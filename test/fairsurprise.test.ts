@@ -153,12 +153,15 @@ function ambushTellGates(): void {
     let sangOk = false;
     let redirectOk = true;
     let singTime = 0;
-    const log = auditAmbushes(w, boss, ["ghost"], 60 * 10, false, () => {
+    // The verse draws its voice from the curated pool now (fair surprise §1): watch every
+    // pool kind, and read "fragments up" off the verse TASK (the silence set), not a kind.
+    const voiceKinds = [...new Set(CHOIR.addPool.map((entry) => entry.kind))];
+    const log = auditAmbushes(w, boss, voiceKinds, 60 * 10, false, () => {
       const isSinging = boss.attack.move === "harmonize" && boss.attack.phase === "active";
       if (isSinging) {
         sangOk = true;
         singTime += DT;
-        if (!w.enemies.some((e) => !e.dead && e.isSummoned && e.kind === "ghost")) redirectOk = false;
+        if (!w.enemies.some((e) => !e.dead && e.isSummoned && boss.boss!.windowAddIds.includes(e.id))) redirectOk = false;
       }
     });
     check("the verse's fragments arrived on omen tells",
@@ -229,7 +232,10 @@ function compositionGates(): void {
   check("complex movers never exceed the live mover cap", moverOk);
   check("every pool member is a known readable creature (archetype table)",
     WEAVER.addPool.every((e) => ENEMY_ARCHETYPES[e.kind] !== undefined)
-    && MARROW.addPool.every((e) => ENEMY_ARCHETYPES[e.kind] !== undefined));
+    && MARROW.addPool.every((e) => ENEMY_ARCHETYPES[e.kind] !== undefined)
+    && CHOIR.addPool.every((e) => ENEMY_ARCHETYPES[e.kind] !== undefined));
+  check("the Choir's voice pool is fragile swarm chaff (silenceable, never a kiter that stalls the window)",
+    CHOIR.addPool.every((e) => e.tier === "swarm" && !isComplexMover(e.kind)));
 }
 
 // ---- §3: phase shifts reshape the room, always leaving a route ----
@@ -313,6 +319,35 @@ function reshapeGates(): void {
       knots2.length > 0 && knots2.every((k) => !ids1.has(k.id)), `knots=${knots2.length}`);
     check("fresh lanes carry silk again", w.hazards.some((h) => h.kind === "web"));
     check("the reshape is silk-only: the route can never be walled off", hasRoute(w, p.x, p.y, boss.x, boss.y));
+  }
+
+  section("§3 Choir split: the hall re-tunes (fresh gapped pillar ring), route intact, no window");
+  {
+    const w = createWorld(0xFA32, 30, { isSandbox: true });
+    w.isGodMode = true;
+    const p = w.players.get(LOCAL_ID)!;
+    const boss = devSpawnEnemy(w, "choir", p.x + 220, p.y);
+    for (let t = 0; t < 12; t++) step(w, idle(t));
+    // First split beat (P1→P2): a huge hit floors the phase and scatters the Choir; the
+    // hall re-tunes as the beat plays.
+    plantBullet(w, boss.x, boss.y, 1e6, 30);
+    step(w);
+    const pillars1 = w.props.filter((pr) => !pr.dead && pr.owner === boss.id);
+    check("the split raises a ring of owned resonant pillars", pillars1.length >= 3, `pillars=${pillars1.length}`);
+    check("every pillar is ordinary destructible cover (never a hard wall)",
+      pillars1.every((pr) => pr.hp > 0 && pr.breakT === undefined));
+    check("no pillar rose on or beside a player",
+      pillars1.every((pr) => Math.hypot(pr.x - p.x, pr.y - p.y) >= CHOIR.reshapePlayerClear - 1e-6));
+    check("a walkable route to the boss survives the reshape", hasRoute(w, p.x, p.y, boss.x, boss.y));
+    check("the split reshape opens NO window (only the verse silence can)", !isBossExposed(boss));
+    const ids1 = new Set(pillars1.map((pr) => pr.id));
+    // Ride the beats out: the queued overflow crosses the next threshold, so the hall
+    // reconfigures a SECOND time (fresh pillars, old set crumbled).
+    for (let t = 0; t < 60 * 6; t++) step(w, idle(t));
+    const pillars2 = w.props.filter((pr) => !pr.dead && pr.breakT === undefined && pr.owner === boss.id);
+    check("the second transition crumbles the old ring and raises a fresh one",
+      pillars2.length >= 3 && pillars2.every((pr) => !ids1.has(pr.id)), `pillars=${pillars2.length}`);
+    check("the route still stands after the second reshape", hasRoute(w, p.x, p.y, boss.x, boss.y));
   }
 }
 

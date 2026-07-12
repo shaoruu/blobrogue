@@ -1278,6 +1278,28 @@ export const CHOIR = {
   splitMinDuration: 1.0,
   splitWisps: 3,
   splitBulletClearRadius: 70,
+  // Fair surprise §1 — the verse draws its VOICE from a curated pool. Instead of always
+  // the ghost fragment, each gathering verse is a DIFFERENT readable spectral body
+  // (drawn seeded + non-repeating via drawFromAddPool + lastAddPick, exactly like
+  // Weaver/Marrow). The verse COUNT stays the co-op task (fragmentsFor, snapshotted at
+  // the pull); only WHICH kin sings is the surprise. Every member is a known creature,
+  // fragile at swarm tier, and a chaser/drifter (never a kiter) so the verse stays
+  // silenceable — the window can always be earned, the guess is only who arrives.
+  addPool: [
+    { kind: "ghost", tier: "swarm", weight: 5, maxAlive: 0, count: 1 },    // the drifting revenant (the Choir's own kin)
+    { kind: "skeleton", tier: "swarm", weight: 3, maxAlive: 0, count: 1 }, // the hollow dead, marching the verse in
+  ] as readonly AddPoolEntry[],
+  // Fair surprise §3 — the hall RESHAPES on every phase transition (the split beat): the
+  // old resonant pillars crumble and a fresh seeded ring rises, so the room reads
+  // differently each phase (the Warden cover / Weaver molt shape). Gaps are authored
+  // into the ring by construction (every reshapeGapEvery-th site stays open → ≥1
+  // readable route always), pillars never rise on or beside a body, and every piece is
+  // ordinary destructible cover — the reshape reorganizes the hall, it can never seal a
+  // route, and (unlike a window) it NEVER touches the guard/exposed state.
+  reshapeSites: 12,       // candidate pillar sites on the ring
+  reshapeGapEvery: 4,     // every Nth site stays open — ≥3 authored gaps per ring
+  reshapeRingDist: 210,
+  reshapePlayerClear: 70, // a pillar never rises within a player's personal space
 } as const;
 
 export function choirHpForFloor(floor: number): number {

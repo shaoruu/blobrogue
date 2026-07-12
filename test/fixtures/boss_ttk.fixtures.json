@@ -35,13 +35,13 @@
     "gilded.p90": -1,
     "gilded.transitionSeconds": 2.4,
     "gilded.closedArmorSeconds": 19.833,
-    "choir.median": 53.417,
-    "choir.medianExposed": 17.583,
-    "choir.highRoll": 85.483,
-    "choir.p10": 50.633,
-    "choir.p50": 62.033,
-    "choir.p90": 94.267,
-    "choir.transitionSeconds": 3.133,
+    "choir.median": 53.533,
+    "choir.medianExposed": 17.483,
+    "choir.highRoll": 87.9,
+    "choir.p10": 53.2,
+    "choir.p50": 63.217,
+    "choir.p90": 100.317,
+    "choir.transitionSeconds": 3.35,
     "brute.f4": 3.183,
     "elite.f6.focused": 2.75,
     "gauntlet.median.total": 61.1,
@@ -58,6 +58,6 @@
     "marrow.godBuild": 60.75,
     "weaver.godBuild": 50.15,
     "gilded.godBuild": 180,
-    "choir.godBuild": 84.467
+    "choir.godBuild": 84.017
   }
 }

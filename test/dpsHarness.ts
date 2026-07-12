@@ -138,7 +138,10 @@ export function measureBossTtk(
           ?? w.enemies.find((e) => !e.dead && e.kind === "knot")
           ?? target;
       } else if (boss.kind === "choir") {
-        aimAt = w.enemies.find((e) => !e.dead && e.isSummoned && e.kind === "ghost") ?? target;
+        // The verse silences the Choir regardless of WHICH voice was drawn (fair
+        // surprise §1): target the verse TASK (the summoner's silence set), not a kind.
+        const ids = target.boss?.windowAddIds ?? [];
+        aimAt = w.enemies.find((e) => !e.dead && e.isSummoned && ids.includes(e.id)) ?? target;
       }
     }
     const aim = Math.atan2(aimAt.y - p.y, aimAt.x - p.x);

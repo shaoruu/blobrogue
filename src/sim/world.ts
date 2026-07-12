@@ -2413,6 +2413,10 @@ function checkBossTransition(w: WorldState, e: Enemy, ev: SimEvent[]): void {
   // non-damaging beat plays (the roar IS the telegraph). Cover memory resets; the
   // escape never does.
   if (e.kind === "gilded") gildedReshapeCover(w, e, ev);
+  // Fair surprise §3: the Choir's split beat re-tunes the HALL — its resonant pillars
+  // crumble and a fresh seeded gapped ring rises (a readable route always survives), so
+  // the finale reads differently each phase. Purely geometry: it never opens a window.
+  if (e.kind === "choir") choirReshape(w, e, ev);
   ev.push({ t: "bossPhase", eid: e.id, x: e.x, y: e.y });
   ev.push({ t: "bossTransition", eid: e.id, phase: boss.phase, entering: true, queued: boss.roar.queued, hpFrac: e.hp / e.maxHp });
 }
@@ -6193,8 +6197,10 @@ function resolveOmen(w: WorldState, h: Hazard, ev: SimEvent[]): void {
   if (h.forBossId === undefined) return;
   const owner = w.enemies.find((o) => !o.dead && o.id === h.forBossId! - 1 && o.boss !== null);
   if (!owner || !owner.boss) return;
-  // Mechanic bodies join their summoner's earned-window set.
-  if (owner.kind === "choir" && add.kind === "ghost") {
+  // Mechanic bodies join their summoner's earned-window set. Every Choir verse omen is a
+  // fragment of the current verse regardless of WHICH voice was drawn (fair surprise §1),
+  // so the silence task is kind-agnostic — the window opens when the whole verse dies.
+  if (owner.kind === "choir") {
     owner.boss.windowAddIds.push(add.id);
     // The verse has fully gathered: the Choir sings WITH it — a bounded untargetable
     // refrain (your DPS is redirected into the fragments, never idled). The refrain
@@ -6480,12 +6486,21 @@ function updateChoir(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void 
         const n = CHOIR.fragmentsFor[w.encounterPlayers];
         const edgeAngle = w.rng.next() * Math.PI * 2;
         for (let i = 0; i < n; i++) {
+          // Fair surprise §1: WHICH voice gathers is a seeded, non-repeating draw from
+          // the curated pool (drawFromAddPool + lastAddPick, exactly like Weaver/Marrow)
+          // — a DIFFERENT readable spectral kin each verse (drawn per fragment so a
+          // single verse mixes its voices, never a rote wall), never always the ghost.
+          // The COUNT stays the co-op task (fragmentsFor); only the voice varies, and
+          // every pool member is fragile swarm chaff so the verse stays silenceable.
+          const voice = drawFromAddPool(w, e, CHOIR.addPool);
+          const voiceKind = voice ? voice.kind : "ghost";
+          const voiceTier = voice ? voice.tier : "swarm";
           // The verse is a TASK (every fragment must die to open the window), so a
           // ring slot fouled by player clearance re-aims around the ring instead of
           // silently shrinking the mechanic.
           for (let nudge = 0; nudge < 6; nudge++) {
             const ang = edgeAngle + (i / n) * Math.PI * 2 + nudge * 0.5;
-            const ok = queueAmbush(w, e.x + Math.cos(ang) * CHOIR.fragmentRingDist, e.y + Math.sin(ang) * CHOIR.fragmentRingDist, "ghost", "swarm", e.id + 1, ev);
+            const ok = queueAmbush(w, e.x + Math.cos(ang) * CHOIR.fragmentRingDist, e.y + Math.sin(ang) * CHOIR.fragmentRingDist, voiceKind, voiceTier, e.id + 1, ev);
             if (ok) break;
           }
         }
@@ -7367,6 +7382,38 @@ function gildedReshapeCover(w: WorldState, e: Enemy, ev: SimEvent[]): void {
       radius: C.PROP_RADIUS, hp: C.PROP_HP.clinker_brick, dead: false, owner: e.id,
     });
     ev.push({ t: "puff", x, y, n: 5, color: ENEMY_ARCHETYPES.gilded.tint });
+    placed++;
+  }
+  if (placed > 0) w.obstacleRev++;
+}
+
+// THE HOLLOW CHOIR's hall reshape (fair surprise §3): the split beat already scatters the
+// Choir into wisps — this EXTENDS that beat into an ARENA reshape. The hall's resonant
+// pillars crumble and a fresh seeded ring rises, so the room reads differently every
+// phase (the Weaver molt / Gilded cover shape, reused wholesale). Every
+// isConstructionSiteClear law holds (wall/exit standoffs, never on props, never on/beside
+// a body), every reshapeGapEvery-th site stays OPEN by construction (≥1 readable route
+// always), and the pieces are ordinary breakable pillars. It fires ON the transition beat
+// and NEVER touches the guard/exposed state — the only way to expose the Choir stays the
+// verse silence, so the reshape can never open or extend a window.
+function choirReshape(w: WorldState, e: Enemy, ev: SimEvent[]): void {
+  for (const p of w.props) {
+    if (p.breakT === undefined && !p.dead && p.owner === e.id) destroyProp(w, p, ev);
+  }
+  const base = w.rng.next() * Math.PI * 2;
+  let placed = 0;
+  for (let i = 0; i < CHOIR.reshapeSites; i++) {
+    if (i % CHOIR.reshapeGapEvery === CHOIR.reshapeGapEvery - 1) continue; // the authored gap
+    const ang = base + (i / CHOIR.reshapeSites) * Math.PI * 2;
+    const x = e.x + Math.cos(ang) * CHOIR.reshapeRingDist;
+    const y = e.y + Math.sin(ang) * CHOIR.reshapeRingDist;
+    if (isNearAnyPlayer(w, x, y, CHOIR.reshapePlayerClear)) continue;
+    if (!isConstructionSiteClear(w, x, y)) continue;
+    w.props.push({
+      id: w.nextPropId++, kind: "clinker_brick", x, y,
+      radius: C.PROP_RADIUS, hp: C.PROP_HP.clinker_brick, dead: false, owner: e.id,
+    });
+    ev.push({ t: "puff", x, y, n: 5, color: ENEMY_ARCHETYPES.choir.tint });
     placed++;
   }
   if (placed > 0) w.obstacleRev++;

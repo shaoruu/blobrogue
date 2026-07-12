@@ -215,7 +215,10 @@ const choir: Scenario = {
   input(_tick, w) {
     if (!w) return { moveX: 0, moveY: 0, aim: 0, firing: true, dash: false };
     const boss = liveKind(w, "choir");
-    const fragment = w.enemies.find((e) => !e.dead && e.isSummoned && e.kind === "ghost");
+    // The verse draws varied voices (fair surprise §1): aim the verse TASK (the silence
+    // set) regardless of which kin was drawn, not a fixed "ghost" kind.
+    const ids = boss?.boss?.windowAddIds ?? [];
+    const fragment = w.enemies.find((e) => !e.dead && e.isSummoned && ids.includes(e.id));
     const p = w.players.get(LOCAL_ID);
     let moveX = 0, moveY = 0;
     if (boss && p && Math.hypot(boss.x - p.x, boss.y - p.y) < 170) {
