@@ -25,7 +25,7 @@ import { ULT } from "../src/sim/kits.js";
 import { TILE } from "../src/sim/types.js";
 import type { InputCmd } from "../src/sim/input.js";
 import type { SimEvent } from "../src/sim/events.js";
-import { buildSnapshot, jsonCodec, PROTOCOL_VERSION } from "../src/net/protocol.js";
+import { buildSnapshot, jsonCodec, validateSnap, PROTOCOL_VERSION } from "../src/net/protocol.js";
 import type { ServerMsg } from "../src/net/protocol.js";
 import { diffSnapshot, applySnapshotDelta, snapshotToWire } from "../src/net/snapshotDelta.js";
 
@@ -407,9 +407,8 @@ section("P2 WIRE: protocol v28, match block + team + respawn round-trip, reliabl
   const live = { enemies: new Set<number>(), players: new Set(["p1", "p2"]), props: new Set<number>(), pickups: new Set<number>(), chests: new Set<number>(), hzds: new Set<number>(), effs: new Set<number>() };
   const delta = diffSnapshot(snapshotToWire(base), snapshotToWire(next), 2, live);
   check("the match block delta-encodes as one whole object", delta.w !== undefined && "match" in delta.w);
-  const rebuilt = applySnapshotDelta(snapshotToWire(base), delta);
-  const rdec = jsonCodec.decodeServer(jsonCodec.encodeServer({ ...(rebuilt as unknown as Extract<ServerMsg, { t: "snap" }>), t: "snap" }));
-  check("delta-reconstructed match matches source", rdec.t === "snap" && rdec.match!.sc.find((s) => s.id === "p1")?.f === 5);
+  const rebuilt = validateSnap(applySnapshotDelta(snapshotToWire(base), delta));
+  check("delta-reconstructed match matches source", rebuilt.match!.sc.find((s) => s.id === "p1")?.f === 5);
 
   // Reliable elimination + match-over events fire from the sim.
   const kw = pvpWorld(31, ["p1", "p2"]);
