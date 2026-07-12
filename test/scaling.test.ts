@@ -69,7 +69,114 @@ function plantBullet(w: WorldState, x: number, y: number, damage: number, radius
   w.bullets.push(b);
 }
 
-// ---- the party fight harness (boss-agnostic; weaver mechanic priorities) ----
+// ---- the mechanic-playing bot: a shared driver + a per-boss window-opener ----
+// KEY FINDING (spec §1): the exposed-window machinery is ALREADY universal —
+// isBossExposed(e) = e.boss.exposed > 0, and every earned boss opens its window through the
+// shared openBossWindow / EARNED_WINDOWS bank. So the bot's "deal damage while exposed, else
+// attack the thing that OPENS the window" loop is boss-agnostic; only TARGET SELECTION while
+// the boss is NOT exposed is per-boss. That per-boss part lives in WINDOW_OPENERS[kind]; the
+// driver (aim, approach-to-range, fire, tally) is shared. Only Marrow needs a MOVE beyond aim
+// (bait the rush into a wall crash) and Choir a small standoff strafe — both live in botMoveFor.
+// This is the same bot the balance-suite §3 gate uses (dpsHarness.measureBossTtk), lifted into
+// the party+gear harness so it runs at any R across N seeds.
+
+type Vec = { readonly x: number; readonly y: number };
+
+// The sandbox arena's inner bounds (buildArena: 34×24 tiles, 1-tile border) — the Marrow
+// bait geometry holds a stride off the boss toward its nearest wall (dpsHarness parity).
+const ARENA = { x0: 48, y0: 48, x1: 33 * TILE, y1: 23 * TILE };
+
+// Quorum's highest-priority LIVING husk (shield → heal → dmg): the only husk that takes FULL
+// pool damage (a lower one is chipped), so the bot must respect the kill-order or it stalls.
+function quorumPriorityHusk(w: WorldState, coreId: number): Enemy | undefined {
+  for (const kind of ["quorum_shield", "quorum_heal", "quorum_dmg"] as const) {
+    const h = w.enemies.find((e) => !e.dead && e.kind === kind && e.seq === coreId + 1);
+    if (h) return h;
+  }
+  return undefined;
+}
+
+// Is the boss taking FULL damage on its intended target right now? For the F15–35 roster + the
+// Tithe this is exactly isBossExposed (boss.exposed > 0). Quorum's P1 pool is guarded by the
+// husk trio (not a timed window): it is EXPOSED while the trio is cleared (huskGuardUp false)
+// or during a merge-form window — so its exposed tally counts the pool-open + merge windows.
+function bossExposedNow(e: Enemy): boolean {
+  const boss = e.boss;
+  if (!boss) return false;
+  if (e.kind === "quorum") return boss.exposed > 0 || (boss.phase < 2 && boss.huskRaised && !boss.huskGuardUp);
+  return isBossExposed(e);
+}
+
+// Per-boss TARGET SELECTION while the boss is NOT exposed (the only authored-per-boss part).
+// Returns the aim target; the driver handles the shared "exposed → shoot the body" case.
+type WindowOpener = (w: WorldState, boss: Enemy) => Vec;
+const WINDOW_OPENERS: Readonly<Partial<Record<EnemyKind, WindowOpener>>> = {
+  // Weaver (F20, reference): shoot the egg-SAC clutch (P2 forced-down), then a lattice KNOT
+  // (P1 break / P3 lane denial), then the body. (Unchanged from the original harness.)
+  weaver: (w, boss) => w.enemies.find((e) => !e.dead && e.kind === "sac")
+    ?? w.enemies.find((e) => !e.dead && e.kind === "knot")
+    ?? boss,
+  // Choir (F30): silence the gathered voice fragments of the current verse (the summoner's
+  // windowAddIds set — WHICH voice varies per fair-surprise §1, so target the TASK, not a kind).
+  choir: (w, boss) => {
+    const ids = boss.boss?.windowAddIds ?? [];
+    return w.enemies.find((e) => !e.dead && e.isSummoned && ids.includes(e.id)) ?? boss;
+  },
+  // Tithe (F40): guardMult 0.0 — the body is pointless while armored; the ONLY damage path is
+  // breaking the feeding SLAB(s) to interrupt the feed → EXPOSED. Aim slabs while armored.
+  tithe: (w, boss) => w.enemies.find((e) => !e.dead && e.kind === "tithe_slab") ?? boss,
+  // Quorum (F45): merge-form (phase ≥ 2) is fought directly; otherwise focus the priority husk
+  // in KILL-ORDER (shield → heal → dmg) to drain the shared pool toward the merge / pool window.
+  quorum: (w, boss) => {
+    if ((boss.boss?.phase ?? 1) >= 2) return boss;
+    return quorumPriorityHusk(w, boss.id) ?? boss;
+  },
+  // Marrow/Gilded/Jet/King: no not-exposed body — the driver just fires the boss (Marrow's
+  // crash is baited by botMoveFor; Gilded/Jet windows ride their own commitment-recover cadence;
+  // King has no guard at all). Absent from the map → the driver falls back to the boss body.
+};
+
+// The Marrow bait point: a stride off the boss toward its NEAREST wall. The bot holds here and
+// freezes until the rush LOCKS, then sidesteps — the committed rush carries past into the wall
+// (the crash that opens Marrow's ONLY window). Mirrors dpsHarness.measureBossTtk exactly.
+function marrowBaitPoint(boss: Enemy): Vec {
+  const dW = boss.x - ARENA.x0, dE = ARENA.x1 - boss.x, dN = boss.y - ARENA.y0, dS = ARENA.y1 - boss.y;
+  const min = Math.min(dW, dE, dN, dS);
+  const dir = min === dW ? [-1, 0] : min === dE ? [1, 0] : min === dN ? [0, -1] : [0, 1];
+  return {
+    x: Math.max(ARENA.x0 + 110, Math.min(ARENA.x1 - 110, boss.x + dir[0] * 130)),
+    y: Math.max(ARENA.y0 + 110, Math.min(ARENA.y1 - 110, boss.y + dir[1] * 130)),
+  };
+}
+
+// Per-boss MOVEMENT. Default: approach the aim target to firing range, then hold. Marrow baits
+// the wall crash; Choir keeps a small standoff strafe. (Weaver/Gilded/Jet/Tithe/Quorum/King all
+// use the shared approach, so the driver stays boss-agnostic outside these two.)
+function botMoveFor(kind: EnemyKind, boss: Enemy, px: number, py: number, aimAt: Vec): Vec {
+  if (kind === "marrow" && !boss.dead) {
+    const a = boss.attack;
+    if (a.move === "rush" && ((a.phase === "windup" && a.isAimLocked) || a.phase === "active")) {
+      const side = a.lockedAngle + Math.PI / 2; // sidestep: the locked rush carries past into the wall
+      return { x: Math.cos(side), y: Math.sin(side) };
+    }
+    const bait = marrowBaitPoint(boss);
+    if (Math.hypot(bait.x - px, bait.y - py) > 24) {
+      const back = Math.atan2(bait.y - py, bait.x - px);
+      return { x: Math.cos(back), y: Math.sin(back) };
+    }
+    return { x: 0, y: 0 };
+  }
+  if (kind === "choir" && !boss.dead) {
+    if (Math.hypot(boss.x - px, boss.y - py) < 170) {
+      const away = Math.atan2(py - boss.y, px - boss.x) + 0.7;
+      return { x: Math.cos(away), y: Math.sin(away) };
+    }
+    return { x: 0, y: 0 };
+  }
+  const d = Math.hypot(aimAt.x - px, aimAt.y - py);
+  if (d > 280) { const t = Math.atan2(aimAt.y - py, aimAt.x - px); return { x: Math.cos(t), y: Math.sin(t) }; }
+  return { x: 0, y: 0 };
+}
 
 interface PullResult {
   r: number;
@@ -85,7 +192,10 @@ interface PullResult {
   spawnTrace: string;
 }
 
-function runPull(seed: number, kind: EnemyKind, floor: number, party: readonly Loadout[]): PullResult {
+// The shared driver + the per-boss window-opener hook (spec §3). Weaver's behaviour is
+// byte-identical to the original runPull (same aim fallback, same approach movement), so the
+// R-framework weaver gates below and the ship-gate report numbers are unchanged.
+function runInstrumentedPull(seed: number, kind: EnemyKind, floor: number, party: readonly Loadout[]): PullResult {
   const w = createWorld(seed, floor, { isSandbox: true, skipLocalPlayer: true });
   const ids: PlayerId[] = [];
   for (let i = 0; i < party.length; i++) {
@@ -100,6 +210,7 @@ function runPull(seed: number, kind: EnemyKind, floor: number, party: readonly L
   w.encounterPlayers = Math.min(4, party.length);
   const p0 = w.players.get(ids[0])!;
   const boss = devSpawnEnemy(w, kind, p0.x + 170, p0.y); // samples R off these loadouts
+  const opener = WINDOW_OPENERS[kind];
   const partyDps = party.reduce((s, b) => s + dpsOf(b), 0);
   let ticks = 0;
   let killed = false;
@@ -111,21 +222,17 @@ function runPull(seed: number, kind: EnemyKind, floor: number, party: readonly L
   const transitions: number[] = [];
   const maxTicks = 60 * 180;
   while (!killed && ticks < maxTicks) {
-    const isExp = isBossExposed(boss);
+    const isExp = bossExposedNow(boss);
     if (isExp) exposedSeconds += DT;
-    const aimAt = isExp ? boss
-      : w.enemies.find((e) => !e.dead && e.kind === "sac")
-        ?? w.enemies.find((e) => !e.dead && e.kind === "knot")
-        ?? boss;
+    // Shared: exposed → shoot the body. Not exposed → the per-boss window-opener's target.
+    const aimAt: Vec = isExp ? boss : (opener ? opener(w, boss) : boss);
     const cmds = new Map<PlayerId, InputCmd>();
     for (const pid of ids) {
       const p = w.players.get(pid)!;
       p.hp = p.maxHp; // damage-taken rides the hit counter, never a wipe
       const aim = Math.atan2(aimAt.y - p.y, aimAt.x - p.x);
-      let moveX = 0, moveY = 0;
-      const d = Math.hypot(aimAt.x - p.x, aimAt.y - p.y);
-      if (d > 280) { const t = Math.atan2(aimAt.y - p.y, aimAt.x - p.x); moveX = Math.cos(t); moveY = Math.sin(t); }
-      cmds.set(pid, { seq: ticks, moveX, moveY, aim, firing: true, dash: false });
+      const mv = botMoveFor(kind, boss, p.x, p.y, aimAt);
+      cmds.set(pid, { seq: ticks, moveX: mv.x, moveY: mv.y, aim, firing: true, dash: false });
     }
     const evs = stepWorld(w, cmds, DT);
     for (const e of evs) {
@@ -370,7 +477,7 @@ function bandGates(): void {
   // "4-strong" = the god-stack (the exact party the rework exists for).
   const four = [BUILDS.god, BUILDS.god, BUILDS.god, BUILDS.god];
   const seeds = [0xBA1A4CE, 0xBA1A4CF, 0xBA1A4D0, 0xBA1A4D1, 0xBA1A4D2];
-  const runs = seeds.map((s) => runPull(s, "weaver", 20, four));
+  const runs = seeds.map((s) => runInstrumentedPull(s, "weaver", 20, four));
   const ttks = runs.map((r) => (r.killed ? r.seconds : Infinity)).sort((a, b) => a - b);
   const p50 = quantile(ttks, 0.5);
   const p10 = quantile(ttks, 0.1);
@@ -387,14 +494,14 @@ function bandGates(): void {
 
   // The high-roll 4-stack (capped crit channel): still a real fight, never a faceroll.
   const fourHigh = [BUILDS.highRoll, BUILDS.highRoll, BUILDS.highRoll, BUILDS.highRoll];
-  const highRuns = [0xBA1A4CE, 0xBA1A4D0].map((s) => runPull(s, "weaver", 20, fourHigh));
+  const highRuns = [0xBA1A4CE, 0xBA1A4D0].map((s) => runInstrumentedPull(s, "weaver", 20, fourHigh));
   const highTtks = highRuns.map((r) => (r.killed ? r.seconds : Infinity));
   process.stdout.write(`  info: 4-high-roll — R=${highRuns[0].r.toFixed(2)} effHP=${highRuns[0].effHp} ttks=[${highTtks.map((t) => t.toFixed(1)).join(",")}]\n`);
   check("the high-roll 4-stack stays ≥22s too", highTtks.every((t) => Number.isFinite(t) && t >= 22));
 
   // 3 strong + 1 weak: the weak-player guard — still a real fight, never a spike.
   const mixed = [BUILDS.highRoll, BUILDS.highRoll, BUILDS.highRoll, BUILDS.naked];
-  const mixedRuns = [0xBA1A4CE, 0xBA1A4D0].map((s) => runPull(s, "weaver", 20, mixed));
+  const mixedRuns = [0xBA1A4CE, 0xBA1A4D0].map((s) => runInstrumentedPull(s, "weaver", 20, mixed));
   const mixedTtks = mixedRuns.map((r) => (r.killed ? r.seconds : Infinity));
   process.stdout.write(`  info: 3-strong+1-weak — R=${mixedRuns[0].r.toFixed(2)} effHP=${mixedRuns[0].effHp} ttks=[${mixedTtks.map((t) => t.toFixed(1)).join(",")}]\n`);
   check("3-strong+1-weak stays in a fair band (22–60s: no spike from carrying a friend)",
@@ -404,7 +511,7 @@ function bandGates(): void {
 
   // Duo median: the "if duo median > 45s, lower Khp" gate.
   const duo = [BUILDS.median, BUILDS.median];
-  const duoRuns = [0xBA1A4CE, 0xBA1A4D1].map((s) => runPull(s, "weaver", 20, duo));
+  const duoRuns = [0xBA1A4CE, 0xBA1A4D1].map((s) => runInstrumentedPull(s, "weaver", 20, duo));
   const duoTtks = duoRuns.map((r) => (r.killed ? r.seconds : Infinity));
   process.stdout.write(`  info: duo median — R=${duoRuns[0].r.toFixed(2)} effHP=${duoRuns[0].effHp} ttks=[${duoTtks.map((t) => t.toFixed(1)).join(",")}]\n`);
   check("the median duo clears without sponging (≤55s)", duoTtks.every((t) => Number.isFinite(t) && t <= 55));
@@ -415,63 +522,288 @@ function bandGates(): void {
 function determinismGates(): void {
   section("determinism: same seed + loadouts → identical R / HP / spawn schedule / timers");
   const four = [BUILDS.highRoll, BUILDS.highRoll, BUILDS.highRoll, BUILDS.god];
-  const a = runPull(0x5CA9, "weaver", 20, four);
-  const b = runPull(0x5CA9, "weaver", 20, four);
+  const a = runInstrumentedPull(0x5CA9, "weaver", 20, four);
+  const b = runInstrumentedPull(0x5CA9, "weaver", 20, four);
   check("two identical pulls agree on R and effective HP", a.r === b.r && a.effHp === b.effHp,
     `R=${a.r.toFixed(3)} hp=${a.effHp}`);
   check("…and on the whole spawn schedule", a.spawnTrace === b.spawnTrace,
     `${a.spawnTrace.length} chars`);
   check("…and on TTK + phase timers to the tick",
     a.seconds === b.seconds && JSON.stringify(a.phaseDurations) === JSON.stringify(b.phaseDurations));
+  // The per-boss window-opener path is deterministic too: a deep boss (Quorum, the kill-order
+  // bot) replays byte-identically — same seed + loadouts → identical TTK, exposed and spawns.
+  const qa = runInstrumentedPull(0x5CAB, "quorum", 45, [BUILDS.median]);
+  const qb = runInstrumentedPull(0x5CAB, "quorum", 45, [BUILDS.median]);
+  check("a deep-boss window-opener pull replays identically (TTK, exposed, spawn schedule)",
+    qa.seconds === qb.seconds && qa.exposedSeconds === qb.exposedSeconds && qa.spawnTrace === qb.spawnTrace,
+    `ttk=${qa.seconds.toFixed(2)}s exposed=${qa.exposedSeconds.toFixed(2)}s`);
 }
 
-// ---- the full 200-pull ship-gate report (opt-in: npm run scaling:report) ----
+// ---- 9. the MULTI-BOSS instrumented health gate (all 8 shipped bosses) ----
+// A STANDING gate: on every content wave, does the calibrated bot's TTK/exposed for ANY
+// shipped boss drift out of its band? Each boss runs at ITS floor, N≥20 seeds, two asserted
+// cells (solo/median + 4-strong) against the per-boss BOSS_BANDS. The 5 calibrated bosses
+// (King/Marrow/Weaver/Gilded/Choir) gate HARD on the shipped balance.test.ts bands; the three
+// Wave-1 bosses (Jet/Tithe/Quorum) are placeholders — MEASURED + SURFACED (never failed red)
+// so the balancer can harden their real rows. A boss whose bot CANNOT open its window
+// (NOKILL / exposed≈0) FAILS LOUD as "bot-can't-play-this-boss" — never a silent pass.
 
-function shipGateReport(): void {
-  section("the 200-pull ship-gate report (deterministic sim harness)");
-  const parties: Readonly<Record<string, readonly Loadout[]>> = {
-    "solo": [BUILDS.median],
-    "P2": [BUILDS.median, BUILDS.median],
-    "P4": [BUILDS.highRoll, BUILDS.highRoll, BUILDS.highRoll, BUILDS.highRoll],
+const CANT_PLAY_EXPOSED_EPS = 0.5; // a guarded boss under this much exposed = broken bot, not a fight
+const CELL_SEEDS = Array.from({ length: 20 }, (_, i) => 0xBA1A000 + i * 7919); // N=20 per cell
+
+interface BossBand {
+  floor: number;
+  // The solo/median cell's loadout. For the 5 calibrated bosses this is the EXACT
+  // balance.test.ts §3 per-boss median build (so the shipped bands reproduce here); the three
+  // placeholders pick a representative deep-roster build (balancer re-measures on build).
+  weapon: WeaponId;
+  build: string[];
+  soloWall: readonly [number, number];        // solo/median wall-clock TTK band
+  exposed: readonly [number, number] | null;  // solo/median EXPOSED-time band (King: no guard)
+  minLegal: number;                           // 4-strong P10 floor (the anti-one-shot bound)
+  party4: readonly [number, number];          // 4-strong P50 band
+  calibrated: boolean;   // solo wall+exposed gate HARD (shipped balance.test.ts numbers)
+  calibrated4: boolean;  // 4-strong P50 gates HARD (only Weaver's is independently validated)
+}
+
+// BOSS_BANDS — exposedBand values are the SHIPPED balance.test.ts per-boss gates (NOT a uniform
+// 20–30). Jet/Tithe/Quorum's wall/exposed are Wave-1 PLACEHOLDERS ("re-measure on build"):
+// gated soft (measured + surfaced), never failed red. The balancer owns every number here.
+const BOSS_BANDS: Readonly<Record<string, BossBand>> = {
+  boss: { floor: 5, weapon: "pistol", build: L3("hair_trigger"),
+    soloWall: [35, 50], exposed: null, minLegal: 20, party4: [42, 58], calibrated: true, calibrated4: false }, // King: no guard, no exposed gate; a god-stack facerolls the tutorial (party4 surfaced)
+  marrow: { floor: 15, weapon: "pistol", build: [...L3("hair_trigger"), "glass_cannon", "glass_cannon"],
+    soloWall: [40, 63], exposed: [8, 20], minLegal: 20, party4: [42, 58], calibrated: true, calibrated4: false },
+  weaver: { floor: 20, weapon: "pistol", build: [...L3("hair_trigger"), "glass_cannon", "glass_cannon"],
+    soloWall: [38, 58], exposed: [16, 30], minLegal: 20, party4: [42, 58], calibrated: true, calibrated4: true }, // the earned-windows flagship (4-strong band = the existing scaling gate)
+  gilded: { floor: 25, weapon: "pistol", build: [...L3("hair_trigger"), ...L3("glass_cannon")],
+    soloWall: [40, 58], exposed: [20, 34], minLegal: 22, party4: [42, 58], calibrated: true, calibrated4: false },
+  choir: { floor: 30, weapon: "pistol", build: [...L3("hair_trigger"), ...L3("glass_cannon")],
+    soloWall: [40, 64], exposed: [12, 26], minLegal: 22, party4: [46, 62], calibrated: true, calibrated4: false }, // finale: longest wall; a 4-strong pull is window-count-bound (~2× solo), surfaced not gated
+  jet: { floor: 35, weapon: "pistol", build: [...L3("hair_trigger"), "glass_cannon", "glass_cannon"],
+    soloWall: [38, 55], exposed: [16, 30], minLegal: 22, party4: [42, 58], calibrated: false, calibrated4: false }, // Wave-1: re-measure on build, placeholder mirrors weaver
+  tithe: { floor: 40, weapon: "pistol", build: [...L3("hair_trigger"), ...L3("glass_cannon")],
+    soloWall: [38, 55], exposed: [16, 30], minLegal: 22, party4: [42, 58], calibrated: false, calibrated4: false }, // Wave-1: re-measure on build
+  quorum: { floor: 45, weapon: "pistol", build: [...L3("hair_trigger"), ...L3("glass_cannon")],
+    soloWall: [40, 58], exposed: [12, 26], minLegal: 22, party4: [42, 58], calibrated: false, calibrated4: false }, // Wave-1: re-measure on build
+};
+
+const GOD_PARTY: readonly Loadout[] = [BUILDS.god, BUILDS.god, BUILDS.god, BUILDS.god];
+
+function inRange(v: number, band: readonly [number, number]): boolean {
+  return v >= band[0] && v <= band[1];
+}
+
+function surface(msg: string): void {
+  process.stdout.write(`  SURFACE  ${msg}\n`);
+}
+
+function buildLabel(weapon: WeaponId, picks: readonly string[]): string {
+  const counts = new Map<string, number>();
+  for (const p of picks) counts.set(p, (counts.get(p) ?? 0) + 1);
+  const parts = [...counts.entries()].map(([k, n]) => (n > 1 ? `${k}×${n}` : k));
+  return parts.length ? `${weapon}+${parts.join(",")}` : weapon;
+}
+
+interface CellStats {
+  killedFrac: number;
+  r: number;
+  effHp: number;
+  wallP10: number;
+  wallP50: number;
+  wallP90: number;
+  exposedP50: number;
+  addsKilledP50: number;
+  hitsTakenP50: number;
+  maxLiveAdds: number;
+}
+
+function measureCell(kind: EnemyKind, floor: number, party: readonly Loadout[], seeds: readonly number[]): CellStats {
+  const runs = seeds.map((s) => runInstrumentedPull(s, kind, floor, party));
+  const killed = runs.filter((r) => r.killed);
+  const ttks = killed.map((r) => r.seconds).sort((a, b) => a - b);
+  const wallP10 = ttks.length ? quantile(ttks, 0.1) : Infinity;
+  const wallP50 = ttks.length ? quantile(ttks, 0.5) : Infinity;
+  const wallP90 = ttks.length ? quantile(ttks, 0.9) : Infinity;
+  const sortedBy = (pick: (r: PullResult) => number): number[] => runs.map(pick).sort((a, b) => a - b);
+  return {
+    killedFrac: killed.length / runs.length,
+    r: runs[0].r,
+    effHp: runs[0].effHp,
+    wallP10, wallP50, wallP90,
+    exposedP50: quantile(sortedBy((r) => r.exposedSeconds), 0.5),
+    addsKilledP50: quantile(sortedBy((r) => r.addsKilled), 0.5),
+    hitsTakenP50: quantile(sortedBy((r) => r.hitsTaken), 0.5),
+    maxLiveAdds: Math.max(...runs.map((r) => r.maxLiveAdds)),
   };
-  const builds = Object.keys(BUILDS);
-  const cells: Record<string, unknown> = {};
-  let pulls = 0;
-  for (const [partyName, base] of Object.entries(parties)) {
-    for (const buildName of builds) {
-      const party = base.map(() => BUILDS[buildName]);
-      const seeds = Array.from({ length: 17 }, (_, i) => 0xBA1A000 + i * 7919);
-      const runs = seeds.map((s) => runPull(s, "weaver", 20, party));
-      pulls += runs.length;
-      const ttks = runs.map((r) => (r.killed ? r.seconds : -1)).filter((t) => t > 0).sort((x, y) => x - y);
-      cells[`${partyName}/${buildName}`] = {
-        partyDps: Math.round(runs[0].partyDps * 100) / 100,
-        r: Math.round(runs[0].r * 1000) / 1000,
-        effHp: runs[0].effHp,
-        killedFrac: ttks.length / runs.length,
-        ttkP10: Math.round(quantile(ttks, 0.1) * 10) / 10,
-        ttkP50: Math.round(quantile(ttks, 0.5) * 10) / 10,
-        ttkP90: Math.round(quantile(ttks, 0.9) * 10) / 10,
-        exposedP50: Math.round(quantile(runs.map((r) => r.exposedSeconds).sort((x, y) => x - y), 0.5) * 10) / 10,
-        addsKilledP50: quantile(runs.map((r) => r.addsKilled).sort((x, y) => x - y), 0.5),
-        hitsTakenP50: quantile(runs.map((r) => r.hitsTaken).sort((x, y) => x - y), 0.5),
-        maxLiveAdds: Math.max(...runs.map((r) => r.maxLiveAdds)),
-        phaseDurationsP50: runs[Math.floor(runs.length / 2)].phaseDurations.map((d) => Math.round(d * 10) / 10),
-      };
-      process.stdout.write(`  ${partyName}/${buildName}: R=${(cells[`${partyName}/${buildName}`] as { r: number }).r} ttkP50=${(cells[`${partyName}/${buildName}`] as { ttkP50: number }).ttkP50}s\n`);
+}
+
+// The pure band verdict for a solo/median cell — shared by the gate AND the deliberate-drift
+// self-test (so both read the identical pass/fail logic). Returns per-axis booleans + reasons.
+function checkSoloBand(band: BossBand, solo: CellStats): { wallOk: boolean; exposedOk: boolean; reasons: string[] } {
+  const reasons: string[] = [];
+  const wallOk = solo.killedFrac === 1 && inRange(solo.wallP50, band.soloWall);
+  if (!wallOk) reasons.push(`wall P50 ${solo.wallP50.toFixed(1)}s vs [${band.soloWall}]`);
+  const exposedOk = band.exposed === null || inRange(solo.exposedP50, band.exposed);
+  if (!exposedOk) reasons.push(`exposed P50 ${solo.exposedP50.toFixed(1)}s vs [${band.exposed}]`);
+  return { wallOk, exposedOk, reasons };
+}
+
+interface BossGateResult {
+  floor: number;
+  solo: CellStats;
+  four: CellStats;
+  band: BossBand;
+  inBand: boolean;
+}
+
+function multiBossGate(): Map<string, BossGateResult> {
+  section("multi-boss health gate: every shipped boss in its TTK/exposed band (calibrated hard, Wave-1 surfaced)");
+  const out = new Map<string, BossGateResult>();
+  for (const [kind, band] of Object.entries(BOSS_BANDS)) {
+    const ek = kind as EnemyKind;
+    const solo = measureCell(ek, band.floor, [{ weapon: band.weapon, picks: band.build }], CELL_SEEDS);
+    const four = measureCell(ek, band.floor, GOD_PARTY, CELL_SEEDS);
+    process.stdout.write(
+      `  info: ${kind}@F${band.floor} — solo(${buildLabel(band.weapon, band.build)}) R=${solo.r.toFixed(2)} effHP=${solo.effHp} `
+      + `wallP50=${solo.wallP50.toFixed(1)}s exposedP50=${solo.exposedP50.toFixed(1)}s killed=${(solo.killedFrac * 100).toFixed(0)}% | `
+      + `4-strong R=${four.r.toFixed(2)} effHP=${four.effHp} P10=${four.wallP10.toFixed(1)}s P50=${four.wallP50.toFixed(1)}s exposedP50=${four.exposedP50.toFixed(1)}s\n`);
+
+    // (A) bot-can't-play-this-boss — HARD for every boss (never a silent pass). A guarded boss
+    // that never opens a window (exposed≈0) or that the bot cannot kill is a BROKEN BOT, the
+    // false-positive class the per-boss window-opener exists to prevent — distinct from a drift.
+    const isWindowOpen = band.exposed === null || solo.exposedP50 >= CANT_PLAY_EXPOSED_EPS;
+    const isPlayable = solo.killedFrac === 1 && isWindowOpen;
+    check(`${kind}: bot opens its window (NOT bot-can't-play-this-boss ${kind})`, isPlayable,
+      `killed=${(solo.killedFrac * 100).toFixed(0)}% exposedP50=${solo.exposedP50.toFixed(1)}s`);
+
+    // (B) solo/median wall + exposed bands.
+    const verdict = checkSoloBand(band, solo);
+    if (band.calibrated) {
+      check(`${kind}: solo/median wall TTK in ${band.soloWall[0]}–${band.soloWall[1]}s`, verdict.wallOk,
+        `wallP50=${solo.wallP50.toFixed(1)}s`);
+      if (band.exposed !== null) {
+        check(`${kind}: solo/median EXPOSED time in ${band.exposed[0]}–${band.exposed[1]}s`, verdict.exposedOk,
+          `exposedP50=${solo.exposedP50.toFixed(1)}s`);
+      }
+    } else {
+      surface(`${kind}@F${band.floor} PLACEHOLDER solo/median: measured wall ${solo.wallP50.toFixed(1)}s (placeholder [${band.soloWall}]), `
+        + `exposed ${solo.exposedP50.toFixed(1)}s (placeholder [${band.exposed}]) — balancer to set the real gate row`);
     }
+
+    // (C) 4-strong: P10 anti-one-shot floor (HARD, all bosses) + P50 party band.
+    check(`${kind}: 4-strong P10 wall ≥ min-legal ${band.minLegal}s (a stack can't delete the fight)`,
+      four.wallP10 >= band.minLegal, `P10=${four.wallP10.toFixed(1)}s`);
+    if (band.calibrated4) {
+      check(`${kind}: 4-strong P50 in the ${band.party4[0]}–${band.party4[1]}s party band`,
+        Number.isFinite(four.wallP50) && inRange(four.wallP50, band.party4), `P50=${four.wallP50.toFixed(1)}s`);
+    } else {
+      surface(`${kind}@F${band.floor} 4-strong P50: measured ${four.wallP50.toFixed(1)}s (party band [${band.party4}] — validated only for Weaver) — balancer to set the real 4-strong row`);
+    }
+
+    const inBand = isPlayable && four.wallP10 >= band.minLegal
+      && (!band.calibrated || (verdict.wallOk && verdict.exposedOk))
+      && (!band.calibrated4 || (Number.isFinite(four.wallP50) && inRange(four.wallP50, band.party4)));
+    out.set(kind, { floor: band.floor, solo, four, band, inBand });
+  }
+  return out;
+}
+
+// ---- 10. the deliberate-drift self-test: prove the gate catches real drift ----
+// A buffed test loadout pushed past a boss's band must make its cell FAIL. King (no guard, pure
+// DPS) is the clean lever: a heavier build drops its wall TTK below the 35s floor. We assert the
+// SAME band-checker the gate uses (checkSoloBand) reports the drift — without failing the build.
+function driftSelfTestGate(): void {
+  section("deliberate-drift self-test: a buffed loadout over a boss ceiling makes its cell FAIL (the gate bites)");
+  const king = BOSS_BANDS.boss;
+  const clean = measureCell("boss", king.floor, [{ weapon: king.weapon, picks: king.build }], CELL_SEEDS);
+  const cleanVerdict = checkSoloBand(king, clean);
+  check("baseline: King's shipped median build sits IN its band (the gate is green on main)", cleanVerdict.wallOk,
+    `wallP50=${clean.wallP50.toFixed(1)}s vs [${king.soloWall}]`);
+  // The drift: a damage-stacked build (glass_cannon×2 over the shipped hair-trigger median).
+  const buffed = measureCell("boss", king.floor, [{ weapon: "pistol", picks: [...L3("hair_trigger"), "glass_cannon", "glass_cannon"] }], CELL_SEEDS);
+  const driftVerdict = checkSoloBand(king, buffed);
+  check("drift: a deliberately-buffed loadout drops King below its band → the cell FAILS (drift is caught)",
+    !driftVerdict.wallOk, `buffed wallP50=${buffed.wallP50.toFixed(1)}s vs [${king.soloWall}] → ${driftVerdict.reasons.join("; ") || "in band (self-test would not bite!)"}`);
+}
+
+// ---- the full multi-boss ship-gate report (opt-in: npm run scaling:report) ----
+
+interface ReportCell {
+  build: string;
+  r: number;
+  effHp: number;
+  killedFrac: number;
+  wallP10: number;
+  wallP50: number;
+  wallP90: number;
+  exposedP50: number;
+  addsKilledP50: number;
+  hitsTakenP50: number;
+  maxLiveAdds: number;
+}
+
+interface BossReport {
+  floor: number;
+  cells: Record<string, ReportCell>;
+  bands: { soloWall: readonly [number, number]; exposed: readonly [number, number] | null; minLegal: number; party4: readonly [number, number] };
+  calibrated: boolean;
+  inBand: boolean;
+}
+
+function cellReport(build: string, s: CellStats): ReportCell {
+  const r1 = (n: number): number => (Number.isFinite(n) ? Math.round(n * 10) / 10 : -1);
+  return {
+    build,
+    r: Math.round(s.r * 1000) / 1000,
+    effHp: s.effHp,
+    killedFrac: s.killedFrac,
+    wallP10: r1(s.wallP10),
+    wallP50: r1(s.wallP50),
+    wallP90: r1(s.wallP90),
+    exposedP50: r1(s.exposedP50),
+    addsKilledP50: s.addsKilledP50,
+    hitsTakenP50: s.hitsTakenP50,
+    maxLiveAdds: s.maxLiveAdds,
+  };
+}
+
+function writeMultiBossReport(gate: Map<string, BossGateResult>): void {
+  section("the multi-boss ship-gate report (deterministic sim harness)");
+  const bosses: Record<string, BossReport> = {};
+  let pulls = 0;
+  for (const [kind, res] of gate) {
+    const band = res.band;
+    pulls += CELL_SEEDS.length * 2; // solo + 4-strong (already measured by the gate)
+    const cells: Record<string, ReportCell> = {
+      "solo/median": cellReport(buildLabel(band.weapon, band.build), res.solo),
+      "4-strong": cellReport(buildLabel(BUILDS.god.weapon, BUILDS.god.picks), res.four),
+    };
+    // Drift-watch cells (report-only): solo/highRoll + solo/god — extra visibility, never gated.
+    for (const [name, loadout] of [["solo/highRoll", BUILDS.highRoll], ["solo/god", BUILDS.god]] as const) {
+      const s = measureCell(kind as EnemyKind, band.floor, [loadout], CELL_SEEDS);
+      pulls += CELL_SEEDS.length;
+      cells[name] = cellReport(buildLabel(loadout.weapon, loadout.picks), s);
+    }
+    bosses[kind] = {
+      floor: band.floor,
+      cells,
+      bands: { soloWall: band.soloWall, exposed: band.exposed, minLegal: band.minLegal, party4: band.party4 },
+      calibrated: band.calibrated,
+      inBand: res.inBand,
+    };
+    process.stdout.write(`  ${kind}@F${band.floor}: solo wallP50=${cells["solo/median"].wallP50}s exposedP50=${cells["solo/median"].exposedP50}s | 4-strong P50=${cells["4-strong"].wallP50}s — ${res.inBand ? "IN BAND" : "OUT"}${band.calibrated ? "" : " (placeholder)"}\n`);
   }
   writeFileSync(new URL("./fixtures/scaling_report.json", import.meta.url), JSON.stringify({
-    note: "The R framework's ship-gate report: deterministic sim-harness pulls (seeded worlds, scripted mechanic-playing parties) across party sizes × builds. NOT live telemetry. Regenerate: npm run scaling:report",
-    boss: "weaver@F20",
+    note: "The R framework's MULTI-BOSS ship-gate report: deterministic sim-harness pulls (seeded worlds, scripted mechanic-playing parties) for all 8 shipped bosses, each at its floor across solo/median, 4-strong, and drift-watch (highRoll/god) cells. Calibrated bosses (King/Marrow/Weaver/Gilded/Choir) gate hard; Jet/Tithe/Quorum are Wave-1 placeholders (measured + surfaced). NOT live telemetry. Regenerate: npm run scaling:report",
     pulls,
     guards: {
       refDps: refDpsForFloor(20), hpFracCap: POWER.hpFracCap, addCapMax: POWER.addCapMax,
       soloGearCap: POWER.soloGearCap, weakFloorFrac: POWER.weakFloorFrac,
     },
-    cells,
+    bosses,
   }, null, 2) + "\n");
-  check(`ship-gate report written (${pulls} pulls)`, pulls >= 200);
+  check(`multi-boss ship-gate report written (${pulls} pulls, ${Object.keys(bosses).length} bosses)`, Object.keys(bosses).length === 8);
 }
 
 function main(): void {
@@ -483,7 +815,9 @@ function main(): void {
   densityGates();
   bandGates();
   determinismGates();
-  if (process.argv.includes("--report")) shipGateReport();
+  const gate = multiBossGate();
+  driftSelfTestGate();
+  if (process.argv.includes("--report")) writeMultiBossReport(gate);
   process.stdout.write(`\n${passed} checks passed, ${failed} failed\n`);
   if (failed > 0) { process.stdout.write(`FAILURES:\n${failures.map((f) => "  - " + f).join("\n")}\n`); process.exit(1); }
   process.stdout.write("\nThe party+gear scaling framework holds.\n");

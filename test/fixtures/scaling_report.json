@@ -1,229 +1,602 @@
 {
-  "note": "The R framework's ship-gate report: deterministic sim-harness pulls (seeded worlds, scripted mechanic-playing parties) across party sizes × builds. NOT live telemetry. Regenerate: npm run scaling:report",
-  "boss": "weaver@F20",
-  "pulls": 204,
+  "note": "The R framework's MULTI-BOSS ship-gate report: deterministic sim-harness pulls (seeded worlds, scripted mechanic-playing parties) for all 8 shipped bosses, each at its floor across solo/median, 4-strong, and drift-watch (highRoll/god) cells. Calibrated bosses (King/Marrow/Weaver/Gilded/Choir) gate hard; Jet/Tithe/Quorum are Wave-1 placeholders (measured + surfaced). NOT live telemetry. Regenerate: npm run scaling:report",
+  "pulls": 640,
   "guards": {
     "refDps": 36,
-    "hpFracCap": 2.9,
+    "hpFracCap": 3.1,
     "addCapMax": 8,
     "soloGearCap": 1.15,
     "weakFloorFrac": 0.55
   },
-  "cells": {
-    "solo/naked": {
-      "partyDps": 9,
-      "r": 1,
-      "effHp": 590,
-      "killedFrac": 0,
-      "ttkP10": null,
-      "ttkP50": null,
-      "ttkP90": null,
-      "exposedP50": 36.2,
-      "addsKilledP50": 58,
-      "hitsTakenP50": 144,
-      "maxLiveAdds": 3,
-      "phaseDurationsP50": [
-        42.8,
-        137.2
-      ]
+  "bosses": {
+    "boss": {
+      "floor": 5,
+      "cells": {
+        "solo/median": {
+          "build": "pistol+hair_trigger×3",
+          "r": 1,
+          "effHp": 950,
+          "killedFrac": 1,
+          "wallP10": 48.2,
+          "wallP50": 48.2,
+          "wallP90": 48.2,
+          "exposedP50": 0,
+          "addsKilledP50": 0,
+          "hitsTakenP50": 58,
+          "maxLiveAdds": 7
+        },
+        "4-strong": {
+          "build": "smg+glass_cannon×3,hair_trigger×3,deadeye×3,split_shot×3",
+          "r": 6,
+          "effHp": 2950,
+          "killedFrac": 1,
+          "wallP10": 31,
+          "wallP50": 31.1,
+          "wallP90": 31.4,
+          "exposedP50": 0,
+          "addsKilledP50": 15,
+          "hitsTakenP50": 50,
+          "maxLiveAdds": 8
+        },
+        "solo/highRoll": {
+          "build": "smg+deadeye×3,glass_cannon×2",
+          "r": 1,
+          "effHp": 950,
+          "killedFrac": 1,
+          "wallP10": 40.2,
+          "wallP50": 40.6,
+          "wallP90": 40.8,
+          "exposedP50": 0,
+          "addsKilledP50": 0,
+          "hitsTakenP50": 48,
+          "maxLiveAdds": 7
+        },
+        "solo/god": {
+          "build": "smg+glass_cannon×3,hair_trigger×3,deadeye×3,split_shot×3",
+          "r": 1.15,
+          "effHp": 1030,
+          "killedFrac": 1,
+          "wallP10": 28,
+          "wallP50": 28.1,
+          "wallP90": 28.3,
+          "exposedP50": 0,
+          "addsKilledP50": 7,
+          "hitsTakenP50": 32,
+          "maxLiveAdds": 7
+        }
+      },
+      "bands": {
+        "soloWall": [
+          35,
+          50
+        ],
+        "exposed": null,
+        "minLegal": 20,
+        "party4": [
+          42,
+          58
+        ]
+      },
+      "calibrated": true,
+      "inBand": true
     },
-    "solo/median": {
-      "partyDps": 28.31,
-      "r": 1,
-      "effHp": 590,
-      "killedFrac": 1,
-      "ttkP10": 42.3,
-      "ttkP50": 54.1,
-      "ttkP90": 64,
-      "exposedP50": 21.6,
-      "addsKilledP50": 23,
-      "hitsTakenP50": 31,
-      "maxLiveAdds": 4,
-      "phaseDurationsP50": [
-        12.2,
-        21.6,
-        16.7
-      ]
+    "marrow": {
+      "floor": 15,
+      "cells": {
+        "solo/median": {
+          "build": "pistol+hair_trigger×3,glass_cannon×2",
+          "r": 1,
+          "effHp": 730,
+          "killedFrac": 1,
+          "wallP10": 49.5,
+          "wallP50": 54.1,
+          "wallP90": 55.4,
+          "exposedP50": 14.1,
+          "addsKilledP50": 11,
+          "hitsTakenP50": 26,
+          "maxLiveAdds": 7
+        },
+        "4-strong": {
+          "build": "smg+glass_cannon×3,hair_trigger×3,deadeye×3,split_shot×3",
+          "r": 4.844,
+          "effHp": 2260,
+          "killedFrac": 1,
+          "wallP10": 47.4,
+          "wallP50": 47.8,
+          "wallP90": 49.2,
+          "exposedP50": 13.4,
+          "addsKilledP50": 26,
+          "hitsTakenP50": 79,
+          "maxLiveAdds": 7
+        },
+        "solo/highRoll": {
+          "build": "smg+deadeye×3,glass_cannon×2",
+          "r": 1,
+          "effHp": 730,
+          "killedFrac": 1,
+          "wallP10": 81,
+          "wallP50": 87.4,
+          "wallP90": 88.3,
+          "exposedP50": 21.8,
+          "addsKilledP50": 18,
+          "hitsTakenP50": 46,
+          "maxLiveAdds": 7
+        },
+        "solo/god": {
+          "build": "smg+glass_cannon×3,hair_trigger×3,deadeye×3,split_shot×3",
+          "r": 1,
+          "effHp": 730,
+          "killedFrac": 1,
+          "wallP10": 57.4,
+          "wallP50": 59.3,
+          "wallP90": 59.9,
+          "exposedP50": 16.7,
+          "addsKilledP50": 15,
+          "hitsTakenP50": 23,
+          "maxLiveAdds": 5
+        }
+      },
+      "bands": {
+        "soloWall": [
+          40,
+          63
+        ],
+        "exposed": [
+          8,
+          20
+        ],
+        "minLegal": 20,
+        "party4": [
+          42,
+          58
+        ]
+      },
+      "calibrated": true,
+      "inBand": true
     },
-    "solo/highRoll": {
-      "partyDps": 19.13,
-      "r": 1,
-      "effHp": 590,
-      "killedFrac": 1,
-      "ttkP10": 66.3,
-      "ttkP50": 72.9,
-      "ttkP90": 82.8,
-      "exposedP50": 29.6,
-      "addsKilledP50": 29,
-      "hitsTakenP50": 42,
-      "maxLiveAdds": 3,
-      "phaseDurationsP50": [
-        15.8,
-        33.9,
-        12.6
-      ]
+    "weaver": {
+      "floor": 20,
+      "cells": {
+        "solo/median": {
+          "build": "pistol+hair_trigger×3,glass_cannon×2",
+          "r": 1,
+          "effHp": 590,
+          "killedFrac": 1,
+          "wallP10": 47.4,
+          "wallP50": 53.4,
+          "wallP90": 63.5,
+          "exposedP50": 21.1,
+          "addsKilledP50": 22,
+          "hitsTakenP50": 32,
+          "maxLiveAdds": 4
+        },
+        "4-strong": {
+          "build": "smg+glass_cannon×3,hair_trigger×3,deadeye×3,split_shot×3",
+          "r": 4.844,
+          "effHp": 1830,
+          "killedFrac": 1,
+          "wallP10": 41.6,
+          "wallP50": 52.8,
+          "wallP90": 59.4,
+          "exposedP50": 25.4,
+          "addsKilledP50": 59,
+          "hitsTakenP50": 37,
+          "maxLiveAdds": 5
+        },
+        "solo/highRoll": {
+          "build": "smg+deadeye×3,glass_cannon×2",
+          "r": 1,
+          "effHp": 590,
+          "killedFrac": 1,
+          "wallP10": 69.7,
+          "wallP50": 79.7,
+          "wallP90": 94,
+          "exposedP50": 32.6,
+          "addsKilledP50": 33,
+          "hitsTakenP50": 47,
+          "maxLiveAdds": 4
+        },
+        "solo/god": {
+          "build": "smg+glass_cannon×3,hair_trigger×3,deadeye×3,split_shot×3",
+          "r": 1,
+          "effHp": 590,
+          "killedFrac": 1,
+          "wallP10": 50.6,
+          "wallP50": 56,
+          "wallP90": 61.6,
+          "exposedP50": 25.1,
+          "addsKilledP50": 25,
+          "hitsTakenP50": 24,
+          "maxLiveAdds": 3
+        }
+      },
+      "bands": {
+        "soloWall": [
+          38,
+          58
+        ],
+        "exposed": [
+          16,
+          30
+        ],
+        "minLegal": 20,
+        "party4": [
+          42,
+          58
+        ]
+      },
+      "calibrated": true,
+      "inBand": true
     },
-    "solo/god": {
-      "partyDps": 35.16,
-      "r": 1,
-      "effHp": 590,
-      "killedFrac": 1,
-      "ttkP10": 43.7,
-      "ttkP50": 47.4,
-      "ttkP90": 49.7,
-      "exposedP50": 21.6,
-      "addsKilledP50": 22,
-      "hitsTakenP50": 21,
-      "maxLiveAdds": 4,
-      "phaseDurationsP50": [
-        11.3,
-        17.3,
-        21
-      ]
+    "gilded": {
+      "floor": 25,
+      "cells": {
+        "solo/median": {
+          "build": "pistol+hair_trigger×3,glass_cannon×3",
+          "r": 1,
+          "effHp": 1280,
+          "killedFrac": 1,
+          "wallP10": 48,
+          "wallP50": 48,
+          "wallP90": 48,
+          "exposedP50": 28.2,
+          "addsKilledP50": 0,
+          "hitsTakenP50": 11,
+          "maxLiveAdds": 0
+        },
+        "4-strong": {
+          "build": "smg+glass_cannon×3,hair_trigger×3,deadeye×3,split_shot×3",
+          "r": 4.055,
+          "effHp": 3430,
+          "killedFrac": 1,
+          "wallP10": 58.1,
+          "wallP50": 58.3,
+          "wallP90": 59.2,
+          "exposedP50": 34.3,
+          "addsKilledP50": 0,
+          "hitsTakenP50": 32,
+          "maxLiveAdds": 0
+        },
+        "solo/highRoll": {
+          "build": "smg+deadeye×3,glass_cannon×2",
+          "r": 1,
+          "effHp": 1280,
+          "killedFrac": 1,
+          "wallP10": 78.7,
+          "wallP50": 79,
+          "wallP90": 79.5,
+          "exposedP50": 47.9,
+          "addsKilledP50": 0,
+          "hitsTakenP50": 19,
+          "maxLiveAdds": 0
+        },
+        "solo/god": {
+          "build": "smg+glass_cannon×3,hair_trigger×3,deadeye×3,split_shot×3",
+          "r": 1,
+          "effHp": 1280,
+          "killedFrac": 1,
+          "wallP10": 92.3,
+          "wallP50": 94.4,
+          "wallP90": 95.1,
+          "exposedP50": 55.8,
+          "addsKilledP50": 0,
+          "hitsTakenP50": 23,
+          "maxLiveAdds": 0
+        }
+      },
+      "bands": {
+        "soloWall": [
+          40,
+          58
+        ],
+        "exposed": [
+          20,
+          34
+        ],
+        "minLegal": 22,
+        "party4": [
+          42,
+          58
+        ]
+      },
+      "calibrated": true,
+      "inBand": true
     },
-    "P2/naked": {
-      "partyDps": 18,
-      "r": 1,
-      "effHp": 590,
-      "killedFrac": 0.8235294117647058,
-      "ttkP10": 122.9,
-      "ttkP50": 151.8,
-      "ttkP90": 163.4,
-      "exposedP50": 32.6,
-      "addsKilledP50": 65,
-      "hitsTakenP50": 158,
-      "maxLiveAdds": 4,
-      "phaseDurationsP50": [
-        16.9,
-        99.8,
-        45.6
-      ]
+    "choir": {
+      "floor": 30,
+      "cells": {
+        "solo/median": {
+          "build": "pistol+hair_trigger×3,glass_cannon×3",
+          "r": 1,
+          "effHp": 750,
+          "killedFrac": 1,
+          "wallP10": 54,
+          "wallP50": 62,
+          "wallP90": 62.6,
+          "exposedP50": 17.9,
+          "addsKilledP50": 18,
+          "hitsTakenP50": 13,
+          "maxLiveAdds": 3
+        },
+        "4-strong": {
+          "build": "smg+glass_cannon×3,hair_trigger×3,deadeye×3,split_shot×3",
+          "r": 3.791,
+          "effHp": 1900,
+          "killedFrac": 1,
+          "wallP10": 97.3,
+          "wallP50": 121.1,
+          "wallP90": 122.4,
+          "exposedP50": 36.7,
+          "addsKilledP50": 49,
+          "hitsTakenP50": 29,
+          "maxLiveAdds": 4
+        },
+        "solo/highRoll": {
+          "build": "smg+deadeye×3,glass_cannon×2",
+          "r": 1,
+          "effHp": 750,
+          "killedFrac": 1,
+          "wallP10": 95.1,
+          "wallP50": 96.3,
+          "wallP90": 98.2,
+          "exposedP50": 28.1,
+          "addsKilledP50": 22,
+          "hitsTakenP50": 23,
+          "maxLiveAdds": 3
+        },
+        "solo/god": {
+          "build": "smg+glass_cannon×3,hair_trigger×3,deadeye×3,split_shot×3",
+          "r": 1,
+          "effHp": 750,
+          "killedFrac": 1,
+          "wallP10": 76.2,
+          "wallP50": 84.6,
+          "wallP90": 85.3,
+          "exposedP50": 26.3,
+          "addsKilledP50": 22,
+          "hitsTakenP50": 18,
+          "maxLiveAdds": 3
+        }
+      },
+      "bands": {
+        "soloWall": [
+          40,
+          64
+        ],
+        "exposed": [
+          12,
+          26
+        ],
+        "minLegal": 22,
+        "party4": [
+          46,
+          62
+        ]
+      },
+      "calibrated": true,
+      "inBand": true
     },
-    "P2/median": {
-      "partyDps": 56.61,
-      "r": 1.573,
-      "effHp": 740,
-      "killedFrac": 1,
-      "ttkP10": 27.2,
-      "ttkP50": 31.9,
-      "ttkP90": 40.4,
-      "exposedP50": 12.2,
-      "addsKilledP50": 21,
-      "hitsTakenP50": 27,
-      "maxLiveAdds": 4,
-      "phaseDurationsP50": [
-        5.8,
-        20.7,
-        15
-      ]
+    "jet": {
+      "floor": 35,
+      "cells": {
+        "solo/median": {
+          "build": "pistol+hair_trigger×3,glass_cannon×2",
+          "r": 1,
+          "effHp": 760,
+          "killedFrac": 1,
+          "wallP10": 33.3,
+          "wallP50": 33.6,
+          "wallP90": 34.5,
+          "exposedP50": 19.7,
+          "addsKilledP50": 0,
+          "hitsTakenP50": 19,
+          "maxLiveAdds": 1
+        },
+        "4-strong": {
+          "build": "smg+glass_cannon×3,hair_trigger×3,deadeye×3,split_shot×3",
+          "r": 3.791,
+          "effHp": 1930,
+          "killedFrac": 1,
+          "wallP10": 49.1,
+          "wallP50": 50.9,
+          "wallP90": 52,
+          "exposedP50": 24.6,
+          "addsKilledP50": 6,
+          "hitsTakenP50": 35,
+          "maxLiveAdds": 1
+        },
+        "solo/highRoll": {
+          "build": "smg+deadeye×3,glass_cannon×2",
+          "r": 1,
+          "effHp": 760,
+          "killedFrac": 1,
+          "wallP10": 49,
+          "wallP50": 50,
+          "wallP90": 51.6,
+          "exposedP50": 29.5,
+          "addsKilledP50": 0,
+          "hitsTakenP50": 33,
+          "maxLiveAdds": 1
+        },
+        "solo/god": {
+          "build": "smg+glass_cannon×3,hair_trigger×3,deadeye×3,split_shot×3",
+          "r": 1,
+          "effHp": 760,
+          "killedFrac": 1,
+          "wallP10": 46.6,
+          "wallP50": 54.9,
+          "wallP90": 56.7,
+          "exposedP50": 32.2,
+          "addsKilledP50": 1,
+          "hitsTakenP50": 21,
+          "maxLiveAdds": 1
+        }
+      },
+      "bands": {
+        "soloWall": [
+          38,
+          55
+        ],
+        "exposed": [
+          16,
+          30
+        ],
+        "minLegal": 22,
+        "party4": [
+          42,
+          58
+        ]
+      },
+      "calibrated": false,
+      "inBand": true
     },
-    "P2/highRoll": {
-      "partyDps": 38.26,
-      "r": 1.063,
-      "effHp": 610,
-      "killedFrac": 1,
-      "ttkP10": 30.5,
-      "ttkP50": 37.3,
-      "ttkP90": 44.4,
-      "exposedP50": 15.5,
-      "addsKilledP50": 25,
-      "hitsTakenP50": 35,
-      "maxLiveAdds": 4,
-      "phaseDurationsP50": [
-        7.3,
-        14.7,
-        10.8
-      ]
+    "tithe": {
+      "floor": 40,
+      "cells": {
+        "solo/median": {
+          "build": "pistol+hair_trigger×3,glass_cannon×3",
+          "r": 1,
+          "effHp": 940,
+          "killedFrac": 1,
+          "wallP10": 48.2,
+          "wallP50": 48.3,
+          "wallP90": 48.3,
+          "exposedP50": 24.3,
+          "addsKilledP50": 6,
+          "hitsTakenP50": 7,
+          "maxLiveAdds": 1
+        },
+        "4-strong": {
+          "build": "smg+glass_cannon×3,hair_trigger×3,deadeye×3,split_shot×3",
+          "r": 3.791,
+          "effHp": 2380,
+          "killedFrac": 1,
+          "wallP10": 41.7,
+          "wallP50": 46,
+          "wallP90": 52.3,
+          "exposedP50": 24.7,
+          "addsKilledP50": 23,
+          "hitsTakenP50": 48,
+          "maxLiveAdds": 6
+        },
+        "solo/highRoll": {
+          "build": "smg+deadeye×3,glass_cannon×2",
+          "r": 1,
+          "effHp": 940,
+          "killedFrac": 0,
+          "wallP10": -1,
+          "wallP50": -1,
+          "wallP90": -1,
+          "exposedP50": 10.6,
+          "addsKilledP50": 3,
+          "hitsTakenP50": 204,
+          "maxLiveAdds": 1
+        },
+        "solo/god": {
+          "build": "smg+glass_cannon×3,hair_trigger×3,deadeye×3,split_shot×3",
+          "r": 1,
+          "effHp": 940,
+          "killedFrac": 1,
+          "wallP10": 58.6,
+          "wallP50": 59.4,
+          "wallP90": 59.8,
+          "exposedP50": 29,
+          "addsKilledP50": 6,
+          "hitsTakenP50": 11,
+          "maxLiveAdds": 1
+        }
+      },
+      "bands": {
+        "soloWall": [
+          38,
+          55
+        ],
+        "exposed": [
+          16,
+          30
+        ],
+        "minLegal": 22,
+        "party4": [
+          42,
+          58
+        ]
+      },
+      "calibrated": false,
+      "inBand": true
     },
-    "P2/god": {
-      "partyDps": 70.31,
-      "r": 1.953,
-      "effHp": 840,
-      "killedFrac": 1,
-      "ttkP10": 33.5,
-      "ttkP50": 38.2,
-      "ttkP90": 40.2,
-      "exposedP50": 18.1,
-      "addsKilledP50": 28,
-      "hitsTakenP50": 17,
-      "maxLiveAdds": 4,
-      "phaseDurationsP50": [
-        7.6,
-        18.2,
-        20
-      ]
-    },
-    "P4/naked": {
-      "partyDps": 36,
-      "r": 1,
-      "effHp": 590,
-      "killedFrac": 0.4117647058823529,
-      "ttkP10": 128.1,
-      "ttkP50": 154.5,
-      "ttkP90": 164.2,
-      "exposedP50": 10.1,
-      "addsKilledP50": 108,
-      "hitsTakenP50": 307,
-      "maxLiveAdds": 3,
-      "phaseDurationsP50": [
-        8.1,
-        169.2,
-        2.8
-      ]
-    },
-    "P4/median": {
-      "partyDps": 113.22,
-      "r": 3.145,
-      "effHp": 1160,
-      "killedFrac": 1,
-      "ttkP10": 21.9,
-      "ttkP50": 29.2,
-      "ttkP90": 33.5,
-      "exposedP50": 11.1,
-      "addsKilledP50": 28,
-      "hitsTakenP50": 34,
-      "maxLiveAdds": 5,
-      "phaseDurationsP50": [
-        5.2,
-        19.2,
-        8.1
-      ]
-    },
-    "P4/highRoll": {
-      "partyDps": 76.52,
-      "r": 2.125,
-      "effHp": 890,
-      "killedFrac": 1,
-      "ttkP10": 27.3,
-      "ttkP50": 31.5,
-      "ttkP90": 39.6,
-      "exposedP50": 12.1,
-      "addsKilledP50": 30,
-      "hitsTakenP50": 37,
-      "maxLiveAdds": 4,
-      "phaseDurationsP50": [
-        5.3,
-        17.6,
-        8.6
-      ]
-    },
-    "P4/god": {
-      "partyDps": 140.62,
-      "r": 3.906,
-      "effHp": 1360,
-      "killedFrac": 1,
-      "ttkP10": 29.5,
-      "ttkP50": 32.5,
-      "ttkP90": 36.2,
-      "exposedP50": 17.6,
-      "addsKilledP50": 35,
-      "hitsTakenP50": 15,
-      "maxLiveAdds": 4,
-      "phaseDurationsP50": [
-        5.2,
-        13.9,
-        6
-      ]
+    "quorum": {
+      "floor": 45,
+      "cells": {
+        "solo/median": {
+          "build": "pistol+hair_trigger×3,glass_cannon×3",
+          "r": 1,
+          "effHp": 800,
+          "killedFrac": 1,
+          "wallP10": 43.4,
+          "wallP50": 44.1,
+          "wallP90": 44.1,
+          "exposedP50": 8.2,
+          "addsKilledP50": 1,
+          "hitsTakenP50": 46,
+          "maxLiveAdds": 4
+        },
+        "4-strong": {
+          "build": "smg+glass_cannon×3,hair_trigger×3,deadeye×3,split_shot×3",
+          "r": 3.791,
+          "effHp": 2030,
+          "killedFrac": 1,
+          "wallP10": 30.2,
+          "wallP50": 30.6,
+          "wallP90": 31.2,
+          "exposedP50": 6.5,
+          "addsKilledP50": 4,
+          "hitsTakenP50": 43,
+          "maxLiveAdds": 8
+        },
+        "solo/highRoll": {
+          "build": "smg+deadeye×3,glass_cannon×2",
+          "r": 1,
+          "effHp": 800,
+          "killedFrac": 1,
+          "wallP10": 58.9,
+          "wallP50": 61.7,
+          "wallP90": 62.4,
+          "exposedP50": 12.3,
+          "addsKilledP50": 1,
+          "hitsTakenP50": 68,
+          "maxLiveAdds": 4
+        },
+        "solo/god": {
+          "build": "smg+glass_cannon×3,hair_trigger×3,deadeye×3,split_shot×3",
+          "r": 1,
+          "effHp": 800,
+          "killedFrac": 1,
+          "wallP10": 30.4,
+          "wallP50": 30.6,
+          "wallP90": 30.7,
+          "exposedP50": 6.5,
+          "addsKilledP50": 1,
+          "hitsTakenP50": 13,
+          "maxLiveAdds": 4
+        }
+      },
+      "bands": {
+        "soloWall": [
+          40,
+          58
+        ],
+        "exposed": [
+          12,
+          26
+        ],
+        "minLegal": 22,
+        "party4": [
+          42,
+          58
+        ]
+      },
+      "calibrated": false,
+      "inBand": true
     }
   }
 }
