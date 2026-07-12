@@ -7419,24 +7419,32 @@ function gildedReshapeCover(w: WorldState, e: Enemy, ev: SimEvent[]): void {
 
 // THE HOLLOW CHOIR's hall reshape (fair surprise §3): the split beat already scatters the
 // Choir into wisps — this EXTENDS that beat into an ARENA reshape. The hall's resonant
-// pillars crumble and a fresh seeded ring rises, so the room reads differently every
-// phase (the Weaver molt / Gilded cover shape, reused wholesale). Every
-// isConstructionSiteClear law holds (wall/exit standoffs, never on props, never on/beside
-// a body), every reshapeGapEvery-th site stays OPEN by construction (≥1 readable route
-// always), and the pieces are ordinary breakable pillars. It fires ON the transition beat
-// and NEVER touches the guard/exposed state — the only way to expose the Choir stays the
-// verse silence, so the reshape can never open or extend a window.
+// pillars crumble and a fresh seeded ring rises, and the ring now VARIES BY PHASE (radius,
+// gap pattern, site count read from CHOIR.reshapeByPhase[boss.phase]) so P2 and P3 read as
+// genuinely different halls, not the same ring re-spun (the Weaver molt / Gilded cover
+// shape, reused wholesale). Every isConstructionSiteClear law holds (wall/exit standoffs,
+// never on props, never on/beside a body), every gapEvery-th site stays OPEN by
+// construction (≥1 readable route always, per phase), and the pieces are ordinary breakable
+// pillars. It fires ON the transition beat and NEVER touches the guard/exposed state — the
+// only way to expose the Choir stays the verse silence, so the reshape can never open or
+// extend a window.
 function choirReshape(w: WorldState, e: Enemy, ev: SimEvent[]): void {
   for (const p of w.props) {
     if (p.breakT === undefined && !p.dead && p.owner === e.id) destroyProp(w, p, ev);
   }
+  // Per-phase hall (fair surprise §3): the ring RADIUS + GAP PATTERN + site count are read
+  // from boss.phase, so P2 and P3 present genuinely different halls (not the same ring
+  // re-spun). Clamped to the table so any future phase reuses the last hall. The random
+  // base angle still rides the world RNG (one draw, exactly as before) — determinism holds.
+  const phase = Math.min(e.boss?.phase ?? 1, CHOIR.reshapeByPhase.length - 1);
+  const hall = CHOIR.reshapeByPhase[phase];
   const base = w.rng.next() * Math.PI * 2;
   let placed = 0;
-  for (let i = 0; i < CHOIR.reshapeSites; i++) {
-    if (i % CHOIR.reshapeGapEvery === CHOIR.reshapeGapEvery - 1) continue; // the authored gap
-    const ang = base + (i / CHOIR.reshapeSites) * Math.PI * 2;
-    const x = e.x + Math.cos(ang) * CHOIR.reshapeRingDist;
-    const y = e.y + Math.sin(ang) * CHOIR.reshapeRingDist;
+  for (let i = 0; i < hall.sites; i++) {
+    if (i % hall.gapEvery === hall.gapEvery - 1) continue; // the authored gap (≥3 per ring)
+    const ang = base + (i / hall.sites) * Math.PI * 2;
+    const x = e.x + Math.cos(ang) * hall.ringDist;
+    const y = e.y + Math.sin(ang) * hall.ringDist;
     if (isNearAnyPlayer(w, x, y, CHOIR.reshapePlayerClear)) continue;
     if (!isConstructionSiteClear(w, x, y)) continue;
     w.props.push({
