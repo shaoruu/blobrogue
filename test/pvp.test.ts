@@ -389,6 +389,64 @@ section("DETERMINISM: identical inputs -> byte-identical, and reconnect-stable s
 }
 
 // ---------------------------------------------------------------------------------------------
+section("CAN-DAMAGE COMPLETENESS: AoE / chain / homing / deployables all hit foes");
+{
+  // Mortar (AoE blast): the shell detonates on/near the foe and the blast catches them — never a
+  // silent pass-through (the exact failure the architecture scan warned about).
+  {
+    const w = pvpWorld(40, ["p1", "p2"]);
+    advanceToLive(w);
+    const s = w.players.get("p1")!; const v = w.players.get("p2")!;
+    s.x = 300; s.y = 216; s.invuln = 0; s.weapon = "mortar"; s.ownedWeapons = ["mortar"];
+    v.x = 500; v.y = 216; v.invuln = 0;
+    stepN(w, 30, new Map([["p1", inp({ firing: true, aim: 0 })]]));
+    check("mortar AoE damages a foe (blast, not silent pass-through)", v.hp < PVP.maxHp, `hp=${v.hp}`);
+  }
+  // Tesla (chain lightning): hitting foe A arcs to nearby foe B.
+  {
+    const w = pvpWorld(41, ["p1", "p2", "p3"]);
+    advanceToLive(w);
+    const s = w.players.get("p1")!; const a = w.players.get("p2")!; const b = w.players.get("p3")!;
+    s.x = 300; s.y = 216; s.invuln = 0; s.weapon = "tesla"; s.ownedWeapons = ["tesla"];
+    a.x = 360; a.y = 216; a.invuln = 0;
+    b.x = 420; b.y = 216; b.invuln = 0;
+    stepN(w, 6, new Map([["p1", inp({ firing: true, aim: 0 })]]));
+    check("tesla hits the struck foe AND chains to a nearby foe", a.hp < PVP.maxHp && b.hp < PVP.maxHp, `a=${a.hp} b=${b.hp}`);
+  }
+  // Homing: a round fired OFF-axis seeks and curves onto the foe (a straight round would miss).
+  {
+    const w = pvpWorld(42, ["p1", "p2"]);
+    advanceToLive(w);
+    const s = w.players.get("p1")!; const v = w.players.get("p2")!;
+    s.x = 300; s.y = 216; s.invuln = 0; s.weapon = "homing"; s.ownedWeapons = ["homing"];
+    v.x = 450; v.y = 176; v.invuln = 0; // 40px off the aim=0 line
+    stepN(w, 40, new Map([["p1", inp({ firing: true, aim: 0 })]]));
+    check("homing rounds seek and hit a foe", v.hp < PVP.maxHp, `hp=${v.hp}`);
+  }
+  // Razor Halo (orbit blades): the ring strikes an adjacent foe (weapon held, no firing needed).
+  {
+    const w = pvpWorld(43, ["p1", "p2"]);
+    advanceToLive(w);
+    const s = w.players.get("p1")!; const v = w.players.get("p2")!;
+    s.x = 300; s.y = 216; s.invuln = 0; s.weapon = "halo"; s.ownedWeapons = ["halo"];
+    v.x = 340; v.y = 216; v.invuln = 0; // inside the 46px orbit ring
+    stepN(w, 45, new Map([["p1", inp({ firing: false, aim: 0 })]]));
+    check("orbit blades damage an adjacent foe", v.hp < PVP.maxHp, `hp=${v.hp}`);
+  }
+  // Prism Sentry (deployable): the turret acquires a foe in range + LOS and its bolts hit.
+  {
+    const w = pvpWorld(44, ["p1", "p2"]);
+    advanceToLive(w);
+    const s = w.players.get("p1")!; const v = w.players.get("p2")!;
+    s.x = 300; s.y = 216; s.invuln = 0; s.weapon = "sentry"; s.ownedWeapons = ["sentry"];
+    v.x = 470; v.y = 216; v.invuln = 0;
+    stepN(w, 1, new Map([["p1", inp({ firing: true, aim: 0 })]])); // deploy the turret
+    stepN(w, 45, new Map()); // owner idle; the sentry acquires + fires autonomously
+    check("a deployed sentry fires at and damages a foe", v.hp < PVP.maxHp, `hp=${v.hp}`);
+  }
+}
+
+// ---------------------------------------------------------------------------------------------
 section("P2 WIRE: protocol v28, match block + team + respawn round-trip, reliable events");
 {
   check("PROTOCOL_VERSION bumped to 28", PROTOCOL_VERSION === 28);
