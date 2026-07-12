@@ -68,7 +68,9 @@ import type {
 // / Mender pulse-CD), `input` grows a `pulse` bit, and EnemyWire grows `mkt` (Phantom mark).
 // v26: JET's surprise layer — a new enemy kind `jet_echo` + EnemyWire `mir` (the mirrored
 // PlayerId), and a new dynamic HazardKind `corrupt` (the per-phase arena-corruption drain zone).
-export const SYNTHETIC_JOIN_PROTOCOL = 26;
+// v27: the GORGE F50 giant — new enemy kinds `gorge` + `gorge_seam` and a new PropKind
+// `gorge_debris` (the shell phase rides bph + the exposed state rides aux, so no new EnemyWire field).
+export const SYNTHETIC_JOIN_PROTOCOL = 27;
 
 export interface HttpProbeConfig {
   baseUrl: string;

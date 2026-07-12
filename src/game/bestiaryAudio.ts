@@ -79,6 +79,7 @@ export const AUDIO_BEHAVIOR: Readonly<Record<EnemyKind, AudioBehavior>> = {
   tithe_slab: "decoy", quorum_shield: "decoy", quorum_heal: "decoy", quorum_dmg: "decoy",
   tithe_tribute: "hunt", quorum_splinter: "hunt", // surplus adds: simple chasers
   jet_echo: "kite", // the reflection warns, locks, and fires ONE salvo (ranged-hold grammar)
+  gorge: "boss", gorge_seam: "decoy", // the F50 giant + its planted weak-point (decoy grammar)
 };
 
 // ---- body materials ----
@@ -125,6 +126,10 @@ export const AUDIO_MATERIAL: Readonly<Record<EnemyKind, AudioMaterial>> = {
   tithe_slab: "chitin", quorum_shield: "chitin", quorum_heal: "chitin", quorum_dmg: "chitin",
   tithe_tribute: "goo", quorum_splinter: "bone", // surplus adds: amber glob / bone shard
   jet_echo: "goo", // your own reflection: reuses JET's goo (King) bank, same as the mirror body
+  // PLACEHOLDER: the giant reuses the Warden's heavy-slammer bank (gold), its weak-points the
+  // Weaver's lattice mechanic-body rows (chitin, like the Tithe slab) — until the audio director's
+  // bespoke giant stems land (half-time footfall + colossal downbeat; see the manifest).
+  gorge: "gold", gorge_seam: "chitin",
 };
 
 // SAME-MATERIAL fallback law: until a row's generated stem lands, its declared fallback
@@ -293,6 +298,15 @@ export const BESTIARY_CUES: Readonly<Record<EnemyKind, Readonly<Record<string, W
   quorum_splinter: { move: "slime.move", commit: "slime.commit" },
   // JET's echo sings the mirror body's own cues (King goo bank): warn/lock/fire on its salvo.
   jet_echo: { warn: "king.hopWarn", lock: "king.hopLock", fire: "king.radialFire" },
+  // GORGE (F50 giant) — PLACEHOLDER audio reusing the Warden's heavy-slammer bank (gold — the
+  // closest colossal slam/quake match) until the audio director's giant stems land (half-time
+  // footfall motive + colossal downbeat — see the manifest). Its weak-points sing the Weaver's
+  // lattice mechanic-body rows (like the Tithe slab).
+  gorge: {
+    windup: "warden.prisonWarn", lock: "warden.turretLock", active: "warden.turretFire", impact: "warden.prisonClose",
+    recover: "warden.exposed", entrance: "gilded.entrance", phase: "warden.phase", special: "warden.glyphWarn", death: "warden.death",
+  },
+  gorge_seam: { fuse: "weaver.latticeWarn", toll: "weaver.latticeFire" },
 };
 
 export function bestiaryCue(kind: EnemyKind, hook: string): WaveEventId | null {

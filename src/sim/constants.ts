@@ -390,6 +390,9 @@ export const PROP_HP: Record<PropKind, number> = {
   crate: 4, pot: 1, barrel: 3, barrel_explosive: 3, brazier: 0,
   // Worker constructions: cover for either side, breakable by either side.
   root_wall: 3, silt_mound: 2, clinker_brick: 3,
+  // GORGE shell debris: a heavy chunk (a peeled layer of the giant) — sturdier cover than a
+  // crate so a peel's evidence stands as a real barricade the fight can be fought around.
+  gorge_debris: 6,
 };
 // Physical world impacts (damagePropsInRadius): a committed charge or slam does not chip
 // cover, it obliterates it — one figure comfortably above every PROP_HP entry.

@@ -229,7 +229,7 @@ function safetyTests(): void {
   const d = diffSnapshot(snapshotToWire(base), snapshotToWire(next), next.sseq, fullWorld(next));
   check("a delta advertises its baseline sseq so a client can refuse a gap", d.b === base.sseq && d.q === 7);
 
-  check("protocol version is current (v26: JET's mirror echo + corruption reshape on the wire)", PROTOCOL_VERSION === 26);
+  check("protocol version is current (v27: the GORGE F50 giant — gorge + gorge_seam kinds + gorge_debris prop)", PROTOCOL_VERSION === 27);
 }
 
 function main(): void {

@@ -66,7 +66,18 @@ export type EnemyKind =
   //    reflection that arrives on the fair-ambush omen, fires ONE mirrored-school salvo,
   //    then dissolves into resin flecks. Fragile + brief (dodge your own reflected
   //    aggression, never "fight two Jets"); which player it mirrors rides Enemy.mirrorOf.
-  | "tithe_tribute" | "quorum_splinter" | "jet_echo";
+  | "tithe_tribute" | "quorum_splinter" | "jet_echo"
+  // GORGE (F50 GIANT #1 — the Sump cap, the LOCKED giant template): a colossal ~192px
+  // STATIONARY front-facing set-piece pinned to floor 50 (never in the seeded deep rotation).
+  // A multi-phase SHELL-PEEL: it fights GUARDED behind a shell (rind → chitin → core) that it
+  // sloughs one layer per phase (the sprite swaps off boss.phase). The peel VERB is destroying
+  // its telegraphed tectonic WEAK-POINTS (gorge_seam) — clearing a whole exposure routes through
+  // the shipped openBossWindow earned-window plumbing (guard chip, window bank, calibration).
+  // Its threat is space-control (rings/zones/spokes), never chasing.
+  //  - gorge_seam: a tectonic WEAK-POINT that juts out of the current shell — a destructible
+  //    mechanic body (like the Weaver's knot / Tithe's slab: no loot, no combo). Destroy the
+  //    whole exposed set to crack the shell and open the exposed window on the bared material.
+  | "gorge" | "gorge_seam";
 
 // Telegraphed-attack state machine. Committed attacks read as
 // CHASE -> WINDUP (telegraph, aim locks partway) -> ACTIVE -> RECOVER -> cooldown.
@@ -219,6 +230,16 @@ export interface BossState {
   // telegraphed pattern from FloorDescriptor.bossAffix). Sim-internal — never on the wire (the
   // affix expresses through the telegraphed "charge" hazards it blooms, which ride hzds).
   affixCd: number;
+  // ---- GORGE (F50 giant) shell-peel scratch (sim-internal; the wire needs none of it — the
+  // shell phase rides bph, the exposed remainder rides aux, the seam bodies ride their own
+  // EnemyWire). The exposure CADENCE reuses the generic addTimer (the giant runs no add drip);
+  // the live seam ids ride the shared windowAddIds list (the "kill all to open the window" set,
+  // exactly the Choir's fragment contract). This is the ONE gorge-specific field: ----
+  // Seconds left before the current weak-point exposure RETRACTS unspent (the CORE's short
+  // window is the execution test). 0 while the shell is sealed. Clearing the whole set before it
+  // elapses cracks the shell → openBossWindow (peels re-seal + re-expose until the shell's HP
+  // chunk is spent, when the layer SLOUGHS at the phase transition).
+  seamLife: number;
 }
 
 export interface Enemy extends Entity {
@@ -572,7 +593,11 @@ export interface Pickup {
 // replaced when their owner builds anew.
 export type PropKind =
   | "crate" | "pot" | "barrel" | "barrel_explosive" | "brazier"
-  | "root_wall" | "silt_mound" | "clinker_brick";
+  | "root_wall" | "silt_mound" | "clinker_brick"
+  // The GORGE giant's sloughed SHELL DEBRIS: a chunk of the peeled layer that piles at the
+  // giant's base as material evidence AND reusable destructible cover (line-of-sight + movement
+  // cover, like the marshal's shatter-crates / the Warden's clinker ring). Deterministic + cheap.
+  | "gorge_debris";
 
 export interface Prop {
   id: number;      // stable per-world id (client keys its cosmetic anim map by this)
@@ -779,6 +804,13 @@ export type SpriteName =
   // JET's mirror-image echo reuses JET's own hero-derived walk sheets (drawn COLD +
   // translucent + hollow-eyed client-side so it never reads as a warm teammate).
   | "jet_echo"
+  // GORGE (F50 GIANT): the AD-LOCKED committed art — three single-frame SHELL states the client
+  // swaps off boss.phase. "gorge" is the base/idle body (the rind, P1); "gorge_shell_chitin"/
+  // "gorge_shell_core" are the P2/P3 escalation swaps (like JET's jet_phase2/3), a 96% shared
+  // silhouette peeling open. core is the ONE bright warm amber on an enemy (additive glow, P3
+  // only). "gorge_seam" is the tectonic weak-point's small crack-chunk (the molten core material
+  // showing through the shell), drawn small + additively lit as a peel target.
+  | "gorge" | "gorge_shell_chitin" | "gorge_shell_core" | "gorge_seam"
   | "patch"
   // Client-side cosmetic companion pets (META spec §3). A pure render key mapping to a
   // swappable placeholder asset; the sim never references it (pets are OUT of the sim). The

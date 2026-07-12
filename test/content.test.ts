@@ -955,25 +955,36 @@ function rotationTests(): void {
     check("F10 is the authored Miniboss Gauntlet floor", isGauntletFloor(10) && !isGauntletFloor(15));
   }
   {
-    // Beyond the authored chain (F50+ endgame): seeded, deterministic, varied, no immediate
-    // repeats — including the F45 Quorum finale boundary. The deep roster now holds all eight.
+    // F50 is the GORGE GIANT — a FIXED set-piece (the Sump cap), NOT part of the seeded deep
+    // rotation. It is pinned for every seed; the seeded rotation resumes at F55.
+    let allGorge = true;
+    for (let s = 0; s < 80; s++) if (bossKindForFloor(0x5EED + s * 977, 50) !== "gorge") allGorge = false;
+    check("F50 is ALWAYS the gorge giant (a fixed set-piece, out of the seeded rotation)", allGorge);
+  }
+  {
+    // Beyond the authored chain + the F50 gorge cap (F55+ endgame): the seeded rotation is
+    // deterministic, varied, no immediate repeats — and never picks the gorge (a fixed set-piece
+    // is out of the pool). The deep roster holds all eight.
     const roster: EnemyKind[] = ["marrow", "choir", "weaver", "gilded", "boss", "jet", "tithe", "quorum"];
     const seen = new Set<EnemyKind>();
     let deterministic = true;
     let noRepeats = true;
+    let neverGorge = true;
     for (let s = 0; s < 80; s++) {
       const seed = 0x5EED + s * 977;
-      let prev: EnemyKind | null = "quorum"; // the F45 authored finale before the rotation
-      for (let floor = 50; floor <= 95; floor += 5) {
+      let prev: EnemyKind | null = "gorge"; // F50 is the gorge; F55 must not repeat it (trivially true)
+      for (let floor = 55; floor <= 95; floor += 5) {
         const a = bossKindForFloor(seed, floor);
         if (a !== bossKindForFloor(seed, floor)) deterministic = false;
         if (a === null || a === prev) noRepeats = false;
+        if (a === "gorge") neverGorge = false;
         if (a !== null) seen.add(a);
         prev = a;
       }
     }
     check("the deep pick is a pure function of (seed, floor)", deterministic);
-    check("no boss repeats back-to-back deep (nor against the F45 finale)", noRepeats);
+    check("no boss repeats back-to-back deep (nor against the F50 gorge cap)", noRepeats);
+    check("the seeded rotation never picks the gorge (the fixed F50 set-piece is out of the pool)", neverGorge);
     check("every deep-roster boss appears across deep seeds", roster.every((k) => seen.has(k)), [...seen].join(","));
   }
   {

@@ -269,7 +269,7 @@ function serverRoundTripTests(): void {
 // who is actually there (the Sev-0 readout).
 function worldBindingWireTests(): void {
   section("v4: authoritative world id + roster are required, strict, and round-trip");
-  check("protocol version covers JET's surprise layer (v26: enemy kind jet_echo + EnemyWire.mir + HazardKind corrupt)", PROTOCOL_VERSION === 26, `v=${PROTOCOL_VERSION}`);
+  check("protocol version covers the GORGE F50 giant (v27: enemy kinds gorge + gorge_seam + PropKind gorge_debris; shell phase rides bph, exposed rides aux)", PROTOCOL_VERSION === 27, `v=${PROTOCOL_VERSION}`);
   check("room code maps to its world id", worldIdForRoomCode(" abcd ") === "room:ABCD");
   check("room world ids pass the shared charset gate", isValidWorldId(worldIdForRoomCode("ZZZZ")) && isValidWorldId("arena-1"));
   check("junk world ids fail the shared charset gate", !isValidWorldId("room:../../etc") && !isValidWorldId(""));

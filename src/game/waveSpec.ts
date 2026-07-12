@@ -1581,6 +1581,15 @@ export const WAVE_TELLS: Readonly<Record<string, Readonly<Record<string, MoveTel
     slam: { windup: "warden.prisonWarn", lock: "warden.turretLock", impact: "warden.prisonClose", recover: "warden.exposed" },
     sweep: { windup: "warden.glyphWarn", active: "warden.turretFire", recover: "warden.exposed" },
   },
+  // GORGE (F50 giant) — PLACEHOLDER tells on the Warden's heavy-slammer bank until the audio
+  // director's giant stems land: the P1 shockwave RING (slam), the P2 slag ZONES (spew) and the
+  // P3 rotating SPOKES (sweep) each get a >=0.6s windup tell (the shell crack-off roar rides the
+  // bespoke boss-phase row).
+  gorge: {
+    slam: { windup: "warden.prisonWarn", impact: "warden.prisonClose" },
+    spew: { windup: "warden.glyphWarn", active: "warden.turretFire" },
+    sweep: { windup: "warden.glyphWarn", active: "warden.turretFire" },
+  },
   skeleton: {
     lunge: { windup: "skeleton.commit" },
   },

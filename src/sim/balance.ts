@@ -1105,6 +1105,9 @@ export const PHASE_TIME_BASE: Readonly<Partial<Record<EnemyKind, number>>> = {
   // Wave 1 deep bosses (balancer FINAL soft-enrage yardsticks). Quorum has one transition
   // (husks → merge), so its budget is the two-stage median rather than a three-phase one.
   jet: 16, tithe: 16, quorum: 14,
+  // GORGE (F50 giant): a three-shell fight, so a longer per-phase budget than the lean roster
+  // (each shell is its own mini earned-window fight). PROVISIONAL — the balancer tunes on build.
+  gorge: 18,
 };
 
 // One curated pool entry: a known readable creature at a tier, weighted for the draw.
@@ -1869,6 +1872,123 @@ export function quorumHpForFloor(floor: number): number {
   return anchoredBossHp(QUORUM.baseHp, QUORUM.baseHpFloor, floor);
 }
 
+// ---- GORGE (F50 GIANT #1 — the Sump cap; the AD-LOCKED giant TEMPLATE for F75/F100) ----
+// A colossal ~192px STATIONARY front-facing set-piece PINNED to floor 50 (never in the seeded
+// deep rotation). It does not chase; its whole threat is SPACE-CONTROL (rings / zones / spokes)
+// plus a MULTI-PHASE SHELL-PEEL task. Calibrated on EXPOSED time like the deep roster, but as a
+// K=3 GIANT: each shell's HP is a FRACTION of a standard deep boss, so the TOTAL is ~1.5x a
+// standard boss via PHASE COUNT — NEVER ~4x HP on one pool (the GIANT calibration HARD RULE; a
+// naive one-pool 4x giant would be ~2360, the sponge this structure avoids). The peel VERB is
+// destroying the shell's telegraphed tectonic WEAK-POINTS (gorge_seam); clearing a whole exposed
+// set routes through the SHIPPED earned-window plumbing (openBossWindow → guard chip + PER-PHASE
+// bank + calibration + determinism), and the body's HP chunk bleeds down across the exposed
+// windows until the layer SLOUGHS at the phase transition (the punctuated crack-off that swaps
+// the sprite rind → chitin → core and drops the shell as debris cover).
+export const GORGE = {
+  // PER-SHELL HP at F50 (the balancer's anchor), BACK-LOADED so the fight escalates INTO its
+  // hardest/longest phase — the core reveal (never front-loaded, which would make the giant
+  // easiest exactly when its scariest form appears). NAMED per-shell (rind/chitin/core), each
+  // riding the §3 curve; total 930 = 1.5x a standard deep boss (~620) delivered across 3 GATED
+  // phases (~9.2s / 10.2s / 13.5s exposed). NOT a single magic number — gorgeHpForFloor sums these.
+  shellHp: [260, 290, 380] as readonly number[], // rind / chitin / core (F50)
+  baseHpFloor: 50,
+  // The shell SLOUGHS (phase transition) when its HP chunk is spent: phaseAt[k] = the cumulative-
+  // from-full complement of shellHp = [1 - 260/930, 1 - 550/930] = [0.720, 0.409]. Kept in lockstep
+  // with shellHp (gorge.test.ts asserts the two agree). phaseFloor = the anti-burst floor (queued
+  // overflow lands after the crack-off), ~0.08 under each threshold.
+  phaseAt: [0.7204, 0.4086] as readonly number[],
+  phaseFloor: [0.64, 0.33] as readonly number[],
+  // GUARDED behind the shell: ZERO body damage while sealed (a TRUE hard gate like the Tithe —
+  // the ONLY damage path is peeling, i.e. the earned window). The shell IS the wall.
+  guardMult: 0.0,
+  // PER-PHASE anti-burst: a single earned window caps at 0.22 × the CURRENT SHELL's HP chunk
+  // (~57 / 64 / 84 for rind/chitin/core), so each phase needs ~5 earned windows to clear and NO
+  // phase can be one-burst even by a high-roll 4-stack — the phase-count structure enforces the
+  // anti-burst without a fat pool (openBossWindow banks off the phase HP for gorge, not the pool).
+  windowBankFrac: 0.22,
+  peelExpose: 3.2,      // seconds of EXPOSED a full weak-point-set clear opens on the bared material
+  contactDamage: 2,
+  entranceGrace: 1.4,
+  // Cadence between SPATIAL-PATTERN commitments, per phase (rings/zones/spokes). Damage never
+  // scales with floor; only the pattern cadence differs per shell.
+  attackCd: [0, 3.0, 2.8, 2.4] as readonly number[],
+  // ---- the shell-peel TASK: the tectonic WEAK-POINTS (gorge_seam mechanic bodies) ----
+  // N weak-points PER EXPOSURE, per shell (solo base) — RIND few (teaches the verb) / CHITIN more
+  // (reposition around the 192px body) / CORE most (execution) — scaled by the SNAPSHOTTED party
+  // (co-op = MORE seams = the TASK scales, NOT the HP), hard-capped for readability (disjoint lanes).
+  seamBaseByShell: [2, 3, 4] as readonly number[], // rind / chitin / core (solo)
+  seamPerPlayer: 1,        // +N seams per extra player (the co-op task scale)
+  seamCap: 6,              // hard readability cap (seams ring the body in disjoint lanes)
+  seamHp: 24,              // one weak-point's HP anchor (a mechanic body — a few focused rounds; floor-scaled)
+  seamRingDist: 96,        // seams jut out at the shell's outer edge (well outside the ~60px body radius)
+  // The seams jut out FACING the threatened player (the shell cracks toward the threat — always
+  // reachable, clear line past each seam to the shell). The arc WIDENS per shell: RIND a tight
+  // front cluster (teaches the verb) → CHITIN a wider spread (track + reposition along the front)
+  // → CORE the widest, out to the giant's sides (±90°). Capped at π so every seam clears the body
+  // from the front — never behind it (a full-orbit-behind would be unfair at giant scale).
+  seamArcByShell: [Math.PI * 0.55, Math.PI * 0.85, Math.PI * 1.0] as readonly number[],
+  seamExposeInterval: 1.4, // seconds sealed between exposures (the giant runs its pattern meanwhile)
+  seamFirstAt: 2.0,        // first exposure after the pull settles
+  // The exposure WINDOW (retract unspent if not cleared in time) — RIND long / CHITIN mid / CORE
+  // SHORT (the execution test). Miss it → the shell re-seals (no window) → re-exposes (it LOOPS).
+  seamLifeByShell: [11.0, 9.5, 8.0] as readonly number[],
+  // ---- P1 RIND (dim) — RADIAL: expanding shockwave RING with an authored GAP + debris blooms ----
+  // Problem = time the dash through the ring band, or stand in the gap (debris complicates the gap).
+  ringWindup: 0.9,         // the RING_BAND lead (the shipped "Gorge" telegraph default)
+  ringRecover: 0.7,
+  ringCount: 16, ringGap: 3, ringSpeed: 240, // ring shards minus a `ringGap`-wide OPEN safe wedge
+  ringDebris: 2, ringDebrisDist: 150,        // charge blooms near the gap (so the ring isn't the only read)
+  globRadius: 8, globDamage: 1, globLife: 2.8,
+  // ---- P2 CHITIN (warm) — ZONING: persistent SLAG pools that progressively DENY floor ----
+  // Problem = positioning under area-denial (the danger STAYS + accumulates), a shrinking safe area.
+  zoneWindup: 0.8,         // the IMPACT_DISCS lead (telegraph shows WHERE the pools land)
+  zoneRecover: 0.7,
+  zoneCount: 3, zoneRing: 150, // pools per commitment, ringed AROUND the party (so their current spot stays safe)
+  zoneRadius: 30, zoneLife: 9.0, zoneCap: 10, // persistent (deny floor), hard-capped (shrinks the pocket, never seals the floor)
+  // ---- P3 CORE (blazing) — CONVERGENT: rotating SPOKE-sweeps leaving ONE moving safe wedge ----
+  // Problem = continuous movement reading a rotating safe lane (with P2 zones still live). Climax.
+  spokeWindup: 0.9, spokeRecover: 0.6,
+  spokeDuration: 3.0, spokeInterval: 0.16,   // the wheel fires a spoke set every interval for this long
+  spokeCount: 9, spokeGap: 2,                // spokes minus a `spokeGap`-wide MOVING safe wedge
+  spokeStep: 0.13, spokeSpeed: 250,          // radians the wheel advances per emission (the moving safe lane)
+  // ---- the peel beat (the punctuated crack-off = the phase transition) ----
+  debrisPerPeel: 2, debrisRingDist: 82,      // shell chunks dropped at the base per shell slough (material evidence + cover; just clear of the ~60px body)
+  // Transition beat: the shell CRACKS OFF (roar semantics) — a big screen-punch, no adds.
+  roarDuration: 1.2,
+  roarDamageReduction: 0.35,
+  roarBulletClearRadius: 80,
+} as const;
+
+export function gorgeHpForFloor(floor: number): number {
+  // Sum the per-shell anchored HP (the balancer's back-loaded split — NOT one magic number); each
+  // shell rides the §3 curve independently, anchored at F50 (260 + 290 + 380 = 930 at F50).
+  let hp = 0;
+  for (const shell of GORGE.shellHp) hp += anchoredBossHp(shell, GORGE.baseHpFloor, floor);
+  return hp;
+}
+
+// The fraction of the giant's pool held by shell `phase` (1..3) — drives the PER-PHASE window
+// bank (0.22 × this shell's HP chunk), so each phase self-gates against a one-burst regardless of
+// the pool size (~5 windows/phase even for a high-roll 4-stack). Back-loaded: rind < chitin < core.
+export function gorgeShellFracFor(phase: number): number {
+  const total = GORGE.shellHp.reduce((a, b) => a + b, 0);
+  return GORGE.shellHp[Math.max(0, Math.min(GORGE.shellHp.length - 1, phase - 1))] / total;
+}
+
+// One weak-point's HP at a floor (the peel-task pacing — a mechanic body scaled on the §3 curve
+// like the Tithe slab; NEVER part of the giant's own pool). Anchored at F50.
+export function gorgeSeamHpForFloor(floor: number): number {
+  return Math.max(1, anchoredBossHp(GORGE.seamHp, GORGE.baseHpFloor, floor));
+}
+
+// N weak-points for a shell phase (1..3) at the snapshotted party size — the co-op TASK scale
+// (more players = more seams = more repositioning, never fatter HP). Capped for readability.
+export function gorgeSeamCountFor(phase: number, players: number): number {
+  const base = GORGE.seamBaseByShell[Math.max(0, Math.min(GORGE.seamBaseByShell.length - 1, phase - 1))];
+  const p = Math.max(1, Math.min(4, players));
+  return Math.min(GORGE.seamCap, base + (p - 1) * GORGE.seamPerPlayer);
+}
+
 // ---- §5f the F10 MINIBOSS GAUNTLET (corrected gate §3, exact formula) ----
 // Three sequential CAPTAINS derived from calibrated Marrow HP — commander round10(.28×),
 // elite round10(.32×), brute round10(.40×), total 1.00× — with 5s intermissions after
@@ -1944,6 +2064,10 @@ export const BOSS_DPS_CEILING: Readonly<Partial<Record<EnemyKind, number>>> = {
   // "nothing may exceed this" guard (non-breaking today, catches any future build spike).
   // TIGHTEN to the measured design value when the multi-boss harness lands its per-boss bot.
   jet: 55, tithe: 55, quorum: 55,
+  // GORGE (F50 giant): PROVISIONAL backstop ceiling in line with the deep roster (the 100k-build
+  // sweep tops out ~47.9 practical DPS, so 55 is a safe non-breaking guard). The multi-boss health
+  // gate CALIBRATES the giant's real bands (its per-shell HP + peel task pace the true TTK).
+  gorge: 55,
 };
 
 // ---- the balancer envelope's canonical unit ----
