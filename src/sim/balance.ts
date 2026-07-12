@@ -1288,6 +1288,11 @@ export const CHOIR = {
   addPool: [
     { kind: "ghost", tier: "swarm", weight: 5, maxAlive: 0, count: 1 },    // the drifting revenant (the Choir's own kin)
     { kind: "skeleton", tier: "swarm", weight: 3, maxAlive: 0, count: 1 }, // the hollow dead, marching the verse in
+    // The third voice (finale variety): grave-bats roused from the rafters — a wheeling
+    // FLOCK swarm (a drifter, never a kiter/ranged) and the most fragile kin of the three
+    // (hp4, ≤ the ghost), so the verse stays silenceable and the window is always earnable.
+    // Lowest weight, so the ghost stays the primary kin and the bat is the rarest guess.
+    { kind: "bat", tier: "swarm", weight: 2, maxAlive: 0, count: 1 },
   ] as readonly AddPoolEntry[],
   // Fair surprise §3 — the hall RESHAPES on every phase transition (the split beat): the
   // old resonant pillars crumble and a fresh seeded ring rises, so the room reads
