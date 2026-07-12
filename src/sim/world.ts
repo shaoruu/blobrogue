@@ -6128,14 +6128,15 @@ function drawFromAddPool(w: WorldState, boss: Enemy, pool: readonly AddPoolEntry
 
 // Queue one ambush: the omen tell at a settled anchor (never on/beside a standing
 // player), carrying its spawn payload. Returns whether the tell was actually placed —
-// a blocked anchor skips the ambush, it never relocates onto someone.
-function queueAmbush(w: WorldState, x: number, y: number, kind: Enemy["kind"], tier: EnemyTier, forBossId: number, ev: SimEvent[], tell: number = AMBUSH.tell, clear: number = AMBUSH.playerClear): boolean {
+// a blocked anchor skips the ambush, it never relocates onto someone. `aux` rides an
+// optional per-body role the resolve stamps on the body (the Quorum splinter's shard role).
+function queueAmbush(w: WorldState, x: number, y: number, kind: Enemy["kind"], tier: EnemyTier, forBossId: number, ev: SimEvent[], tell: number = AMBUSH.tell, clear: number = AMBUSH.playerClear, aux?: number): boolean {
   if (!settleSpawnPoint(w, x, y, ENEMY_ARCHETYPES[kind].radius)) return false;
   if (isNearAnyPlayer(w, settlePoint.x, settlePoint.y, clear)) return false;
   w.hazards.push({
     id: w.nextHazardId++, kind: "omen", x: settlePoint.x, y: settlePoint.y,
     radius: AMBUSH.radius, life: tell, maxLife: tell,
-    spawnKind: kind, spawnTier: tier, forBossId: forBossId > 0 ? forBossId : undefined,
+    spawnKind: kind, spawnTier: tier, forBossId: forBossId > 0 ? forBossId : undefined, spawnAux: aux,
   });
   ev.push({ t: "cue", name: "enemyAttack", x: settlePoint.x, y: settlePoint.y, rate: 1.7, gain: 0.45, trauma: 0 });
   return true;
@@ -6219,6 +6220,15 @@ function resolveOmen(w: WorldState, h: Hazard, ev: SimEvent[]): void {
   if (owner.kind === "weaver" && add.kind === "sac") {
     add.seq = owner.id + 1; // the clutch belongs to the weaver that laid it
     owner.boss.windowAddIds.push(add.id);
+  }
+  if (owner.kind === "quorum" && add.kind === "quorum_splinter") {
+    // The shard carries its parent husk's WEAK role (planted on the omen): 0 shield / 1 heal
+    // / 2 dmg. seq links it to the core (the heal shard's trickle target); only the dmg pip
+    // contacts. Its ordinary spawn grace + the arbiter hold still keep it inert mid tether-snap.
+    const role = h.spawnAux ?? 0;
+    add.aux = role;
+    add.seq = owner.id + 1;
+    add.touchDamage = role === 2 ? 1 : 0;
   }
 }
 
@@ -8537,10 +8547,15 @@ function quorumDamageHusk(w: WorldState, by: PlayerId | null, husk: Enemy, dmg: 
 
 // SPLINTERS (balancer FINAL surplus): a dying husk breaks off small role-echo shards, count =
 // min(bossAddCapFor(1, R), 5) → solo 1 / 2p 4 / 3p 5 / 4p 5, paced by bossAddIntervalFor(6.0 →
-// 3.0s), spawned AT the dying husk with a ~1s grace (so they don't act mid tether-snap). Each
-// carries a WEAK version of its parent's role on aux (0 shield / 1 heal / 2 dmg): the heal
-// shard trickle-heals the pool, the dmg shard pips on contact, the shield shard is a body to
-// clear — the kill-order lesson at small scale (clear the wave before the pool window).
+// 3.0s). They arrive through the FAIR-AMBUSH path like every other boss add (fair surprise §2):
+// each shard plants an omen tell at a seeded ring spot off the husk (husk.zig based) that stands
+// for its whole AMBUSH.tell BEFORE the body exists, and the omen REFUSES any spot within
+// AMBUSH.playerClear (140px) of a standing player — so a shard can never pop onto you. The
+// resolved body keeps its ordinary spawn grace (and the arbiter hold) so it never acts mid
+// tether-snap. Each carries a WEAK version of its parent's role on aux (0 shield / 1 heal /
+// 2 dmg): the heal shard trickle-heals the pool, the dmg shard pips on contact, the shield
+// shard is a body to clear — the kill-order lesson at small scale (clear the wave before the
+// pool window).
 function quorumSpawnSplinters(w: WorldState, core: Enemy, husk: Enemy, ev: SimEvent[]): void {
   const boss = core.boss!;
   if (boss.addTimer > 0) return; // paced by the wave interval
@@ -8548,22 +8563,18 @@ function quorumSpawnSplinters(w: WorldState, core: Enemy, husk: Enemy, ev: SimEv
   if (cap <= 0) return;
   boss.addTimer = bossAddIntervalFor(QUORUM.huskAddInterval, w.encounterPower);
   const role = husk.kind === "quorum_shield" ? 0 : husk.kind === "quorum_heal" ? 1 : 2;
-  let live = countLiveAddsOfKind(w, "quorum_splinter");
+  // Pending omens hold the cap the moment their tell stands (like the Tithe's feed adds), so
+  // the wave never over-plants while shards are still announcing.
+  let live = countLiveAddsOfKind(w, "quorum_splinter") + countPendingOmensOfKind(w, "quorum_splinter", "standard");
   for (let i = 0; i < cap && live < cap; i++) {
-    const ang = husk.zig + (i / cap) * Math.PI * 2; // seeded spread off the husk (zig baked at spawn)
-    const x = husk.x + Math.cos(ang) * 26;
-    const y = husk.y + Math.sin(ang) * 26;
-    if (!settleSpawnPoint(w, x, y, ENEMY_ARCHETYPES.quorum_splinter.radius)) continue;
-    const sp = createEnemy("quorum_splinter", settlePoint.x, settlePoint.y, w.floor, w.rng, w.nextEnemyId++, {
-      isSummoned: true, players: w.encounterPlayers,
-    });
-    sp.aux = role;                          // role rides the wire (client renders the shard variant)
-    sp.seq = core.id + 1;                   // link to the core (the heal shard's trickle target)
-    sp.touchDamage = role === 2 ? 1 : 0;    // only the dmg-pip shard contacts; heal/shield are body-clear
-    sp.spawnTimer = QUORUM.splinterGrace;   // ~1s grace: it does not act mid tether-snap
-    w.enemies.push(sp);
-    ev.push({ t: "enemySpawn", eid: sp.id, kind: sp.kind, tier: sp.tier, x: sp.x, y: sp.y });
-    live++;
+    // The seeded ring off the husk (zig baked at spawn) is WHERE it tries; a spot within the
+    // player-clear is refused, so retry a few nudged angles before giving that shard up.
+    for (let attempt = 0; attempt < 4; attempt++) {
+      const ang = husk.zig + (i / cap) * Math.PI * 2 + attempt * 2.399963;
+      const x = husk.x + Math.cos(ang) * 26;
+      const y = husk.y + Math.sin(ang) * 26;
+      if (queueAmbush(w, x, y, "quorum_splinter", "standard", core.id + 1, ev, AMBUSH.tell, AMBUSH.playerClear, role)) { live++; break; }
+    }
   }
 }
 
@@ -8571,7 +8582,7 @@ function quorumSpawnSplinters(w: WorldState, core: Enemy, husk: Enemy, ev: SimEv
 // the pool progress — clear it, the kill-order lesson at small scale); all shards chase. The
 // spawn grace holds it inert so it never acts inside the husk's tether-snap.
 function updateQuorumSplinter(w: WorldState, e: Enemy, dt: number): void {
-  if (e.spawnTimer > 0) return; // (a) 1.0s spawn-grace
+  if (e.spawnTimer > 0) return; // (a) ordinary spawn-grace (on top of the omen tell that preceded it)
   // (b) FIRST-action hold (explicit — the arbiter covers the pip-vs-sweep INSTANT overlap but
   // not the full hold): the shard's first action waits until no MAJOR release (tether-snap
   // sweep / crossfire beam) is mid-flight. affixClock latches once it has acted (0 → 1), so

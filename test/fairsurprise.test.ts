@@ -22,7 +22,7 @@ import { LOCAL_ID } from "../src/sim/input.js";
 import type { Bullet, Enemy, EnemyKind } from "../src/sim/types.js";
 import { TILE } from "../src/sim/types.js";
 import { SPAWN_GRACE, isComplexMover, ENEMY_ARCHETYPES } from "../src/sim/enemies.js";
-import { AMBUSH, WEAVER, MARROW, CHOIR, GILDED, activeMoverCapFor } from "../src/sim/balance.js";
+import { AMBUSH, WEAVER, MARROW, CHOIR, GILDED, QUORUM, activeMoverCapFor } from "../src/sim/balance.js";
 
 const DT = 1 / 60;
 
@@ -171,6 +171,62 @@ function ambushTellGates(): void {
     check("the refrain is bounded (never exceeds its authored duration)", singTime <= CHOIR.singDuration + 0.2,
       `sang=${singTime.toFixed(1)}s cap=${CHOIR.singDuration}s`);
     check("DPS is always redirected: fragments stood the whole refrain", redirectOk);
+  }
+
+  section("§2 Quorum splinters: a husk break's shard wave rides the SAME omen contract");
+  {
+    // Break husks (focus the whole trio) to trip splinter waves, holding the pool in phase 1
+    // (reset the shared HP each tick) so the trio reforms and breaks repeatedly — a steady
+    // stream of shard waves to audit. The core stays put; its husks orbit it (never chase),
+    // so this proves the shards themselves telegraph, grace, and clear like every other add.
+    const w = createWorld(0xFA1E, 45, { isSandbox: true });
+    w.isGodMode = true;
+    const p = w.players.get(LOCAL_ID)!;
+    const boss = devSpawnEnemy(w, "quorum", p.x + 170, p.y);
+    step(w); // raise the husks
+    const omens = new Map<number, { x: number; y: number; tick: number }>();
+    const spawns: Array<{ tick: number; hadTell: boolean; tellAge: number; graceOk: boolean; roleOk: boolean }> = [];
+    let omenClearOk = true;
+    for (let t = 0; t < 60 * 40 && !boss.dead; t++) {
+      boss.hp = boss.maxHp; // pin phase 1 (never let the pool merge) so the trio keeps reforming
+      for (const h of w.hazards) {
+        if (h.kind !== "omen" || omens.has(h.id)) continue;
+        omens.set(h.id, { x: h.x, y: h.y, tick: t });
+        if (Math.hypot(p.x - h.x, p.y - h.y) < AMBUSH.playerClear - 1e-6) omenClearOk = false;
+      }
+      for (const en of w.enemies) {
+        if (!en.dead && (en.kind === "quorum_shield" || en.kind === "quorum_heal" || en.kind === "quorum_dmg")) {
+          plantBullet(w, en.x, en.y, boss.maxHp * 0.12, 6); // break the priority husk's integrity without cratering the (pinned) pool
+        }
+      }
+      const evs = step(w, idle(t));
+      for (const e of evs) {
+        if (e.t !== "enemySpawn" || e.kind !== "quorum_splinter") continue;
+        let hadTell = false, tellAge = 0;
+        for (const o of omens.values()) {
+          if (Math.hypot(o.x - e.x, o.y - e.y) < 30) { hadTell = true; tellAge = (t - o.tick) * DT; }
+        }
+        const body = w.enemies.find((en) => en.id === e.eid);
+        const role = body?.aux ?? -1;
+        const roleOk = body !== undefined && (role === 0 || role === 1 || role === 2)
+          && body.seq === boss.id + 1 && body.touchDamage === (role === 2 ? 1 : 0);
+        spawns.push({
+          tick: t, hadTell, tellAge,
+          graceOk: body !== undefined && Math.abs(body.spawnTimer - SPAWN_GRACE) < 1e-9,
+          roleOk,
+        });
+      }
+    }
+    check("splinter waves arrived to audit", spawns.length >= 3, `spawns=${spawns.length}`);
+    check("every splinter stood behind an omen tell of at least 0.6s (was: instant pop-in)",
+      spawns.every((sp) => sp.hadTell && sp.tellAge >= 0.6 - 2 * DT),
+      spawns.map((sp) => `${sp.tellAge.toFixed(2)}s`).join(","));
+    check("every splinter keeps its full spawn grace before it may act", spawns.every((sp) => sp.graceOk));
+    check("every splinter still carries its parent role (aux 0/1/2, core link, dmg-only contact)",
+      spawns.every((sp) => sp.roleOk));
+    check("no splinter omen ever bloomed inside the player's ≥140px personal space", omenClearOk);
+    check("the splinter's clearance is the shared ambush guarantee (140px)", AMBUSH.playerClear === 140);
+    check("splinters draw from the R-keyed wave cap (never an unbounded pop)", QUORUM.huskAddCap > 0);
   }
 }
 

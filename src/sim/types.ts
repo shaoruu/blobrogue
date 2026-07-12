@@ -601,6 +601,10 @@ export interface Hazard {
   // The summoning boss's enemy id + 1 (0/undefined = none): a Choir verse omen feeds
   // its fragment into the summoner's silence set when it resolves.
   forBossId?: number;
+  // Extra per-body spawn payload the resolve applies (kind-specific). The Quorum splinter
+  // rides its parent husk's ROLE here (0 shield / 1 heal / 2 dmg) so the fair-ambush omen
+  // can plant the tell before the body exists, then stamp the role when it resolves.
+  spawnAux?: number;
 }
 
 // Environmental FLOOR hazards — the depth-escalation danger layer, DISTINCT from the

@@ -1784,7 +1784,6 @@ export const QUORUM = {
   huskAddBase: 1,          // bossAddCapFor base for the break-wave count
   huskAddCap: 5,           // hard readability cap on the wave count
   huskAddInterval: 6.0,    // wave cadence base → bossAddIntervalFor (3.0s floor at high R)
-  splinterGrace: 1.0,      // splinter spawn-grace (don't act mid tether-snap)
   splinterHealPerSec: 4,   // a heal-role splinter trickle-heals the pool (weak vs the heal husk's 14)
   // The ONE shared telegraph (core-driven): a converging amber ring the lead husk shows.
   attackCd: [0, 2.8, 2.2] as readonly number[], // phase 1 (husks), phase 2 (merged)
