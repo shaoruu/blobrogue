@@ -7724,6 +7724,88 @@ export class Game {
         this.fxLayer("crackle", "#f0d9ff", bx, by, R * 3.4, R * 3.4, 0.6, this.animClock * 10);
         return this.fxLayer("core_dot", "#e9d2ff", bx, by, R * 2.2, R * 2.2, 1, 0);
       }
+      case "lastlight":
+        // The desperate round: a fierce red glow trailing a hot streak into a white-hot core
+        // that blazes brightest when HP runs low — the last-stand ember.
+        this.fxLayer("glow_round", color, bx, by, R * 8, R * 8, 0.55, 0);
+        this.fxTrail("trail_streak", color, bx, by, trailLen * 0.7, R * 2.2, 0.6, angle);
+        return this.fxLayer("core_dot", "#ffe0d0", bx, by, R * 3, R * 3, 1, 0);
+      case "breach":
+        // A charged demolition shell: smoke off the tail, a warm glow, a fat slug head — a
+        // heavier sibling of the mortar lob.
+        this.fxLayer("smoke_puff", "#c9b8a0", bx - Math.cos(angle) * R * 2.4, by - Math.sin(angle) * R * 2.4, R * 4.5, R * 4.5, 0.45, 0);
+        this.fxLayer("glow_round", color, bx, by, R * 9, R * 9, 0.5, 0);
+        return this.fxLayer("slug", color, bx, by, R * 4.4, R * 4.4, 1, angle);
+      case "frostline":
+        // The chill bead: an icy frost mask (falls back to glow) dripping a short cold streak
+        // into a pale frozen core — it paints the floor, so the round itself reads as frost.
+        this.fxLayer("frost", color, bx, by, R * 4.5, R * 4.5, 0.7, angle) || this.fxLayer("glow_round", color, bx, by, R * 5.5, R * 5.5, 0.5, 0);
+        this.fxTrail("trail_streak", color, bx, by, trailLen * 0.55, R * 1.7, 0.45, angle);
+        return this.fxLayer("core_dot", "#eafaff", bx, by, R * 2.2, R * 2.2, 1, 0);
+      case "sentry":
+        // The turret's prism bolt: a tidy focused round — soft glow, short streak, a bright
+        // crystalline core.
+        this.fxLayer("glow_round", color, bx, by, R * 5.5, R * 5.5, 0.4, 0);
+        this.fxTrail("trail_streak", color, bx, by, trailLen * 0.6, R * 1.6, 0.5, angle);
+        return this.fxLayer("core_dot", "#efe6ff", bx, by, R * 2.6, R * 2.6, 1, 0);
+      case "reaper": {
+        // AD spec — a raked toxic-green SCYTHE-STREAK, never a dot: an angled slug blade
+        // behind a short comet trail, a crackle serration on the edge, and a white-hot core
+        // at the LEADING tip. Reads as a sickle scything forward (kill shards inherit it).
+        const tipX = bx + Math.cos(angle) * R * 1.2, tipY = by + Math.sin(angle) * R * 1.2;
+        this.fxTrail("comet_trail", "#3fbf5f", bx, by, Math.max(R * 4.5, trailLen * 0.7), R * 2.4, 0.55, angle);
+        this.fxLayer("slug", "#3fbf5f", bx, by, R * 6, R * 2.4, 0.9, angle - 0.5);
+        this.fxLayer("crackle", "#8fffa8", bx, by, R * 3, R * 3, 0.3, angle + this.animClock * 5);
+        return this.fxLayer("core_dot", "#8fffa8", tipX, tipY, R * 2.2, R * 2.2, 1, 0);
+      }
+      case "swarm": {
+        // AD spec — a nervous ghost-blue SEEKING MOTE: a tight glow core, a short trail that
+        // stutters off the travel line, and tiny spark flecks jittering beside it. Kept
+        // SMALLER than the other legendaries so it reads as a live darting hornet.
+        const wob = Math.sin(this.animClock * 34 + bx * 0.7 + by * 0.3) * R * 1.1;
+        const perpX = Math.cos(angle + Math.PI / 2), perpY = Math.sin(angle + Math.PI / 2);
+        this.fxTrail("comet_trail", "#57b6ff", bx, by, Math.max(R * 3, trailLen * 0.45), R * 1.5, 0.5, angle + Math.sin(this.animClock * 22 + bx) * 0.5);
+        this.fxLayer("spark", "#bfeaff", bx + perpX * wob, by + perpY * wob, R * 1.5, R * 1.5, 0.55, this.animClock * 8);
+        this.fxLayer("glow_round", "#57b6ff", bx, by, R * 3.2, R * 3.2, 0.55, 0);
+        return this.fxLayer("core_dot", "#bfeaff", bx, by, R * 2, R * 2, 1, 0);
+      }
+      case "midas": {
+        // AD spec (THE CRITICAL ONE) — gold is one degree off the enemy amber, so HUE cannot
+        // separate it: it reads by SHAPE + BRIGHTNESS ONLY. A hard 4-POINT STAR gleam (two
+        // concentric sparks at the SAME rotation so the silhouette stays a 4-point star) over
+        // a near-white core. Deliberately NO glow_round halo — a round halo is exactly what
+        // makes gold read as an enemy orb, which is a reject.
+        const spin = this.animClock * 1.2;
+        this.fxLayer("spark", "#ffe9b0", bx, by, R * 10, R * 10, 0.8, spin);
+        this.fxLayer("spark", "#fff4d0", bx, by, R * 5.5, R * 5.5, 0.95, spin);
+        return this.fxLayer("core_dot", "#ffffff", bx, by, R * 2.2, R * 2.2, 1, 0);
+      }
+      case "phase": {
+        // AD spec — a violet PHASE TRAIL: a long smooth comet with a faint ghosted second copy
+        // offset BEHIND it (the after-image of where it just was) over a dim smoke haze — a
+        // low-luminance body with a bright core. Reads as a violet streak that smears/echoes.
+        const backX = bx - Math.cos(angle) * R * 4, backY = by - Math.sin(angle) * R * 4;
+        this.fxLayer("smoke_puff", "#3a1f5c", bx - Math.cos(angle) * R * 2, by - Math.sin(angle) * R * 2, R * 5, R * 5, 0.35, 0);
+        this.fxTrail("comet_trail", "#a24bff", backX, backY, Math.max(R * 6, trailLen), R * 2.4, 0.3, angle);
+        this.fxTrail("comet_trail", "#a24bff", bx, by, Math.max(R * 8, trailLen * 1.2), R * 2.8, 0.6, angle);
+        return this.fxLayer("core_dot", "#d9a6ff", bx, by, R * 2.4, R * 2.4, 1, 0);
+      }
+      case "vortex": {
+        // AD spec — an IMPLOSION that reads by MOTION, not a trail: spark flecks + arc_chain
+        // lines converge INWARD onto a compressed core, and the pull distance breathes with
+        // the clock so it visibly sucks in. Steel-white, high brightness — a magnetic collapse
+        // (distinct from Umbra's long dark trail: this one is bright, compact, inward).
+        const pull = 0.5 + 0.5 * Math.abs(Math.sin(this.animClock * 5));
+        const reach = R * (2.2 + pull * 3.4);
+        for (let i = 0; i < 4; i++) {
+          const a = i * (Math.PI / 2) + this.animClock * 0.6;
+          const fxX = bx + Math.cos(a) * reach, fyY = by + Math.sin(a) * reach;
+          this.fxTrail("arc_chain", "#c9c9de", bx, by, reach, R * 1.3, 0.45, a + Math.PI);
+          this.fxLayer("spark", "#ffffff", fxX, fyY, R * 1.4, R * 1.4, 0.7 * pull, a);
+        }
+        this.fxLayer("glow_round", "#c9c9de", bx, by, R * 3.6, R * 3.6, 0.6, 0);
+        return this.fxLayer("core_dot", "#ffffff", bx, by, R * 2.6, R * 2.6, 1, 0);
+      }
       default:
         return false;
     }
