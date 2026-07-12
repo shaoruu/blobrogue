@@ -8017,7 +8017,10 @@ function updateJetEcho(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): voi
     }
     return;
   }
-  // No idle chase: the reflection holds its pose (beginWindup at resolve seeds the windup).
+  // Orphaned: the omen resolved AFTER the mirror that cast it died, so its windup was never
+  // seeded — a reflection with no source simply dissolves (never a lingering inert body).
+  e.dead = true;
+  ev.push({ t: "puff", x: e.x, y: e.y, n: 6, color: ENEMY_ARCHETYPES.jet_echo.tint });
 }
 
 // ---- §5g B3: the PER-PHASE ARENA-CORRUPTION RESHAPE ("The Light Goes Out") ----
