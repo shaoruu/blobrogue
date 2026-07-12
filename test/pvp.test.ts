@@ -256,6 +256,32 @@ section("SPAWNS: symmetric 19x19 arena + spread + break-on-fire protection");
   const occupied = [spawns[0]];
   const idx = farthestSpawnIndex(spawns, occupied);
   check("respawn picks a spawn away from occupants", idx !== 0);
+
+  // Authoritative N-most-spread selection at match start (greedy, id-sorted). The tile a player
+  // sits on is a spawn center: tile = round(worldX/TILE - 0.5). EDGE_MIDS are the 4 @2/3-R spawns;
+  // anything else is a diagonal. Two tiles are "opposite" iff one is the rot180 of the other.
+  const EDGE_MIDS = new Set(["9,3", "3,9", "9,15", "15,9"]);
+  const startTiles = (n: number): string[] => {
+    const w = pvpWorld(7, Array.from({ length: n }, (_, i) => `p${i + 1}`));
+    advanceToLive(w);
+    return [...w.players.values()].map((p) => `${Math.round(p.x / TILE - 0.5)},${Math.round(p.y / TILE - 0.5)}`);
+  };
+  const isOpposite = (a: string, b: string): boolean => {
+    const [ax, ay] = a.split(",").map(Number);
+    const [bx, by] = b.split(",").map(Number);
+    return bx === 18 - ax && by === 18 - ay;
+  };
+  // 2 players -> two OPPOSITE edge-mids.
+  const t2 = startTiles(2);
+  check("2p spawns on two opposite edge-mids", t2.length === 2 && t2.every((t) => EDGE_MIDS.has(t)) && isOpposite(t2[0], t2[1]), t2.join(" "));
+  // 4 players -> ALL four edge-mids.
+  const t4 = startTiles(4);
+  check("4p spawns on all four edge-mids", new Set(t4).size === 4 && t4.every((t) => EDGE_MIDS.has(t)), t4.join(" "));
+  // 6 players -> four edge-mids + two OPPOSITE diagonals (max spread, not two adjacent ones).
+  const t6 = startTiles(6);
+  const diag6 = t6.filter((t) => !EDGE_MIDS.has(t));
+  check("6p spawns on all four edge-mids + two diagonals", EDGE_MIDS.size === 4 && [...EDGE_MIDS].every((e) => t6.includes(e)) && diag6.length === 2, t6.join(" "));
+  check("6p diagonals are point-opposite (max spread)", diag6.length === 2 && isOpposite(diag6[0], diag6[1]), diag6.join(" "));
 }
 
 // ---------------------------------------------------------------------------------------------

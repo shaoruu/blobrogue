@@ -204,10 +204,12 @@ const CLIP_WALLS: ReadonlyArray<[number, number]> = [
 ];
 
 // Spawn CANDIDATES (8): 4 edge-mids + 4 diagonals. The match picks the N-most-spread subset
-// deterministically (greedy farthest-from-placed). Tile coords.
+// deterministically (greedy farthest-from-placed). Diagonals are listed as point-opposite pairs
+// so the greedy's lowest-index tiebreak yields OPPOSITE diagonals at 6p (max spread), matching the
+// authoritative selection: 2->opposite edge-mids, 4->all edge-mids, 6->edge-mids + opposite diagonals.
 const SPAWN_TILES: ReadonlyArray<[number, number]> = [
   [9, 3], [3, 9], [9, 15], [15, 9],   // edge-mids
-  [12, 6], [6, 6], [6, 12], [12, 12], // diagonals
+  [12, 6], [6, 12], [6, 6], [12, 12], // diagonals (opposite pairs consecutive)
 ];
 
 // Breakable cover (16 props): center knot (center 9,9 stays OPEN), four mid pairs, four corner
