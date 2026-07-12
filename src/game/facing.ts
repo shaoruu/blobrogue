@@ -18,10 +18,14 @@ export interface FacingState {
   facing: Facing4;
   isMirrored: boolean;
   lastVertical: "down" | "up";
+  // Smoothed observed velocity (px/s) for bodies that face off a smoothed signal — see
+  // FACING_DRIFT_SMOOTHING. Zero for everyone else (they face off the raw velocity).
+  smoothVx: number;
+  smoothVy: number;
 }
 
 export function createFacing(): FacingState {
-  return { facing: "down", isMirrored: false, lastVertical: "down" };
+  return { facing: "down", isMirrored: false, lastVertical: "down", smoothVx: 0, smoothVy: 0 };
 }
 
 // px/s below which facing holds its last value — knockback dribbles, interpolation noise
@@ -30,6 +34,17 @@ export const FACING_DEADZONE = 36;
 // How decisively the OTHER axis must lead before it steals the facing. Without this, a
 // 45° walk flips between down and side every frame the ratio wobbles across 1.
 export const FACING_AXIS_BIAS = 1.25;
+
+// The deadzone/axis-bias hysteresis gates on velocity MAGNITUDE, not its SIGN — so a body
+// whose observed velocity reverses at full speed still flips its L/R mirror every frame.
+// That is exactly what a PHASING body does: it drifts through its target instead of
+// colliding, so once it overlaps, its heading snaps target-ward → past → back every frame
+// (a ghost sitting on the player oscillated ±full-speed, mirror-flickering the sprite). The
+// smoothed-facing bodies face off this EMA of their observed velocity (one fixed 60Hz sim
+// step per update): a 2-frame oscillation averages toward ~0 (below the deadzone → the
+// facing HOLDS, no flip), while genuine sustained travel still converges and turns the
+// body. It reuses the existing deadzone rather than adding a second threshold.
+export const FACING_DRIFT_SMOOTHING = 0.2;
 
 export function updateFacing(f: FacingState, vx: number, vy: number): void {
   const ax = Math.abs(vx), ay = Math.abs(vy);
@@ -103,11 +118,22 @@ export interface EnemyPose {
 
 // `vx/vy` is the client's observed velocity (position deltas / interpolation), px/s.
 // Mutates `f` — the persistent facing memory — and returns the frame's pose.
-export function computeEnemyPose(e: Enemy, f: FacingState, vx: number, vy: number, isMoving: boolean): EnemyPose {
+// `smoothFacing` bodies (phasing drifters — a ghost, the Choir — that pass THROUGH their
+// target and so see an oscillating full-speed velocity) face off a smoothed velocity so
+// the wobble can't flip-flicker their mirror. Everyone else faces off the raw signal.
+export function computeEnemyPose(e: Enemy, f: FacingState, vx: number, vy: number, isMoving: boolean, smoothFacing = false): EnemyPose {
   const a = e.attack;
   const isAttacking = a.move !== "none" && (a.phase === "windup" || a.phase === "active");
+  // Advance the EMA every frame (even mid-attack) so the facing never lags a beat behind
+  // when the aim releases back to movement.
+  let mvx = vx, mvy = vy;
+  if (smoothFacing) {
+    f.smoothVx += (vx - f.smoothVx) * FACING_DRIFT_SMOOTHING;
+    f.smoothVy += (vy - f.smoothVy) * FACING_DRIFT_SMOOTHING;
+    mvx = f.smoothVx; mvy = f.smoothVy;
+  }
   if (isAttacking && AIMED_MOVES[a.move]) facingFromAngle(f, a.lockedAngle);
-  else updateFacing(f, vx, vy);
+  else updateFacing(f, mvx, mvy);
   return {
     facing: f.facing,
     isMirrored: f.isMirrored,
@@ -117,7 +143,7 @@ export function computeEnemyPose(e: Enemy, f: FacingState, vx: number, vy: numbe
     move: a.move,
     phase: a.phase,
     windup: a.windup,
-    aimAngle: isAttacking && AIMED_MOVES[a.move] ? a.lockedAngle : Math.atan2(vy, vx),
+    aimAngle: isAttacking && AIMED_MOVES[a.move] ? a.lockedAngle : Math.atan2(mvy, mvx),
   };
 }
 

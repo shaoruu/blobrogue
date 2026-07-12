@@ -1944,7 +1944,11 @@ export class Game {
         this.enemyFacing.set(e.id, facing);
       }
       const inv = dt > 0 ? 1 / dt : 0;
-      this.enemyPoses.set(e.id, computeEnemyPose(e, facing, dx * inv, dy * inv, anim.move > 0.5));
+      // Phasing bodies drift THROUGH their target, so their observed velocity oscillates at
+      // full speed while they overlap it — face off a smoothed velocity so that wobble can't
+      // flip-flicker the sprite's L/R mirror (see FACING_DRIFT_SMOOTHING).
+      const smoothFacing = ENEMY_ARCHETYPES[e.kind].isPhasing;
+      this.enemyPoses.set(e.id, computeEnemyPose(e, facing, dx * inv, dy * inv, anim.move > 0.5, smoothFacing));
       this.enemyAnimPos.set(e.id, { x: e.x, y: e.y });
     }
     if (this.enemyAnims.size > liveEnemyIds.size) {
