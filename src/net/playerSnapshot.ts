@@ -94,7 +94,12 @@ type ClientOwnedField = "id" | "pr" | "aimAngle" | "shotSeq" | "rewindTicks" | "
 // - overshieldRegenT: BULWARK overshield regen bookkeeping (the paused-under-fire countdown). The
 //   client only needs the POOL (overshield) to draw the chip layer; the regen clock is pure
 //   server upkeep and never accrues in prediction, so it stays off the wire.
-type ServerOnlyField = "reviveBy" | "downsThisFloor" | "ultSources" | "ultWasted" | "overshieldRegenT";
+// - team:      pvp FFA team id — always 0 for the local player (self) in the FFA MVP, so it need
+//              not ride SelfWire; other players' teams ride PlayerWire.tm (built in toPlayerWire).
+// - respawnT:  pvp respawn countdown — reconciled to OTHER players via the wire, but the server
+//              owns the local respawn timing; prediction reads it off the authoritative snapshot
+//              (P2 wires it) rather than accruing it, so it stays off the self-reconcile here.
+type ServerOnlyField = "reviveBy" | "downsThisFloor" | "ultSources" | "ultWasted" | "overshieldRegenT" | "team" | "respawnT";
 
 // Compile-time exhaustiveness: every PlayerSim key must be classified exactly once. The
 // MustBeNever constraint fails to instantiate for any non-empty type, so adding a PlayerSim
