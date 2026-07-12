@@ -104,3 +104,11 @@ existing twin-stick movement / shooting / authoritative netcode / kits. NOT a fo
 - IFRAME: cannot fire while iframed; iframe ends on first outgoing shot (or 2.0s, whichever first) — kills iframe-peek/shoot-from-invuln.
 - TD P1 gate lines: co-op goldens zero-diff, no-fork (mode gates ≤4 concerns), no client-side damage/kill prediction, canDamage completeness (no owned-damage site bypasses it), respawn is a SEPARATE lifecycle path (does not reuse/perturb co-op down/revive/endRun; checkStrandedWipe byte-UNCHANGED, bypassed not rewired), determinism (id-sorted win/spawn/tie, tick timers).
 - PARKED (non-blocking): environmental-hazard kill attribution in a pvp arena (suicide vs no-credit) — MVP arena has no hazards; define IF hazards ever added.
+
+
+## AUTHORITATIVE ARENA GRID (GD — SUPERSEDES the main-agent grid above; independently re-verified 4-fold symmetric, zero overlap, center open)
+19×19, 0-18, center (9,9). px = (tile+0.5)*48.
+- CLIP WALLS (12): (0,0)(1,0)(0,1) (17,0)(18,0)(18,1) (0,17)(0,18)(1,18) (18,17)(17,18)(18,18) + 1-tile border.
+- SPAWNS (8): edge-mid (9,3)(3,9)(9,15)(15,9); diagonal (12,6)(6,6)(6,12)(12,12). Select N-most-spread (2→opposite edges,4→all edges,6→edges+2 opposite diagonals); farthest-from-threat respawn.
+- COVER (16 breakable): center knot (8,8)(10,8)(8,10)(10,10); mid pairs (9,6)+(9,7),(6,9)+(7,9),(9,12)+(9,11),(12,9)+(11,9); corner blockers (3,3)(15,3)(3,15)(15,15). Center (9,9) OPEN.
+- ≥3-tile lanes, no unflankable spot, all props breakable (degrading-cover arc). Scales to 17×17 (pull 1 tile inward) if sparse at 2p; floor 15×15.
