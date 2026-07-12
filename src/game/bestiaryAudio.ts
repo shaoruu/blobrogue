@@ -78,6 +78,7 @@ export const AUDIO_BEHAVIOR: Readonly<Record<EnemyKind, AudioBehavior>> = {
   jet: "boss", tithe: "boss", quorum: "boss",
   tithe_slab: "decoy", quorum_shield: "decoy", quorum_heal: "decoy", quorum_dmg: "decoy",
   tithe_tribute: "hunt", quorum_splinter: "hunt", // surplus adds: simple chasers
+  jet_echo: "kite", // the reflection warns, locks, and fires ONE salvo (ranged-hold grammar)
 };
 
 // ---- body materials ----
@@ -123,6 +124,7 @@ export const AUDIO_MATERIAL: Readonly<Record<EnemyKind, AudioMaterial>> = {
   jet: "goo", tithe: "gold", quorum: "bone",
   tithe_slab: "chitin", quorum_shield: "chitin", quorum_heal: "chitin", quorum_dmg: "chitin",
   tithe_tribute: "goo", quorum_splinter: "bone", // surplus adds: amber glob / bone shard
+  jet_echo: "goo", // your own reflection: reuses JET's goo (King) bank, same as the mirror body
 };
 
 // SAME-MATERIAL fallback law: until a row's generated stem lands, its declared fallback
@@ -289,6 +291,8 @@ export const BESTIARY_CUES: Readonly<Record<EnemyKind, Readonly<Record<string, W
   // director's per-boss add stems land).
   tithe_tribute: { move: "slime.move", commit: "slime.commit" },
   quorum_splinter: { move: "slime.move", commit: "slime.commit" },
+  // JET's echo sings the mirror body's own cues (King goo bank): warn/lock/fire on its salvo.
+  jet_echo: { warn: "king.hopWarn", lock: "king.hopLock", fire: "king.radialFire" },
 };
 
 export function bestiaryCue(kind: EnemyKind, hook: string): WaveEventId | null {

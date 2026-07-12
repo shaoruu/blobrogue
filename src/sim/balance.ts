@@ -1648,6 +1648,34 @@ export const JET = {
   roarDamageReduction: 0.35,
   roarBulletClearRadius: 70,
   shardRadius: 8,
+  // ---- SURPRISE LAYER §5g B2: MIRROR-IMAGE ECHO AMBUSHES ----
+  // A telegraphed jet-black reflection of a targeted player: it arrives on the shared
+  // fair-ambush omen (0.7s pre-tell + ≥140px player-clear), fires ONE mirrored-school salvo
+  // on its OWN readable windup, then dissolves into resin flecks. FRAGILE + BRIEF — "dodge
+  // your own reflected aggression," never a second durable JET. It rides the shared add
+  // density controller (bossAddCapFor / countBossAdds / pending omens) and is HARD-capped at
+  // echoCap CONCURRENT echoes: ONE at a time (the deliberate default — the P3 "two sequential"
+  // flourish is dropped so the 4p read never becomes a soup of reflections / a multi-Jet fight).
+  echoCap: 1,
+  echoRingDist: 190,          // where the reflection tries to arrive, off the mirrored player
+  echoInterval: [0, 7.0, 6.0, 5.0] as readonly number[], // cadence per phase (R-scaled by bossAddIntervalFor)
+  echoFirstAt: 3.0,           // first echo cadence beat after the pull settles
+  echoWindup: 0.7,            // its salvo tell (≥0.6s, the shared readable-windup floor)
+  echoLock: 0.35,             // aim locks here — 0.7-0.35 = 0.35s post-lock dodge (≥0.30)
+  echoActive: 0.3,            // the single-salvo emission beat
+  echoDissolve: 0.45,         // brief recover, then it dissolves into resin flecks (never lingers)
+  // ---- SURPRISE LAYER §5g B3: PER-PHASE ARENA-CORRUPTION RESHAPE ("The Light Goes Out") ----
+  // On each ≤1.2s non-invuln transition the arena degrades toward corruption as JET wins: the
+  // previous corruption crumbles and a fresh, DENSER band of cold black-resin drain zones
+  // creeps in from the room EDGES (P1 clean → P2 edges → P3 deep, safe pockets on the last
+  // tiles). The reshape is pure zoning: it leaves ≥1 readable route (an authored corridor gap)
+  // and NEVER touches guard/exposed (windows stay earned by the mirror-salvo spent-recover).
+  corruptInsetTiles: [0, 0, 1, 3] as readonly number[], // how many tiles inward per phase (P1=0/none)
+  corruptStepTiles: 2,       // patch spacing along the band (coarse grid — bounded wire/render count, not per-tile)
+  corruptGapTiles: 3,        // width of the authored safe corridor left open through the corruption
+  corruptRadius: 40,         // each drain patch's damage radius (covers the coarse-grid cell so the band reads continuous)
+  corruptDrain: 1,           // drain damage while a player stands in it (protection-gated like cinder — zoning, not a DPS race)
+  corruptLife: 999,          // effectively permanent within the phase (re-laid, not accumulated, each transition)
 } as const;
 
 export function jetHpForFloor(floor: number): number {

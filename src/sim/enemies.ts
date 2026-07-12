@@ -351,6 +351,20 @@ export const ENEMY_ARCHETYPES: Record<EnemyKind, EnemyArchetype> = {
     radius: 11, drawSize: 34, alpha: 1, tint: "#d8d0be", kbResist: 0.8,
     baseHp: 4, baseSpeed: 62, touchDamage: 1, threat: 1.0,
   },
+  // JET's MIRROR-IMAGE ECHO (§5g B2): a player-sized cold reflection that arrives on the
+  // fair-ambush omen, fires ONE mirrored-school salvo, then dissolves. Stationary (a
+  // reflection, not a chaser) and FRAGILE (a few rounds pop it early) so it can never read
+  // as a second durable JET. Cold jet-indigo body; the client draws it translucent +
+  // hollow-eyed with a cold rim + dead-amber seams so it never reads as a warm teammate.
+  jet_echo: {
+    kind: "jet_echo", sprite: "jet_echo", movement: "drift", isPhasing: false,
+    // AD hard gates (JET_SURPRISE_LAYER_DIRECTION): the echo body is NEAR-BLACK (lum ~0.05,
+    // an enormous value gap under a teammate's ~0.68) and TRANSLUCENT (<=40%, floor shows
+    // through) — never brightened toward the teammate range. tint feeds the near-black body
+    // fill + resin flecks; the client renders rim/seams/eyes/telegraph on top.
+    radius: 26, drawSize: 60, alpha: 0.38, tint: "#0e0b1a", kbResist: 6,
+    baseHp: 6, baseSpeed: 0, touchDamage: 0, threat: 1.5,
+  },
 };
 
 // Which archetypes each tier may inhabit: swarms are small fast bodies, brutes are the
@@ -388,6 +402,7 @@ export const ELITE_AFFIXES: Readonly<Record<EnemyKind, EliteAffix>> = {
   jet: "brace", tithe: "brace", tithe_slab: "brace",
   quorum: "brace", quorum_shield: "brace", quorum_heal: "brace", quorum_dmg: "brace",
   tithe_tribute: "brace", quorum_splinter: "brace", // surplus adds never roll elite
+  jet_echo: "brace", // JET's mirror echo is a summon-only reflection, never an elite roll
 };
 
 export function eliteAffixOf(kind: EnemyKind): EliteAffix {
@@ -606,6 +621,7 @@ export function createEnemy(kind: EnemyKind, x: number, y: number, floor: number
     avoidSide: 0,
     avoidTime: 0,
     burn: 0, burnDmg: 0, chill: 0, shock: 0, markT: 0, statusTick: 0, burnOwner: null,
+    mirrorOf: null,
     attack: {
       phase: "none", time: 0, move: "none", windup: 0,
       // Bosses wait a beat after their dramatic entrance before the first commitment.
@@ -619,6 +635,7 @@ export function createEnemy(kind: EnemyKind, x: number, y: number, floor: number
         attackCount: 0, isNextRadial: false, burstParity: 0,
         beatAddIds: [], spinCount: 0,
         exposed: 0, windowBank: 0, windowAddIds: [], laneKnotId: 0, lastAddPick: -1, mirrorFamily: -1,
+        mirrorLastFamily: -1,
         huskRaised: false, huskGuardUp: true, huskReformTimer: 0,
         phaseTime: 0, enrage: 0, isSurpriseSpent: false, affixCd: 0,
       }
@@ -637,6 +654,7 @@ const BOSS_ENTRANCE_GRACE: Readonly<Partial<Record<EnemyKind, number>>> = {
 // the Warden fights alone).
 const BOSS_ADD_FIRST_AT: Readonly<Partial<Record<EnemyKind, number>>> = {
   boss: BOSS.addFirstAt, marrow: MARROW.addFirstAt, choir: CHOIR.fragmentFirstAt,
+  jet: JET.echoFirstAt, // JET's first mirror-echo cadence beat after the pull settles
 };
 
 // The per-floor enemy pool is now Gate 1's biome-selective encounter deck (roster.ts): a

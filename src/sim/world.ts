@@ -15,7 +15,7 @@ import { createNav, markNavTargets, navChaseField, navReachField, navClassFor, n
 import type { NavRuntime } from "./nav.js";
 import { TILE } from "./types.js";
 import type {
-  Enemy, EnemyKind, Bullet, Pickup, Prop, Chest, Hazard, FloorHazard, WeaponId, WeaponRarity, AttackMove, TileKind, PropKind,
+  Enemy, EnemyKind, BossState, Bullet, Pickup, Prop, Chest, Hazard, FloorHazard, WeaponId, WeaponRarity, AttackMove, TileKind, PropKind,
   MysteryTwist,
   Effect, ZoneEffect, WireEffect, OrbitEffect, SentryEffect, TetherEffect, SanctuaryEffect, AegisEffect,
 } from "./types.js";
@@ -2417,6 +2417,10 @@ function checkBossTransition(w: WorldState, e: Enemy, ev: SimEvent[]): void {
   // crumble and a fresh seeded gapped ring rises (a readable route always survives), so
   // the finale reads differently each phase. Purely geometry: it never opens a window.
   if (e.kind === "choir") choirReshape(w, e, ev);
+  // Fair surprise §5g B3: JET's "The Light Goes Out" — on each transition the arena degrades
+  // toward corruption (P1 clean → P2 edges creep in → P3 floor mostly corrupted, safe pockets on
+  // the last tiles). Pure zoning: it leaves ≥1 readable safe interior and NEVER opens a window.
+  if (e.kind === "jet") jetReshape(w, e, ev);
   ev.push({ t: "bossPhase", eid: e.id, x: e.x, y: e.y });
   ev.push({ t: "bossTransition", eid: e.id, phase: boss.phase, entering: true, queued: boss.roar.queued, hpFrac: e.hp / e.maxHp });
 }
@@ -2503,7 +2507,10 @@ function isDecoyKind(kind: Enemy["kind"]): boolean {
   return kind === "echo" || kind === "knell" || kind === "knot" || kind === "sac"
     // The Tithe's feeding slab is a mechanic body (like a knot): breaking it is counterplay,
     // never an economy — no loot, no combo fuel.
-    || kind === "tithe_slab";
+    || kind === "tithe_slab"
+    // JET's mirror-image echo is a fake body (your own reflection): popping it early is
+    // counterplay, never a kill/economy. Its concurrency is capped separately (jetEchoCap).
+    || kind === "jet_echo";
 }
 
 function isQuorumHusk(kind: Enemy["kind"]): boolean {
@@ -4172,6 +4179,7 @@ function updateEnemyAI(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): voi
     case "quorum_dmg": updateQuorumHusk(w, e, dt); return;
     case "tithe_tribute": updateTitheTribute(w, e, dt, ev); return;
     case "quorum_splinter": updateQuorumSplinter(w, e, dt); return;
+    case "jet_echo": updateJetEcho(w, e, dt, ev); return;
     default: updateChaser(w, e, dt); return;
   }
 }
@@ -6221,6 +6229,18 @@ function resolveOmen(w: WorldState, h: Hazard, ev: SimEvent[]): void {
     add.seq = owner.id + 1; // the clutch belongs to the weaver that laid it
     owner.boss.windowAddIds.push(add.id);
   }
+  if (owner.kind === "jet" && add.kind === "jet_echo") {
+    // The reflection MIRRORS whoever it landed nearest (the targeted player reads "that's ME";
+    // teammates read "[name]'s reflection"). Rides Enemy.mirrorOf → EnemyWire.mir.
+    add.mirrorOf = jetNearestPlayer(w, add.x, add.y)?.id ?? null;
+    add.aux = JET.echoWindup + JET.echoActive + JET.echoDissolve; // remaining-life readout (client fade)
+    // Freeze ONE mirrored school (from the frozen pool) for this reflection's salvo — one of
+    // YOUR OWN guns, turned back on you. Drawn seeded, never from live inventory.
+    add.seq = w.jetMirror.length > 0
+      ? RESONANCE_FAMILIES.indexOf(w.jetMirror[w.rng.int(0, w.jetMirror.length - 1)])
+      : 0;
+    beginWindup(add, "mirror"); // its salvo tell begins now; the spawn grace still holds it inert
+  }
   if (owner.kind === "quorum" && add.kind === "quorum_splinter") {
     // The shard carries its parent husk's WEAK role (planted on the omen): 0 shield / 1 heal
     // / 2 dmg. seq links it to the core (the heal shard's trickle target); only the dmg pip
@@ -7613,6 +7633,18 @@ function updateJet(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void {
   const boss = e.boss;
   if (!boss) return;
   if (w.jetMirror.length === 0) resolveJetMirror(w); // frozen at first tick (the pull loadout)
+  // Fair surprise §5g B2: the MIRROR-IMAGE ECHO cadence. On its beat JET spawns ONE telegraphed
+  // reflection of a targeted player through the shared fair-ambush omen (0.7s tell + ≥140px
+  // clear), capped at jetEchoCap CONCURRENT echoes and gated by the shared add-density
+  // controller. Paused during the transition beat (the roar owns that beat). The cadence rides
+  // boss.addTimer (JET's only add is the echo), R-scaled like every boss add loop.
+  if (!boss.roar && boss.phase >= 1) {
+    boss.addTimer -= dt;
+    if (boss.addTimer <= 0) {
+      boss.addTimer = bossAddIntervalFor(JET.echoInterval[boss.phase], w.encounterPower);
+      jetTrySpawnEcho(w, e, ev);
+    }
+  }
   const a = e.attack;
 
   if (a.phase === "windup") { jetWindup(w, e, dt, ev); return; }
@@ -7654,10 +7686,12 @@ function jetBeginAttack(w: WorldState, e: Enemy, ev: SimEvent[]): void {
   // salvo instead of a no-op tracer beat, so it never stalls into an empty telegraph.
   if (move === "tracer" && jetTracerMotes(w) <= 0) move = "mirror";
   beginWindup(e, move);
-  // Surface the salvo's LEAD mirror family (index 0 = pool[attackCount % len]) so the client
-  // draws the copied weapon's shape + hue; -1 for the non-mirror pressure moves.
+  // Fair surprise §5g B1: the salvo's LEAD mirror family is now a WEIGHTED NON-REPEAT DRAW over
+  // the frozen pool (the drawFromAddPool lastAddPick law applied to the verb) — "which of my own
+  // guns is turned on you THIS time," never the same school back-to-back. The drawn family rides
+  // the wire (mfm) so the client draws the copied weapon's shape + hue; -1 for the pressure moves.
   boss.mirrorFamily = move === "mirror" && w.jetMirror.length > 0
-    ? RESONANCE_FAMILIES.indexOf(w.jetMirror[boss.attackCount % w.jetMirror.length])
+    ? RESONANCE_FAMILIES.indexOf(w.jetMirror[drawMirrorFamily(w, boss)])
     : -1;
   ev.push({ t: "cue", name: move === "mirror" ? "enemyHit" : "enemyAttack", x: e.x, y: e.y, rate: 0.5, gain: 0.7, trauma: 0 });
 }
@@ -7770,13 +7804,34 @@ function jetSalvoSize(w: WorldState, phase: number): number {
   return Math.max(1, Math.min(desire, cap, w.jetMirror.length));
 }
 
-// Fire the index-th mirrored verb of this salvo. Verbs cycle through the frozen pool by the
-// salvo count, so a longer pool is worked through across salvos. P3 INVERTS the pattern.
+// Fair surprise §5g B1: draw WHICH mirrored school leads the next salvo — a weighted, seeded,
+// NON-REPEATING pick over the frozen pool (the drawFromAddPool + lastAddPick law, applied to the
+// VERB rather than a body). Returns the drawn POSITION into w.jetMirror. Every family is equally
+// weighted (the pool is a set); the previous salvo's lead family is excluded whenever another
+// school is available, so JET never turns the SAME of your guns on you back-to-back. Rides the
+// world RNG exactly like drawFromAddPool, so two identical pulls replay byte-for-byte.
+function drawMirrorFamily(w: WorldState, boss: BossState): number {
+  const pool = w.jetMirror;
+  if (pool.length === 0) return 0;
+  const eligible: number[] = [];
+  for (let i = 0; i < pool.length; i++) {
+    if (pool.length > 1 && RESONANCE_FAMILIES.indexOf(pool[i]) === boss.mirrorLastFamily) continue;
+    eligible.push(i);
+  }
+  const pick = eligible[w.rng.int(0, eligible.length - 1)];
+  boss.mirrorLastFamily = RESONANCE_FAMILIES.indexOf(pool[pick]);
+  return pick;
+}
+
+// Fire the index-th mirrored verb of this salvo. Index 0 is the drawn LEAD school (boss.mirrorFamily,
+// the non-repeat pick); the simultaneous verbs fan out from it through the pool, so a salvo's
+// multiple lanes stay distinct schools (the copied-gun silhouette stays legible). P3 INVERTS.
 function jetFireVerb(w: WorldState, e: Enemy, index: number, ev: SimEvent[], forceInvert = false): void {
   const boss = e.boss!;
   const pool = w.jetMirror;
   if (pool.length === 0) return;
-  const family = pool[(boss.attackCount + index) % pool.length];
+  const lead = boss.mirrorFamily >= 0 ? pool.indexOf(RESONANCE_FAMILIES[boss.mirrorFamily]) : 0;
+  const family = pool[((lead >= 0 ? lead : 0) + index) % pool.length];
   const isInverted = boss.phase >= 3 || forceInvert; // the soft-enrage verb inverts even in P2
   let aim = e.attack.lockedAngle;
   if (findTarget(w, e.x, e.y)) aim = Math.atan2(w.targetY - e.y, w.targetX - e.x);
@@ -7884,6 +7939,153 @@ function jetFireBeam(w: WorldState, e: Enemy, ev: SimEvent[]): void {
   }
   ev.push({ t: "bossVolley", x: e.x, y: e.y });
   ev.push({ t: "cue", name: "enemyHit", x: e.x, y: e.y, rate: isCorrupt ? 0.4 : 0.55, gain: 0.85, trauma: 0.06 });
+}
+
+// ---- §5g B2: the MIRROR-IMAGE ECHO (JET's marquee surprise element) ----
+
+// Concurrent-echo cap: ONE at a time (the deliberate default). The optional P3 "two sequential"
+// flourish is DROPPED — one reflection keeps the worst-case 4p read from ever becoming a soup of
+// echoes / a multi-Jet fight (the fairness guardrail wins over the flourish).
+function jetEchoCap(_w: WorldState): number {
+  return JET.echoCap;
+}
+
+// The nearest live, targetable player to a point (deterministic: players iterate in insertion
+// order). The echo MIRRORS this player — the reflection's identity for the co-op read.
+function jetNearestPlayer(w: WorldState, x: number, y: number): PlayerSim | null {
+  let best: PlayerSim | null = null;
+  let bestD = Infinity;
+  for (const p of w.players.values()) {
+    if (p.isDown || p.isAbsent || p.hp <= 0) continue;
+    const d = (p.x - x) * (p.x - x) + (p.y - y) * (p.y - y);
+    if (d < bestD) { bestD = d; best = p; }
+  }
+  return best;
+}
+
+// Queue ONE mirror-image echo through the shared fair-ambush omen path (0.7s tell + ≥140px
+// clear), if the concurrent-echo cap AND the shared add-density budget both allow. The tell
+// stands off a targeted player; the resolved body mirrors whoever it lands nearest (resolveOmen).
+function jetTrySpawnEcho(w: WorldState, e: Enemy, ev: SimEvent[]): void {
+  const cap = jetEchoCap(w);
+  // Concurrent echoes = live bodies + pending omens (an announced echo holds a slot the moment
+  // its tell stands, so the cadence never over-plants while one is still arriving).
+  const live = countLiveAddsOfKind(w, "jet_echo") + countPendingOmensOfKind(w, "jet_echo", "standard");
+  if (live >= cap) return;
+  // Route through the density controller like any add (bossAddCapFor over the shared budget).
+  if (countBossAdds(w) + countPendingOmens(w) >= bossAddCapFor(cap, w.encounterPower)) return;
+  const target = jetNearestPlayer(w, e.x, e.y);
+  if (!target) return;
+  const base = w.rng.next() * Math.PI * 2;
+  for (let attempt = 0; attempt < 4; attempt++) {
+    const ang = base + attempt * 2.399963;
+    const x = target.x + Math.cos(ang) * JET.echoRingDist;
+    const y = target.y + Math.sin(ang) * JET.echoRingDist;
+    if (queueAmbush(w, x, y, "jet_echo", "standard", e.id + 1, ev)) break;
+  }
+}
+
+// A resolved mirror-image echo: it holds its pose through spawn grace, telegraphs its ONE
+// mirrored-school salvo on its own readable windup, fires it, then DISSOLVES into resin flecks.
+// FRAGILE + BRIEF — never a second durable JET. aux carries remaining life (the client fade).
+function updateJetEcho(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void {
+  if (e.spawnTimer > 0) return; // fair-ambush spawn grace on top of the omen tell
+  const a = e.attack;
+  if (e.aux > 0) e.aux = Math.max(0, e.aux - dt); // remaining-life readout (drives the client fade)
+  if (a.phase === "windup") {
+    if (stepWindupTimer(w, e, dt, JET.echoWindup, JET.echoLock, false)) {
+      a.phase = "active"; a.time = 0; a.windup = 0;
+      // ONE mirrored-school salvo (the school frozen on `seq` at resolve), fired from the
+      // reflection's body at the locked bearing — "dodge your own reflected aggression."
+      const fam = RESONANCE_FAMILIES[e.seq] ?? w.jetMirror[0];
+      jetEmitFamily(w, e, fam, a.lockedAngle, false);
+      ev.push({ t: "bossVolley", x: e.x, y: e.y });
+      ev.push({ t: "cue", name: "enemyAttack", x: e.x, y: e.y, rate: 0.6, gain: 0.75, trauma: 0.03 });
+    }
+    return;
+  }
+  if (a.phase === "active") {
+    a.time += dt;
+    if (a.time >= JET.echoActive) enterRecover(e);
+    return;
+  }
+  if (a.phase === "recover") {
+    a.time += dt;
+    if (a.time >= JET.echoDissolve) {
+      e.dead = true; // self-dissolve into resin flecks (a reflection, never a kill/loot)
+      ev.push({ t: "puff", x: e.x, y: e.y, n: 8, color: ENEMY_ARCHETYPES.jet_echo.tint });
+    }
+    return;
+  }
+  // Orphaned: the omen resolved AFTER the mirror that cast it died, so its windup was never
+  // seeded — a reflection with no source simply dissolves (never a lingering inert body).
+  e.dead = true;
+  ev.push({ t: "puff", x: e.x, y: e.y, n: 6, color: ENEMY_ARCHETYPES.jet_echo.tint });
+}
+
+// ---- §5g B3: the PER-PHASE ARENA-CORRUPTION RESHAPE ("The Light Goes Out") ----
+
+// The room JET is fighting in (its perimeter is what corrupts inward). The boss arena is the
+// last room on a boss floor; otherwise (sandbox/dev) the room whose tile-rect holds the boss.
+function jetArenaRoom(w: WorldState, e: Enemy): Room | null {
+  const d = w.dungeon;
+  const tx = Math.floor(e.x / TILE), ty = Math.floor(e.y / TILE);
+  for (const room of d.rooms) {
+    if (tx >= room.x && tx < room.x + room.w && ty >= room.y && ty < room.y + room.h) return room;
+  }
+  return d.rooms.length > 0 ? d.rooms[d.rooms.length - 1] : null;
+}
+
+// JET's arena reshape (fair surprise §5g B3): mirrors the weaver/gilded/choir reshape STRUCTURE
+// (crumble the old, raise the fresh) but the material is CORRUPTION, not pillars — JET's own cold
+// black-resin drain (the plantAffixCharge env-drain, made persistent + escalating). The previous
+// phase's corruption crumbles and a fresh, DENSER band creeps in from the room EDGES (inset tiles
+// deep, growing each phase), so the safe space SHRINKS INWARD as JET wins — never a ring/circle,
+// never violet. An authored corridor gap on one seeded edge + the always-open interior guarantee
+// ≥1 readable safe route; a patch never lands on/beside a standing player. It fires ON the ≤1.2s
+// transition beat and NEVER touches guard/exposed — the window stays earned by the mirror salvo.
+function jetReshape(w: WorldState, e: Enemy, ev: SimEvent[]): void {
+  const boss = e.boss!;
+  const exposedBefore = boss.exposed; // the reshape must NEVER open/extend a window (asserted below)
+  // Crumble the previous phase's corruption: the room re-corrupts fresh + denser each transition,
+  // never accumulates (the choir/weaver "crumble old, raise fresh" law).
+  for (const h of w.hazards) if (h.kind === "corrupt") h.life = 0;
+  w.hazards = w.hazards.filter((h) => h.life > 0);
+  const room = jetArenaRoom(w, e);
+  const wantInset = JET.corruptInsetTiles[boss.phase] ?? 0;
+  if (room && wantInset > 0) {
+    // Clamp the band so a corruption-free INTERIOR (the safe pocket) always survives.
+    const inset = Math.min(wantInset, Math.floor(Math.min(room.w, room.h) / 2) - 2);
+    if (inset > 0) {
+      // The authored safe-corridor gap: one seeded edge carries a corruptGapTiles-wide opening,
+      // a readable break in the corruption wall (on top of the always-open interior).
+      const gapSide = w.rng.int(0, 3); // 0 top / 1 bottom / 2 left / 3 right
+      const gapHalf = JET.corruptGapTiles / 2;
+      const step = JET.corruptStepTiles; // coarse grid: a bounded patch count, never per-tile
+      for (let ty = room.y; ty < room.y + room.h; ty += step) {
+        for (let tx = room.x; tx < room.x + room.w; tx += step) {
+          const dl = tx - room.x, dr = room.x + room.w - 1 - tx;
+          const dtp = ty - room.y, db = room.y + room.h - 1 - ty;
+          const edge = Math.min(dl, dr, dtp, db);
+          if (edge >= inset) continue; // interior tile: stays clear (the safe pocket)
+          // Skip the authored corridor gap on the seeded edge (a readable way out).
+          if (gapSide === 0 && dtp < inset && Math.abs(tx - room.cx) <= gapHalf) continue;
+          if (gapSide === 1 && db < inset && Math.abs(tx - room.cx) <= gapHalf) continue;
+          if (gapSide === 2 && dl < inset && Math.abs(ty - room.cy) <= gapHalf) continue;
+          if (gapSide === 3 && dr < inset && Math.abs(ty - room.cy) <= gapHalf) continue;
+          const x = (tx + 0.5) * TILE, y = (ty + 0.5) * TILE;
+          if (isWall(w, x, y)) continue;
+          if (isNearAnyPlayer(w, x, y, AMBUSH.playerClear)) continue; // never corrupt a player's ground
+          w.hazards.push({
+            id: w.nextHazardId++, kind: "corrupt", x, y,
+            radius: JET.corruptRadius, life: JET.corruptLife, maxLife: JET.corruptLife,
+          });
+        }
+      }
+    }
+  }
+  ev.push({ t: "puff", x: e.x, y: e.y, n: 6, color: ENEMY_ARCHETYPES.jet.tint });
+  boss.exposed = exposedBefore; // hard invariant: the corruption reshape opens no window (like choirReshape)
 }
 
 // ---- §5h THE TITHE (F40): the armored FEEDER + its destructible feeding slab ----
@@ -9016,8 +9218,18 @@ function updateHazards(w: WorldState, dt: number, ev: SimEvent[]): void {
     if (h.kind === "omen" && h.life <= 0) resolveOmen(w, h, ev);
     // Cinders burn any player standing in them; post-hit protection self-limits the ticks.
     if (h.kind === "cinder") cinderBurn(w, h, ev);
+    // JET's corruption drains any player standing in it (post-hit protection self-limits the
+    // ticks, like cinder) — zoning, not a DPS race. The bright authored edge is client-side.
+    if (h.kind === "corrupt") corruptDrain(w, h, ev);
   }
   w.hazards = w.hazards.filter((h) => h.life > 0);
+}
+
+function corruptDrain(w: WorldState, h: Hazard, ev: SimEvent[]): void {
+  for (const p of w.players.values()) {
+    if (isProtected(p) || p.isDown || p.isAbsent || p.hp <= 0 || w.pendingBlessings.has(p.id)) continue;
+    if (Math.hypot(p.x - h.x, p.y - h.y) < h.radius) damagePlayer(w, p, JET.corruptDrain, ev);
+  }
 }
 
 function cinderBurn(w: WorldState, h: Hazard, ev: SimEvent[]): void {
