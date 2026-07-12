@@ -269,7 +269,7 @@ function serverRoundTripTests(): void {
 // who is actually there (the Sev-0 readout).
 function worldBindingWireTests(): void {
   section("v4: authoritative world id + roster are required, strict, and round-trip");
-  check("protocol version covers the Wave 2 kit signatures (v25: SelfWire ovh/osh/pra + input.pulse + EnemyWire.mkt)", PROTOCOL_VERSION === 25, `v=${PROTOCOL_VERSION}`);
+  check("protocol version covers JET's surprise layer (v26: enemy kind jet_echo + EnemyWire.mir + HazardKind corrupt)", PROTOCOL_VERSION === 26, `v=${PROTOCOL_VERSION}`);
   check("room code maps to its world id", worldIdForRoomCode(" abcd ") === "room:ABCD");
   check("room world ids pass the shared charset gate", isValidWorldId(worldIdForRoomCode("ZZZZ")) && isValidWorldId("arena-1"));
   check("junk world ids fail the shared charset gate", !isValidWorldId("room:../../etc") && !isValidWorldId(""));

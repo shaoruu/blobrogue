@@ -22,7 +22,7 @@ import { LOCAL_ID } from "../src/sim/input.js";
 import type { Bullet, Enemy, EnemyKind } from "../src/sim/types.js";
 import { TILE } from "../src/sim/types.js";
 import { SPAWN_GRACE, isComplexMover, ENEMY_ARCHETYPES } from "../src/sim/enemies.js";
-import { AMBUSH, WEAVER, MARROW, CHOIR, GILDED, QUORUM, activeMoverCapFor } from "../src/sim/balance.js";
+import { AMBUSH, WEAVER, MARROW, CHOIR, GILDED, QUORUM, JET, RESONANCE_FAMILIES, activeMoverCapFor } from "../src/sim/balance.js";
 
 const DT = 1 / 60;
 
@@ -228,6 +228,48 @@ function ambushTellGates(): void {
     check("the splinter's clearance is the shared ambush guarantee (140px)", AMBUSH.playerClear === 140);
     check("splinters draw from the R-keyed wave cap (never an unbounded pop)", QUORUM.huskAddCap > 0);
   }
+
+  section("§2 JET mirror-image echoes ride the SAME omen contract — telegraphed, capped at one, fragile + brief");
+  {
+    const w = createWorld(0xFA2A, 35, { isSandbox: true });
+    w.isGodMode = true;
+    const p = w.players.get(LOCAL_ID)!;
+    const boss = devSpawnEnemy(w, "jet", p.x + 170, p.y);
+    // Watch echo arrivals against the fair laws, and live-audit the concurrent-echo cap +
+    // each echo's mirrored-player tag. Do NOT cull (let echoes live their brief life to dissolve).
+    let capOk = true;
+    let mirrorTagOk = true;
+    let sawDissolve = false;
+    const priorEchoIds = new Set<number>();
+    const log = auditAmbushes(w, boss, ["jet_echo"], 60 * 30, false, () => {
+      let live = 0;
+      for (const e of w.enemies) {
+        if (e.dead || e.kind !== "jet_echo") continue;
+        live++;
+        // Every live echo tags WHICH player it mirrors (the co-op "that's ME" read).
+        if (e.mirrorOf === null) mirrorTagOk = false;
+        priorEchoIds.add(e.id);
+      }
+      if (live > JET.echoCap) capOk = false;
+      // A prior echo that is no longer alive dissolved on its own (fragile + brief, never durable).
+      for (const id of priorEchoIds) {
+        if (!w.enemies.some((e) => !e.dead && e.id === id)) sawDissolve = true;
+      }
+    });
+    check("mirror echoes arrived on omen tells to audit", log.spawns.length >= 2, `echoes=${log.spawns.length}`);
+    check("every echo stood behind its omen tell of at least 0.6s (the shared fair-ambush pre-tell)",
+      log.spawns.every((sp) => sp.hadTell && sp.tellAge >= 0.6 - 2 * DT),
+      log.spawns.map((sp) => `${sp.tellAge.toFixed(2)}s`).join(","));
+    check("every echo keeps its full spawn grace before it may fire", log.spawns.every((sp) => sp.graceOk));
+    check("no echo omen ever bloomed inside the player's ≥140px personal space", log.omenClearOk);
+    check("never more than ONE concurrent echo (the soup / multi-Jet guardrail)", capOk);
+    check("every live echo tags the player it mirrors (the co-op reflection read)", mirrorTagOk);
+    check("echoes are FRAGILE + BRIEF — each dissolves on its own (never a second durable JET)", sawDissolve);
+    check("the echo body carries no contact damage (dodge its salvo, not its body)",
+      ENEMY_ARCHETYPES.jet_echo.touchDamage === 0);
+    check("the echo's tell is the shared 0.6–0.8s omen (its windup adds a second readable salvo tell)",
+      JET.echoWindup >= 0.6 && JET.echoWindup - JET.echoLock >= 0.30);
+  }
 }
 
 // ---- §1: composition varies by seed, inside every cap ----
@@ -292,6 +334,40 @@ function compositionGates(): void {
     && CHOIR.addPool.every((e) => ENEMY_ARCHETYPES[e.kind] !== undefined));
   check("the Choir's voice pool is fragile swarm chaff (silenceable, never a kiter that stalls the window)",
     CHOIR.addPool.every((e) => e.tier === "swarm" && !isComplexMover(e.kind)));
+
+  section("§1 JET mirror-verb draw: WHICH of your guns fires next is a non-repeat draw (never the same school back-to-back)");
+  {
+    // Drive a JET fight and record the LEAD mirrored school of every mirror salvo it commits.
+    const w = createWorld(0xFA24, 35, { isSandbox: true });
+    w.isGodMode = true;
+    const p = w.players.get(LOCAL_ID)!;
+    const boss = devSpawnEnemy(w, "jet", p.x + 170, p.y);
+    boss.spawnTimer = 0;
+    step(w); // resolve the frozen mirror pool
+    const poolSize = w.jetMirror.length;
+    const leads: number[] = [];
+    let lastSalvoTick = -1;
+    for (let t = 0; t < 60 * 40 && !boss.dead; t++) {
+      step(w, idle(t));
+      const bs = boss.boss!;
+      const isMirror = boss.attack.move === "mirror"
+        && (boss.attack.phase === "windup" || boss.attack.phase === "active");
+      // Record ONCE per salvo (its lead family is stable across the salvo's ticks).
+      if (isMirror && bs.mirrorFamily >= 0 && t !== lastSalvoTick + 1) {
+        if (leads.length === 0 || leads[leads.length - 1] !== bs.mirrorFamily) leads.push(bs.mirrorFamily);
+      }
+      if (isMirror) lastSalvoTick = t;
+    }
+    check("the frozen mirror pool carries more than one school (the non-repeat draw is meaningful)",
+      poolSize > 1, `pool=${poolSize}`);
+    check("multiple mirror salvos fired to audit the draw", leads.length >= 4, `salvos=${leads.length}`);
+    let noRepeat = true;
+    for (let i = 1; i < leads.length; i++) if (leads[i] === leads[i - 1]) noRepeat = false;
+    check("no mirror salvo ever leads with the SAME school as the one before it (the guardrail)",
+      noRepeat, leads.map((f) => RESONANCE_FAMILIES[f]).join(","));
+    check("the draw is a REAL draw, not a fixed cycle (it visits more than one school)",
+      new Set(leads).size >= 2, `distinct=${new Set(leads).size}`);
+  }
 }
 
 // ---- §3: phase shifts reshape the room, always leaving a route ----
@@ -405,6 +481,41 @@ function reshapeGates(): void {
       pillars2.length >= 3 && pillars2.every((pr) => !ids1.has(pr.id)), `pillars=${pillars2.length}`);
     check("the route still stands after the second reshape", hasRoute(w, p.x, p.y, boss.x, boss.y));
   }
+
+  section("§3 JET corruption: the arena corrupts inward per phase (edges creep in), safe pocket + route intact, no window");
+  {
+    const w = createWorld(0xFA33, 35, { isSandbox: true });
+    w.isGodMode = true;
+    const p = w.players.get(LOCAL_ID)!;
+    const boss = devSpawnEnemy(w, "jet", p.x + 170, p.y);
+    boss.spawnTimer = 0;
+    for (let t = 0; t < 12; t++) step(w, idle(t));
+    const corruptCount = (): number => w.hazards.filter((h) => h.kind === "corrupt").length;
+    const safePocketOk = (): boolean => !w.hazards.some((h) => h.kind === "corrupt" && Math.hypot(h.x - boss.x, h.y - boss.y) < TILE * 1.5);
+    check("P1 is CLEAN — no corruption before JET starts winning", corruptCount() === 0);
+    // P1 → P2: a huge hit floors the phase; "The Light Goes Out" creeps the edges in.
+    plantBullet(w, boss.x, boss.y, 1e6, 30);
+    step(w);
+    check("JET crossed into P2", boss.boss!.phase >= 2, `phase=${boss.boss!.phase}`);
+    const p2 = corruptCount();
+    check("P2 corruption creeps in from the edges (the arena degrades as JET wins)", p2 > 0, `patches=${p2}`);
+    check("every corruption patch is JET's own drain hazard (never a pillar/ring/AoE circle)",
+      w.hazards.filter((h) => h.kind === "corrupt").every((h) => h.radius === JET.corruptRadius));
+    check("the interior stays a readable SAFE POCKET (corruption never eats JET's own ground)", safePocketOk());
+    check("a walkable route survives the corruption (it never walls the room off)", hasRoute(w, p.x, p.y, boss.x, boss.y));
+    check("the corruption reshape opens NO window (only the mirror-salvo spent-recover can)", !isBossExposed(boss));
+    // Ride the beat out, then P2 → P3: the corruption re-lays DENSER + deeper (crumble old, raise fresh).
+    for (let t = 0; t < 60 * 2; t++) step(w, idle(t));
+    plantBullet(w, boss.x, boss.y, 1e6, 30);
+    step(w);
+    check("JET crossed into P3", boss.boss!.phase >= 3, `phase=${boss.boss!.phase}`);
+    const p3 = corruptCount();
+    check("P3 corruption is DEEPER than P2 (the floor is mostly corrupted, safe pockets on the last tiles)",
+      p3 > p2, `p2=${p2} p3=${p3}`);
+    check("even at P3 the interior stays a readable safe pocket", safePocketOk());
+    check("even at P3 a walkable route survives", hasRoute(w, p.x, p.y, boss.x, boss.y));
+    check("the P3 corruption reshape still opens NO window", !isBossExposed(boss));
+  }
 }
 
 // ---- determinism: seeded variety, never divergence ----
@@ -438,6 +549,34 @@ function determinismGates(): void {
   const b = runFight();
   check("two identical runs of a P1→P3 fight (ambushes, climbs, dashes) match exactly", a === b,
     `trace=${a.length} chars`);
+
+  // JET's full surprise stack (mirror-verb draw + echo omens/salvos + per-phase corruption
+  // reshape) must also replay byte-for-byte — every draw/spawn/reshape rides the world RNG.
+  const runJet = (): string => {
+    const w = createWorld(0xFA41, 35, { isSandbox: true });
+    w.isGodMode = true;
+    const p = w.players.get(LOCAL_ID)!;
+    const boss = devSpawnEnemy(w, "jet", p.x + 170, p.y);
+    boss.spawnTimer = 0;
+    const log: string[] = [];
+    for (let t = 0; t < 60 * 45 && !boss.dead; t++) {
+      const isExp = isBossExposed(boss);
+      const aim = Math.atan2(boss.y - p.y, boss.x - p.x);
+      const evs = step(w, { seq: t, moveX: 0, moveY: 0, aim, firing: true, dash: false });
+      for (const e of evs) {
+        if (e.t === "enemySpawn" && e.kind === "jet_echo") log.push(`${t}:echo@${e.x.toFixed(2)},${e.y.toFixed(2)}`);
+      }
+      if (t % 30 === 0) {
+        const corrupt = w.hazards.filter((h) => h.kind === "corrupt").length;
+        log.push(`${t}:${boss.hp.toFixed(4)}:${boss.boss!.phase}:${boss.boss!.mirrorFamily}:${boss.boss!.mirrorLastFamily}:${isExp ? 1 : 0}:${corrupt}:${w.enemies.length}`);
+      }
+    }
+    return log.join("|");
+  };
+  const ja = runJet();
+  const jb = runJet();
+  check("two identical JET pulls (verb draws, echo omens/salvos, corruption reshapes) match tick-for-tick",
+    ja === jb, `trace=${ja.length} chars`);
 }
 
 function main(): void {
