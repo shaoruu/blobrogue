@@ -469,11 +469,13 @@ function coopMechanicGates(): void {
     for (let i = 0; i < players; i++) spawnPlayerInWorld(w2, `p${i}`);
     w2.encounterPlayers = players;
     const q0 = w2.players.get("p0")!;
-    devSpawnEnemy(w2, "choir", q0.x + 170, q0.y);
+    const choir = devSpawnEnemy(w2, "choir", q0.x + 170, q0.y);
     let fragments = 0;
     for (let t = 0; t < 60 * 8; t++) {
       stepWorld(w2, new Map([["p0", idle(t)]]), DT);
-      fragments = Math.max(fragments, w2.enemies.filter((e) => !e.dead && e.isSummoned && e.kind === "ghost").length);
+      // The verse draws varied voices now (fair surprise §1), so count the verse TASK
+      // (the silence set), not the ghost kind — the co-op contract is the task COUNT.
+      fragments = Math.max(fragments, w2.enemies.filter((e) => !e.dead && e.isSummoned && choir.boss!.windowAddIds.includes(e.id)).length);
     }
     return { knots, fragments };
   };
