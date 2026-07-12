@@ -50,7 +50,7 @@ function probeBullet(fx: WeaponId): Bullet {
 
 async function main(): Promise<void> {
   const { game } = await bootGame(320, 240);
-  const probe = game as unknown as FxProbe;
+  const probe = game as object as FxProbe;
 
   const ids = Object.keys(WEAPONS) as WeaponId[];
   const projectiles = ids.filter((id) => firesProjectile(WEAPONS[id]));
@@ -68,8 +68,8 @@ async function main(): Promise<void> {
   process.stdout.write("\n[non-projectile weapons are justified exclusions (no traveling bullet)]\n");
   for (const id of nonProjectiles) {
     const w = WEAPONS[id];
-    const reason = w.melee ? "melee" : w.wire ? "wire" : w.orbit ? "orbit" : w.tether ? "tether" : "unknown";
-    check(`${id} legitimately fires no traveling bullet (${reason})`, reason !== "unknown");
+    const kind = w.melee ? "melee" : w.wire ? "wire" : w.orbit ? "orbit" : w.tether ? "tether" : null;
+    check(`${id} legitimately fires no traveling bullet${kind ? ` (${kind})` : ""}`, kind !== null);
   }
 
   game.stop();
