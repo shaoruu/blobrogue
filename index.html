@@ -767,12 +767,14 @@
       .home-online .online-text{ min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
       .home-hero .blob-stage{ position:relative; flex:none; width:200px; height:200px;
         background:transparent; box-shadow:none; display:flex; align-items:center; justify-content:center; }
-      /* the radial plinth glow (quiet, low alpha — never competes with the amber Play) */
-      .home-hero .blob-stage::before{ content:""; position:absolute; inset:10px; border-radius:50%;
-        background:radial-gradient(closest-side, rgba(255,180,59,.16), rgba(255,180,59,.05) 55%, transparent 74%); }
-      /* the soft ground-shadow ellipse under the feet — standing, not floating (scaled up) */
-      .home-hero .blob-stage::after{ content:""; position:absolute; left:50%; bottom:22px; width:92px; height:14px;
-        transform:translateX(-50%); border-radius:50%; background:rgba(5,3,11,.55); }
+      /* the radial plinth glow — a warmer pool so the hero reads as lit + present on the
+         flat dark band, still low enough it never competes with the amber Play button */
+      .home-hero .blob-stage::before{ content:""; position:absolute; inset:2px; border-radius:50%;
+        background:radial-gradient(closest-side, rgba(255,180,59,.24), rgba(255,180,59,.09) 52%, transparent 80%); }
+      /* the soft ground-shadow under the feet — lifted up to the contact point + blurred so
+         the blob reads as STANDING, not floating over a detached hard ellipse */
+      .home-hero .blob-stage::after{ content:""; position:absolute; left:50%; bottom:30px; width:104px; height:16px;
+        transform:translateX(-50%); border-radius:50%; background:rgba(5,3,11,.6); filter:blur(3px); }
       .home-hero .blob-stage .blob-preview{ position:relative; z-index:1; width:160px; height:160px;
         image-rendering:pixelated; background:transparent; }
       /* The small closet door beside the blob — the natural place to tap your guy. Quiet
