@@ -8912,10 +8912,12 @@ function gorgeSeamLoop(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): voi
   if (boss.addTimer <= 0) gorgeExposeSeams(w, e, ev);
 }
 
-// Jut N tectonic weak-points out of the current shell. RIND clusters them on the front arc (easy
-// to reach — teaches the verb); CHITIN/CORE ring them all the way around the 192px body (players
-// must REPOSITION to hit them all — space pressure). The seams are mechanic bodies (decoy kind:
-// no loot/combo), linked to the giant via seq, on the shared windowAddIds set.
+// Jut N tectonic weak-points out of the current shell, FACING the threatened player (always
+// reachable), the arc widening per shell: RIND a tight front cluster (easy — teaches the verb) →
+// CHITIN wider → CORE the widest (out to the giant's sides), so players must TRACK + REPOSITION
+// across the front to hit them all (space pressure) without an unfair orbit behind the body. The
+// seams are mechanic bodies (decoy kind: no loot/combo), linked to the giant via seq, on the
+// shared windowAddIds set.
 function gorgeExposeSeams(w: WorldState, e: Enemy, ev: SimEvent[]): void {
   const boss = e.boss!;
   const n = gorgeSeamCountFor(boss.phase, w.encounterPlayers);
