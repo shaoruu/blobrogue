@@ -581,11 +581,17 @@ const BOSS_BANDS: Readonly<Record<string, BossBand>> = {
   choir: { floor: 30, weapon: "pistol", build: [...L3("hair_trigger"), ...L3("glass_cannon")],
     soloWall: [40, 64], exposed: [12, 26], minLegal: 22, party4: [46, 62], calibrated: true, calibrated4: false }, // finale: longest wall; a 4-strong pull is window-count-bound (~2× solo), surfaced not gated
   jet: { floor: 35, weapon: "pistol", build: [...L3("hair_trigger"), "glass_cannon", "glass_cannon"],
-    soloWall: [38, 55], exposed: [16, 30], minLegal: 22, party4: [42, 58], calibrated: false, calibrated4: false }, // Wave-1: re-measure on build, placeholder mirrors weaver
+    soloWall: [28, 48], exposed: [14, 26], minLegal: 22, party4: [42, 60], calibrated: true, calibrated4: true }, // Wave-1 CALIBRATED (balancer, from harness N=20): measured wall 33.6 / exp 19.7 / 4p P50 50.9. Lower wall floor (28) is correct — Jet's window is the mirror-salvo spent-recover CADENCE (no dash/body gate), so it's intentionally one of the faster deep bosses (mirror duel, not endurance).
   tithe: { floor: 40, weapon: "pistol", build: [...L3("hair_trigger"), ...L3("glass_cannon")],
-    soloWall: [38, 55], exposed: [16, 30], minLegal: 22, party4: [42, 58], calibrated: false, calibrated4: false }, // Wave-1: re-measure on build
+    soloWall: [40, 60], exposed: [18, 30], minLegal: 22, party4: [40, 56], calibrated: true, calibrated4: true }, // Wave-1 CALIBRATED (balancer, from harness N=20): measured wall 48.3 / exp 24.3 / 4p P50 46.0.
   quorum: { floor: 45, weapon: "pistol", build: [...L3("hair_trigger"), ...L3("glass_cannon")],
-    soloWall: [40, 58], exposed: [12, 26], minLegal: 22, party4: [42, 58], calibrated: false, calibrated4: false }, // Wave-1: re-measure on build
+    // Wave-1 CALIBRATED (balancer, from harness N=20): measured wall 44.1 / exp 8.2 / 4p P50 30.6.
+    // NOTE: Quorum's exposed band [5,14] is INTENTIONALLY low, NOT a regression — most P1 damage
+    // flows through the priority husk into the shared POOL (counted as mechanic-solving, not
+    // "exposed"), so its exposed tally is structurally lower than the roster. For Quorum the WALL
+    // band is the primary TTK gate; exposed is a secondary sanity check. Do NOT "fix" the low
+    // exposed by widening it to the roster's [12,26] — that would defeat the gate.
+    soloWall: [36, 54], exposed: [5, 14], minLegal: 22, party4: [26, 40], calibrated: true, calibrated4: true },
 };
 
 const GOD_PARTY: readonly Loadout[] = [BUILDS.god, BUILDS.god, BUILDS.god, BUILDS.god];
