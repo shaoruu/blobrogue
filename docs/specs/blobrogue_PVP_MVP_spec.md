@@ -33,8 +33,14 @@ existing twin-stick movement / shooting / authoritative netcode / kits. NOT a fo
 3. SPAWNS: symmetric fixed spawn points from the arena def, id-sorted assignment (deterministic), max spread.
    Spawn i-frames on (re)spawn [BAL? ~1.5s] so nobody is spawn-camped.
 4. MATCH STATE MACHINE (pure sim, tick-based): phases lobby → countdown → live → round-over → match-over.
-   MVP: FFA last-blob-standing round; best-of-N rounds (N configurable, MVP N=3) [GD? bo3 vs frag-limit].
-   Round ends when ≤1 player alive; match ends when a player wins ceil(N/2) rounds. Short reset between rounds.
+   MVP (LOCKED — GD pushed off last-standing to kill spectator dead-time): FRAG-LIMIT RESPAWN DEATHMATCH.
+   Players RESPAWN ~PVP.respawnDelaySec (2.5s) after death (NOT eliminated); respawn at farthest-from-opponents
+   spawn (id-sorted) with 2.0s/first-shot protection. Match ends at PVP.fragLimit frags (default 10) OR
+   PVP.matchTimeSec cap (default 300s) → most frags wins (id-sorted tiebreak). Phases: lobby→countdown→live→
+   match-over (NO per-round loop). checkStrandedWipe fully BYPASSED in pvp (no wipe; dead respawn). Fun at 2 (duel-to-N).
+   POST-MVP: round-hybrid short rounds + sudden-death arena-shrink (deferred — not built now).
+   NO-SNOWBALL (hard req): ult-charge loop, Gunner momentum/HEAT, kill-heal/lifesteal/on-kill buffs ALL inert in pvp.
+   Flat symmetric, zero in-match power gain.
 
 ## PVP DAMAGE MODEL (BALANCER — LOCKED numbers, all in one named PVP config block)
 - FIXED PVP HP = 100 (PVP.maxHp). NOT the PvE 6-pool (too coarse/swingy). PvP-only; PvE HP untouched. UI: map 100→3-heart bar (33/heart) or a PVP health bar.
