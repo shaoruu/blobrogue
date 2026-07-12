@@ -39,7 +39,7 @@ import { applyItemToWorld, chooseBlessingInWorld, dismissBlessingOfferInWorld, a
 import type { WorldState, PlayerSim, MeleeSwing, RemoteTarget } from "../sim/world.js";
 import { ULT, isRealKit, canCastUlt, KIT_META, MOMENTUM, OVERSHIELD, HEAL_PULSE, LIFEBLOOM } from "../sim/kits.js";
 import type { KitId } from "../sim/kits.js";
-import { UltCueTracker } from "./ultCue.js";
+import { UltCueTracker, isFlyingMoteSource, isPassiveMeterPulse } from "./ultCue.js";
 import type { UltMoteSource } from "./ultCue.js";
 import type { SimEvent } from "../sim/events.js";
 import type { InputCmd, PlayerId } from "../sim/input.js";
@@ -798,6 +798,10 @@ export class Game {
   // the point the next mote flies FROM; null falls back to the player's own body (self-sourced
   // charge: the time-floor trickle, dash, heal, damage-taken).
   private ultMoteOrigin: { x: number; y: number; source: UltMoteSource } | null = null;
+  // The authoritative ult charge last step + a throttle clock, so passive (self-sourced) charge —
+  // which no longer flies a mote — still ticks the meter with a throttled pulse on each increase.
+  private ultChargePulsePrev = 0;
+  private ultChargePulseClock = 0;
   private isUltCasting = false;           // the local player's own ult resolved this step
   private hasShownUltReadyNudge = false;  // the one-time "[F] <ULT> READY" world nudge, per run
   private ultReadyNudge: { verb: string; t: number } | null = null; // world-anchored, over the player
@@ -1301,6 +1305,8 @@ export class Game {
     this.ultMoteOrigin = null;
     this.ultReadyNudge = null;
     this.ultCue.reset(this.p.ultCharge);
+    this.ultChargePulsePrev = this.p.ultCharge;
+    this.ultChargePulseClock = 0;
     this.remoteTracers = [];
     this.corpses = [];
     this.decals = [];
@@ -3403,7 +3409,7 @@ export class Game {
   // the one-time ready nudge, then feed the tracker the SAME authoritative charge the meter shows
   // and play back whatever cues it derives (motes / the loud READY / the cast spend).
   private tickUltCue(dt: number) {
-    this.updateUltMotes(dt);
+    const isMoteLanded = this.updateUltMotes(dt);
     if (this.ultReadyNudge !== null) {
       this.ultReadyNudge.t += dt;
       if (this.ultReadyNudge.t >= ULT_READY_NUDGE_SECONDS) this.ultReadyNudge = null;
@@ -3413,17 +3419,29 @@ export class Game {
     const origin = this.ultMoteOrigin ?? { x: this.px, y: this.py, source: "dmg" as const };
     this.ultMoteOrigin = null;
     const ult = this.ultHud();
-    if (ult === null) { this.ultCue.reset(this.p.ultCharge); return; }
+    if (ult === null) { this.ultCue.reset(this.p.ultCharge); this.ultChargePulsePrev = this.p.ultCharge; return; }
     // During the post-cast lockout the bar shows the cooldown REFILL, not the charge fill, so a
     // mote landing on its "leading edge" would misread — suppress motes there (charge still
     // accrues authoritatively; motes resume the moment the meter is charging again).
     const isLockout = ult.cd > 0 && !ult.isReady;
     const cues = this.ultCue.feed({ charge: this.p.ultCharge, isReady: ult.isReady, isCasting, origin, dt });
     for (const c of cues) {
-      if (c.t === "ultMote") { if (!isLockout) this.spawnUltMote(c.x, c.y, c.amount, c.source); }
+      // Only discrete COMBAT charge (a kill / boss hit) flies a mote from the enemy; self-sourced
+      // charge would stream nonstop from the body, so it drives only the throttled meter pulse.
+      if (c.t === "ultMote") { if (!isLockout && isFlyingMoteSource(c.source)) this.spawnUltMote(c.x, c.y, c.amount, c.source); }
       else if (c.t === "ultReady") this.onUltReady(ult.name);
       // ultCast: the meter collapsing to empty + the 8s lockout refill render straight off
       // HudState.cd, and the cast BURST rides the authoritative ult* event FX — nothing here.
+    }
+    // Passive (self-sourced) charge still has to read on the meter now that its motes are gone:
+    // pulse the fill on any authoritative charge increase, throttled and never doubled with a
+    // combat mote that landed this step (that path already pulsed).
+    this.ultChargePulseClock = isMoteLanded ? 0 : this.ultChargePulseClock + dt;
+    const chargeDelta = this.p.ultCharge - this.ultChargePulsePrev;
+    this.ultChargePulsePrev = this.p.ultCharge;
+    if (isPassiveMeterPulse(chargeDelta, this.ultChargePulseClock, isMoteLanded, isLockout)) {
+      this.hud.pulseUlt();
+      this.ultChargePulseClock = 0;
     }
   }
 
@@ -3435,8 +3453,8 @@ export class Game {
     this.ultMotes.push({ x, y, t: 0, size, source });
   }
 
-  private updateUltMotes(dt: number) {
-    if (this.ultMotes.length === 0) return;
+  private updateUltMotes(dt: number): boolean {
+    if (this.ultMotes.length === 0) return false;
     let landed = false;
     for (const m of this.ultMotes) { m.t += dt / ULT_MOTE_DUR; if (m.t >= 1) landed = true; }
     if (landed) {
@@ -3444,6 +3462,7 @@ export class Game {
       this.hud.pulseUlt();                       // the fill pulses as charge lands
       sfx("uiClick", { gain: 0.16, rate: 1.5 }); // a soft tick (coalesced: one per landing frame)
     }
+    return landed;
   }
 
   // The loud READY moment: a soft amber flash (amber is the universal "you can act now"

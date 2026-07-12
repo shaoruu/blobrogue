@@ -46,6 +46,22 @@ export interface UltCueInput {
 export const ULT_MOTES_PER_SEC = 8;
 const MOTE_INTERVAL = 1 / ULT_MOTES_PER_SEC;
 
+// Only DISCRETE combat charge (a kill or a boss hit — meaningful and intermittent even on a kit
+// that charges continuously) flies a mote from the enemy. Self-sourced charge ("dmg": heal, dash,
+// time-floor trickle, damage-taken/dealt) is a body-anchored stream, so it mints NO projectile —
+// it reads on the meter via the passive pulse instead.
+export function isFlyingMoteSource(source: UltMoteSource): boolean {
+  return source === "kill" || source === "boss";
+}
+
+// The passive meter tick that stands in for the dropped self-sourced motes: pulse the fill on any
+// authoritative charge INCREASE, throttled, and never when a combat mote already pulsed this step
+// (no double-ping) or during the lockout refill (the bar shows cooldown then, not charge).
+export const PASSIVE_PULSE_INTERVAL = 0.15;
+export function isPassiveMeterPulse(chargeDelta: number, sinceLastPulse: number, isMoteLanded: boolean, isLockout: boolean): boolean {
+  return chargeDelta > 0 && !isMoteLanded && !isLockout && sinceLastPulse >= PASSIVE_PULSE_INTERVAL;
+}
+
 // Watches the local player's ult meter and emits cosmetic cues. One instance per run; reset() on
 // any charge discontinuity (floor load / kit change / reconnect resync) so a jump is never read
 // as combat charge.
