@@ -1002,6 +1002,13 @@ export class Game {
     // Cap at a sane max so a huge monitor doesn't blow out fill-rate, but no letterbox.
     this.canvas.width = Math.min(window.innerWidth, 2560);
     this.canvas.height = Math.min(window.innerHeight, 1440);
+    // Nearest-neighbour sampling for the whole world raster: the tile pass draws scaled
+    // pixel-art sprites off a deliberately fractional camera, and bilinear smoothing on
+    // those samples the semi-transparent tile edges into 1px seams between floors/walls.
+    // Every scaled draw on this ctx is either pixel art (wants nearest) or a low-frequency
+    // gradient blitted 1:1 (unaffected); the lighting grade already forces this off for its
+    // own upscales. Re-asserted here because assigning width/height resets ctx state.
+    this.ctx.imageSmoothingEnabled = false;
   }
 
   // Thin DOM binding: every listener just forwards plain data into the InputController,
