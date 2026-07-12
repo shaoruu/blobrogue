@@ -830,11 +830,78 @@ function kitChromeHideTests(): void {
   }
 }
 
+// HEAT DECLUTTER: a Gunner's HEAT/momentum pip row is a *readout* — an empty 0-stack row is
+// pure clutter, so it earns a row ONLY once heat is building (stacks > 0) or the boil-over burst
+// is live. The kit is still a Gunner, so the ult meter + kit badge stay up; only the pip row
+// hides. Two guarantees ride along: the hide is a real display:none REMOVAL FROM FLOW (never a
+// space-reserving visibility/opacity), and — because the row sits ABOVE the bottom-anchored DASH
+// — collapsing it must not move DASH.
+function heatDeclutterTests(): void {
+  section("HEAT declutter: the momentum row hides at 0 stacks, appears once heat is relevant");
+  const root = document.createElement("div");
+  document.body.appendChild(root); // connected so the UA [hidden]{display:none} rule resolves
+  const hud = new Hud(root);
+  const gunner: NonNullable<HudState["ult"]> = { charge: 0.5, isReady: false, cd: 0, kit: "gunner", name: "Overdrive" };
+  type Momentum = NonNullable<NonNullable<HudState["sig"]>["momentum"]>;
+  const sigWith = (momentum: Momentum): Partial<HudState> => ({ ult: gunner, sig: { momentum, overshield: null, pulse: null } });
+  const momentum = root.querySelector("[data-momentum]") as HTMLElement;
+  const pips = root.querySelector("[data-momentum-pips]") as HTMLElement;
+  const kitBadge = root.querySelector("[data-kitbadge]") as HTMLElement;
+  const ult = root.querySelector("[data-ult]") as HTMLElement;
+  const displayOf = (el: HTMLElement) => dom.window.getComputedStyle(el).display;
+
+  hud.update(mkState(sigWith({ stacks: 0, max: 5, isOverheat: false })));
+  check("a Gunner idling at 0 stacks (not overheating) earns NO HEAT row", momentum.hasAttribute("hidden"));
+  // The hide is a real display:none REMOVAL from flow (jsdom honors the UA [hidden]{display:none}),
+  // so the row reserves ZERO space — the declutter is real, not a blanked-but-present gap.
+  check("the hidden HEAT row is display:none (removed from flow, reserves no space)", displayOf(momentum) === "none");
+  check("the kit stays a Gunner: ult meter + kit badge remain shown at 0 stacks",
+    !ult.hasAttribute("hidden") && !kitBadge.hasAttribute("hidden"));
+
+  hud.update(mkState(sigWith({ stacks: 1, max: 5, isOverheat: false })));
+  check("the HEAT row appears the instant heat starts building (stacks > 0)",
+    !momentum.hasAttribute("hidden") && displayOf(momentum) !== "none");
+  check("the row lights exactly the built pips", [...pips.children].filter((p) => p.classList.contains("on")).length === 1);
+
+  hud.update(mkState(sigWith({ stacks: 0, max: 5, isOverheat: true })));
+  check("the boil-over burst shows the row even at 0 stacks (overheat is relevant)",
+    !momentum.hasAttribute("hidden") && momentum.classList.contains("overheat"));
+
+  hud.update(mkState(sigWith({ stacks: 0, max: 5, isOverheat: false })));
+  check("dropping back to a cold 0 stacks hides the row again", momentum.hasAttribute("hidden"));
+
+  section("HEAT declutter: DASH never jumps when the HEAT row hides/shows (the no-jump guarantee)");
+  const cluster = root.querySelector("[data-klcluster]") as HTMLElement;
+  const dash = root.querySelector(".dash") as HTMLElement;
+  const kids = [...cluster.children];
+  // The structural precondition for the collapse-upward, no-jump behavior: DASH is the terminal
+  // flow child (pinned to the corner's bottom edge) and HEAT is a sibling ABOVE it.
+  check("DASH is the bottom-pinned terminal row, with HEAT stacked above it",
+    kids[kids.length - 1] === dash && kids.indexOf(momentum) < kids.indexOf(dash));
+  // jsdom has no layout engine (getBoundingClientRect is all-zero, verified), so the no-jump
+  // proof is its MECHANISM, not a pixel diff: HEAT collapses to display:none ABOVE a
+  // bottom-anchored DASH, so DASH's flow position can't shift. We assert DASH itself is
+  // unaffected across the toggle, and pin the bottom-anchor invariant in the shipped CSS.
+  hud.update(mkState(sigWith({ stacks: 3, max: 5, isOverheat: false })));
+  const dashShown = { present: !dash.hasAttribute("hidden"), display: displayOf(dash), top: dash.getBoundingClientRect().top };
+  hud.update(mkState(sigWith({ stacks: 0, max: 5, isOverheat: false })));
+  const dashHidden = { present: !dash.hasAttribute("hidden"), display: displayOf(dash), top: dash.getBoundingClientRect().top };
+  check("DASH stays present + painting whether HEAT is shown or hidden",
+    dashShown.present && dashHidden.present && dashShown.display === dashHidden.display && dashShown.display !== "none");
+  check("DASH's box is identical with HEAT shown vs hidden (no jump)", dashShown.top === dashHidden.top);
+
+  const html = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "..", "index.html"), "utf8");
+  check("the BL cluster is bottom-anchored in the shipped CSS (so it collapses upward, DASH pinned)",
+    /\.hud-corner\.bl\s*\{[^}]*\bbottom\s*:/.test(html));
+  root.remove();
+}
+
 function main(): void {
   weaponSlotTests();
   weaponTooltipTests();
   kitHudTests();
   kitChromeHideTests();
+  heatDeclutterTests();
   buffChipTests();
   buffOverflowTests();
   blessingCardTests();
