@@ -192,6 +192,8 @@ export function pvpRespawnIndex(spawns: Vec2[], opponents: Array<{ x: number; y:
 // cover pieces. All groups are invariant under the 90° rotation rot90(x,y)=(y,18-x) — the pvp
 // tests assert this. Cover is destructible props (not walls), so the arena degrades over a match
 // (thinning cover → late-game raw aim), and props block movement + bullets via the shared sim.
+// ARENA_N is the tunable size dial (design band 15..21); the coord tables below are hand-authored
+// for 19 (the GD's exact grid), so retuning the size means re-authoring them for 4-fold symmetry.
 const ARENA_N = 19;
 
 // Wall cells cut from each corner (an octagon-ish clip so no one-angle corner camp), 4-fold

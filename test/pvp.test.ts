@@ -210,6 +210,30 @@ section("SPAWNS: symmetric 19x19 arena + spread + break-on-fire protection");
   check("walls are invariant under 90 rotation (clipped corners + border)", wallsSymmetric);
   check("arena center is open", dungeon.tiles[9 * dungeon.w + 9] === 0);
 
+  // HARD RULE (flankable cover): no cover piece is a wall you can fully hide behind — every
+  // orthogonally-contiguous cover cluster is small (<= 2 props), so a foe can always come from
+  // another angle. Keeps it a duel, not a camp.
+  const coverKeys = new Set(cover.map((c) => `${Math.round((c.x - TILE / 2) / TILE)},${Math.round((c.y - TILE / 2) / TILE)}`));
+  const seen = new Set<string>();
+  let maxCluster = 0;
+  for (const start of coverKeys) {
+    if (seen.has(start)) continue;
+    let size = 0;
+    const stack = [start];
+    while (stack.length > 0) {
+      const cur = stack.pop()!;
+      if (seen.has(cur)) continue;
+      seen.add(cur); size++;
+      const [cx, cy] = cur.split(",").map(Number);
+      for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+        const nk = `${cx + dx},${cy + dy}`;
+        if (coverKeys.has(nk) && !seen.has(nk)) stack.push(nk);
+      }
+    }
+    maxCluster = Math.max(maxCluster, size);
+  }
+  check("cover is small + flankable (no cluster > 2 props to hide behind)", maxCluster <= 2, `maxCluster=${maxCluster}`);
+
   // Break-on-fire: a respawn-protected player who fires drops protection immediately.
   const w = pvpWorld(5, ["p1", "p2"]);
   advanceToLive(w);
