@@ -62,7 +62,11 @@ export type EnemyKind =
   //  - quorum_splinter: a role-echo shard that breaks off a husk WHEN IT DIES, carrying a
   //    WEAK version of its parent's role (heal-trickle / dmg-pip / shield body) — clear the
   //    wave (the kill-order lesson at small scale) before the pool window.
-  | "tithe_tribute" | "quorum_splinter";
+  //  - jet_echo: JET's telegraphed MIRROR-IMAGE of a targeted player — a cold jet-black
+  //    reflection that arrives on the fair-ambush omen, fires ONE mirrored-school salvo,
+  //    then dissolves into resin flecks. Fragile + brief (dodge your own reflected
+  //    aggression, never "fight two Jets"); which player it mirrors rides Enemy.mirrorOf.
+  | "tithe_tribute" | "quorum_splinter" | "jet_echo";
 
 // Telegraphed-attack state machine. Committed attacks read as
 // CHASE -> WINDUP (telegraph, aim locks partway) -> ACTIVE -> RECOVER -> cooldown.
@@ -196,6 +200,11 @@ export interface BossState {
   // client draws the copied weapon's SHAPE (fan/lane/ring/parabola/wedge) and its OWN family hue
   // (the "recognize your gun" read) — the same enum the sim colors the mirrored shards with.
   mirrorFamily: number;
+  // JET only (fair surprise §5g B1): the RESONANCE_FAMILIES index of the PREVIOUS mirror
+  // salvo's lead school (-1 = none yet). The next salvo's weighted draw excludes it, so
+  // JET never turns the SAME of your guns on you back-to-back (the drawFromAddPool
+  // lastAddPick non-repeat law, applied to the verb draw). Sim-internal scratch, never wired.
+  mirrorLastFamily: number;
   // ---- the R framework (party+gear-aware scaling; see balance.ts POWER) ----
   // Seconds spent in the CURRENT phase — the soft-enrage yardstick.
   phaseTime: number;
@@ -304,6 +313,11 @@ export interface Enemy extends Entity {
   // the single local player. Multiplayer: the shooter/exploder who lit the enemy, so the burn
   // tick that finishes a kill credits the correct player's combo/loot. null before any burn.
   burnOwner: PlayerId | null;
+  // JET mirror-image echo (kind "jet_echo"): WHICH player this reflection mirrors. The
+  // targeted player reads it as "that's ME"; teammates read "[name]'s reflection". Rides
+  // the wire (EnemyWire.mir) so every client draws the co-op read authoritatively. null on
+  // every non-echo body (same local per-body ownership model as burnOwner).
+  mirrorOf: PlayerId | null;
   attack: AttackState;
   boss: BossState | null; // set only on the boss
 }
@@ -584,7 +598,12 @@ export interface Prop {
 //  - omen: an AMBUSH pre-spawn tell (fair surprise §2) — a harmless marked bloom
 //    (burst web / dust / egg-sac swell) that stands for its whole life BEFORE the body
 //    it announces exists; the spawn resolves where the omen stood when it expires.
-export type HazardKind = "web" | "cinder" | "charge" | "omen";
+// `corrupt` is JET's per-phase arena-corruption drain zone (the "The Light Goes Out"
+// reshape, §5g B3): a persistent cold black-resin patch that creeps in from the edges as
+// JET wins and drains a player standing in it. It ALWAYS carries a bright authored edge
+// (dead-amber crack-lines / cold-frost rim) so "don't stand here" reads on a dark floor —
+// the corruption creep is mood, the bright edge is the fairness cue.
+export type HazardKind = "web" | "cinder" | "charge" | "omen" | "corrupt";
 
 export interface Hazard {
   id: number;      // stable per-floor id (wire identity + client anim keying)
@@ -757,6 +776,9 @@ export type SpriteName =
   // Wave 1 surplus adds (placeholder art: the tribute reuses the feeder walk, the splinter
   // reuses the dmg-husk walk — the art director ships dedicated sprites later).
   | "tithe_tribute" | "quorum_splinter"
+  // JET's mirror-image echo reuses JET's own hero-derived walk sheets (drawn COLD +
+  // translucent + hollow-eyed client-side so it never reads as a warm teammate).
+  | "jet_echo"
   | "patch"
   // Client-side cosmetic companion pets (META spec §3). A pure render key mapping to a
   // swappable placeholder asset; the sim never references it (pets are OUT of the sim). The

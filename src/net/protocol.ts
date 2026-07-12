@@ -257,7 +257,17 @@ export const FIXED_DT = 1 / TICK_HZ; // 50ms authoritative step
 //   - EnemyWire grows `mkt` (PHANTOM dash-through mark seconds) so EVERY client draws the marked
 //     glow on a shared enemy (the mark is authoritative team-wide vulnerability). A v24 client
 //     rejects a snapshot carrying it (the enemy validator is exhaustive).
-export const PROTOCOL_VERSION = 25;
+// v26 (JET surprise layer — §5g mirror-native): two wire changes bump the gate.
+//   - a NEW enemy kind `jet_echo` rides the wire (JET's telegraphed mirror-image of a player:
+//     arrives on the fair-ambush omen, fires ONE mirrored-school salvo, then dissolves). It
+//     also grows EnemyWire ONE field — `mir`, the PlayerId this reflection mirrors ("" = not an
+//     echo) — so every client draws the co-op read ("that's ME" / "[name]'s reflection") and
+//     the CD readability distinction (cold black translucent echo vs warm solid teammate). A
+//     v25 client rejects a snapshot carrying the kind or the field (both validators are exhaustive).
+//   - a NEW dynamic HazardKind `corrupt` rides `hzds` (JET's per-phase arena-corruption drain
+//     zone — the "The Light Goes Out" reshape creeping in from the edges). A v25 client rejects
+//     a snapshot carrying it (HAZARD_KINDS is a validated closed set).
+export const PROTOCOL_VERSION = 26;
 
 // How long the server reserves a disconnected player's body (their seat) before the
 // authoritative leave lifecycle applies. 90s per the studio balance gate's reconnect
@@ -434,6 +444,10 @@ export interface EnemyWire {
   // The rolled affix's per-body scalar (its OWN channel, never aux): a shielded slab's HP, a
   // reflect facet's armed state (>0 = armed). 0 for other affixes. Drives the armed/slab render.
   afs: number;
+  // JET mirror-image echo (kind "jet_echo"): the PlayerId this reflection mirrors, or "" when the
+  // body is not an echo. Drives the co-op read ("that's ME" for the mirrored player, "[name]'s
+  // reflection" for teammates); enemyFromWire restores it into Enemy.mirrorOf.
+  mir: string;
   burn: number; chill: number; shock: number;
   // PHANTOM dash-through MARK seconds remaining (Wave 2): a shared authoritative vulnerability so
   // every client renders the marked glow (0 = unmarked). enemyFromWire restores it into markT.
@@ -678,6 +692,13 @@ function affixOf(o: Record<string, unknown>, k: string): string {
   if (typeof v !== "string" || v.length > 16) throw new ProtocolError(`bad ${k}`);
   return v;
 }
+// A PlayerId reference, or "" for none (the JET echo's mirrored-player field). Empty is a
+// valid value here — most bodies are not echoes — so it is distinct from shortStr.
+function idRefOf(o: Record<string, unknown>, k: string): string {
+  const v = o[k];
+  if (typeof v !== "string" || v.length > 32) throw new ProtocolError(`bad ${k}`);
+  return v;
+}
 function obj(v: unknown, what: string): Record<string, unknown> {
   if (typeof v !== "object" || v === null || Array.isArray(v)) throw new ProtocolError(`bad ${what}`);
   return v as Record<string, unknown>;
@@ -727,7 +748,7 @@ const SHOP_SLOT_KINDS: Record<ShopSlotKind, true> = {
 };
 const SHOP_MODES: Record<ShopMode, true> = { dealer: true, premium: true, spoils: true, climax: true };
 const CHEST_KINDS: Record<ChestKind, true> = { wood: true, boss: true };
-const HAZARD_KINDS: Record<HazardKind, true> = { web: true, cinder: true, charge: true, omen: true };
+const HAZARD_KINDS: Record<HazardKind, true> = { web: true, cinder: true, charge: true, omen: true, corrupt: true };
 const EFFECT_KINDS: Record<EffectKind, true> = { zone: true, wire: true, orbit: true, sentry: true, tether: true, sanctuary: true, aegis: true };
 const ATTACK_PHASES: Record<AttackPhase, true> = { none: true, windup: true, active: true, recover: true };
 const ATTACK_MOVES: Record<AttackMove, true> = {
@@ -1116,6 +1137,7 @@ function validateEnemyWire(v: unknown): EnemyWire {
     aux: num(o, "aux", -1e9, 1e9),
     afx: affixOf(o, "afx"),
     afs: num(o, "afs", -1e9, 1e9),
+    mir: idRefOf(o, "mir"),
     burn: num(o, "burn", 0, 1e4), chill: num(o, "chill", 0, 1e4), shock: num(o, "shock", 0, 1e4),
     mkt: num(o, "mkt", 0, 1e4),
   };
@@ -1516,6 +1538,7 @@ export function toEnemyWire(e: Enemy): EnemyWire {
     aux: e.aux,
     afx: e.rollAffix,
     afs: e.affixState,
+    mir: e.mirrorOf ?? "",
     burn: e.burn, chill: e.chill, shock: e.shock, mkt: e.markT,
   };
 }
@@ -1535,6 +1558,7 @@ export function enemyFromWire(w: EnemyWire, x: number, y: number): Enemy {
     speed: 0, touchDamage: 0, zig: 0, hopClock: 0, hopMove: 0, spawnTimer: 0, stuckTimer: 0,
     avoidSide: 0, avoidTime: 0,
     burn: w.burn, burnDmg: 0, chill: w.chill, shock: w.shock, markT: w.mkt, statusTick: 0, burnOwner: null,
+    mirrorOf: w.mir.length > 0 ? w.mir : null,
     attack: {
       phase: w.atk.ph, time: 0, move: w.atk.mv, windup: w.atk.wu, cooldown: 0,
       lockedAngle: w.atk.la, isAimLocked: w.atk.lk, markX: w.atk.mx, markY: w.atk.my,
@@ -1552,6 +1576,7 @@ export function enemyFromWire(w: EnemyWire, x: number, y: number): Enemy {
         // into boss.exposed so the client's guard/expose art reads the SAME flag as the damage
         // gate (isBossExposed). The bank + mechanic id lists are sim-internal and never travel.
         exposed: w.aux, windowBank: 0, windowAddIds: [], laneKnotId: 0, lastAddPick: -1, mirrorFamily: w.mfm,
+        mirrorLastFamily: -1,
         // Husk lifecycle flags are sim-internal spawn/guard bookkeeping (the client reads husk
         // liveness off the husks' own wires); defaulted on the render-only reconstruction.
         huskRaised: false, huskGuardUp: true, huskReformTimer: 0,

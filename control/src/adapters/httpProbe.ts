@@ -66,7 +66,9 @@ import type {
 // per-baseline changes, and `input` carries `ackSnap` (the client's retained baseline sseq).
 // v25: Wave 2 kit signatures — SelfWire grows ovh/osh/pra (Gunner overheat / Bulwark overshield
 // / Mender pulse-CD), `input` grows a `pulse` bit, and EnemyWire grows `mkt` (Phantom mark).
-export const SYNTHETIC_JOIN_PROTOCOL = 25;
+// v26: JET's surprise layer — a new enemy kind `jet_echo` + EnemyWire `mir` (the mirrored
+// PlayerId), and a new dynamic HazardKind `corrupt` (the per-phase arena-corruption drain zone).
+export const SYNTHETIC_JOIN_PROTOCOL = 26;
 
 export interface HttpProbeConfig {
   baseUrl: string;

@@ -215,6 +215,9 @@ registerDirectionalSet("quorum_dmg", { walkFps: 6, facings: ["down", "up", "side
 // splinter reuses the dmg-husk's; the art director ships dedicated sprites later).
 registerDirectionalSet("tithe_tribute", { walkFps: 8, fileBase: "tithe", facings: ["down", "up", "side"] });
 registerDirectionalSet("quorum_splinter", { walkFps: 8, fileBase: "quorum_dmg", facings: ["down", "up", "side"] });
+// JET's mirror echo reuses JET's own hero-derived walk sheets; the renderer draws it COLD +
+// translucent + hollow-eyed (renderJetEcho) so a reflection never reads as a warm teammate.
+registerDirectionalSet("jet_echo", { walkFps: 8, fileBase: "jet", facings: ["down", "up", "side"] });
 
 // Tintable bullet-FX primitives (public/sprites/fx). Authored pure white with all
 // intensity in the alpha channel so a single source-in fill recolors them and they
@@ -352,6 +355,8 @@ const SOURCES: Record<SpriteName, string> = {
   // Wave 1 surplus adds — placeholder art (reuse the feeder / dmg-husk base sprites).
   tithe_tribute: "/sprites/tithe_walk_down.png",
   quorum_splinter: "/sprites/quorum_dmg_walk_down.png",
+  // JET's mirror echo reuses JET's hero-derived down sprite (drawn cold + translucent).
+  jet_echo: "/sprites/jet_walk_down.png",
   // PATCH — the Dealer NPC (studio coherence gate: warm amber salvage-hauler). ART GATE:
   // generated separately via the locked FAL recipe; until patch.png lands the renderer
   // shows the flagged placeholder silhouette (never procedural character art). Poses ship

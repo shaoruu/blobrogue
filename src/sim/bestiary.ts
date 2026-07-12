@@ -67,6 +67,7 @@ export const ENEMY_WAVE: Readonly<Record<EnemyKind, EnemyWave>> = {
   jet: "boss", tithe: "boss", quorum: "boss",
   tithe_slab: "B", quorum_shield: "B", quorum_heal: "B", quorum_dmg: "B",
   tithe_tribute: "B", quorum_splinter: "B", // surplus adds: Wave-B summons, never in a common deck
+  jet_echo: "B", // JET's mirror echo: a Wave-B summon (never in a common deck)
 };
 
 // Topology workers: bodies whose commitment EDITS the room (persistent destructible
@@ -95,6 +96,7 @@ export const WAVE_B_SYNTHESIS: Readonly<Partial<Record<EnemyKind, readonly Enemy
   // Wave 1 surplus adds synthesize the earliest-taught chase verb (simple chasers):
   tithe_tribute: ["slime"],            // the chase verb, aimed at the slab it reinforces
   quorum_splinter: ["skeleton"],       // the aggressor-chaser verb, a role-echo shard
+  jet_echo: ["spitter"],               // the ranged warn/lock/fire verb, turned into your own reflection
 };
 
 // Biome specialists (the capacity envelope's third bucket): archetypes whose identity
@@ -293,6 +295,7 @@ export const ENEMY_MOVESET: Readonly<Record<EnemyKind, readonly AttackMove[]>> =
   quorum_dmg: [],
   tithe_tribute: [], // a crawler: its pressure is reaching the slab, not a telegraphed move
   quorum_splinter: [], // a chaser: no telegraphed move
+  jet_echo: ["mirror"], // the reflection fires ONE mirrored-school salvo on its own tell
 };
 
 // ---- the directional-art contract (QA render manifest) ----
@@ -353,6 +356,7 @@ export const SPRITE_CONTRACT: Readonly<Record<EnemyKind, SpriteContract>> = {
   // like the other contact bodies (placeholder sprites reused; art director refines).
   tithe_tribute: "directional_walk",
   quorum_splinter: "directional_walk",
+  jet_echo: "directional_walk", // reuses JET's hero-derived walk triplet (drawn cold + translucent)
 };
 
 // ---- band helpers (the 5-floor intro-cadence unit) ----
