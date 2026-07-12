@@ -7724,6 +7724,63 @@ export class Game {
         this.fxLayer("crackle", "#f0d9ff", bx, by, R * 3.4, R * 3.4, 0.6, this.animClock * 10);
         return this.fxLayer("core_dot", "#e9d2ff", bx, by, R * 2.2, R * 2.2, 1, 0);
       }
+      case "lastlight":
+        // The desperate round: a fierce red glow trailing a hot streak into a white-hot core
+        // that blazes brightest when HP runs low — the last-stand ember.
+        this.fxLayer("glow_round", color, bx, by, R * 8, R * 8, 0.55, 0);
+        this.fxTrail("trail_streak", color, bx, by, trailLen * 0.7, R * 2.2, 0.6, angle);
+        return this.fxLayer("core_dot", "#ffe0d0", bx, by, R * 3, R * 3, 1, 0);
+      case "breach":
+        // A charged demolition shell: smoke off the tail, a warm glow, a fat slug head — a
+        // heavier sibling of the mortar lob.
+        this.fxLayer("smoke_puff", "#c9b8a0", bx - Math.cos(angle) * R * 2.4, by - Math.sin(angle) * R * 2.4, R * 4.5, R * 4.5, 0.45, 0);
+        this.fxLayer("glow_round", color, bx, by, R * 9, R * 9, 0.5, 0);
+        return this.fxLayer("slug", color, bx, by, R * 4.4, R * 4.4, 1, angle);
+      case "frostline":
+        // The chill bead: an icy frost mask (falls back to glow) dripping a short cold streak
+        // into a pale frozen core — it paints the floor, so the round itself reads as frost.
+        this.fxLayer("frost", color, bx, by, R * 4.5, R * 4.5, 0.7, angle) || this.fxLayer("glow_round", color, bx, by, R * 5.5, R * 5.5, 0.5, 0);
+        this.fxTrail("trail_streak", color, bx, by, trailLen * 0.55, R * 1.7, 0.45, angle);
+        return this.fxLayer("core_dot", "#eafaff", bx, by, R * 2.2, R * 2.2, 1, 0);
+      case "sentry":
+        // The turret's prism bolt: a tidy focused round — soft glow, short streak, a bright
+        // crystalline core.
+        this.fxLayer("glow_round", color, bx, by, R * 5.5, R * 5.5, 0.4, 0);
+        this.fxTrail("trail_streak", color, bx, by, trailLen * 0.6, R * 1.6, 0.5, angle);
+        return this.fxLayer("core_dot", "#efe6ff", bx, by, R * 2.6, R * 2.6, 1, 0);
+      case "reaper":
+        // The reaping bolt: a heavy green soul-glow dragging a long comet trail into a pale
+        // core — menacing, the harvest incarnate (its kill shards inherit this look).
+        this.fxLayer("glow_round", color, bx, by, R * 8.5, R * 8.5, 0.6, 0);
+        this.fxTrail("comet_trail", color, bx, by, Math.max(R * 7, trailLen), R * 3.6, 0.65, angle);
+        return this.fxLayer("core_dot", "#e6fff2", bx, by, R * 2.4, R * 2.4, 1, 0);
+      case "swarm":
+        // A live seeking dart: a small darting core with a comet tail — reads as a hunting
+        // mote, not a bullet.
+        this.fxLayer("glow_round", color, bx, by, R * 5.5, R * 5.5, 0.45, 0);
+        this.fxTrail("comet_trail", color, bx, by, Math.max(R * 5, trailLen), R * 3, 0.7, angle);
+        return this.fxLayer("core_dot", "#fff7cf", bx, by, R * 2.2, R * 2.2, 1, 0);
+      case "midas":
+        // The golden shot: a rich gold glow, a gilded streak, a tight inner gleam over a
+        // near-white core — a coin turned to a round.
+        this.fxLayer("glow_round", color, bx, by, R * 7.5, R * 7.5, 0.55, 0);
+        this.fxTrail("trail_streak", "#fff4c0", bx, by, trailLen * 0.55, R * 1.9, 0.55, angle);
+        this.fxLayer("glow_round", "#fff4c0", bx, by, R * 3.4, R * 3.4, 0.7, 0);
+        return this.fxLayer("core_dot", "#fffbe6", bx, by, R * 2.6, R * 2.6, 1, 0);
+      case "phase": {
+        // The blink round: a faint violet afterimage lagging behind the live phase-glow +
+        // streak — it slips through walls, so it leaves a ghost of where it just was.
+        this.fxLayer("glow_round", color, bx - Math.cos(angle) * R * 3, by - Math.sin(angle) * R * 3, R * 5, R * 5, 0.28, 0);
+        this.fxLayer("glow_round", color, bx, by, R * 8, R * 8, 0.5, 0);
+        this.fxTrail("trail_streak", color, bx, by, Math.max(R * 5, trailLen), R * 2.2, 0.5, angle);
+        return this.fxLayer("core_dot", "#efe6ff", bx, by, R * 2.6, R * 2.6, 1, 0);
+      }
+      case "vortex":
+        // The magnet round: a heavy blue glow with a counter-rotating crackle swirling
+        // inward — the pull made visible, a lighter cousin of the singularity.
+        this.fxLayer("glow_round", color, bx, by, R * 9, R * 9, 0.55, 0);
+        this.fxLayer("crackle", color, bx, by, R * 5, R * 5, 0.5, -this.animClock * 8);
+        return this.fxLayer("core_dot", "#dbeaff", bx, by, R * 2.4, R * 2.4, 1, 0);
       default:
         return false;
     }
