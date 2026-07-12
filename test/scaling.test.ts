@@ -131,6 +131,13 @@ const WINDOW_OPENERS: Readonly<Partial<Record<EnemyKind, WindowOpener>>> = {
     if ((boss.boss?.phase ?? 1) >= 2) return boss;
     return quorumPriorityHusk(w, boss.id) ?? boss;
   },
+  // Gorge (F50 giant): guardMult 0.0 — the body is pointless while shelled; the ONLY damage path
+  // is PEELING (destroy the tectonic weak-points → openBossWindow). Target the seams in SPAWN
+  // order (which is arc order — the sim juts them across the shell arc from one end to the other),
+  // so a competent player sweeps the arc one direction instead of zig-zagging; the shared driver
+  // bursts the body during the exposed window. A bot that can't reach the seams never opens a
+  // window → FAILS LOUD via the (A) playability gate below.
+  gorge: (w, boss) => w.enemies.find((e) => !e.dead && e.kind === "gorge_seam") ?? boss,
   // Marrow/Gilded/Jet/King: no not-exposed body — the driver just fires the boss (Marrow's
   // crash is baited by botMoveFor; Gilded/Jet windows ride their own commitment-recover cadence;
   // King has no guard at all). Absent from the map → the driver falls back to the boss body.
@@ -171,6 +178,16 @@ function botMoveFor(kind: EnemyKind, boss: Enemy, px: number, py: number, aimAt:
       const away = Math.atan2(py - boss.y, px - boss.x) + 0.7;
       return { x: Math.cos(away), y: Math.sin(away) };
     }
+    return { x: 0, y: 0 };
+  }
+  if (kind === "gorge" && !boss.dead) {
+    // The GIANT is a stationary set-piece with a GUARDED body: bullets must reach the tectonic
+    // seams (which jut out FACING the player, capped to a front arc so each has clear LOS past it
+    // to the shell). A competent player holds a firing standoff facing the giant and tracks the
+    // seam arc; only close in if too far. aimAt is the current target seam (sealed) or the body
+    // (exposed) — approach it to a mid firing range, then hold and let aim track the arc.
+    const d = Math.hypot(aimAt.x - px, aimAt.y - py);
+    if (d > 220) { const t = Math.atan2(aimAt.y - py, aimAt.x - px); return { x: Math.cos(t), y: Math.sin(t) }; }
     return { x: 0, y: 0 };
   }
   const d = Math.hypot(aimAt.x - px, aimAt.y - py);
@@ -539,7 +556,7 @@ function determinismGates(): void {
     `ttk=${qa.seconds.toFixed(2)}s exposed=${qa.exposedSeconds.toFixed(2)}s`);
 }
 
-// ---- 9. the MULTI-BOSS instrumented health gate (all 8 shipped bosses) ----
+// ---- 9. the MULTI-BOSS instrumented health gate (all 9 shipped bosses) ----
 // A STANDING gate: on every content wave, does the calibrated bot's TTK/exposed for ANY
 // shipped boss drift out of its band? Each boss runs at ITS floor, N≥20 seeds, two asserted
 // cells (solo/median + 4-strong) against the per-boss BOSS_BANDS. The 5 calibrated bosses
@@ -592,6 +609,14 @@ const BOSS_BANDS: Readonly<Record<string, BossBand>> = {
     // band is the primary TTK gate; exposed is a secondary sanity check. Do NOT "fix" the low
     // exposed by widening it to the roster's [12,26] — that would defeat the gate.
     soloWall: [36, 54], exposed: [5, 14], minLegal: 22, party4: [26, 40], calibrated: true, calibrated4: true },
+  // GORGE (F50 GIANT #1): a K=3 shell-peel giant, PROVISIONAL bands (measured + surfaced, never
+  // failed red) until the balancer calibrates its per-shell fractions + peel pace on build. The
+  // HARD gates STILL apply: (A) the bot MUST open windows + kill it (peeling the tectonic seams —
+  // else it never dies = FAIL LOUD), and (C) the 4-strong P10 must stay >= min-legal (a stack
+  // can't one-burst the giant — the per-window bank + 3-phase structure hold it). The exposed
+  // tally is the sum of the peel windows.
+  gorge: { floor: 50, weapon: "pistol", build: [...L3("hair_trigger"), ...L3("glass_cannon")],
+    soloWall: [24, 80], exposed: [6, 40], minLegal: 22, party4: [24, 80], calibrated: false, calibrated4: false },
 };
 
 const GOD_PARTY: readonly Loadout[] = [BUILDS.god, BUILDS.god, BUILDS.god, BUILDS.god];
@@ -801,7 +826,7 @@ function writeMultiBossReport(gate: Map<string, BossGateResult>): void {
     process.stdout.write(`  ${kind}@F${band.floor}: solo wallP50=${cells["solo/median"].wallP50}s exposedP50=${cells["solo/median"].exposedP50}s | 4-strong P50=${cells["4-strong"].wallP50}s — ${res.inBand ? "IN BAND" : "OUT"}${band.calibrated ? "" : " (placeholder)"}\n`);
   }
   writeFileSync(new URL("./fixtures/scaling_report.json", import.meta.url), JSON.stringify({
-    note: "The R framework's MULTI-BOSS ship-gate report: deterministic sim-harness pulls (seeded worlds, scripted mechanic-playing parties) for all 8 shipped bosses, each at its floor across solo/median, 4-strong, and drift-watch (highRoll/god) cells. Calibrated bosses (King/Marrow/Weaver/Gilded/Choir) gate hard; Jet/Tithe/Quorum are Wave-1 placeholders (measured + surfaced). NOT live telemetry. Regenerate: npm run scaling:report",
+    note: "The R framework's MULTI-BOSS ship-gate report: deterministic sim-harness pulls (seeded worlds, scripted mechanic-playing parties) for all 9 shipped bosses, each at its floor across solo/median, 4-strong, and drift-watch (highRoll/god) cells. Calibrated bosses (King/Marrow/Weaver/Gilded/Choir) gate hard; Jet/Tithe/Quorum/Gorge are Wave-1 placeholders (measured + surfaced). NOT live telemetry. Regenerate: npm run scaling:report",
     pulls,
     guards: {
       refDps: refDpsForFloor(20), hpFracCap: POWER.hpFracCap, addCapMax: POWER.addCapMax,
@@ -809,7 +834,7 @@ function writeMultiBossReport(gate: Map<string, BossGateResult>): void {
     },
     bosses,
   }, null, 2) + "\n");
-  check(`multi-boss ship-gate report written (${pulls} pulls, ${Object.keys(bosses).length} bosses)`, Object.keys(bosses).length === 8);
+  check(`multi-boss ship-gate report written (${pulls} pulls, ${Object.keys(bosses).length} bosses)`, Object.keys(bosses).length === 9);
 }
 
 function main(): void {
