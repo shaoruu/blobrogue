@@ -1733,7 +1733,7 @@ export class Hud {
         // OUT (down limit spent) outranks plain down: the party's move is the stairs.
         const state = r.isReconnecting ? " \u2014 reconnecting\u2026" : r.isOut ? " \u2014 out (down limit)" : r.isDown ? " \u2014 down" : r.isAtExit ? " \u2014 at the stairs" : "";
         const label = `${r.name}${r.isYou ? " (you)" : ""}${state}`;
-        row.appendChild(el("span", `color:${r.isReconnecting ? "var(--ink-mute)" : r.isDown || r.isOut ? "var(--red)" : r.isAtExit ? "var(--ok)" : "var(--cream)"};`, label));
+        row.appendChild(el("span", `color:${r.isReconnecting ? "var(--ink-mute)" : r.isDown || r.isOut ? "var(--red)" : r.isAtExit ? "var(--at-exit)" : "var(--cream)"};`, label));
         this.statsBody.appendChild(row);
       }
     }
