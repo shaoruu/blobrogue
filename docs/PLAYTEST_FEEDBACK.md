@@ -21,7 +21,7 @@ This is the source of truth for Ian's playtest feedback. Main runner updates it 
 
 ## Bugs / clarity / UI — current
 - `SHIPPED` **Stuck white hit flash** root cause: Stage-A client cosmetic anim maps were never stepped; hit flash remained 1. Fix advances/cleans enemy, prop, pickup, chest anim maps in `tickCosmetics`. (pending commit/deploy at ledger creation)
-- `NEW` **Wall weird-edge / anti-alias seams.** Suspected fractional camera tile draws + smoothing/transparent edge sampling. Fix: integer tile draw/snap + smoothing audit, verify autotile 1px leaks. Owner: main runner. `BLOCKED (multiplayer priority)` except low-risk visual patch.
+- `SHIPPED` **Wall weird-edge / anti-alias seams** — FIXED (#116): the main canvas ctx never set imageSmoothingEnabled=false, so scaled pixel-art tiles got bilinear-edge-sampled into 1px seams at the fractional camera. Now nearest-neighbour on the world ctx (global-safe: gradients are fill-based, lighting already forced it off). No pixel-snapping (would shimmer vs the fractional pan). rendersmooth 8/8, readability unchanged.
 - `SHIPPED` Boss health bar + tougher boss + boss-death music returns to dungeon.
 - `SPECCED` Persistent floor objective: `CLEAR THE FLOOR · N ENEMIES LEFT`; `FLOOR CLEAR — EXIT OPEN`; boss objective; locked/open stair silhouette + GO DOWN prompt.
 - `NEW` Current floor unclear (`FL 4`). Replace with persistent `BIOME · FLOOR N` + objective. Post-server HUD clarity pass.
@@ -54,7 +54,7 @@ This is the source of truth for Ian's playtest feedback. Main runner updates it 
 ## Enemies / bosses / difficulty
 - `SHIPPED` Enemy prop/chest avoidance + stronger anti-stuck.
 - `SHIPPED` Skeleton original cool look restored + real stride (no vibrate/dancing redraw).
-- `NEW` Ghost flickers / half frames face opposite. Diagnose sheet direction vs renderer flip; normalize authored direction. Owner: main runner/art. `BLOCKED (multiplayer priority)`.
+- `SHIPPED` Ghost flickers / half frames face opposite — FIXED (#117): NOT a backward sheet — the ghost is the only PHASING mover, so it drifts THROUGH the player and its observed velocity SIGN reverses full-speed every frame; the facing hysteresis gated on magnitude not sign, so the mirror flipped ~281/400 frames. Fix: phasing bodies read facing off an EMA-smoothed velocity (scoped via isPhasing; non-phasing enemies + hero unchanged). Measured 281->0 flips, facing.test asserts it.
 - `SPECCED` Movement grammar: HUNT/ORBIT/BURROW/ANCHOR/FLOCK/FLEE-BAIT. First trio Rootkite, Knellbat, Seamwalker. Smart low-HP flee/reposition with tell/counter; no input cheating.
 - `SPECCED` Visible threat ladder: normal→large/brute→elite→miniboss, mechanical size/mass/attacks/loot; no HP sponge.
 - `SHIPPED` **Durability pass (playtest: enemy toughness uniformly low):** swarm/standard untouched (fodder still melts, early-melt gates hold); brute 2.4×→3.8× HP (F4 starter-pistol focused ~3.2s), elite 2.0×→2.6× (F6 median ~2.8s, aggro→death ~3.6s); threat costs repriced (brute 2.2→2.8, elite 2.8→3.0) so floors buy fewer tough bodies instead of inflating total HP. Ladder gate: swarm << standard < elite < brute. Boss pacing + co-op scaling gates unchanged.
