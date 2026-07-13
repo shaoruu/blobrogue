@@ -1,8 +1,8 @@
 import type { ConvexClient } from "convex/browser";
 import { api } from "./api.js";
-import type { PresenceDoc, RoomStatus } from "./api.js";
+import type { PresenceDoc, RoomStatus, RoomMode } from "./api.js";
 import type { Session } from "./session.js";
-import { worldIdForRoomCode } from "./worldId.js";
+import { worldIdForRoomCode, pvpWorldIdForRoomCode } from "./worldId.js";
 import { getSelectedKit } from "./kitSelection.js";
 
 // One room session for AUTHORITATIVE online play — the ONLY multiplayer product path.
@@ -39,6 +39,10 @@ export class OnlineLobby {
   private roomId = "";
   code = "";
   status: RoomStatus = "lobby";
+  // The room's match mode (co-op dungeon vs pvp arena). Drives expectedWorldId so the client
+  // asserts + connects to the correct authoritative world; the room dictates it (a joiner adopts
+  // whatever the room was created as).
+  mode: RoomMode = "coop";
   hostPlayerId = "";
   // Entered via quick play (public drop-in pool): no start gate, and game over offers
   // "play again" instead of a return to a private lobby.
@@ -86,13 +90,14 @@ export class OnlineLobby {
     await this.session.flushIdentity();
   }
 
-  // Create a private room and get a shareable code.
-  async create(): Promise<void> {
+  // Create a private room and get a shareable code. `mode` selects co-op vs the pvp arena.
+  async create(mode: RoomMode = "coop"): Promise<void> {
     await this.flushIdentity();
     const playerId = this.requirePlayerId();
-    const res = await this.client.mutation(api.rooms.create, { playerId, kind: "online", ...this.colorArg() });
+    const res = await this.client.mutation(api.rooms.create, { playerId, kind: "online", mode, ...this.colorArg() });
     this.roomId = res.roomId;
     this.code = res.code;
+    this.mode = res.mode ?? mode;
     this.status = "lobby";
     this.hostPlayerId = playerId;
     this.isQuickPlay = false;
@@ -109,6 +114,7 @@ export class OnlineLobby {
     });
     this.roomId = res.roomId;
     this.code = res.code;
+    this.mode = res.mode ?? "coop"; // the room dictates the mode; the joiner adopts it
     this.status = res.status;
     this.isQuickPlay = false;
     this.subscribe();
@@ -116,12 +122,13 @@ export class OnlineLobby {
 
   // Matchmake into the public pool: an open online room with space, or a fresh one (born
   // "playing" — the pool has no start gate; players drop in and out).
-  async quickPlay(): Promise<void> {
+  async quickPlay(mode: RoomMode = "coop"): Promise<void> {
     await this.flushIdentity();
     const playerId = this.requirePlayerId();
-    const res = await this.client.mutation(api.rooms.quickPlay, { playerId, kind: "online", ...this.colorArg() });
+    const res = await this.client.mutation(api.rooms.quickPlay, { playerId, kind: "online", mode, ...this.colorArg() });
     this.roomId = res.roomId;
     this.code = res.code;
+    this.mode = res.mode ?? mode;
     this.status = res.status;
     this.isQuickPlay = true;
     this.subscribe();
@@ -212,7 +219,7 @@ export class OnlineLobby {
   // The one authoritative world this room's members are allowed to play in. Tickets are
   // minted with exactly this claim, and the client asserts every snapshot against it.
   expectedWorldId(): string {
-    return worldIdForRoomCode(this.code);
+    return this.mode === "pvp" ? pvpWorldIdForRoomCode(this.code) : worldIdForRoomCode(this.code);
   }
 
   // Mirror the game server's connection truth onto our presence row (worldId after a

@@ -117,6 +117,10 @@ export default defineSchema({
   rooms: defineTable({
     code: v.string(),
     kind: v.optional(v.union(v.literal("coop"), v.literal("online"))),
+    // The MATCH mode of an authoritative (kind "online") room: co-op dungeon (default) or the
+    // PVP arena deathmatch. Optional so every pre-existing room reads as "coop" (zero change);
+    // it only changes which authoritative WORLD id the ticket mint binds (pvp: prefix).
+    mode: v.optional(v.union(v.literal("coop"), v.literal("pvp"))),
     hostPlayerId: v.id("players"),
     seed: v.number(),
     floor: v.number(),

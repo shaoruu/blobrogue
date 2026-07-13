@@ -424,6 +424,9 @@ export interface OrbitEffect extends EffectBase {
   // Per-enemy re-hit cooldowns (sim-internal scratch, never on the wire): a body inside
   // the ring is struck on a readable cadence, not once per tick.
   rehit: Map<number, number>;
+  // PVP-only per-FOE-PLAYER re-hit cadence (string player ids can't share the numeric `rehit`
+  // map). Sim-internal, lazily allocated, never on the wire; undefined in co-op.
+  rehitP?: Map<PlayerId, number>;
 }
 
 // A destructible lane-holding turret (the Prism Sentry): acquires the nearest enemy in
@@ -557,6 +560,10 @@ export interface Bullet {
   // scratch — never on the wire. Undefined only before the bullet's first move.
   prevX?: number;
   prevY?: number;
+  // PVP-only: player ids this round has already struck (the player twin of hitList, which only
+  // holds enemies). Keeps a piercing round from re-hitting the same foe across ticks. Undefined
+  // in co-op/solo (never allocated), so the golden path is untouched.
+  hitPids?: PlayerId[];
 }
 
 // Free world loot only. Anything PRICED lives in Patch's shop room (src/sim/shop.ts)

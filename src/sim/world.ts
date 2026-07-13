@@ -16,7 +16,7 @@ import type { NavRuntime } from "./nav.js";
 import { TILE } from "./types.js";
 import type {
   Enemy, EnemyKind, BossState, Bullet, Pickup, Prop, Chest, Hazard, FloorHazard, WeaponId, WeaponRarity, AttackMove, TileKind, PropKind,
-  MysteryTwist,
+  MysteryTwist, Vec2,
   Effect, ZoneEffect, WireEffect, OrbitEffect, SentryEffect, TetherEffect, SanctuaryEffect, AegisEffect,
 } from "./types.js";
 import { placeFloorHazards, isFloorHazardDamaging, floorHazardPhaseAt, FLOOR_HAZARD_DAMAGE, RIFT_PULL_RADIUS, RIFT_PULL_SPEED } from "./hazards.js";
@@ -40,6 +40,11 @@ import {
   KIT_START_WEAPON, ticksToSec, TICKS_PER_SECOND,
 } from "./kits.js";
 import type { KitId, UltSource } from "./kits.js";
+import {
+  PVP, buildPvpArena, createMatchState, pvpHitDamage, pvpPerHitCap, arePvpFoes, farthestSpawnIndex, pvpRespawnIndex,
+  pvpRespawnDelayTicks, pvpCountdownTicks, pvpMatchTimeTicks, pvpFragLimit,
+} from "./pvp.js";
+import type { WorldMode, MatchState } from "./pvp.js";
 import { lowHpFrac, liveDamageMult, liveFireRateMult, gunnerDamageMult, gunnerFireRateMult, expectedBossDps } from "./weaponStats.js";
 import type { PlayerMods, ItemDef } from "./items.js";
 import type { SimEvent } from "./events.js";
@@ -98,6 +103,9 @@ export interface MeleeSwing {
   // so this rewinds hits to when the swing started. 0/undefined in solo.
   bornTick?: number;
   lagRewind?: number;
+  // PVP-only: foe player ids this swing has already struck, so one swing lands one hit per foe
+  // over its multi-tick duration (hitList only holds enemies). Undefined in co-op (never set).
+  hitPids?: PlayerId[];
 }
 
 interface StrikeInfo {
@@ -264,6 +272,15 @@ export interface PlayerSim {
   // contract as isUltRequested: re-derived from the consumed input, resolved + cleared in the
   // authoritative updateUlts, never wired — a client can request, the server alone resolves.
   isPulseRequested: boolean;
+  // ---- PVP (mode === "pvp") ----
+  // FFA team id: 0 = "no team" (every distinct player is a foe). Set at spawn, low-churn — the
+  // damage funnel reads it via arePvpFoes so future team modes need no new damage path. Always
+  // 0 in co-op (the field is inert there).
+  team: number;
+  // Ticks until this player respawns after a pvp death (0 = alive/active). Frag-limit
+  // deathmatch: a death schedules a respawn, never an elimination. Always 0 in co-op, so the
+  // co-op movement/collision gates that read it (respawnT === 0) stay byte-identical.
+  respawnT: number;
 }
 
 // Extra AI target points fed in by the client from co-op presence (Stage A keeps co-op on
@@ -404,6 +421,10 @@ export interface WorldState {
   enemyHist: Map<number, EnemyHist>;
   histHead: number;
   histCount: number;
+  // Lag-compensation position history for PLAYERS (pvp hit-reg): the SAME ring/rewind the
+  // enemy history uses, keyed by player id. Recorded only in pvp (empty/unread in co-op), so
+  // the co-op golden path is untouched. Rewind is bounded identically (LAGCOMP window).
+  playerHist: Map<PlayerId, EnemyHist>;
   // Authoritative pending blessing offers: pid -> seconds left to answer. An entry exists
   // from the moment an offerBlessing event is raised until the pick is applied (or the offer
   // expires / the player leaves). While pending, that player is PAUSED (stepPlayerPhase
@@ -417,6 +438,12 @@ export interface WorldState {
   // 4.0s all-down beat, not an instant cut. Resets whenever anyone is standing.
   wipeTimer: number;
   remoteTargets: RemoteTarget[];
+  // The world-content mode discriminant. "coop" (DEFAULT) keeps every existing path + golden
+  // zero-diff; "pvp" swaps ONLY the four gated concerns (damage targeting, arena, spawns,
+  // match). Orthogonal to isCoop/isShared/isSandbox below.
+  mode: WorldMode;
+  // FFA match state (phase / scores / winner / arena spawns), non-null ONLY in pvp mode.
+  match: MatchState | null;
   isCoop: boolean;
   // Authoritative shared multiplayer world (the Stage-C server). Like solo it descends in-sim
   // (the server owns floor transitions), but unlike solo a player hitting 0 HP goes DOWN rather
@@ -469,13 +496,21 @@ export function createPlayer(id: PlayerId, x: number, y: number): PlayerSim {
     ultWasted: 0,
     isUltRequested: false,
     isPulseRequested: false,
+    team: 0,
+    respawnT: 0,
   };
 }
 
 // skipLocalPlayer: the authoritative server owns N per-connection players and adds them via
 // spawnPlayerInWorld on join, so it creates the world WITHOUT the implicit LOCAL_ID player.
 // Solo/co-op/prediction clients keep the default (one LOCAL_ID player).
-export interface WorldOptions { isSandbox?: boolean; isCoop?: boolean; isShared?: boolean; skipLocalPlayer?: boolean }
+export interface WorldOptions { isSandbox?: boolean; isCoop?: boolean; isShared?: boolean; skipLocalPlayer?: boolean; mode?: WorldMode }
+
+// The one mode predicate every "does pvp logic run here?" gate keys off, so co-op stays inert
+// by construction (mode defaults to "coop").
+export function isPvp(w: WorldState): boolean {
+  return w.mode === "pvp";
+}
 
 export function createWorld(seed: number, floor: number, opts: WorldOptions = {}): WorldState {
   const w: WorldState = {
@@ -532,10 +567,13 @@ export function createWorld(seed: number, floor: number, opts: WorldOptions = {}
     enemyHist: new Map(),
     histHead: 0,
     histCount: 0,
+    playerHist: new Map(),
     pendingBlessings: new Map(),
     isBlessingOfferedThisFloor: false,
     wipeTimer: 0,
     remoteTargets: [],
+    mode: opts.mode ?? "coop",
+    match: null,
     isCoop: opts.isCoop ?? false,
     isShared: opts.isShared ?? false,
     isSandbox: opts.isSandbox ?? false,
@@ -544,7 +582,11 @@ export function createWorld(seed: number, floor: number, opts: WorldOptions = {}
     targetY: 0,
   };
   loadFloorIntoWorld(w, floor);
-  if (!opts.skipLocalPlayer) {
+  if (!opts.skipLocalPlayer && isPvp(w)) {
+    // pvp: route through the shared pvp-aware spawn so the local player gets the fixed HP pool,
+    // neutral loadout, team, and a spread arena spawn with break-on-fire protection.
+    spawnPlayerInWorld(w, LOCAL_ID);
+  } else if (!opts.skipLocalPlayer) {
     const spawn = w.dungeon.spawn;
     const p = createPlayer(LOCAL_ID, spawn.x * TILE + TILE / 2, spawn.y * TILE + TILE / 2);
     // Run start is a floor entry too: the same spawn grace every descend grants (the
@@ -563,7 +605,46 @@ export function spawnPlayerInWorld(w: WorldState, id: PlayerId): PlayerSim {
   const spawn = w.dungeon.spawn;
   const p = createPlayer(id, spawn.x * TILE + TILE / 2, spawn.y * TILE + TILE / 2);
   w.players.set(id, p);
+  if (isPvp(w)) initPvpPlayer(w, p);
   return p;
+}
+
+// Give a freshly-joined pvp player the flat symmetric loadout (fixed HP pool, neutral kit +
+// starting weapon, FFA team) and drop them onto a spread spawn with break-on-fire protection.
+// The definitive id-sorted spawn assignment happens at the match whistle; on-join placement is
+// just "far from everyone here now" so a mid-lobby join isn't dropped onto someone.
+function initPvpPlayer(w: WorldState, p: PlayerSim): void {
+  // A real kit would route through setPlayerKit (stat lean + maxHp); PVP.kit is "none" for the
+  // MVP (no lean, no in-match power loop), so the neutral baseline createPlayer already set is
+  // correct — we only fix the loadout, HP pool, and team here.
+  p.kitId = PVP.kit;
+  p.team = 0;
+  p.ownedWeapons = [PVP.startWeapon];
+  p.weapon = PVP.startWeapon;
+  p.maxHp = PVP.maxHp;
+  p.hp = PVP.maxHp;
+  p.respawnT = 0;
+  pvpPlaceOnSpawn(w, p);
+}
+
+// Place a pvp player on the arena spawn farthest from every LIVE opponent (deterministic:
+// position-based, ties to the lowest spawn index) and arm spawn protection. Used for on-join
+// placement and mid-match respawns.
+function pvpPlaceOnSpawn(w: WorldState, p: PlayerSim): void {
+  const spawns = w.match?.spawns ?? [];
+  if (spawns.length > 0) {
+    // Anti-camp: farthest from any living opponent AND out of their crosshairs (never respawn in
+    // someone's line of fire). Deterministic (position + authoritative aim, id-sorted tiebreak).
+    const opponents: Array<{ x: number; y: number; aim: number }> = [];
+    for (const o of w.players.values()) {
+      if (o.id === p.id || o.hp <= 0 || o.respawnT > 0) continue;
+      opponents.push({ x: o.x, y: o.y, aim: o.aimAngle });
+    }
+    const idx = pvpRespawnIndex(spawns, opponents);
+    p.x = spawns[idx].x;
+    p.y = spawns[idx].y;
+  }
+  p.invuln = PVP.spawnIframeSec; // spawn protection: ends here or on first outgoing attack
 }
 
 // Assign a kit to a player (lobby kit-select at spawn / dev sandbox / the authoritative server
@@ -628,6 +709,10 @@ function accrueUlt(p: PlayerSim, source: UltSource, amount: number): void {
 // per-encounter, not per-raw-damage — §10), ramps GUNNER momentum, and banks MENDER lifebloom
 // credit. No-op for the neutral baseline. `p` may be null (a departed owner's projectile).
 function onKitDamageDealt(w: WorldState, p: PlayerSim | null, dmg: number): void {
+  // No-snowball: pvp is flat symmetric with ZERO in-match power gain, so no kit charge/momentum
+  // loop ever accrues (pvp routes damage through damagePlayer, never strikeEnemy, so this is
+  // already unreachable in pvp — the gate makes the invariant explicit and future-proof).
+  if (isPvp(w)) return;
   if (p === null || !isRealKit(p.kitId) || dmg <= 0) return;
   accrueUlt(p, "dmg", ultChargeFromDamageDealt(dmg, refEncounterHpForFloor(w.floor)));
   if (p.kitId === "gunner") {
@@ -966,12 +1051,29 @@ export function loadFloorIntoWorld(w: WorldState, floor: number, playerCountAtLo
   // Vision (denseDark) is a client render read; dash (thinAir) is read by the shared dash step.
   const hazMut = floorHazardMutation(w.floorDescriptor.mutators);
   const extraElites = floorExtraElites(w.floorDescriptor.mutators);
-  w.dungeon = w.isSandbox ? buildArena() : generateDungeon(w.seed, floor);
+  // pvp loads the fixed symmetric arena and suppresses ALL population (AI/props/chests/hazards/
+  // shop) through the SAME "bare" seam the dev sandbox uses — mode only swaps the geometry +
+  // win rule, never the movement/collision engine.
+  const pvp = isPvp(w);
+  const isBare = w.isSandbox || pvp;
+  let pvpCover: Vec2[] = [];
+  if (pvp) {
+    // A floor build IS a fresh arena, so it is a fresh MATCH (cleared scoreboard, lobby phase).
+    // pvp never descends mid-match, so this only runs at world create + on a room reset/rematch,
+    // where a clean slate is exactly right.
+    const arena = buildPvpArena();
+    w.dungeon = arena.dungeon;
+    w.match = createMatchState(arena.spawns);
+    pvpCover = arena.cover;
+  } else {
+    w.dungeon = w.isSandbox ? buildArena() : generateDungeon(w.seed, floor);
+    w.match = null;
+  }
   w.bullets = [];
   w.hazards = [];
   w.effects = [];
   w.recentReleases = [];
-  w.gauntlet = !w.isSandbox && isGauntletFloor(floor) ? { stage: 0, breath: 0, isRewarded: false } : null;
+  w.gauntlet = !isBare && isGauntletFloor(floor) ? { stage: 0, breath: 0, isRewarded: false } : null;
   w.nextEnemyId = 0;
   w.nextPropId = 0;
   w.nextPickupId = 0;
@@ -994,13 +1096,18 @@ export function loadFloorIntoWorld(w: WorldState, floor: number, playerCountAtLo
   // Floor hazards place FIRST: props/chests then avoid hazard tiles (a barrel on spikes
   // reads as a bug). floorHazardClock is NOT reset — it is monotonic sim time (phases
   // are per-hazard), so an online client reconstructs it from the tick.
-  w.floorHazards = w.isSandbox ? [] : placeFloorHazards(w.dungeon, w.seed, floor, "standard", hazMut);
+  w.floorHazards = isBare ? [] : placeFloorHazards(w.dungeon, w.seed, floor, "standard", hazMut);
   // Obstacles land BEFORE enemies: spawn settling needs the floor's real prop/chest
   // footprint, and the obstacle revision must already name this floor's layout. The
   // ordering is free — every placement draws from its own seeded stream.
-  w.props = w.isSandbox ? [] : placeProps(w);
-  w.chests = w.isSandbox ? [] : placeChests(w);
-  if (!w.isSandbox) stockWeaponChests(w);
+  // pvp cover is BREAKABLE PROPS (degrading-cover arc): the arena's symmetric prop set replaces
+  // the seeded PvE props. They block movement + bullets and break like any destructible, all via
+  // the shared systems (moveCircle / updateProps) — no pvp-specific collision code.
+  w.props = pvp
+    ? pvpCover.map((c) => ({ id: w.nextPropId++, kind: "crate" as PropKind, x: c.x, y: c.y, radius: C.PROP_RADIUS, hp: C.PROP_HP.crate, dead: false }))
+    : (isBare ? [] : placeProps(w));
+  w.chests = isBare ? [] : placeChests(w);
+  if (!isBare) stockWeaponChests(w);
   // Patch's shop: built off the generator's dedicated shop room. Layout/prices are pure
   // (seed, floor) and party-size-invariant so a mid-floor join never shifts the stall;
   // the weapon stock additionally dodges guns the whole party owns at build time
@@ -1008,11 +1115,11 @@ export function loadFloorIntoWorld(w: WorldState, floor: number, playerCountAtLo
   // premium sink count scales with the SNAPSHOTTED encounter size — only ever growing
   // upward from the identical solo prefix.
   const shopRoom = w.dungeon.rooms.find((r) => r.kind === "shop");
-  w.shop = !w.isSandbox && shopRoom !== undefined
+  w.shop = !isBare && shopRoom !== undefined
     ? buildShopState(w.seed, floor, shopRoom, [...weaponsOwnedByAll(w)], w.encounterPlayers)
     : null;
   w.obstacleRev++;
-  const spawns = w.isSandbox
+  const spawns = isBare
     ? { active: [], pending: [] }
     : spawnFloorEnemies(w.dungeon, w.seed, floor, w.encounterPlayers, w.encounterPower, {
       extraElites,
@@ -1029,12 +1136,15 @@ export function loadFloorIntoWorld(w: WorldState, floor: number, playerCountAtLo
   for (const e of w.enemies) settleEnemySpawn(w, e);
   for (const e of w.pendingSpawns) settleEnemySpawn(w, e);
   // Reposition living players to the new spawn, each under the spawn-grace mercy window:
-  // nobody loads into a fresh floor (a boss floor especially) already taking damage.
-  const spawn = w.dungeon.spawn;
-  for (const p of w.players.values()) {
-    p.x = spawn.x * TILE + TILE / 2;
-    p.y = spawn.y * TILE + TILE / 2;
-    p.invuln = Math.max(p.invuln, C.PLAYER_SPAWN_GRACE);
+  // nobody loads into a fresh floor (a boss floor especially) already taking damage. pvp owns
+  // its own symmetric spawn assignment (the match whistle / respawns), so it skips this.
+  if (!pvp) {
+    const spawn = w.dungeon.spawn;
+    for (const p of w.players.values()) {
+      p.x = spawn.x * TILE + TILE / 2;
+      p.y = spawn.y * TILE + TILE / 2;
+      p.invuln = Math.max(p.invuln, C.PLAYER_SPAWN_GRACE);
+    }
   }
 }
 
@@ -2792,6 +2902,7 @@ function updateShooting(w: WorldState, p: PlayerSim, input: InputCmd, dt: number
   }
   if (input.firing && p.fireCd === 0) {
     cancelReviveChannelBy(w, p.id); // gate §6: the reviver's attack cancels their channel
+    if (isPvp(w)) p.invuln = 0; // pvp: the first OUTGOING attack breaks spawn protection
     if (wep.melee) {
       startMeleeSwing(w, p, ev);
       return;
@@ -2848,6 +2959,7 @@ function updateChargeShooting(w: WorldState, p: PlayerSim, wep: Weapon, input: I
   }
   if (input.firing && p.fireCd === 0) {
     if (p.chargeT === 0) cancelReviveChannelBy(w, p.id); // charging is an attack commitment
+    if (isPvp(w)) p.invuln = 0; // pvp: committing to a charge is an outgoing attack — drop protection
     p.chargeT = Math.min(spec.time, p.chargeT + dt);
     return;
   }
@@ -3204,10 +3316,11 @@ function updateBullets(w: WorldState, dt: number, ev: SimEvent[]): void {
           }
         }
       }
-    } else if (b.owner !== null && isFriendlyNudgeProjectile(b)) {
+    } else if (!isPvp(w) && b.owner !== null && isFriendlyNudgeProjectile(b)) {
       // A teammate's DIRECT round grazing a friend: 0 damage, a gentle positional impulse,
       // and the bullet PASSES THROUGH (never consumed, no pierce cost). Resolved in the same
       // bullet pass as every other collision so it stays deterministic + server-authoritative.
+      // pvp has no friendlies — owned rounds DAMAGE foes (resolvePvpHits), never nudge them.
       applyFriendlyNudges(w, b, ev);
     }
   }
@@ -3320,6 +3433,9 @@ function detonateBullet(w: WorldState, b: Bullet, x: number, y: number, ev: SimE
       if (Math.hypot(prop.x - bx, prop.y - by) <= r + prop.radius) destroyProp(w, prop, ev, shooter ?? undefined);
     }
   }
+  // pvp: the blast also catches FOE PLAYERS in the radius (mortars never silently pass through a
+  // player). One splash at the primary point through the ONE funnel; the per-tick cap bounds it.
+  pvpSplash(w, b.owner, b.fx ?? null, x, y, r, b.damage, ev);
 }
 
 // Lodestone implosion: the round's ONE payload. Every targetable enemy in the radius is
@@ -3348,6 +3464,22 @@ function implodeBullet(w: WorldState, b: Bullet, x: number, y: number, ev: SimEv
     }, ev);
     (b.hitList ??= []).push(e);
   }
+  // pvp: the implosion splashes AND yanks FOE PLAYERS toward the collapse point (the player twin
+  // of the enemy pull), routed through the ONE funnel. Wall-aware pull, cap-bounded splash.
+  if (isPvp(w) && b.owner !== null) {
+    const splash = pvpHitDamage(b.fx ?? PVP.startWeapon, b.damage * C.IMPLODE_SPLASH_FRAC);
+    for (const vid of [...w.players.keys()].sort()) {
+      const v = w.players.get(vid);
+      if (v === undefined || !canDamagePlayer(w, b.owner, v)) continue;
+      if (Math.hypot(v.x - x, v.y - y) > r + v.pr) continue;
+      const inX = x - v.x, inY = y - v.y;
+      const d = Math.hypot(inX, inY) || 1;
+      const pull = Math.min(d, r * 0.5);
+      [v.x, v.y] = moveCircle(w, v.x, v.y, v.pr, (inX / d) * pull, 0);
+      [v.x, v.y] = moveCircle(w, v.x, v.y, v.pr, 0, (inY / d) * pull);
+      damagePlayer(w, v, splash, ev, b.owner);
+    }
+  }
   // The Singularity's SECOND stage: the collapse point births a short-fused friendly nova.
   // It rides the isLob path (like a Breach shell) so it SAILS OVER bodies during its fuse —
   // detonating only when the fuse expires (updateBullets' end-of-life blast branch), never on
@@ -3369,17 +3501,27 @@ function steerHoming(w: WorldState, b: Bullet, dt: number): void {
   const rate = b.homing;
   if (rate === undefined || rate <= 0) return;
   const RANGE = 260;
-  let best: Enemy | null = null;
+  let bx = 0, by = 0, found = false;
   let bestD = RANGE * RANGE;
-  for (const e of w.enemies) {
-    if (e.dead || isUntargetable(e)) continue;
-    const dx = e.x - b.x, dy = e.y - b.y, d = dx * dx + dy * dy;
-    if (d < bestD) { bestD = d; best = e; }
+  if (isPvp(w)) {
+    // pvp: home toward the nearest FOE PLAYER (the enemy-seeker twin), so homing weapons track
+    // opponents instead of flying straight in an empty arena.
+    for (const v of w.players.values()) {
+      if (!canDamagePlayer(w, b.owner, v)) continue;
+      const dx = v.x - b.x, dy = v.y - b.y, d = dx * dx + dy * dy;
+      if (d < bestD) { bestD = d; bx = v.x; by = v.y; found = true; }
+    }
+  } else {
+    for (const e of w.enemies) {
+      if (e.dead || isUntargetable(e)) continue;
+      const dx = e.x - b.x, dy = e.y - b.y, d = dx * dx + dy * dy;
+      if (d < bestD) { bestD = d; bx = e.x; by = e.y; found = true; }
+    }
   }
-  if (!best) return;
+  if (!found) return;
   const speed = Math.hypot(b.vx, b.vy) || 1;
   const cur = Math.atan2(b.vy, b.vx);
-  let delta = Math.atan2(best.y - b.y, best.x - b.x) - cur;
+  let delta = Math.atan2(by - b.y, bx - b.x) - cur;
   while (delta > Math.PI) delta -= Math.PI * 2;
   while (delta < -Math.PI) delta += Math.PI * 2;
   const maxTurn = rate * dt;
@@ -3518,6 +3660,13 @@ function updateWireEffect(w: WorldState, e: WireEffect, dt: number, ev: SimEvent
     if (en.dead || isUntargetable(en)) continue;
     if (distToSegment(en.x, en.y, e.x, e.y, e.x2, e.y2) <= e.width + en.radius) { isTripped = true; break; }
   }
+  // pvp: a FOE PLAYER crossing the armed band trips it too (the wire is cover-agnostic).
+  if (!isTripped && isPvp(w)) {
+    for (const v of w.players.values()) {
+      if (!canDamagePlayer(w, e.owner, v)) continue;
+      if (distToSegment(v.x, v.y, e.x, e.y, e.x2, e.y2) <= e.width + v.pr) { isTripped = true; break; }
+    }
+  }
   if (!isTripped) return;
   e.life = 0;
   ev.push({ t: "wireSnap", x: e.x, y: e.y, tx: e.x2, ty: e.y2 });
@@ -3542,6 +3691,16 @@ function updateWireEffect(w: WorldState, e: WireEffect, dt: number, ev: SimEvent
       isPersistent: true,
       ownerId: e.owner, fxWeapon: e.fx,
     }, ev);
+  }
+  // pvp: the snap strikes every FOE PLAYER in the band too, through the ONE funnel.
+  if (isPvp(w)) {
+    const pdmg = pvpHitDamage(e.fx, e.damage);
+    for (const vid of [...w.players.keys()].sort()) {
+      const v = w.players.get(vid);
+      if (v === undefined || !canDamagePlayer(w, e.owner, v)) continue;
+      if (distToSegment(v.x, v.y, e.x, e.y, e.x2, e.y2) > e.width + v.pr) continue;
+      damagePlayer(w, v, pdmg, ev, e.owner);
+    }
   }
   // The snap chews cover in the band too — a barrel across the wire goes down with the pack.
   // One-shot (the wire is spent this tick), so no re-hit guard is needed.
@@ -3596,6 +3755,25 @@ function updateOrbitEffect(w: WorldState, e: OrbitEffect, dt: number, ev: SimEve
       break;
     }
   }
+  // pvp: the blades strike FOE PLAYERS in the ring on the same per-foe re-hit cadence, through
+  // the ONE funnel (a player-keyed rehit map, since player ids are strings).
+  if (isPvp(w)) {
+    const rehitP = (e.rehitP ??= new Map<PlayerId, number>());
+    for (const [pid, cd] of rehitP) { if (cd <= dt) rehitP.delete(pid); else rehitP.set(pid, cd - dt); }
+    const pdmg = pvpHitDamage(e.fx, e.damage * flareMult);
+    for (const vid of [...w.players.keys()].sort()) {
+      const v = w.players.get(vid);
+      if (v === undefined || rehitP.has(vid) || !canDamagePlayer(w, e.owner, v)) continue;
+      for (let i = 0; i < e.blades; i++) {
+        const a = e.angle + (i / e.blades) * Math.PI * 2;
+        const bx = e.x + Math.cos(a) * e.ring, by = e.y + Math.sin(a) * e.ring;
+        if (Math.hypot(v.x - bx, v.y - by) > e.bladeRadius + v.pr) continue;
+        damagePlayer(w, v, pdmg, ev, e.owner);
+        rehitP.set(vid, spec.rehit);
+        break;
+      }
+    }
+  }
   // Cover pressed into the ring is shredded too, on the same per-target re-hit cadence —
   // negative prop-id keys share the rehit map (enemy ids are non-negative) so the worn
   // blades never delete a wall every tick.
@@ -3644,20 +3822,32 @@ function updateSentryEffect(w: WorldState, e: SentryEffect, dt: number, ev: SimE
   // carries a fight its owner is not standing in. (A DEPARTED owner's turret keeps the
   // attribution contract instead: it works, credits no one, and expires on its own.)
   if (owner && (owner.isDown || owner.isAbsent)) return;
-  let best: Enemy | null = null;
+  // Acquire the nearest target in range + line of sight: enemies in co-op, FOE PLAYERS in pvp
+  // (id-sorted tiebreak for determinism). tid -2 marks a pvp foe-player lock (distinct from enemy
+  // ids >= 0 and -1 "none"); the bolt itself is an owned bullet that hits foes via resolvePvpHits.
+  let tx = 0, ty = 0, tid = -1;
   let bestD = e.range * e.range;
-  for (const en of w.enemies) {
-    if (en.dead || isUntargetable(en)) continue;
-    const dx = en.x - e.x, dy = en.y - e.y, d = dx * dx + dy * dy;
-    if (d < bestD && hasLineOfSight(w, e.x, e.y, en.x, en.y)) { bestD = d; best = en; }
+  if (isPvp(w)) {
+    for (const vid of [...w.players.keys()].sort()) {
+      const v = w.players.get(vid);
+      if (v === undefined || !canDamagePlayer(w, e.owner, v)) continue;
+      const dx = v.x - e.x, dy = v.y - e.y, d = dx * dx + dy * dy;
+      if (d < bestD && hasLineOfSight(w, e.x, e.y, v.x, v.y)) { bestD = d; tx = v.x; ty = v.y; tid = -2; }
+    }
+  } else {
+    for (const en of w.enemies) {
+      if (en.dead || isUntargetable(en)) continue;
+      const dx = en.x - e.x, dy = en.y - e.y, d = dx * dx + dy * dy;
+      if (d < bestD && hasLineOfSight(w, e.x, e.y, en.x, en.y)) { bestD = d; tx = en.x; ty = en.y; tid = en.id; }
+    }
   }
-  if (!best) return;
-  if (best.id !== e.targetEid) {
-    e.targetEid = best.id;
+  if (tid === -1) return;
+  if (tid !== e.targetEid) {
+    e.targetEid = tid;
     ev.push({ t: "sentryAcquire", x: e.x, y: e.y });
   }
   const spec = WEAPONS[e.fx].sentry!;
-  const aim = Math.atan2(best.y - e.y, best.x - e.x);
+  const aim = Math.atan2(ty - e.y, tx - e.x);
   const dmg = e.boltDamage * (owner ? currentDamageMult(owner) : 1);
   const isCrit = owner !== null && owner.mods.critChance > 0 && w.rng.next() < owner.mods.critChance;
   w.bullets.push({
@@ -3743,6 +3933,19 @@ export function recordHistory(w: WorldState): void {
     for (const e of w.enemies) live.add(e.id);
     for (const id of w.enemyHist.keys()) if (!live.has(id)) w.enemyHist.delete(id);
   }
+  // pvp lag-comp: record PLAYER positions into the SAME ring (same slot/head/count), so a pvp
+  // shooter's hit test can rewind a target player exactly as PvE rewinds a target enemy. Only
+  // in pvp, so co-op keeps an empty playerHist and zero extra work.
+  if (isPvp(w)) {
+    for (const p of w.players.values()) {
+      let h = w.playerHist.get(p.id);
+      if (!h) { h = { x: new Array(H).fill(p.x), y: new Array(H).fill(p.y) }; w.playerHist.set(p.id, h); }
+      h.x[slot] = p.x; h.y[slot] = p.y;
+    }
+    if (w.playerHist.size > w.players.size) {
+      for (const id of w.playerHist.keys()) if (!w.players.has(id)) w.playerHist.delete(id);
+    }
+  }
 }
 
 // The position of enemy `e` as the shooter saw it `rewindTicks` ticks ago (offset rewindTicks-1
@@ -3766,6 +3969,19 @@ export function rewoundEnemyPos(w: WorldState, e: Enemy, rewindTicks: number): [
   if (r <= 0) return [e.x, e.y];
   const h = w.enemyHist.get(e.id);
   if (!h) return [e.x, e.y];
+  const slot = (w.histHead - (r - 1) + C.LAGCOMP_HISTORY * 2) % C.LAGCOMP_HISTORY;
+  return [h.x[slot], h.y[slot]];
+}
+
+// The pvp twin of rewoundEnemyPos: the position of PLAYER `p` as the shooter saw it `rewindTicks`
+// ago, bounded to the same history window so a high-latency shooter can never kill someone who
+// already broke line-of-sight beyond the window. rewindTicks <= 0 returns the present position.
+function rewoundPlayerPos(w: WorldState, p: PlayerSim, rewindTicks: number): [number, number] {
+  if (rewindTicks <= 0) return [p.x, p.y];
+  const r = Math.min(rewindTicks, C.LAGCOMP_MAX_TICKS, w.histCount);
+  if (r <= 0) return [p.x, p.y];
+  const h = w.playerHist.get(p.id);
+  if (!h) return [p.x, p.y];
   const slot = (w.histHead - (r - 1) + C.LAGCOMP_HISTORY * 2) % C.LAGCOMP_HISTORY;
   return [h.x[slot], h.y[slot]];
 }
@@ -3963,7 +4179,7 @@ function updateEnemies(w: WorldState, dt: number, ev: SimEvent[]): void {
         // The Reaper's harvest: a KILLING round bursts the body into seeking shards
         // (shards carry the field too, so kills cascade at geometrically decaying damage).
         if (e.dead && b.killShards !== undefined && b.killShards > 0) {
-          spawnKillShards(w, b, e, shardSpawns);
+          spawnKillShards(w, b, e.x, e.y, shardSpawns);
         }
         // The caskbellows' rear crank: a hit on its back mid-commitment staggers it.
         if (!e.dead) maybeCrankStagger(e, b, ev);
@@ -4008,14 +4224,14 @@ function updateEnemies(w: WorldState, dt: number, ev: SimEvent[]): void {
 // The Reaper's kill shards: an even deterministic fan off the corpse (the homing does the
 // aiming), each at KILL_SHARD_DMG_FRAC of the killing round. The cascade is bounded by
 // construction: damage halves per generation and stops under KILL_SHARD_MIN_DMG.
-function spawnKillShards(w: WorldState, b: Bullet, e: Enemy, out: Bullet[]): void {
+function spawnKillShards(w: WorldState, b: Bullet, ex: number, ey: number, out: Bullet[]): void {
   const count = b.killShards ?? 0;
   const damage = b.damage * C.KILL_SHARD_DMG_FRAC;
   if (count <= 0 || damage <= 0) return;
   for (let i = 0; i < count; i++) {
     const a = (i / count) * Math.PI * 2;
     out.push({
-      x: e.x, y: e.y,
+      x: ex, y: ey,
       vx: Math.cos(a) * C.KILL_SHARD_SPEED,
       vy: Math.sin(a) * C.KILL_SHARD_SPEED,
       radius: C.KILL_SHARD_RADIUS,
@@ -10142,7 +10358,10 @@ function hasStandingAlly(w: WorldState, p: PlayerSim): boolean {
   return w.isCoop && w.remoteTargets.some((r) => !r.isDown);
 }
 
-function damagePlayer(w: WorldState, p: PlayerSim, amount: number, ev: SimEvent[]): void {
+// The ONE player-damage funnel. `by` is the attacking player for kill attribution (bullet.owner
+// / melee owner), null for enemy/environmental damage — plumbed through so pvp frag credit uses
+// the SAME funnel, never a second damage path. Co-op callers omit `by` (defaults null), unchanged.
+function damagePlayer(w: WorldState, p: PlayerSim, amount: number, ev: SimEvent[], by: PlayerId | null = null): void {
   if (w.isGodMode) return; // dev god mode; never set outside the sandbox
   // PHASE ult invuln (spec §2.4/§9.1): a brief, hard-capped (<= 1.2s) full-immunity window the
   // one damage funnel honours directly — an earned "get us out" button, never extending the
@@ -10152,9 +10371,14 @@ function damagePlayer(w: WorldState, p: PlayerSim, amount: number, ev: SimEvent[
   // no way to react (the reconnect-grace contract). Collision paths skip absent bodies too;
   // this is the belt-and-suspenders gate on the one damage funnel.
   if (p.isAbsent) return;
+  // pvp: the FIXED-HP model, the anti-one-shot per-tick cap, frag attribution, and respawn
+  // scheduling all live in the pvp branch of this ONE funnel (no second damage path).
+  if (isPvp(w)) { damagePlayerPvp(w, p, amount, ev, by); return; }
   // A player mid-blessing-pick cannot be hurt. Offers are only raised on the safe side of a
   // transition (cleared floor), but the shared world keeps ticking under the chooser's menu
   // online — this shield covers the residue (a stray in-flight glob, a chained barrel).
+  // BELOW the pvp branch by design: a deathmatch must NEVER grant blessing-pick immunity
+  // (blessings are off in pvp, so pendingBlessings stays empty there regardless).
   if (w.pendingBlessings.has(p.id)) return;
   // BULWARK HARDENED (spec §2.3/§10): flat damage reduction with NO invuln, applied HERE in the
   // damage-taken math BEFORE any co-op/mode pressure, and clamped so total DR never stacks past
@@ -10239,6 +10463,270 @@ function damagePlayer(w: WorldState, p: PlayerSim, amount: number, ev: SimEvent[
       // makes the terminal transition derivable from STATE, not only from the event.
       endRun(w, ev);
     }
+  }
+}
+
+// The pvp branch of the ONE damage funnel: fixed-HP model, anti-one-shot cap, frag credit +
+// respawn scheduling. Damage lands only during the LIVE phase (countdown/lobby/over are safe).
+// No post-hit iframe is granted (the PvE 0.8s window would swamp the balancer's ~4s TTK); the
+// only pvp protections are earned spawn-iframes + dash-iframes, honoured at the hit-test site.
+function damagePlayerPvp(w: WorldState, p: PlayerSim, amount: number, ev: SimEvent[], by: PlayerId | null): void {
+  const m = w.match;
+  if (m === null || m.phase !== "live") return;
+  if (p.respawnT > 0 || p.hp <= 0) return; // already dead, awaiting respawn
+  if (amount <= 0) return;
+  // Per-victim, per-tick cumulative clamp: no single tick (one trigger / pellet stack / crit)
+  // may remove more than perHitCap HP. This is the hard anti-one-shot backstop that holds even
+  // after per-weapon tuning.
+  const cap = pvpPerHitCap();
+  const already = m.dmgThisTick.get(p.id) ?? 0;
+  amount = Math.min(amount, Math.max(0, cap - already));
+  if (amount <= 0) return;
+  m.dmgThisTick.set(p.id, already + amount);
+  p.hp -= amount;
+  ev.push({ t: "playerHurt", pid: p.id, x: p.x, y: p.y });
+  if (p.hp <= 0) {
+    p.hp = 0;
+    p.chargeT = 0;       // a held charge never survives death
+    p.meleeSwing = null; // a mid-swing never survives death
+    p.respawnT = pvpRespawnDelayTicks();
+    // Frag credit flows through `by` (bullet.owner / melee owner). No credit for a suicide or
+    // an unattributed death (there are none in the MVP arena), so nobody snowballs off self-kills.
+    if (by !== null && by !== p.id) m.scores.set(by, (m.scores.get(by) ?? 0) + 1);
+    // Reliable, id-tagged elimination event — a dropped snapshot never loses a kill.
+    ev.push({ t: "pvpKill", by: by ?? "", victim: p.id, x: p.x, y: p.y });
+  }
+}
+
+// ---- PVP hit resolution (the mode-gated DAMAGE-TARGETING concern) --------------------------
+
+// The ONE "can attacker `owner` damage player `target` right now?" predicate — the single team
+// model EVERY owned-damage subsystem routes player-damage through (direct bullets, melee, AoE
+// blasts, chain lightning, homing, deployables), so pvp is CONSISTENT (no weapon silently passes
+// through a foe) and co-op is inert (players never damage players — the `friendly` pass-through is
+// preserved). pvp only, live phase, FOES only, honouring spawn/dash i-frames + dead/respawning.
+function canDamagePlayer(w: WorldState, owner: PlayerId | null, target: PlayerSim): boolean {
+  if (owner === null || !isPvp(w)) return false;
+  const m = w.match;
+  if (m === null || m.phase !== "live") return false;
+  if (target.id === owner || target.hp <= 0 || target.respawnT > 0 || isProtected(target)) return false;
+  const shooter = w.players.get(owner);
+  return arePvpFoes(shooter ? shooter.team : 0, owner, target.team, target.id);
+}
+
+// Apply an owned AoE/point hit to every FOE PLAYER within `radius` of (x,y) — the player twin of
+// the strikeEnemy radius loops (detonate / implode / orbit / wire). Routes through the ONE
+// predicate + the damagePlayer funnel (pvp model + per-tick cap + attribution), foes scanned
+// id-sorted for determinism. No-op in co-op / outside a live match.
+function pvpSplash(w: WorldState, owner: PlayerId | null, fx: WeaponId | null, x: number, y: number, radius: number, baseDmg: number, ev: SimEvent[]): void {
+  if (owner === null || !isPvp(w)) return;
+  const dmg = pvpHitDamage(fx ?? PVP.startWeapon, baseDmg);
+  if (dmg <= 0) return;
+  for (const vid of [...w.players.keys()].sort()) {
+    const v = w.players.get(vid);
+    if (v === undefined || !canDamagePlayer(w, owner, v)) continue;
+    if (Math.hypot(v.x - x, v.y - y) > radius + v.pr) continue;
+    damagePlayer(w, v, dmg, ev, owner);
+  }
+}
+
+// Chain lightning to FOE PLAYERS (the tesla/arc twin of arcLightning): from the struck foe, hop
+// to the nearest not-yet-hit foe within range, `jumps` times, damage decaying per hop. Routes
+// every hop through the ONE funnel. `hit` accumulates the pids already zapped (no re-hit).
+function pvpChain(w: WorldState, owner: PlayerId | null, fx: WeaponId | null, fromX: number, fromY: number, jumps: number, range: number, baseDmg: number, hit: Set<PlayerId>, ev: SimEvent[]): void {
+  let dmg = baseDmg, x = fromX, y = fromY;
+  for (let j = 0; j < jumps; j++) {
+    let best: PlayerSim | null = null;
+    let bestD = range * range;
+    for (const vid of [...w.players.keys()].sort()) {
+      const v = w.players.get(vid);
+      if (v === undefined || hit.has(v.id) || !canDamagePlayer(w, owner, v)) continue;
+      const dx = v.x - x, dy = v.y - y, d = dx * dx + dy * dy;
+      if (d < bestD) { bestD = d; best = v; }
+    }
+    if (best === null) return;
+    hit.add(best.id);
+    ev.push({ t: "shockArc", eid: -1, x, y, tx: best.x, ty: best.y, tRadius: best.pr, dmg: pvpHitDamage(fx ?? PVP.startWeapon, dmg), color: "#7fe9ff", killed: false });
+    damagePlayer(w, best, pvpHitDamage(fx ?? PVP.startWeapon, dmg), ev, owner);
+    x = best.x; y = best.y;
+    dmg *= 0.7; // same geometric decay as the PvE arc
+  }
+}
+
+// In pvp, owned ("friendly") rounds and swings resolve against NON-OWNER FOE players — the ONE
+// thing the enemy resolve never does. It mirrors the enemy resolve exactly (swept collision,
+// FIRE-TIME lag-comp rewind of the TARGET, per-weapon damage) but routes every hit through the
+// single damagePlayer funnel with attribution. Runs only during the live match.
+function resolvePvpHits(w: WorldState, ev: SimEvent[]): void {
+  const m = w.match;
+  if (m === null || m.phase !== "live") return;
+  // Victims are scanned in ID-SORTED order (never Map iteration order), so which foe an
+  // overlapping round hits — and the per-tick cap + kill attribution when multiple sources
+  // land the same tick — is byte-identical across servers.
+  const victimIds = [...w.players.keys()].sort();
+  // Reaper kill-shards spawned this pass, flushed AFTER the bullet loop (a fresh shard never
+  // hit-tests inside the tick that spawned it — same contract as the enemy cascade).
+  const shardSpawns: Bullet[] = [];
+
+  // Owned bullets vs foe players, resolved in a CANONICAL order — attacker id, then each
+  // attacker's own creation order (preserved by a STABLE sort) — NOT w.bullets/Map iteration
+  // order. A reconnect reorders the players map (and thus bullet-creation order), so without this
+  // the SAME-TICK damage order — which decides the 35% cap application and which source lands the
+  // killing blow (`by`) — could differ between two servers on identical inputs. A departed owner's
+  // round keeps flying but can't be a pvp hit (unknown team), so it fizzles — no free frags.
+  const ownedBullets = w.bullets.filter((b) => b.friendly && b.life > 0 && !b.isLob && b.owner !== null);
+  ownedBullets.sort((x, y) => (x.owner! < y.owner! ? -1 : x.owner! > y.owner! ? 1 : 0));
+  for (const b of ownedBullets) {
+    const owner = b.owner;
+    if (owner === null || b.life <= 0) continue;
+    const rewind = fireTimeRewind(w, b.bornTick, b.lagRewind);
+    for (const vid of victimIds) {
+      const victim = w.players.get(vid);
+      if (victim === undefined || !canDamagePlayer(w, owner, victim)) continue;
+      if (b.hitPids && b.hitPids.indexOf(victim.id) !== -1) continue;
+      const [vx, vy] = rewoundPlayerPos(w, victim, rewind);
+      if (!sweptBulletHit(b, vx, vy, b.radius + victim.pr)) continue;
+      // AoE rounds NEVER direct-hit: the blast/implosion IS the payload (the foe is inside its
+      // own radius and takes exactly one splash), exactly as the enemy resolve treats them.
+      if (b.blast !== undefined) { detonateBullet(w, b, sweptHit.x, sweptHit.y, ev); break; }
+      if (b.implode !== undefined) { implodeBullet(w, b, sweptHit.x, sweptHit.y, ev); break; }
+      damagePlayer(w, victim, pvpHitDamage(b.fx ?? PVP.startWeapon, b.damage), ev, owner);
+      // Reaper: a KILLING round bursts the foe into seeking shards (the cascade twin).
+      if (victim.hp <= 0 && b.killShards !== undefined && b.killShards > 0) spawnKillShards(w, b, victim.x, victim.y, shardSpawns);
+      // Tesla/arc: a chaining round leaps to nearby foes (the player twin of arcLightning).
+      if (b.chain !== undefined && b.chain > 0) {
+        pvpChain(w, owner, b.fx ?? null, victim.x, victim.y, b.chain, b.chainRange ?? 130, b.damage * 0.7, new Set<PlayerId>([victim.id]), ev);
+        b.life = 0;
+        break;
+      }
+      if (b.pierce > 0) { b.pierce--; (b.hitPids ??= []).push(victim.id); }
+      else { b.life = 0; ev.push({ t: "bulletExpire", x: b.x, y: b.y, color: b.color }); break; }
+    }
+  }
+
+  // Owned melee swings vs foe players. One hit per foe per swing (hitPids), over the swing's
+  // multi-tick duration, both actors evaluated at the swing's fire-time pose (lag-comp).
+  for (const aid of victimIds) {
+    const attacker = w.players.get(aid);
+    const swing = attacker?.meleeSwing;
+    if (attacker === undefined || !swing || swing.timer <= 0) continue;
+    const rewind = fireTimeRewind(w, swing.bornTick, swing.lagRewind);
+    const [sx, sy] = swingPose(w, attacker, swing);
+    for (const vid of victimIds) {
+      const victim = w.players.get(vid);
+      if (victim === undefined || !canDamagePlayer(w, attacker.id, victim)) continue;
+      if (swing.hitPids && swing.hitPids.indexOf(victim.id) !== -1) continue;
+      const [vx, vy] = rewoundPlayerPos(w, victim, rewind);
+      if (!isPointInMeleeHit(sx, sy, vx, vy, victim.pr, swing)) continue;
+      damagePlayer(w, victim, pvpHitDamage(attacker.weapon, swing.damage), ev, attacker.id);
+      (swing.hitPids ??= []).push(victim.id);
+    }
+  }
+
+  for (const s of shardSpawns) w.bullets.push(s);
+}
+
+// ---- PVP match state machine (pure sim, TICK-based) ---------------------------------------
+
+// The winner: most frags, ties broken by the LOWEST player id (id-sorted iteration + strict >),
+// so two servers with identical inputs pick the identical winner. Null when there are no players.
+function pvpTopScorer(w: WorldState): PlayerId | null {
+  const m = w.match;
+  if (m === null) return null;
+  let best: PlayerId | null = null;
+  let bestScore = -1;
+  for (const id of [...w.players.keys()].sort()) {
+    const s = m.scores.get(id) ?? 0;
+    if (s > bestScore) { bestScore = s; best = id; }
+  }
+  return best;
+}
+
+function pvpEndMatch(w: WorldState, winner: PlayerId | null, ev: SimEvent[]): void {
+  const m = w.match;
+  if (m === null || m.phase === "over") return;
+  m.phase = "over";
+  m.winner = winner;
+  m.phaseEndTick = 0;
+  ev.push({ t: "pvpMatchOver", winner: winner ?? "" });
+}
+
+// Place every present player on a maximally-spread arena spawn in ID-SORTED order (deterministic:
+// greedy farthest-from-already-placed, ties to the lowest spawn index), full HP, spawn protection
+// armed. Used at the countdown/live whistle so the opening spread never depends on join order.
+function pvpAssignSpreadSpawns(w: WorldState): void {
+  const m = w.match;
+  if (m === null || m.spawns.length === 0) return;
+  const placed: Array<{ x: number; y: number }> = [];
+  for (const id of [...w.players.keys()].sort()) {
+    const p = w.players.get(id);
+    if (p === undefined) continue;
+    const idx = farthestSpawnIndex(m.spawns, placed);
+    p.x = m.spawns[idx].x;
+    p.y = m.spawns[idx].y;
+    p.hp = p.maxHp;
+    p.respawnT = 0;
+    p.dashInvuln = 0;
+    p.meleeSwing = null;
+    p.chargeT = 0;
+    p.fireCd = 0;
+    p.invuln = PVP.spawnIframeSec; // spawn protection: ends here or on first outgoing attack
+    placed.push({ x: p.x, y: p.y });
+  }
+}
+
+// Respawn a dead player at the spawn farthest from live opponents (frag-limit deathmatch: death
+// schedules a respawn, never an elimination), full HP + spawn protection.
+function pvpRespawn(w: WorldState, p: PlayerSim): void {
+  p.hp = p.maxHp;
+  p.respawnT = 0;
+  p.meleeSwing = null;
+  p.chargeT = 0;
+  p.fireCd = 0;
+  pvpPlaceOnSpawn(w, p);
+}
+
+// The frag-limit RESPAWN deathmatch state machine (lobby -> countdown -> live -> over). Pure sim,
+// counted in TICKS off w.tick — no rounds, no last-standing, no wipe. A death respawns after a
+// delay; the match ends when a player reaches the frag limit OR the time cap expires (highest
+// frags wins, id-sorted tiebreak). This REPLACES the co-op wipe/descend loop in pvp.
+function stepPvpMatch(w: WorldState, ev: SimEvent[]): void {
+  const m = w.match;
+  if (m === null) return;
+  // Respawn timers tick only during live play.
+  if (m.phase === "live") {
+    for (const p of w.players.values()) {
+      if (p.respawnT > 0) {
+        p.respawnT -= 1;
+        if (p.respawnT <= 0) { p.respawnT = 0; pvpRespawn(w, p); }
+      }
+    }
+  }
+  switch (m.phase) {
+    case "lobby":
+      // Fun at 2 — the loop opens the instant minPlayers are present (never gated to >= 3).
+      if (w.players.size >= PVP.minPlayers) {
+        m.phase = "countdown";
+        m.phaseEndTick = w.tick + pvpCountdownTicks();
+        pvpAssignSpreadSpawns(w);
+      }
+      break;
+    case "countdown":
+      if (w.tick >= m.phaseEndTick) {
+        m.phase = "live";
+        m.phaseEndTick = w.tick + pvpMatchTimeTicks();
+        m.fragLimit = pvpFragLimit(w.players.size); // scaled by the match-start player count
+        pvpAssignSpreadSpawns(w); // fresh id-sorted spread + protection at the whistle
+      }
+      break;
+    case "live": {
+      const leader = pvpTopScorer(w);
+      if (leader !== null && (m.scores.get(leader) ?? 0) >= m.fragLimit) { pvpEndMatch(w, leader, ev); break; }
+      if (w.tick >= m.phaseEndTick) pvpEndMatch(w, pvpTopScorer(w), ev); // time cap -> highest frags
+      break;
+    }
+    case "over":
+      break;
   }
 }
 
@@ -10478,7 +10966,9 @@ export function stepPlayerPhase(w: WorldState, p: PlayerSim, input: InputCmd, dt
   if (p.overheatT > 0) p.overheatT = p.overheatT > dt ? p.overheatT - dt : 0;
   if (p.phaseSpeed > 0) p.phaseSpeed = p.phaseSpeed > dt ? p.phaseSpeed - dt : 0;
   if (p.ultInvuln > 0) p.ultInvuln = p.ultInvuln > dt ? p.ultInvuln - dt : 0;
-  if (!p.isDown) {
+  // respawnT > 0 is a pvp dead body awaiting respawn — no movement/shooting until it respawns
+  // (respawnT is always 0 in co-op, so this is byte-identical there). isDown stays the co-op gate.
+  if (!p.isDown && p.respawnT === 0) {
     updatePlayer(w, p, input, dt, ev);
     updateShooting(w, p, input, dt, ev);
   }
@@ -10493,6 +10983,9 @@ export function stepPlayerPhase(w: WorldState, p: PlayerSim, input: InputCmd, dt
 // advanced. Only the sim RNG (w.rng) is consumed here, so the server is the single roller.
 export function stepWorldPhase(w: WorldState, dt: number, ev: SimEvent[]): void {
   w.barrelExplosionsThisTick = 0; // reset the per-tick explosive-barrel chain budget
+  const pvp = isPvp(w);
+  // Reset the per-victim per-tick pvp damage-cap accumulator BEFORE any damage this tick.
+  if (pvp && w.match !== null) w.match.dmgThisTick.clear();
   recordHistory(w);
   updateBullets(w, dt, ev);
   updateEffects(w, dt, ev);
@@ -10500,14 +10993,25 @@ export function stepWorldPhase(w: WorldState, dt: number, ev: SimEvent[]): void 
   updateGauntlet(w, dt, ev);
   updateHazards(w, dt, ev);
   updateProps(w, dt, ev);
+  // The mode-gated DAMAGE-TARGETING concern: owned rounds/swings hit non-owner foe players. Runs
+  // AFTER updateProps so breakable cover consumes a round before it can reach a player behind it
+  // (real LOS cover), and after recordHistory (fire-time rewind samples ready).
+  if (pvp) resolvePvpHits(w, ev);
   updateChests(w, dt, ev);
   updateFloorHazards(w, dt, ev);
   updatePickups(w, dt, ev);
-  updateUlts(w, ev);
-  updateRevives(w, dt, ev);
-  checkStrandedWipe(w, dt, ev);
-  tickPendingBlessings(w, dt, ev);
-  updateExit(w, ev);
+  if (pvp) {
+    // The deathmatch replaces the whole co-op end-of-run loop: NO ult accrual/firing (ults off +
+    // no-snowball), NO revives, NO all-down wipe, NO blessing gate, NO floor descend. Just the
+    // frag-limit respawn match machine.
+    stepPvpMatch(w, ev);
+  } else {
+    updateUlts(w, ev);
+    updateRevives(w, dt, ev);
+    checkStrandedWipe(w, dt, ev);
+    tickPendingBlessings(w, dt, ev);
+    updateExit(w, ev);
+  }
 
   for (const p of w.players.values()) {
     if (p.comboTimer > 0) {

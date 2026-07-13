@@ -26,6 +26,7 @@ import type { SimEvent } from "../sim/events.js";
 import type { PlayerId } from "../sim/input.js";
 import type { KitId } from "../sim/kits.js";
 import { isKitId } from "../sim/kits.js";
+import type { MatchPhase, MatchState } from "../sim/pvp.js";
 import { projectPlayer, applyPlayerSnapshot, modsFromWire } from "./playerSnapshot.js";
 import type { AuthoritativePlayerSnapshot } from "./playerSnapshot.js";
 import type { KeyedDelta, RemovalReason, SelfDelta, WireObject, WireValue } from "./snapshotDelta.js";
@@ -278,7 +279,10 @@ export const FIXED_DT = 1 / TICK_HZ; // 50ms authoritative step
 //     `bph` (boss.phase — the client swaps the shell sprite off it, exactly like JET's phase
 //     bodies), and its GUARDED/EXPOSED state already rides `aux` (the exposed remainder, restored
 //     into boss.exposed — the same flag the damage gate reads). Compact by construction.
-export const PROTOCOL_VERSION = 27;
+// v28: PVP MVP — PlayerWire.tm (FFA team), SelfWire.rsp (respawn countdown), a top-level `match`
+// block (phase / phase-end tick / per-player frags + alive / winner), and the reliable
+// pvpKill / pvpMatchOver events. All inert in co-op (team 0, respawn 0, match null).
+export const PROTOCOL_VERSION = 28;
 
 // How long the server reserves a disconnected player's body (their seat) before the
 // authoritative leave lifecycle applies. 90s per the studio balance gate's reconnect
@@ -293,7 +297,7 @@ export const RESUME_GRACE_MS = 90000;
 // can map room codes -> worlds without pulling protocol.ts's wire code (and the whole sim)
 // onto the menu's critical path. Re-exported here so every existing consumer of protocol.js
 // (client, server ticket verifier, tests) is unaffected.
-export { isValidWorldId, worldIdForRoomCode } from "./worldId.js";
+export { isValidWorldId, worldIdForRoomCode, pvpWorldIdForRoomCode, isPvpWorldId, PVP_WORLD_PREFIX } from "./worldId.js";
 
 // Base client interpolation delay (ms) for remote entities. The server uses this as the
 // lag-comp rewind default until the client reports its ACTUAL adaptive delay via `stat.dly`
@@ -353,6 +357,7 @@ export interface SelfWire {
   phs: number;                 // Phase speed-surge seconds
   uiv: number;                 // Phase invuln seconds (<= 1.2s)
   pst: number;                 // per-kit passive channel (momentum / lifebloom / hardened)
+  rsp: number;                 // pvp respawn countdown in ticks (0 = alive); gates local prediction
 }
 
 // Another player as seen by this client (rendered via interpolation, never predicted).
@@ -388,6 +393,7 @@ export interface PlayerWire {
   ht: string | null; // equipped cosmetic hat id (visual-only; null = the classic blob)
   fc: string | null; // equipped cosmetic face id (visual-only)
   pt: string | null; // equipped cosmetic COMPANION pet id (visual-only; null = no pet)
+  tm: number;        // pvp FFA team id (0 = no team / every-man-for-himself); always 0 in co-op
 }
 
 // One SEAT in this world, as published on every snapshot REGARDLESS of interest filtering:
@@ -514,6 +520,19 @@ export interface ShopSlotWire {
 }
 export interface ShopWire { md: ShopMode; kx: number; ky: number; ru: number; slots: ShopSlotWire[] }
 
+// PVP FFA match block — ONE small top-level object on the snapshot (never smeared across every
+// entity). The phase timer rides as an ABSOLUTE end-tick (`end`), so it changes only on phase
+// transitions (not every tick) and the client derives "seconds left" from `end - tick`. The
+// per-player scoreboard (frags + alive) changes only on kills/deaths/respawns, so the whole
+// block delta-encodes as one rarely-changing object. null in co-op.
+export interface MatchScoreWire { id: PlayerId; f: number; a: boolean } // frags, alive
+export interface MatchWire {
+  ph: MatchPhase;        // "lobby" | "countdown" | "live" | "over"
+  end: number;           // absolute tick the current TIMED phase ends (0 = untimed)
+  sc: MatchScoreWire[];  // per-player frags + alive (the authoritative scoreboard)
+  win: PlayerId | null;  // winner id once phase === "over" (null otherwise)
+}
+
 // ---- messages ----
 
 // Client -> server. The client authors INPUTS/INTENTS ONLY.
@@ -626,6 +645,7 @@ export type ServerMsg =
       hzds: HazardWire[];        // shared ground hazards (the Weaver's webs)
       shop: ShopWire | null;     // Patch's stall (shop floors only) — stock + claim state
       effs: EffectWire[];        // shared weapon effect entities (the effect wave)
+      match: MatchWire | null;   // pvp FFA match block (phase/timer/scores/winner); null in co-op
       events: WireEvent[];       // reliable, id-tagged events (dedupe + ack) -> client replays juice
     }
   // Snapshot DELTA (v24): only what CHANGED since the baseline snapshot `b` (the client's last
@@ -759,6 +779,7 @@ const SHOP_SLOT_KINDS: Record<ShopSlotKind, true> = {
   mythic_weapon: true, mythic_trio: true, mythic_amber: true,
 };
 const SHOP_MODES: Record<ShopMode, true> = { dealer: true, premium: true, spoils: true, climax: true };
+const MATCH_PHASES: Record<MatchPhase, true> = { lobby: true, countdown: true, live: true, over: true };
 const CHEST_KINDS: Record<ChestKind, true> = { wood: true, boss: true };
 const HAZARD_KINDS: Record<HazardKind, true> = { web: true, cinder: true, charge: true, omen: true, corrupt: true };
 const EFFECT_KINDS: Record<EffectKind, true> = { zone: true, wire: true, orbit: true, sentry: true, tether: true, sanctuary: true, aegis: true };
@@ -877,6 +898,10 @@ const EVENT_SPECS: Record<SimEvent["t"], EventSpec> = {
   descend: { scope: "global", fields: { toFloor: "num" } },
   reachExit: { scope: "global", fields: { toFloor: "num" } },
   gameOver: { scope: "pid", fields: { pid: "str" } },
+  // PVP: positional elimination juice (everyone near the kill sees it); the authoritative
+  // scoreboard rides the match block. Match-over is global (every client shows the result).
+  pvpKill: { scope: "pos", fields: { by: "str", victim: "str", x: "num", y: "num" } },
+  pvpMatchOver: { scope: "global", fields: { winner: "str" } },
   // flash/trauma carry no position — rare, tiny, and safe to deliver globally.
   flash: { scope: "global", fields: { eid: "num" } },
   puff: { scope: "pos", fields: { x: "num", y: "num", n: "num", color: "str" } },
@@ -1090,6 +1115,7 @@ function validateSelfWire(v: unknown): SelfWire {
     phs: num(o, "phs", 0, 1e4),
     uiv: num(o, "uiv", 0, 1e4),
     pst: num(o, "pst", 0, 1e4),
+    rsp: intOf(o, "rsp", 0, 1e6),
   };
 }
 
@@ -1123,6 +1149,7 @@ function validatePlayerWire(v: unknown): PlayerWire {
     bcl: boolOf(o, "bcl"),
     ab: boolOf(o, "ab"),
     nm, cl, ht, fc, pt,
+    tm: intOf(o, "tm", 0, 1e6),
   };
 }
 
@@ -1250,6 +1277,23 @@ function validateShopWire(v: unknown): ShopWire {
   };
 }
 
+function validateMatchWire(v: unknown): MatchWire {
+  const o = obj(v, "match");
+  const sc = arr(o.sc, "match.sc").map((e) => {
+    const s = obj(e, "match.sc entry");
+    return { id: shortStr(s, "id", 64), f: intOf(s, "f", 0, 1e6), a: boolOf(s, "a") };
+  });
+  if (sc.length > 64) throw new ProtocolError("bad match.sc size");
+  const win = o.win;
+  if (win !== null && (typeof win !== "string" || win.length < 1 || win.length > 64)) throw new ProtocolError("bad match.win");
+  return {
+    ph: inSet(MATCH_PHASES, o.ph, "match.ph"),
+    end: intOf(o, "end", 0, Number.MAX_SAFE_INTEGER),
+    sc,
+    win: win as PlayerId | null,
+  };
+}
+
 function validateEffectWire(v: unknown): EffectWire {
   const o = obj(v, "effect");
   const owner = o.o;
@@ -1342,6 +1386,7 @@ export function validateSnap(o: Record<string, unknown>): Extract<ServerMsg, { t
     hzds: arr(o.hzds, "hzds").map(validateHazardWire),
     shop: o.shop === null ? null : validateShopWire(o.shop),
     effs: arr(o.effs, "effs").map(validateEffectWire),
+    match: o.match === null || o.match === undefined ? null : validateMatchWire(o.match),
     events: arr(o.events, "events").map(validateWireEvent),
   };
 }
@@ -1475,7 +1520,7 @@ export function selfWireFromSnapshot(s: AuthoritativePlayerSnapshot): SelfWire {
     rvt: s.reviveTokens, xsl: s.extraWeaponSlots, tth: s.hpTithe, pfl: s.prospectorFloor,
     kit: s.kitId, uc: s.ultCharge, ura: s.ultReadyAtTick, ovt: s.overdriveT,
     ovh: s.overheatT, osh: s.overshield, pra: s.pulseReadyAtTick, phs: s.phaseSpeed,
-    uiv: s.ultInvuln, pst: s.passiveState,
+    uiv: s.ultInvuln, pst: s.passiveState, rsp: s.respawnT,
   };
 }
 
@@ -1491,7 +1536,7 @@ export function snapshotFromSelfWire(w: SelfWire): AuthoritativePlayerSnapshot {
     reviveTokens: w.rvt, extraWeaponSlots: w.xsl, hpTithe: w.tth, prospectorFloor: w.pfl,
     kitId: w.kit, ultCharge: w.uc, ultReadyAtTick: w.ura, overdriveT: w.ovt,
     overheatT: w.ovh, overshield: w.osh, pulseReadyAtTick: w.pra, phaseSpeed: w.phs,
-    ultInvuln: w.uiv, passiveState: w.pst,
+    ultInvuln: w.uiv, passiveState: w.pst, respawnT: w.rsp,
   };
 }
 
@@ -1536,7 +1581,19 @@ export function toPlayerWire(p: PlayerSim, identity?: PlayerIdentity): PlayerWir
     ht: identity?.hat ?? null,
     fc: identity?.face ?? null,
     pt: identity?.pet ?? null,
+    tm: p.team,
   };
+}
+
+// Project the pvp match block off the sim's MatchState. Scores + alive are ID-SORTED so the
+// wire form is deterministic (and delta-diffs stably) regardless of the players-map order.
+export function toMatchWire(m: MatchState, w: WorldState): MatchWire {
+  const sc: MatchScoreWire[] = [];
+  for (const id of [...w.players.keys()].sort()) {
+    const p = w.players.get(id);
+    sc.push({ id, f: m.scores.get(id) ?? 0, a: p !== undefined && p.hp > 0 && p.respawnT === 0 });
+  }
+  return { ph: m.phase, end: m.phaseEndTick, sc, win: m.winner };
 }
 
 export function toEnemyWire(e: Enemy): EnemyWire {
@@ -1910,6 +1967,8 @@ export function buildSnapshot(
     shop: w.shop ? toShopWire(w.shop) : null,
     // Effects share the hazard rule: hard sim caps per family, so the list stays small.
     effs: w.effects.map(toEffectWire),
+    // pvp match block (one small object; null in co-op).
+    match: w.match ? toMatchWire(w.match, w) : null,
     events,
   };
 }

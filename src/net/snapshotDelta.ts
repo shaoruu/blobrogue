@@ -55,8 +55,10 @@ export const KEYED_LISTS = [
 ] as const;
 
 // Small lists (or id-less ones like bullets) sent whole when they change — cheap and simpler
-// than a keyed diff, and never a dominant cost.
-export const WHOLE_LISTS = ["roster", "wait", "exr", "bullets", "shop"] as const;
+// than a keyed diff, and never a dominant cost. `match` is one small object (pvp only) whose
+// phase timer rides as an absolute end-tick, so it changes only on transitions/kills/deaths —
+// whole-replacing it when it changes stays tiny and never smears across entities.
+export const WHOLE_LISTS = ["roster", "wait", "exr", "bullets", "shop", "match"] as const;
 
 // Top-level scalar fields diffed by value. `events`/`evTo`/`sseq` are handled out of band, and
 // the keyed/whole lists + `self` have their own channels, so they are excluded here.

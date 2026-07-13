@@ -18,3 +18,20 @@ export function isValidWorldId(id: string): boolean {
 export function worldIdForRoomCode(code: string): string {
   return "room:" + code.trim().toUpperCase();
 }
+
+// The PVP world-id prefix. A pvp world id (public arena or a room) carries this marker so the
+// server's room factory can create the world in pvp mode WITHOUT any per-connection guessing:
+// the mode is part of the world IDENTITY, so every joiner of the same id lands in the same
+// pvp world. Kept a plain prefix so it passes the shared charset gate.
+export const PVP_WORLD_PREFIX = "pvp:";
+
+// The pvp room-code -> world-id mapping (reuses the room-code path; distinct id space so a code
+// can host a coop world and a pvp world independently). Client + Convex minter must agree.
+export function pvpWorldIdForRoomCode(code: string): string {
+  return PVP_WORLD_PREFIX + "room:" + code.trim().toUpperCase();
+}
+
+// Whether a world id names a PVP world (the server factory branches on this).
+export function isPvpWorldId(id: string): boolean {
+  return id.startsWith(PVP_WORLD_PREFIX);
+}

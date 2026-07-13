@@ -14,7 +14,7 @@ import type { ConvexClient } from "convex/browser";
 
 import { OnlineLobby } from "../src/net/onlineLobby.js";
 import { Session } from "../src/net/session.js";
-import { worldIdForRoomCode } from "../src/net/protocol.js";
+import { worldIdForRoomCode, pvpWorldIdForRoomCode } from "../src/net/protocol.js";
 
 let passed = 0, failed = 0;
 const failures: string[] = [];
@@ -34,12 +34,14 @@ interface FakeConvexOpts {
   // Delay every ensurePlayer resolution, so ordering tests can prove the mint truly AWAITS
   // an in-flight identity flush rather than racing past it.
   ensureDelayMs?: number;
+  // The mode a rooms:join resolves to (a joiner ADOPTS the room's mode). Default "coop".
+  joinMode?: "coop" | "pvp";
 }
 
 // A Convex client double that records every call in order and answers with canned rows.
 function fakeConvex(calls: Call[], opts: FakeConvexOpts = {}): ConvexClient {
   const profileColor = opts.profileColor === undefined ? 4 : opts.profileColor;
-  const respond = (fn: string): unknown => {
+  const respond = (fn: string, args: Record<string, unknown>): unknown => {
     switch (fn) {
       case "players:ensurePlayer":
         return {
@@ -48,9 +50,11 @@ function fakeConvex(calls: Call[], opts: FakeConvexOpts = {}): ConvexClient {
           totalKills: 0, deepestFloor: 0, totalCoins: 0, gamesPlayed: 0, unlocks: [], isAccount: false,
         };
       case "rooms:create":
-        return { roomId: "room-doc-1", code: "ABCD", seed: 1, floor: 1 };
+        return { roomId: "room-doc-1", code: "ABCD", seed: 1, floor: 1, mode: args.mode ?? "coop" };
       case "rooms:join":
-        return { roomId: "room-doc-1", code: "ABCD", seed: 1, floor: 1, status: "lobby" };
+        return { roomId: "room-doc-1", code: "ABCD", seed: 1, floor: 1, status: "lobby", mode: opts.joinMode ?? "coop" };
+      case "rooms:quickPlay":
+        return { roomId: "room-doc-1", code: "ABCD", seed: 1, floor: 1, status: "playing", mode: args.mode ?? "coop", joined: false };
       case "gsTicket:mint":
         return { ticket: "signed-ticket", playerId: "player-1" };
       default:
@@ -61,9 +65,9 @@ function fakeConvex(calls: Call[], opts: FakeConvexOpts = {}): ConvexClient {
     const fn = getFunctionName(ref as Parameters<typeof getFunctionName>[0]);
     calls.push({ fn, args });
     if (fn === "players:ensurePlayer" && opts.ensureDelayMs !== undefined) {
-      return new Promise((resolve) => setTimeout(() => resolve(respond(fn)), opts.ensureDelayMs));
+      return new Promise((resolve) => setTimeout(() => resolve(respond(fn, args)), opts.ensureDelayMs));
     }
-    return Promise.resolve(respond(fn));
+    return Promise.resolve(respond(fn, args));
   };
   const fake = {
     mutation: record,
@@ -183,6 +187,40 @@ async function main(): Promise<void> {
     await lobby.create();
     check("expectedWorldId is worldIdForRoomCode(code)", lobby.expectedWorldId() === worldIdForRoomCode("ABCD") && lobby.expectedWorldId() === "room:ABCD", lobby.expectedWorldId());
     lobby.leave();
+  }
+
+  section("PVP: create/quickPlay carry the pvp mode; expectedWorldId binds the pvp world; join adopts it");
+  {
+    const calls: Call[] = [];
+    const client = fakeConvex(calls);
+    const session = new Session(client);
+    const lobby = new OnlineLobby(client, session);
+    await lobby.create("pvp");
+    const createArgs = calls.find((c) => c.fn === "rooms:create")?.args;
+    check("rooms:create is asked for a pvp room", createArgs?.mode === "pvp", JSON.stringify(createArgs));
+    check("a pvp room binds the pvp-prefixed world id", lobby.expectedWorldId() === pvpWorldIdForRoomCode("ABCD") && lobby.expectedWorldId() === "pvp:room:ABCD", lobby.expectedWorldId());
+    lobby.leave();
+
+    const qcalls: Call[] = [];
+    const qlobby = new OnlineLobby(fakeConvex(qcalls), new Session(fakeConvex(qcalls)));
+    await qlobby.quickPlay("pvp");
+    check("rooms:quickPlay is asked for a pvp room", qcalls.find((c) => c.fn === "rooms:quickPlay")?.args.mode === "pvp");
+    qlobby.leave();
+
+    const jcalls: Call[] = [];
+    const jclient = fakeConvex(jcalls, { joinMode: "pvp" });
+    const jlobby = new OnlineLobby(jclient, new Session(jclient));
+    await jlobby.join("ABCD");
+    check("a joiner adopts the room's pvp mode (and its pvp world id)", jlobby.mode === "pvp" && jlobby.expectedWorldId() === "pvp:room:ABCD", jlobby.expectedWorldId());
+    jlobby.leave();
+
+    // Co-op stays the default: a plain create resolves the co-op world id (no leak).
+    const ccalls: Call[] = [];
+    const cclient = fakeConvex(ccalls);
+    const clobby = new OnlineLobby(cclient, new Session(cclient));
+    await clobby.create();
+    check("a co-op room keeps the co-op world id", clobby.mode === "coop" && clobby.expectedWorldId() === "room:ABCD");
+    clobby.leave();
   }
 
   section("setReady: the lobby consent toggle reaches the roster row");

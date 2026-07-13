@@ -70,7 +70,9 @@ import type {
 // PlayerId), and a new dynamic HazardKind `corrupt` (the per-phase arena-corruption drain zone).
 // v27: the GORGE F50 giant — new enemy kinds `gorge` + `gorge_seam` and a new PropKind
 // `gorge_debris` (the shell phase rides bph + the exposed state rides aux, so no new EnemyWire field).
-export const SYNTHETIC_JOIN_PROTOCOL = 27;
+// v28: the PVP MVP — PlayerWire.tm (FFA team), SelfWire.rsp (respawn countdown), the top-level
+// `match` block, and the reliable pvpKill / pvpMatchOver events (all inert in co-op).
+export const SYNTHETIC_JOIN_PROTOCOL = 28;
 
 export interface HttpProbeConfig {
   baseUrl: string;
