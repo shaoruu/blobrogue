@@ -5,7 +5,7 @@
 //
 // Run: npx tsx test/ultcue.test.ts
 
-import { UltCueTracker, ULT_MOTES_PER_SEC } from "../src/game/ultCue.js";
+import { UltCueTracker, ULT_MOTES_PER_SEC, isFlyingMoteSource, isPassiveMeterPulse, PASSIVE_PULSE_INTERVAL } from "../src/game/ultCue.js";
 import type { UltCue, UltMoteOrigin } from "../src/game/ultCue.js";
 
 let passed = 0, failed = 0;
@@ -134,9 +134,47 @@ function roundTripTests(): void {
     has(all, "ultMote") && has(all, "ultReady") && has(all, "ultCast"));
 }
 
+function sourceGateTests(): void {
+  section("combat-source gate: only kill/boss fly a mote; self-sourced 'dmg' does not (no pee stream)");
+  // The tracker itself is unchanged — it still coalesces one ultMote per accrual carrying its
+  // source; the gate that decides whether that cue becomes a FLYING projectile is source-scoped.
+  const t = new UltCueTracker();
+  t.reset(0);
+  const dmg = motes(t.feed({ charge: 300, isReady: false, isCasting: false, origin: SELF, dt: 0.05 }));
+  check("a self-sourced (heal/dash/trickle) accrual still emits a tracker mote cue", dmg.length === 1 && dmg[0].source === "dmg");
+  check("but the flying-mote gate DROPS the self-sourced cue (Mender's continuous heal-charge)", !isFlyingMoteSource(dmg[0].source));
+
+  const tk = new UltCueTracker();
+  tk.reset(0);
+  const kill = motes(tk.feed({ charge: 300, isReady: false, isCasting: false, origin: KILL, dt: 0.05 }));
+  check("a kill accrual passes the flying-mote gate (fires from the enemy)", kill.length === 1 && isFlyingMoteSource(kill[0].source));
+  const tb = new UltCueTracker();
+  tb.reset(0);
+  const boss = motes(tb.feed({ charge: 300, isReady: false, isCasting: false, origin: BOSS, dt: 0.05 }));
+  check("a boss-hit accrual passes the flying-mote gate", boss.length === 1 && isFlyingMoteSource(boss[0].source));
+  check("the gate is exactly {kill, boss}", isFlyingMoteSource("kill") && isFlyingMoteSource("boss") && !isFlyingMoteSource("dmg"));
+}
+
+function passivePulseTests(): void {
+  section("passive meter pulse: self-sourced charge still nudges the bar, throttled, never doubled");
+  const beyond = PASSIVE_PULSE_INTERVAL + 0.001;
+  check("a charge INCREASE past the throttle window pulses the meter (no projectile)",
+    isPassiveMeterPulse(50, beyond, false, false));
+  check("no increase (flat / decreasing charge) never pulses",
+    !isPassiveMeterPulse(0, beyond, false, false) && !isPassiveMeterPulse(-10, beyond, false, false));
+  check("within the throttle window it stays quiet (>= ~1 pulse / 0.15s)",
+    !isPassiveMeterPulse(50, PASSIVE_PULSE_INTERVAL - 0.01, false, false));
+  check("a combat mote landing the same step suppresses the passive pulse (no double-ping)",
+    !isPassiveMeterPulse(50, beyond, true, false));
+  check("the lockout refill suppresses it (the bar shows cooldown, not charge)",
+    !isPassiveMeterPulse(50, beyond, false, true));
+}
+
 function main(): void {
   primingTests();
   moteTests();
+  sourceGateTests();
+  passivePulseTests();
   readyTests();
   castTests();
   roundTripTests();
