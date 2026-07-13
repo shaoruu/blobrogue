@@ -2476,17 +2476,24 @@ export interface WarmthDrainParams {
   readonly rampSec: number;
 }
 
+// The core-reveal shell phase (P3) — warmth-drain is P3-ONLY (the prestige "the Pale turns on you"
+// finale beat), never in the P1/P2 shells.
+const WARMTH_PHASE = 3;
+
 // Resolve the warmth-drain SIGNATURE active THIS tick: if a live giant carries warmth-drain in its
-// spec (Gorge has none; Pale does; F100 will), return its params, else null. Pure over the enemy
-// list so the server (w.enemies) and the online client (snapshot enemies) resolve the SAME slow —
-// the web-slow precedent (the predicted walk must feel the environmental slow the server applies).
-export function resolveWarmthDrain(enemies: readonly { kind: EnemyKind; dead?: boolean }[]): WarmthDrainParams | null {
+// spec (Gorge has none; Pale does; F100 will) AND is in its core-reveal phase, return its params,
+// else null. Pure over the enemy list (kind + boss phase) so the server (w.enemies) and the online
+// client (snapshot enemies) resolve the SAME slow — the web-slow precedent (the predicted walk must
+// feel the environmental slow the server applies). The phase gate keeps it P3-only in both.
+export function resolveWarmthDrain(enemies: readonly { kind: EnemyKind; dead?: boolean; phase: number }[]): WarmthDrainParams | null {
   for (const e of enemies) {
-    if (e.dead) continue;
+    if (e.dead || e.phase !== WARMTH_PHASE) continue;
     const gc = GIANT_SPEC[e.kind]?.C;
-    if (gc && gc.warmthIdleSec !== undefined && gc.warmthChillMult !== undefined
-      && gc.warmthClearDist !== undefined && gc.warmthRampSec !== undefined) {
-      return { idleSec: gc.warmthIdleSec, chillMult: gc.warmthChillMult, clearDist: gc.warmthClearDist, rampSec: gc.warmthRampSec };
+    if (gc && gc.warmthDrainIdleSec !== undefined && gc.warmthDrainSlow !== undefined && gc.warmthDrainMoveClearTiles !== undefined) {
+      return {
+        idleSec: gc.warmthDrainIdleSec, chillMult: gc.warmthDrainSlow,
+        clearDist: gc.warmthDrainMoveClearTiles * TILE, rampSec: gc.warmthDrainIdleSec,
+      };
     }
   }
   return null;
@@ -9348,8 +9355,7 @@ function giantRing(w: WorldState, e: Enemy, ev: SimEvent[], spec: GiantSpec, rin
   const boss = e.boss!;
   const gc = spec.C;
   const baseGap = (boss.attackCount * 5) % gc.ringCount; // rotate the gap each commitment (deterministic)
-  const slotOffset = ringIx === 1 && gc.ring2OffsetDeg !== undefined
-    ? Math.round((gc.ring2OffsetDeg / 360) * gc.ringCount) : 0;
+  const slotOffset = ringIx === 1 && gc.ring2GapOffsetSlots !== undefined ? gc.ring2GapOffsetSlots : 0;
   const gapStart = (baseGap + slotOffset) % gc.ringCount;
   const gapCenterAng = ((gapStart + gc.ringGap / 2) / gc.ringCount) * Math.PI * 2;
   for (let i = 0; i < gc.ringCount; i++) {
@@ -9378,21 +9384,28 @@ function giantZones(w: WorldState, e: Enemy, ev: SimEvent[], spec: GiantSpec): v
   const gc = spec.C;
   if (!findTarget(w, e.x, e.y)) return;
   const base = w.rng.next() * Math.PI * 2;
-  if (gc.poolReseedEdgeDist !== undefined) {
-    // P2 POSITIONING-OVER-TIME axis: seed at the EDGE of the existing pool field (biased OUTWARD
-    // from the giant) so the denied floor MIGRATES across the arena — you can't camp a corner. The
-    // field bootstraps around the party (like Gorge) when empty, then creeps outward; the denial
-    // cap (giantPlantSlag) + expiry keep it churning, never filling (the safe pocket always holds).
-    const field = w.hazards.filter((h) => h.kind === "cinder" && h.life > 0);
+  // The P2 MIGRATION axis: each new pool also CREEPS outward from the giant (drift), and (churn)
+  // seeds at the edge of the nearest-to-expiring pool so the field ROLLS forward instead of
+  // re-centering on the party. spread = 0 (no drift) for Gorge, so its plant is byte-identical.
+  const spread = gc.zoneSpreadTilesPerSec !== undefined ? gc.zoneSpreadTilesPerSec * TILE : 0;
+  if (gc.zoneChurn) {
+    const field = w.hazards.filter((h) => h.kind === "cinder" && h.life > 0).sort((a, b) => a.life - b.life);
     for (let i = 0; i < gc.zoneCount; i++) {
-      if (field.length === 0) {
-        const ang = base + (i / gc.zoneCount) * Math.PI * 2;
-        giantPlantSlag(w, w.targetX + Math.cos(ang) * gc.zoneRing, w.targetY + Math.sin(ang) * gc.zoneRing, spec);
-      } else {
-        const src = field[Math.floor(w.rng.next() * field.length)];
+      let px: number, py: number;
+      if (i < field.length) {
+        // Seed at the OUTWARD edge of the i-th nearest-to-expiring pool (the field's leading edge).
+        const src = field[i];
         const outward = Math.atan2(src.y - e.y, src.x - e.x);
-        giantPlantSlag(w, src.x + Math.cos(outward) * gc.poolReseedEdgeDist, src.y + Math.sin(outward) * gc.poolReseedEdgeDist, spec);
+        px = src.x + Math.cos(outward) * gc.zoneRadius * 2;
+        py = src.y + Math.sin(outward) * gc.zoneRadius * 2;
+      } else {
+        // Bootstrap around the party (like Gorge) until a field exists to churn off of.
+        const ang = base + (i / gc.zoneCount) * Math.PI * 2;
+        px = w.targetX + Math.cos(ang) * gc.zoneRing;
+        py = w.targetY + Math.sin(ang) * gc.zoneRing;
       }
+      const drift = Math.atan2(py - e.y, px - e.x);
+      giantPlantSlag(w, px, py, spec, Math.cos(drift) * spread, Math.sin(drift) * spread);
     }
   } else {
     for (let i = 0; i < gc.zoneCount; i++) {
@@ -9408,7 +9421,7 @@ function giantZones(w: WorldState, e: Enemy, ev: SimEvent[], spec: GiantSpec): v
 // denied floor is a rolling, shrinking-then-shifting area — never a sealed room. (The pool rides
 // the shared cinder floor-denial primitive for both giants; only the giant's telegraph BULLETS
 // carry the per-giant material color, so the sim/wire is untouched by the cold material swap.)
-function giantPlantSlag(w: WorldState, x: number, y: number, spec: GiantSpec): void {
+function giantPlantSlag(w: WorldState, x: number, y: number, spec: GiantSpec, driftVx = 0, driftVy = 0): void {
   const gc = spec.C;
   if (isWall(w, x, y)) return;
   let cinders = 0;
@@ -9418,13 +9431,15 @@ function giantPlantSlag(w: WorldState, x: number, y: number, spec: GiantSpec): v
     cinders++;
     if (oldest === null || h.life < oldest.life) oldest = h;
   }
-  // The denial ceiling: Gorge's zoneCap, or a giant's own poolDenialCap (Pale's migrating field
-  // caps a touch higher but still leaves the ~⅔ safe floor). At the cap, evict nearest-to-expiring.
-  const cap = gc.poolDenialCap ?? gc.zoneCap;
-  if (cinders >= cap && oldest !== null) oldest.life = 0; // evict the nearest-to-expiring
+  // The denial ceiling (zoneCap): keeps total denied area ≤ ⅓ arena so the safe pocket always
+  // holds (pale.test.ts asserts it). At the cap, evict the nearest-to-expiring — the field churns.
+  if (cinders >= gc.zoneCap && oldest !== null) oldest.life = 0;
+  // Pale's slag CREEPS outward (driftVx/Vy from zoneSpreadTilesPerSec); Gorge's is static (0/0 →
+  // vx/vy left undefined → inert in updateHazards, so every other cinder source is unaffected).
   w.hazards.push({
     id: w.nextHazardId++, kind: "cinder", x, y,
     radius: gc.zoneRadius, life: gc.zoneLife, maxLife: gc.zoneLife,
+    ...(driftVx !== 0 || driftVy !== 0 ? { vx: driftVx, vy: driftVy } : {}),
   });
 }
 
@@ -9440,17 +9455,18 @@ function giantSpokes(w: WorldState, e: Enemy, emission: number, ev: SimEvent[], 
     const ang = wheel + (i / gc.spokeCount) * Math.PI * 2;
     spawnEnemyBullet(w, e.x, e.y, ang, gc.spokeSpeed, gc.globRadius, gc.globDamage, spec.spokeColor, gc.globLife);
   }
-  // P3 DUAL-READ axis: a SPARSE COUNTER-ROTATING second sweep (giants with sweep2 only — Gorge has
-  // none). sweep2Count spokes (no gap of their own), spaced 360/sweep2Count APART — WIDER than the
-  // primary lane by construction (sweep2Count < spokeCount/spokeGap), so at most ONE ever crosses
-  // the moving lane: it SPLITS the safe wedge into two standable halves but PROVABLY never seals it
-  // (pale.test.ts asserts a standable spot always persists). The counter-rotation is the difficulty.
-  if (gc.sweep2Count !== undefined && gc.sweep2Step !== undefined) {
-    const wheel2 = boss.burstParity - emission * gc.sweep2Step; // minus = counter-rotating
-    const speed2 = gc.sweep2Speed ?? gc.spokeSpeed;
-    for (let i = 0; i < gc.sweep2Count; i++) {
-      const ang = wheel2 + (i / gc.sweep2Count) * Math.PI * 2;
-      spawnEnemyBullet(w, e.x, e.y, ang, speed2, gc.globRadius, gc.globDamage, spec.spokeColor, gc.globLife);
+  // P3 DUAL-READ axis: a COUNTER-ROTATING second sweep (giants with spoke2Step only — Gorge has
+  // none). It reuses the SWEEP_ARC (spokeCount slots, gap = spoke2Gap ?? spokeGap) counter-rotating
+  // at spoke2Step (opposite sign). Safe = the drifting INTERSECTION of the two wedges, which
+  // provably never fully closes at spokeGap 2 (discrete 40°-apart spokes leave inter-spoke lanes —
+  // pale.test.ts measures min ~40° every tick). Safe = ride the primary lane, dodge the crossings.
+  if (gc.spoke2Step !== undefined) {
+    const gap2 = gc.spoke2Gap ?? gc.spokeGap;
+    const wheel2 = emission * gc.spoke2Step + boss.burstParity; // spoke2Step is negative = counter-rotating
+    for (let i = 0; i < gc.spokeCount; i++) {
+      if (i < gap2) continue; // the counter-sweep's (wider) moving wedge
+      const ang = wheel2 + (i / gc.spokeCount) * Math.PI * 2;
+      spawnEnemyBullet(w, e.x, e.y, ang, gc.spokeSpeed, gc.globRadius, gc.globDamage, spec.spokeColor, gc.globLife);
     }
   }
   if (emission === 0) ev.push({ t: "radialBurst", x: e.x, y: e.y });
@@ -9919,6 +9935,13 @@ function updateHazards(w: WorldState, dt: number, ev: SimEvent[]): void {
   if (w.hazards.length === 0) return;
   for (const h of w.hazards) {
     h.life -= dt;
+    // PALE THRONE slag pools CREEP outward (the P2 motion-under-denial axis): a per-hazard drift
+    // velocity migrates the pool across the floor (walls stop it). Only the giant's slag carries
+    // vx/vy (set at plant); every other cinder/hazard is static, so this is inert elsewhere.
+    if (h.vx !== undefined || h.vy !== undefined) {
+      const nx = h.x + (h.vx ?? 0) * dt, ny = h.y + (h.vy ?? 0) * dt;
+      if (!isWall(w, nx, ny)) { h.x = nx; h.y = ny; }
+    }
     // A volatile charge detonates the instant its fuse runs out — the delayed shared burst.
     if (h.kind === "charge" && h.life <= 0) detonateCharge(w, h, ev);
     // An omen's beat is over: the ambush body it announced arrives (fair surprise §2).
@@ -11223,9 +11246,10 @@ export function stepWorld(w: WorldState, inputs: Map<PlayerId, InputCmd>, dt: nu
   w.tick++;
 
   // Resolve the warmth-drain SIGNATURE for this tick BEFORE the player phase reads it (null on every
-  // non-giant floor, so the player speed calc is a ×1 no-op there — byte-identical). Online clients
-  // set predState.warmthDrain from the snapshot enemies instead (they don't run stepWorld).
-  w.warmthDrain = resolveWarmthDrain(w.enemies);
+  // non-giant floor AND in the giant's P1/P2 shells — P3-only — so the player speed calc is a ×1
+  // no-op there, byte-identical). Online clients set predState.warmthDrain from the snapshot enemies
+  // instead (they don't run stepWorld). The giant's boss phase gates the P3-only signature.
+  w.warmthDrain = resolveWarmthDrain(w.enemies.map((e) => ({ kind: e.kind, dead: e.dead, phase: e.boss ? e.boss.phase : 0 })));
 
   for (const p of w.players.values()) {
     stepPlayerPhase(w, p, inputs.get(p.id) ?? IDLE_INPUT, dt, ev);

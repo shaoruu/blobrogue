@@ -665,6 +665,10 @@ export interface Hazard {
   // rides its parent husk's ROLE here (0 shield / 1 heal / 2 dmg) so the fair-ambush omen
   // can plant the tell before the body exists, then stamp the role when it resolves.
   spawnAux?: number;
+  // Per-hazard drift velocity (px/s), sim-internal — the PALE THRONE slag pools CREEP outward (the
+  // P2 motion axis). Undefined on every other hazard (static, unchanged); the drifted x/y ride the
+  // existing HazardWire x/y, so no new wire field. Set at plant, integrated in updateHazards.
+  vx?: number; vy?: number;
 }
 
 // Environmental FLOOR hazards — the depth-escalation danger layer, DISTINCT from the
