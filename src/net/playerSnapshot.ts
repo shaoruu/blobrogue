@@ -102,7 +102,10 @@ type ClientOwnedField = "id" | "pr" | "aimAngle" | "shotSeq" | "rewindTicks" | "
 // - lastDamagedTick: the tick a landed hit last cut this player, driving the MENDER post-damage
 //              SELF-heal delay. Self-heal resolves only in the authoritative world phase (never in
 //              prediction), so this is pure server upkeep and never crosses the wire.
-type ServerOnlyField = "reviveBy" | "downsThisFloor" | "ultSources" | "ultWasted" | "overshieldRegenT" | "team" | "lastDamagedTick";
+// - selfHealReadyTick: the earliest tick the next MENDER self-heal HP may land (the sustained
+//              self-heal ceiling). Same story as lastDamagedTick — world-phase-only self-heal
+//              bookkeeping, off the wire.
+type ServerOnlyField = "reviveBy" | "downsThisFloor" | "ultSources" | "ultWasted" | "overshieldRegenT" | "team" | "lastDamagedTick" | "selfHealReadyTick";
 
 // Compile-time exhaustiveness: every PlayerSim key must be classified exactly once. The
 // MustBeNever constraint fails to instantiate for any non-empty type, so adding a PlayerSim
