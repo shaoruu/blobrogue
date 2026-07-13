@@ -5,6 +5,10 @@
 // kill/frag/respawn MECHANICS are exhaustively covered by the pure-sim suite (root test/pvp.test.ts);
 // this proves the authoritative server plumbs the same sim end-to-end.
 //
+// TEMP kill switch: PVP entry is disabled by default (config.pvpPublicEnabled mirrors the shared
+// build flag). This suite proves the PVP plumbing is intact + un-deleted by starting the server
+// with it explicitly ENABLED; the DISABLED reject is covered by test/pvpdisabled.test.ts.
+//
 // Run: npm run test:pvp (in server/)
 
 import { startTestServer, Bot, idle, waitUntil, sleep } from "../harness/lib.js";
@@ -27,7 +31,7 @@ async function test(name: string, fn: () => Promise<void>): Promise<void> {
 
 async function main(): Promise<void> {
   await test("a pvp-prefixed world id spins up a deathmatch world and publishes the match block", async () => {
-    const s = await startTestServer();
+    const s = await startTestServer({ pvpPublicEnabled: true });
     try {
       const world = "pvp:room:ARENA";
       const a = new Bot({ url: s.url, secret: s.secret, playerId: "a", world, name: "aaa", colorIndex: 1, script: () => idle() });
