@@ -2,6 +2,7 @@ import { mutation, query } from "./_generated/server";
 import { v } from "convex/values";
 import type { MutationCtx } from "./_generated/server";
 import type { Doc, Id } from "./_generated/dataModel";
+import { assertPvpModeAllowed } from "./pvpFlag";
 
 // Rooms come in two kinds that never cross-match (see schema.ts):
 //   "coop"   — classic peer-synced co-op (the pre-authoritative path, fully preserved).
@@ -87,6 +88,9 @@ async function ensurePresence(
 export const create = mutation({
   args: { playerId: v.id("players"), kind: kindArg, mode: modeArg, colorIndex: v.optional(v.number()) },
   handler: async (ctx, { playerId, kind, mode, colorIndex }) => {
+    // TEMP kill switch (independent of the client UI): a pvp room can't be hosted while PVP is
+    // disabled, so a stale client with a cached bundle can't create one either. Co-op untouched.
+    assertPvpModeAllowed(mode);
     const player = await ctx.db.get(playerId);
     if (!player) throw new Error("unknown player");
     const code = await uniqueCode(ctx);
@@ -118,6 +122,9 @@ export const join = mutation({
       throw new Error(wantKind === "online" ? "that code is a classic co-op room" : "that code is an online room");
     }
     if (room.status === "ended") throw new Error("that game has ended");
+    // TEMP kill switch: the mode comes from the EXISTING room doc, so joining a pvp room (even
+    // one created before the switch flipped) is rejected while disabled. Co-op joins untouched.
+    assertPvpModeAllowed(modeOf(room));
     if (wantKind === "online") {
       // Online rooms enforce the party cap at join (classic co-op keeps its historical
       // quickPlay-only cap, unchanged).
@@ -142,6 +149,9 @@ export const join = mutation({
 export const quickPlay = mutation({
   args: { playerId: v.id("players"), kind: kindArg, mode: modeArg, colorIndex: v.optional(v.number()) },
   handler: async (ctx, { playerId, kind, mode, colorIndex }) => {
+    // TEMP kill switch: quick-play into the pvp pool is closed while disabled (independent of
+    // the UI), so a stale client can neither join an open pvp room nor spin up a fresh one.
+    assertPvpModeAllowed(mode);
     const player = await ctx.db.get(playerId);
     if (!player) throw new Error("unknown player");
     const wantKind: RoomKind = kind ?? "coop";

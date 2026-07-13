@@ -27,8 +27,10 @@ import {
   READY_LABEL, NOT_READY_LABEL, START_ANYWAY_IDLE, START_ANYWAY_HOLD_MS, startAnywayHoldLabel,
   COPY_INVITE_LABEL, INVITE_COPIED_LABEL, INVITE_SHARED_LABEL, INVITE_COPY_FAILED_LABEL, INVITE_SHARE_HINT,
   INVITE_OFFLINE_NOTE, INVITE_UNREACHABLE_NOTE, INVITE_TRY_AGAIN_LABEL, inviteJoiningNote, inviteFailState,
+  ARENA_LABEL, ARENA_PATCHING_LABEL,
 } from "./onlineCopy.js";
 import { inviteUrlFor, shareInviteUrl, stripInviteFromLocation } from "../net/inviteLink.js";
+import { PVP_PUBLIC_ENABLED, PVP_DISABLED_MESSAGE } from "../net/pvpFlag.js";
 import { CHANGELOG, LATEST_VERSION } from "../generated/changelog.js";
 
 // The build's changelog version key: the vite `define` (__BUILD_VERSION__) at build time,
@@ -1940,14 +1942,22 @@ export class Menu {
     quick.appendChild(quickSub);
     const modeRow = el("div", "actrow mode-toggle");
     const coopBtn = el("button", "secondary", "CO-OP");
-    const pvpBtn = el("button", "secondary", "ARENA");
+    // TEMP kill switch: while PVP is disabled the ARENA toggle stays visible but disabled with
+    // the patching copy, and CO-OP is force-selected. Any stale click still hits the typed
+    // backend pvp_disabled guard (create/quickPlay/join all enforce it independently).
+    const pvpBtn = el("button", "secondary", PVP_PUBLIC_ENABLED ? ARENA_LABEL : ARENA_PATCHING_LABEL);
+    if (!PVP_PUBLIC_ENABLED) {
+      this.onlineMode = "coop";
+      pvpBtn.disabled = true;
+      pvpBtn.title = PVP_DISABLED_MESSAGE;
+    }
     const syncMode = (): void => {
       coopBtn.classList.toggle("sel", this.onlineMode === "coop");
       pvpBtn.classList.toggle("sel", this.onlineMode === "pvp");
       quickSub.textContent = this.onlineMode === "pvp" ? "drop into an open arena deathmatch" : "drop into an open public room";
     };
     coopBtn.addEventListener("click", () => { this.onlineMode = "coop"; syncMode(); });
-    pvpBtn.addEventListener("click", () => { this.onlineMode = "pvp"; syncMode(); });
+    pvpBtn.addEventListener("click", () => { if (!PVP_PUBLIC_ENABLED) return; this.onlineMode = "pvp"; syncMode(); });
     modeRow.append(coopBtn, pvpBtn);
     wrap.appendChild(modeRow);
 
@@ -1981,7 +1991,9 @@ export class Menu {
     row.appendChild(back);
     wrap.appendChild(row);
 
-    const buttons = [quick, create, join, coopBtn, pvpBtn];
+    // While PVP is disabled the ARENA toggle is permanently disabled — keep it OUT of the
+    // busy-toggle set so re-arming after a busy cycle never re-enables the kill-switched button.
+    const buttons = PVP_PUBLIC_ENABLED ? [quick, create, join, coopBtn, pvpBtn] : [quick, create, join, coopBtn];
     const setBusy = (isBusy: boolean, text: string) => {
       buttons.forEach((b) => (b.disabled = isBusy));
       status.textContent = text;

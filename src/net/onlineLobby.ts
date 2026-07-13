@@ -4,6 +4,7 @@ import type { PresenceDoc, RoomStatus, RoomMode } from "./api.js";
 import type { Session } from "./session.js";
 import { worldIdForRoomCode, pvpWorldIdForRoomCode } from "./worldId.js";
 import { getSelectedKit } from "./kitSelection.js";
+import { assertPvpModeAllowed } from "./pvpFlag.js";
 
 // One room session for AUTHORITATIVE online play — the ONLY multiplayer product path.
 // Convex hosts only the social handshake: the room code, who is EXPECTED in it (roster),
@@ -92,6 +93,9 @@ export class OnlineLobby {
 
   // Create a private room and get a shareable code. `mode` selects co-op vs the pvp arena.
   async create(mode: RoomMode = "coop"): Promise<void> {
+    // TEMP kill switch: refuse a pvp room before touching the backend — the typed pvp_disabled
+    // error carries the clean copy. Co-op is untouched. (Convex enforces this independently.)
+    assertPvpModeAllowed(mode);
     await this.flushIdentity();
     const playerId = this.requirePlayerId();
     const res = await this.client.mutation(api.rooms.create, { playerId, kind: "online", mode, ...this.colorArg() });
@@ -112,6 +116,10 @@ export class OnlineLobby {
     const res = await this.client.mutation(api.rooms.join, {
       code: code.trim().toUpperCase(), playerId, kind: "online", ...this.colorArg(),
     });
+    // TEMP kill switch: the room dictates the mode (the joiner adopts it), so a pvp room is
+    // refused here too while disabled. Convex rejects the join independently — this guards the
+    // stale-cache race where a client learns the mode only from the response. Co-op untouched.
+    assertPvpModeAllowed(res.mode ?? "coop");
     this.roomId = res.roomId;
     this.code = res.code;
     this.mode = res.mode ?? "coop"; // the room dictates the mode; the joiner adopts it
@@ -123,6 +131,8 @@ export class OnlineLobby {
   // Matchmake into the public pool: an open online room with space, or a fresh one (born
   // "playing" — the pool has no start gate; players drop in and out).
   async quickPlay(mode: RoomMode = "coop"): Promise<void> {
+    // TEMP kill switch: refuse the pvp public pool before any backend call. Co-op untouched.
+    assertPvpModeAllowed(mode);
     await this.flushIdentity();
     const playerId = this.requirePlayerId();
     const res = await this.client.mutation(api.rooms.quickPlay, { playerId, kind: "online", mode, ...this.colorArg() });

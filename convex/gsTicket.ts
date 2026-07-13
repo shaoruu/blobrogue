@@ -23,6 +23,7 @@ import { api } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { mintGsTicket, worldIdForRoomCode, pvpWorldIdForRoomCode, type GsTicketClaims } from "./gsTicketCore";
 import { isKitUnlocked, masteryLevelForXp, type KitId } from "./masteryCore";
+import { assertPvpModeAllowed } from "./pvpFlag";
 
 const TICKET_TTL_SECS = 120;
 
@@ -69,6 +70,10 @@ export const mint = action({
       const memberId = profile.playerId as Id<"players">;
       const { isMember, mode } = await ctx.runQuery(api.rooms.membership, { code: roomCode, playerId: memberId });
       if (!isMember) throw new Error("you are not in that room");
+      // TEMP kill switch: never mint a pvp-prefixed world id while PVP is disabled. Even if a
+      // pvp room doc survives, the ticket that would authorize its world is refused here. Co-op
+      // tickets are byte-unchanged.
+      assertPvpModeAllowed(mode);
       // The ROOM's mode selects the authoritative world id: a pvp room binds the pvp-prefixed
       // world so the game server's factory spins it up in deathmatch mode. Every member of the
       // same room resolves the same id, so friends land together.

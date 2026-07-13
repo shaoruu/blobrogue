@@ -29,6 +29,12 @@ export function startAnywayHoldLabel(heldMs: number): string {
   return `STARTING IN ${left}\u2026 release to cancel`;
 }
 
+// TEMP PVP kill switch (see src/net/pvpFlag.ts): the ARENA mode-toggle labels. While PVP is
+// disabled the toggle stays VISIBLE but disabled with the patching copy — players see it is
+// temporary, not gone — and any click/stale path still hits the typed backend pvp_disabled guard.
+export const ARENA_LABEL = "ARENA";
+export const ARENA_PATCHING_LABEL = "ARENA \u00b7 PATCHING";
+
 // ---- HUD label (normal + transitional states) ----
 
 export type OnlinePhase = "connecting" | "waiting" | "connected" | "reconnecting";
