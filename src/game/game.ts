@@ -36,7 +36,7 @@ import { PartyGate } from "../net/partyGate.js";
 import type { ExpectedMember, PartyGateView } from "../net/partyGate.js";
 import { onlineHudLabel, netDetailsLine, reconnectOverlayCopy, BACK_ONLINE_TOAST, CONNECT_CANCEL_HINT, OFFER_EXPIRED_TOAST } from "../ui/onlineCopy.js";
 import type { OnlineExitReason, OnlinePhase } from "../ui/onlineCopy.js";
-import { applyItemToWorld, chooseBlessingInWorld, dismissBlessingOfferInWorld, applyMaxHpBonus, loadFloorIntoWorld, descend, devSpawnEnemy, devSpawnProp, devSpawnChest, acquireWeaponInWorld, isFloorCleared, navDebugField, workerBuildSites, nearestShopSlot, isPlayerInCombat, consumeBlessingReroll, setPlayerKit } from "../sim/world.js";
+import { applyItemToWorld, chooseBlessingInWorld, dismissBlessingOfferInWorld, applyMaxHpBonus, loadFloorIntoWorld, descend, devSpawnEnemy, devSpawnProp, devSpawnChest, acquireWeaponInWorld, isFloorCleared, navDebugField, workerBuildSites, nearestShopSlot, isPlayerInCombat, consumeBlessingReroll, setPlayerKit, resolveWarmthDrain } from "../sim/world.js";
 import type { WorldState, PlayerSim, MeleeSwing, RemoteTarget } from "../sim/world.js";
 import { ULT, isRealKit, canCastUlt, KIT_META, MOMENTUM, OVERSHIELD, HEAL_PULSE, LIFEBLOOM } from "../sim/kits.js";
 import type { KitId } from "../sim/kits.js";
@@ -1017,6 +1017,10 @@ export class Game {
   private trauma = 0; // screen-shake trauma, 0..1
   private kickX = 0; private kickY = 0; // directional camera kick (recoil), render-only
   private hurtFlash = 0; // red hurt-vignette intensity, 0..1
+  // PALE THRONE warmth-drain telegraph (client render only): the local player's stillness time +
+  // the ref position it's measured from, mirroring the sim's per-player idle clock so the frost
+  // vignette RAMPS as you idle and clears the instant you move. The authoritative slow is sim-side.
+  private warmthIdleT = 0; private warmthRefX = 0; private warmthRefY = 0;
 
   private coop: CoopBridge | null = null;
   private profile: ProfileStats | null = null;
@@ -2134,6 +2138,7 @@ export class Game {
     const ke = Math.min(1, dt * KICK_DECAY);
     this.kickX -= this.kickX * ke; this.kickY -= this.kickY * ke;
     if (this.hurtFlash > 0) this.hurtFlash = Math.max(0, this.hurtFlash - dt * HURT_FLASH_DECAY);
+    this.updateWarmthVignette(dt);
 
     this.checkFloorCleared();
 
@@ -4506,6 +4511,7 @@ export class Game {
     this.renderBiomeVignette();
     this.screenFlash.render(ctx, canvas.width, canvas.height);
     this.renderHurtVignette();
+    this.renderWarmthVignette();
     this.renderDownOverlay();
     this.renderSpectateBanner();
     this.renderReticle();
@@ -4747,6 +4753,48 @@ export class Game {
       dg.addColorStop(0, `rgba(255,60,50,${0.42 * this.hurtFlash})`);
       dg.addColorStop(1, "rgba(255,60,50,0)");
       ctx.fillStyle = dg;
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+    }
+  }
+
+  // PALE THRONE warmth-drain telegraph: track the LOCAL player's stillness client-side (mirroring
+  // the sim's idle clock) so the frost vignette can RAMP the ~1.5s warning and clear on movement.
+  // Mode-agnostic (reads the rendered position + the active giant's params); the authoritative
+  // ×0.5 slow is sim-side (updatePlayer). Inert (and reset) whenever no warmth-drain giant is live.
+  private updateWarmthVignette(dt: number) {
+    const wd = this.isRunning ? resolveWarmthDrain(this.world.enemies) : null;
+    if (!wd || this.isDown || this.hp <= 0) { this.warmthIdleT = 0; this.warmthRefX = this.px; this.warmthRefY = this.py; return; }
+    if (Math.hypot(this.px - this.warmthRefX, this.py - this.warmthRefY) >= wd.clearDist) {
+      this.warmthIdleT = 0; this.warmthRefX = this.px; this.warmthRefY = this.py;
+    } else {
+      this.warmthIdleT += dt;
+    }
+  }
+
+  // The cold frost vignette (the warmth-drain fairness tell): a cold-blue edge that RAMPS as the
+  // idle timer climbs toward the chill, then holds + breathes once chilled (move ×0.5). Cold, never
+  // amber — the Pale "blazing absence of warmth". A single screen effect (never ambient soup).
+  private renderWarmthVignette() {
+    const wd = this.isRunning ? resolveWarmthDrain(this.world.enemies) : null;
+    if (!wd || this.warmthIdleT <= 0) return;
+    const { ctx, canvas } = this;
+    const cx = canvas.width / 2, cy = canvas.height / 2;
+    const ramp = Math.min(1, this.warmthIdleT / wd.rampSec); // 0 → 1 over the warning
+    const chilled = this.warmthIdleT >= wd.idleSec;
+    const breath = chilled ? 0.06 + 0.05 * Math.sin(this.animClock * 3.4) : 0;
+    const alpha = ramp * 0.16 + breath;
+    if (alpha <= 0.001) return;
+    const g = ctx.createRadialGradient(cx, cy, Math.min(cx, cy) * 0.5, cx, cy, Math.hypot(cx, cy));
+    g.addColorStop(0, "rgba(191,234,255,0)");
+    g.addColorStop(1, `rgba(87,182,255,${alpha})`); // #57b6ff cold-blue frost rim
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    // A brighter cold-white inner bloom once fully chilled — "you are freezing, move".
+    if (chilled) {
+      const g2 = ctx.createRadialGradient(cx, cy, Math.min(cx, cy) * 0.72, cx, cy, Math.hypot(cx, cy));
+      g2.addColorStop(0, "rgba(255,255,255,0)");
+      g2.addColorStop(1, `rgba(191,234,255,${0.10 + 0.05 * Math.sin(this.animClock * 3.4)})`);
+      ctx.fillStyle = g2;
       ctx.fillRect(0, 0, canvas.width, canvas.height);
     }
   }
@@ -7662,6 +7710,15 @@ export class Game {
         const shown = Math.max(1, gc.spokeCount - gc.spokeGap);
         for (let i = 0; i < shown; i++) {
           this.tgLane(sx, sy, rot + (i / gc.spokeCount) * 6.28, 240, TILE, hue, isActive ? fix : { locked: false, dynamic: false, dashed: true });
+        }
+        // P3 DUAL-READ axis (Pale): the SPARSE COUNTER-rotating second sweep — draw its lanes
+        // turning the OTHER way, so the "two moving gaps, safe spot at their intersection" read is
+        // legible before the live bullets arrive.
+        if (gc.sweep2Count !== undefined) {
+          const rot2 = -this.animClock * 0.9;
+          for (let i = 0; i < gc.sweep2Count; i++) {
+            this.tgLane(sx, sy, rot2 + (i / gc.sweep2Count) * 6.28, 240, TILE, hue, isActive ? fix : { locked: false, dynamic: false, dashed: true });
+          }
         }
       }
       return;
