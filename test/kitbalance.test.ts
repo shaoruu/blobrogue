@@ -554,6 +554,165 @@ function gate8PhantomMarkBossCap(): void {
   report(`GATE 8 — boss vulnerability: mark+shock+freeze no-crit ${(allNoCrit / base).toFixed(3)}×, +max-crit ${(allMaxCrit / base).toFixed(3)}× (cap ${BOSS_VULN_CAP}); statuses amplify nothing on boss, mark shares the crit cap`);
 }
 
+// ---- GATE 9 — Mender SELF-sustain is weaker than ALLY healing + gated after a hit ----
+
+// A Mender is a great healer OF OTHERS and a POOR SELF-sustainer (balancer 2026-07-13). Two
+// surgical, self-ONLY levers: (1) a SELF-heal draws the smaller selfHpPerSec budget (ally healing
+// keeps the full perTargetHpPerSec); (2) a SELF-heal pauses selfHealDelaySec after the Mender is
+// hit (ally healing is NEVER delayed). This gate proves both levers, that ALLY output is
+// unchanged, and the shipped outcome: a solo Mender under light pressure DRIFTS DOWN.
+
+// The sustained SELF-heal rate (HP/s) a solo Mender achieves at MAX self-healing (Lifebloom pool
+// pinned full + a live Sanctuary on self) with NO incoming damage — so the post-hit delay is
+// inert and this reads the pure per-target self budget.
+function measureMenderSelfHealRate(): number {
+  const w = createWorld(0x5E1F_9E7, 20, { isShared: true, skipLocalPlayer: true });
+  w.enemies = [];
+  spawnPlayerInWorld(w, "m"); setPlayerKit(w, "m", "mender");
+  const m = w.players.get("m")!;
+  m.maxHp = 400; m.hp = 200;                 // wounded, deep pool: every self-heal lands (no overheal)
+  m.invuln = 0; m.lastDamagedTick = -1;      // never hit: the self-heal delay is inert here
+  m.ultCharge = ULT.meterMax; m.ultReadyAtTick = 0;
+  tick(w, (p) => ({ ...idleCmd(), ult: p.id === "m" })); // drop Sanctuary on self (self HoT source)
+  const windowTicks = TICKS_PER_SECOND * 4; // inside one Sanctuary lifetime — both self sources live
+  const hp0 = m.hp;
+  for (let t = 0; t < windowTicks; t++) {
+    m.passiveState = LIFEBLOOM.poolCap;      // pin Lifebloom credit full: the max self-heal attempt
+    tick(w, () => idleCmd());
+  }
+  return (m.hp - hp0) / (windowTicks / TICKS_PER_SECOND);
+}
+
+// The sustained ALLY-heal rate (HP/s) a solo Mender delivers to ONE co-located wounded teammate
+// via Lifebloom + Sanctuary HoT. `isMenderUnderFire` arms the Mender's post-hit self-delay every
+// tick (the state the damage funnel sets) while the Mender stays full — proving ally healing is
+// NEVER gated by the Mender itself being hit.
+function measureMenderAllyHealRate(isMenderUnderFire: boolean): number {
+  const w = createWorld(0x5E1F_A11, 20, { isShared: true, skipLocalPlayer: true });
+  w.enemies = [];
+  spawnPlayerInWorld(w, "m"); setPlayerKit(w, "m", "mender");
+  const a = spawnPlayerInWorld(w, "a");
+  const m = w.players.get("m")!;
+  m.maxHp = 4000; m.hp = 4000;               // the healing SOURCE, held full (a hit each tick never sinks it)
+  a.maxHp = 4000; a.hp = 2000;               // wounded ally, deep pool held mid-bar (every heal lands)
+  a.x = m.x; a.y = m.y;                       // co-located: covered by Lifebloom + Sanctuary
+  m.ultCharge = ULT.meterMax; m.ultReadyAtTick = 0;
+  tick(w, (p) => ({ ...idleCmd(), ult: p.id === "m" }));
+  const windowTicks = TICKS_PER_SECOND * 4;  // inside one Sanctuary lifetime
+  const hp0 = a.hp;
+  for (let t = 0; t < windowTicks; t++) {
+    m.passiveState = LIFEBLOOM.poolCap;
+    if (isMenderUnderFire) { m.invuln = 0; m.lastDamagedTick = w.tick; } // Mender under constant fire
+    tick(w, () => idleCmd());
+  }
+  return (a.hp - hp0) / (windowTicks / TICKS_PER_SECOND);
+}
+
+// A solo Mender starting at FULL HP under sustained LIGHT pressure (a 1-HP chip on `hitEveryTicks`,
+// applied after the heal read so the trend is clean) at MAX self-healing. Returns the HP trend.
+function measureSoloMenderDrift(hitEveryTicks: number, seconds: number): { start: number; end: number; hits: number } {
+  const w = createWorld(0x5E1F_D06, 20, { isShared: true, skipLocalPlayer: true });
+  w.enemies = [];
+  spawnPlayerInWorld(w, "m"); setPlayerKit(w, "m", "mender");
+  const m = w.players.get("m")!;
+  m.maxHp = 400; m.hp = 400;                 // starts PINNED at full (the bug)
+  const windowTicks = TICKS_PER_SECOND * seconds;
+  const start = m.hp;
+  let hits = 0;
+  for (let t = 0; t < windowTicks; t++) {
+    m.passiveState = LIFEBLOOM.poolCap;      // sustained max self-heal via Lifebloom
+    tick(w, () => idleCmd());
+    if (t % hitEveryTicks === 0) { m.hp = Math.max(0, m.hp - 1); m.lastDamagedTick = w.tick; hits++; }
+  }
+  return { start, end: m.hp, hits };
+}
+
+// A solo Mender's SELF-targeted heal-pulse (the clutch burst) respects the post-hit delay: it
+// lands when not recently hit, is REFUSED (and NOT spent) within the delay window, then lands
+// again once the delay lapses.
+function measureSelfPulseGate(): { unhitLands: boolean; withinDelayRefused: boolean; afterDelayLands: boolean } {
+  const w = createWorld(0x5E1F_9017, 20, { isShared: true, skipLocalPlayer: true });
+  w.enemies = [];
+  spawnPlayerInWorld(w, "m"); setPlayerKit(w, "m", "mender");
+  const m = w.players.get("m")!;
+  m.maxHp = 400; m.hp = 200; m.lastDamagedTick = -1; m.pulseReadyAtTick = 0;
+  const b1 = m.hp;
+  tick(w, (p) => ({ ...idleCmd(), aim: 0, pulse: p.id === "m" })); // no ally -> self fallback
+  const unhitLands = m.hp > b1;
+
+  m.hp = 200; m.pulseReadyAtTick = 0; m.lastDamagedTick = w.tick; // just took a hit
+  const b2 = m.hp;
+  tick(w, (p) => ({ ...idleCmd(), aim: 0, pulse: p.id === "m" }));
+  const withinDelayRefused = m.hp === b2 && m.pulseReadyAtTick <= w.tick; // not healed, button not spent
+
+  for (let t = 0; t < TICKS_PER_SECOND * 2; t++) tick(w, () => idleCmd()); // let the delay lapse (no more hits)
+  m.hp = 200; m.pulseReadyAtTick = 0;
+  const b3 = m.hp;
+  tick(w, (p) => ({ ...idleCmd(), aim: 0, pulse: p.id === "m" }));
+  const afterDelayLands = m.hp > b3;
+  return { unhitLands, withinDelayRefused, afterDelayLands };
+}
+
+// A Mender that JUST took a hit can still instantly save a TEAMMATE with the pulse (ally clutch is
+// never gated by the Mender's own post-hit delay).
+function measureAllyPulseUnaffectedByMenderHit(): boolean {
+  const w = createWorld(0x5E1F_A17, 20, { isShared: true, skipLocalPlayer: true });
+  w.enemies = [];
+  spawnPlayerInWorld(w, "m"); setPlayerKit(w, "m", "mender");
+  const a = spawnPlayerInWorld(w, "a");
+  const m = w.players.get("m")!;
+  a.maxHp = 400; a.hp = 100; a.x = m.x + 30; a.y = m.y; // wounded ally under the +x reticle
+  m.pulseReadyAtTick = 0; m.lastDamagedTick = w.tick;   // the Mender was hit THIS tick
+  const b = a.hp;
+  tick(w, (p) => ({ ...idleCmd(), aim: 0, pulse: p.id === "m" }));
+  return a.hp > b; // the ally is topped despite the Mender's fresh hit
+}
+
+function gate9MenderSelfSustain(): void {
+  section("GATE 9 — Mender SELF-sustain weaker than ALLY heal + gated after a hit (self-only levers)");
+
+  const selfRate = measureMenderSelfHealRate();
+  const allyRate = measureMenderAllyHealRate(false);
+  const allyRateUnderFire = measureMenderAllyHealRate(true);
+
+  // (a) a solo Mender self-heals at ≤ selfHpPerSec sustained — NOT the full ally rate.
+  check(`solo Mender self-heal ≤ selfHpPerSec (${MENDER_HEAL_CLAMP.selfHpPerSec} HP/s) sustained, not the ally rate`,
+    selfRate <= MENDER_HEAL_CLAMP.selfHpPerSec + 1e-9 && selfRate < allyRate,
+    `self=${selfRate.toFixed(3)} HP/s vs ally=${allyRate.toFixed(3)} HP/s`);
+
+  // (c) ALLY heal throughput is UNCHANGED (≤ perTargetHpPerSec) and NOT delayed by the Mender
+  //     taking a hit — identical whether or not the Mender is under fire.
+  check(`ally heal throughput ≤ perTargetHpPerSec (${MENDER_HEAL_CLAMP.perTargetHpPerSec} HP/s) and > 0`,
+    allyRate > 0 && allyRate <= MENDER_HEAL_CLAMP.perTargetHpPerSec + 1e-9,
+    `ally=${allyRate.toFixed(3)} HP/s`);
+  check("ally heal is NOT delayed by the Mender taking a hit (identical under fire)",
+    Math.abs(allyRate - allyRateUnderFire) < 1e-9,
+    `ally=${allyRate.toFixed(3)} vs under-fire=${allyRateUnderFire.toFixed(3)} HP/s`);
+
+  // (b) the SELF-heal pause after a hit — observable on the clutch pulse burst.
+  const pulse = measureSelfPulseGate();
+  check("self-pulse: lands when not recently hit, refused within the delay, lands again after it lapses",
+    pulse.unhitLands && pulse.withinDelayRefused && pulse.afterDelayLands,
+    `unhit=${pulse.unhitLands}, within-delay-refused=${pulse.withinDelayRefused}, after-delay=${pulse.afterDelayLands}`);
+  check("a fresh-hit Mender can still instantly pulse-save a TEAMMATE (ally clutch never gated)",
+    measureAllyPulseUnaffectedByMenderHit());
+
+  // Ship gate: under sustained LIGHT pressure a solo Mender that starts FULL now DRIFTS DOWN (the
+  // self-heal can no longer out-pace even light incoming — no longer pinned at full / unkillable).
+  const lightHitEvery = Math.round(TICKS_PER_SECOND / 0.5); // ~0.5 HP/s incoming (light)
+  const drift = measureSoloMenderDrift(lightHitEvery, 20);
+  const netLoss = drift.start - drift.end;
+  check("ship gate: a solo Mender under light pressure DRIFTS DOWN (ends below full)",
+    drift.end < drift.start,
+    `${drift.start} → ${drift.end} HP over 20s (${drift.hits} chip hits)`);
+  check("ship gate: self-heal does not offset even light incoming (net loss ≈ incoming)",
+    netLoss >= drift.hits * 0.9,
+    `net loss ${netLoss} HP vs ${drift.hits} incoming`);
+
+  report(`GATE 9 — self-heal ${selfRate.toFixed(3)} HP/s (cap ${MENDER_HEAL_CLAMP.selfHpPerSec}) vs ally ${allyRate.toFixed(3)} HP/s (cap ${MENDER_HEAL_CLAMP.perTargetHpPerSec}); ally under-fire ${allyRateUnderFire.toFixed(3)} HP/s (unchanged)`);
+  report(`GATE 9 — self-heal delay ${MENDER_HEAL_CLAMP.selfHealDelaySec}s (self-pulse gated in-window, ally pulse never); solo drift ${drift.start}→${drift.end} HP under ~0.5 HP/s light pressure`);
+}
+
 function main(): void {
   gate1OverdriveCeiling();
   gate2BossFloorWithOverdrive();
@@ -563,6 +722,7 @@ function main(): void {
   gate6BulwarkRealizedDR();
   gate7MenderPulseClamp();
   gate8PhantomMarkBossCap();
+  gate9MenderSelfSustain();
   process.stdout.write(`\n${passed} checks passed, ${failed} failed\n`);
   if (failed > 0) { process.stdout.write(`FAILURES:\n${failures.map((f) => "  - " + f).join("\n")}\n`); process.exit(1); }
   process.stdout.write("\nAll kit-ult balance gates hold.\n");
