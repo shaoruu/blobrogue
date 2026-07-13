@@ -13,6 +13,7 @@ import { buildSnapshot, jsonCodec, type RosterWire, type ServerMsg, type SnapMsg
 import { diffSnapshot, snapshotToWire, type WorldLiveIds } from "../src/net/snapshotDelta.js";
 import { createWorld, spawnPlayerInWorld, devSpawnEnemy } from "../src/sim/world.js";
 import type { WorldState } from "../src/sim/world.js";
+import type { WorldMode } from "../src/sim/pvp.js";
 import { generateDungeon } from "../src/sim/dungeon.js";
 
 let passed = 0, failed = 0;
@@ -49,8 +50,10 @@ interface Rig {
 }
 
 // A rig: a server-shaped world + a WSTransport bound to a fake socket with a controlled clock.
-async function makeRig(seed = 0xAB12): Promise<Rig> {
-  const world = createWorld(seed, 1, { isShared: true, skipLocalPlayer: true });
+async function makeRig(seed = 0xAB12, worldMode: WorldMode = "coop"): Promise<Rig> {
+  // worldMode shapes the SERVER world (co-op dungeon vs pvp arena); the client derives its own
+  // mode from each snapshot's authoritative world id.
+  const world = createWorld(seed, 1, { isShared: true, skipLocalPlayer: true, mode: worldMode });
   const pid = "p1";
   spawnPlayerInWorld(world, pid);
   world.tick = 5;
@@ -248,6 +251,32 @@ async function worldRebuildTests(): Promise<void> {
   const clientDungeon = rig.transport.poll().state.dungeon;
   check("client dungeon geometry matches the authoritative floor-2 generation", clientDungeon.spawn.x === spawn2.x && clientDungeon.spawn.y === spawn2.y);
   rig.transport.stop();
+}
+
+async function pvpWorldModeTests(): Promise<void> {
+  section("pvp world id rebuilds the LOCAL world as the arena; a co-op id stays a dungeon");
+  // Regression for the shipped PVP seam (hyp B): PR #121 wired the server/wire/sim/lobby but not
+  // the client transport, so WSTransport always rebuilt a co-op dungeon over the pvp arena (a
+  // walk-through-walls co-op floor with procedural rooms + a GO DOWN exit). The client's local
+  // mode must be DERIVED from the authoritative world id — and co-op must stay a seeded dungeon.
+  const pvp = await makeRig(0x9911, "pvp");
+  pvp.sock.deliver(pvp.snap({ full: true, worldId: "pvp:room:ARENA" }));
+  const pw = pvp.transport.poll().state;
+  check("client rebuilds the local world in pvp mode from the authoritative wid", pw.mode === "pvp", `mode=${pw.mode}`);
+  check("client builds the fixed 19x19 pvp arena (not a generated dungeon)", pw.dungeon.w === 19 && pw.dungeon.h === 19, `${pw.dungeon.w}x${pw.dungeon.h}`);
+  check("the authoritative pvp snapshot carries a match block", pvp.transport.getLatestSnapshot()?.match != null);
+  pvp.transport.stop();
+
+  // Control: a plain room id keeps co-op — the seeded generated dungeon, null match. Proves the
+  // mode is DERIVED from the world id, not hard-forced (co-op geometry/goldens stay identical).
+  const coop = await makeRig(0x1111, "coop");
+  coop.sock.deliver(coop.snap({ full: true, worldId: "room:COOP" }));
+  const cw = coop.transport.poll().state;
+  const gen = generateDungeon(0x1111, 1);
+  check("client keeps co-op mode for a plain room id", cw.mode === "coop", `mode=${cw.mode}`);
+  check("co-op rebuilds the seeded generated dungeon geometry (not the arena)", cw.dungeon.spawn.x === gen.spawn.x && cw.dungeon.spawn.y === gen.spawn.y);
+  check("co-op snapshot carries no match block", coop.transport.getLatestSnapshot()?.match == null);
+  coop.transport.stop();
 }
 
 // v14: a NETWORKED player's combat events reach every nearby client's event queue (not only
@@ -475,6 +504,7 @@ async function main(): Promise<void> {
   await offerAndRunOverTests();
   await firstSpawnPlacementTests();
   await worldRebuildTests();
+  await pvpWorldModeTests();
   await deltaReconstructTests();
   await deltaOrderingTests();
   await deltaMissedBaselineTests();
