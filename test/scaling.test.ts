@@ -645,6 +645,12 @@ function surface(msg: string): void {
   process.stdout.write(`  SURFACE  ${msg}\n`);
 }
 
+// A loud, greppable flag line (never a hard fail) — for measured signals the balancer must SEE at
+// review even though the exact threshold isn't gated yet (e.g. the giant sponge-check below).
+function warn(msg: string): void {
+  process.stdout.write(`  WARN  ${msg}\n`);
+}
+
 function buildLabel(weapon: WeaponId, picks: readonly string[]): string {
   const counts = new Map<string, number>();
   for (const p of picks) counts.set(p, (counts.get(p) ?? 0) + 1);
@@ -660,6 +666,11 @@ interface CellStats {
   wallP50: number;
   wallP90: number;
   exposedP50: number;
+  // EXPOSED-EFFICIENCY: the per-run median of exposed-window time / total fight time — the fraction
+  // of the fight the bot spends FREE-DPSing the exposed core vs. "in mechanic" (guarded/peeling/
+  // dodging). The giant sponge-check reads this: at the same build, a HARDER giant (more mechanics)
+  // has a LOWER exposed-efficiency; a SPONGE giant (just more HP) keeps the same efficiency.
+  exposedEffP50: number;
   addsKilledP50: number;
   hitsTakenP50: number;
   maxLiveAdds: number;
@@ -679,6 +690,7 @@ function measureCell(kind: EnemyKind, floor: number, party: readonly Loadout[], 
     effHp: runs[0].effHp,
     wallP10, wallP50, wallP90,
     exposedP50: quantile(sortedBy((r) => r.exposedSeconds), 0.5),
+    exposedEffP50: quantile(sortedBy((r) => (r.seconds > 0 ? r.exposedSeconds / r.seconds : 0)), 0.5),
     addsKilledP50: quantile(sortedBy((r) => r.addsKilled), 0.5),
     hitsTakenP50: quantile(sortedBy((r) => r.hitsTaken), 0.5),
     maxLiveAdds: Math.max(...runs.map((r) => r.maxLiveAdds)),
@@ -774,6 +786,41 @@ function driftSelfTestGate(): void {
     !driftVerdict.wallOk, `buffed wallP50=${buffed.wallP50.toFixed(1)}s vs [${king.soloWall}] → ${driftVerdict.reasons.join("; ") || "in band (self-test would not bite!)"}`);
 }
 
+// ---- the GIANT mechanics-step gate: F75 exposed-efficiency vs F50 (harder mechanics, not a sponge) ----
+// The balancer's sponge-check. At the SAME build/DPS (both giant rows carry the identical
+// hair_trigger×3 + glass_cannon×3 solo build), the region-cap giant (Pale F75) must make the bot
+// spend a SMALLER fraction of the fight FREE-DPSing the exposed core — i.e. MORE time solving the
+// peel/dodge patterns — than the first giant (Gorge F50). That lower exposed-efficiency is the
+// signature of "harder mechanics." If F75's exposed-efficiency is NOT meaningfully below F50's, the
+// F75 step is pure HP (a SPONGE), and we flag it LOUDLY. Measure-and-surface, NEVER a hard red-fail:
+// the exact threshold needs the GD's F75 pattern variants landed first (they drop into the PALE
+// block's variant slots), and TODAY F75 reuses the Gorge patterns — so this WARN is EXPECTED to
+// fire until those variants land. The point is the NUMBER is in the gate output for the balancer.
+const GIANT_EFF_MARGIN = 0.03; // F75 must sit >= this fraction (3pp) below F50 to read as "harder mechanics"
+function giantMechanicsStepGate(gate: Map<string, BossGateResult>): void {
+  section("giant mechanics step: F75 (pale) exposed-efficiency must sit BELOW F50 (gorge) — harder mechanics, not a sponge");
+  const gorge = gate.get("gorge"), pale = gate.get("pale");
+  // The instrumentation is wired (both giant cells measured) — the actual efficiency relationship is
+  // SURFACED below, never gated, until the GD's F75 pattern variants land.
+  check("giant mechanics step measured (F50 + F75 exposed-efficiency reported at the same build)",
+    gorge !== undefined && pale !== undefined);
+  if (!gorge || !pale) return;
+  const gEff = gorge.solo.exposedEffP50, pEff = pale.solo.exposedEffP50;
+  const deltaPP = (pEff - gEff) * 100;
+  process.stdout.write(
+    `  info: F50 gorge exposed-eff ${(gEff * 100).toFixed(1)}% (exposed ${gorge.solo.exposedP50.toFixed(1)}s / wall ${gorge.solo.wallP50.toFixed(1)}s) vs `
+    + `F75 pale exposed-eff ${(pEff * 100).toFixed(1)}% (exposed ${pale.solo.exposedP50.toFixed(1)}s / wall ${pale.solo.wallP50.toFixed(1)}s) — same build\n`);
+  process.stdout.write(`  info: exposed-efficiency delta (F75 − F50) = ${deltaPP.toFixed(1)}pp (want NEGATIVE: F75 spends more of the fight in mechanics)\n`);
+  if (pEff <= gEff - GIANT_EFF_MARGIN) {
+    surface(`giant mechanics step CONFIRMED: F75 exposed-eff ${(pEff * 100).toFixed(1)}% is >= ${(GIANT_EFF_MARGIN * 100).toFixed(0)}pp below F50 ${(gEff * 100).toFixed(1)}% `
+      + `— the region-cap step is MECHANICS, not HP.`);
+  } else {
+    warn(`SPONGE failure mode: F75 exposed-eff ${(pEff * 100).toFixed(1)}% is NOT meaningfully below F50 ${(gEff * 100).toFixed(1)}% `
+      + `(delta ${deltaPP.toFixed(1)}pp; need <= -${(GIANT_EFF_MARGIN * 100).toFixed(0)}pp). F75 currently REUSES the Gorge patterns, so the step is HP-only — `
+      + `PENDING the GD's F75 pattern variants (tighter windows / denser telegraphs in disjoint lanes / a phase-3 wrinkle) that drop into the PALE block's variant slots.`);
+  }
+}
+
 // ---- the full multi-boss ship-gate report (opt-in: npm run scaling:report) ----
 
 interface ReportCell {
@@ -785,6 +832,7 @@ interface ReportCell {
   wallP50: number;
   wallP90: number;
   exposedP50: number;
+  exposedEff: number; // exposed-window time / total fight time (the giant sponge-check metric)
   addsKilledP50: number;
   hitsTakenP50: number;
   maxLiveAdds: number;
@@ -809,6 +857,7 @@ function cellReport(build: string, s: CellStats): ReportCell {
     wallP50: r1(s.wallP50),
     wallP90: r1(s.wallP90),
     exposedP50: r1(s.exposedP50),
+    exposedEff: Math.round(s.exposedEffP50 * 1000) / 1000,
     addsKilledP50: s.addsKilledP50,
     hitsTakenP50: s.hitsTakenP50,
     maxLiveAdds: s.maxLiveAdds,
@@ -839,10 +888,10 @@ function writeMultiBossReport(gate: Map<string, BossGateResult>): void {
       calibrated: band.calibrated,
       inBand: res.inBand,
     };
-    process.stdout.write(`  ${kind}@F${band.floor}: solo wallP50=${cells["solo/median"].wallP50}s exposedP50=${cells["solo/median"].exposedP50}s | 4-strong P50=${cells["4-strong"].wallP50}s — ${res.inBand ? "IN BAND" : "OUT"}${band.calibrated ? "" : " (placeholder)"}\n`);
+    process.stdout.write(`  ${kind}@F${band.floor}: solo wallP50=${cells["solo/median"].wallP50}s exposedP50=${cells["solo/median"].exposedP50}s exposedEff=${(cells["solo/median"].exposedEff * 100).toFixed(1)}% | 4-strong P50=${cells["4-strong"].wallP50}s — ${res.inBand ? "IN BAND" : "OUT"}${band.calibrated ? "" : " (placeholder)"}\n`);
   }
   writeFileSync(new URL("./fixtures/scaling_report.json", import.meta.url), JSON.stringify({
-    note: "The R framework's MULTI-BOSS ship-gate report: deterministic sim-harness pulls (seeded worlds, scripted mechanic-playing parties) for all 9 shipped bosses, each at its floor across solo/median, 4-strong, and drift-watch (highRoll/god) cells. Calibrated bosses (King/Marrow/Weaver/Gilded/Choir) gate hard; Jet/Tithe/Quorum/Gorge are Wave-1 placeholders (measured + surfaced). NOT live telemetry. Regenerate: npm run scaling:report",
+    note: "The R framework's MULTI-BOSS ship-gate report: deterministic sim-harness pulls (seeded worlds, scripted mechanic-playing parties) for all 10 shipped bosses, each at its floor across solo/median, 4-strong, and drift-watch (highRoll/god) cells. Calibrated bosses (King/Marrow/Weaver/Gilded/Choir) gate hard; Jet/Tithe/Quorum are Wave-1 placeholders and the giants Gorge (F50) / Pale Throne (F75) are placeholders too (measured + surfaced). exposedEff = the giant sponge-check metric (exposed-window time / total fight time). NOT live telemetry. Regenerate: npm run scaling:report",
     pulls,
     guards: {
       refDps: refDpsForFloor(20), hpFracCap: POWER.hpFracCap, addCapMax: POWER.addCapMax,
@@ -850,7 +899,7 @@ function writeMultiBossReport(gate: Map<string, BossGateResult>): void {
     },
     bosses,
   }, null, 2) + "\n");
-  check(`multi-boss ship-gate report written (${pulls} pulls, ${Object.keys(bosses).length} bosses)`, Object.keys(bosses).length === 9);
+  check(`multi-boss ship-gate report written (${pulls} pulls, ${Object.keys(bosses).length} bosses)`, Object.keys(bosses).length === 10);
 }
 
 function main(): void {
@@ -863,6 +912,7 @@ function main(): void {
   bandGates();
   determinismGates();
   const gate = multiBossGate();
+  giantMechanicsStepGate(gate);
   driftSelfTestGate();
   if (process.argv.includes("--report")) writeMultiBossReport(gate);
   process.stdout.write(`\n${passed} checks passed, ${failed} failed\n`);
