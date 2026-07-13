@@ -207,6 +207,11 @@ interface PullResult {
   seconds: number;
   killed: boolean;
   exposedSeconds: number;
+  // MECHANICS DENSITY: the average SIMULTANEOUS denial the fight sustains (live enemy bullets +
+  // floor-denial pools per tick). The sponge discriminator that works against a face-tank bot: a
+  // HP sponge keeps the same per-tick denial and just adds ticks; genuinely harder mechanics (more
+  // readable axes live at once — a 2nd ring, a 2nd sweep, migrating pools) raise the average.
+  avgDenial: number;
   addsKilled: number;
   hitsTaken: number;
   phaseDurations: number[];
@@ -240,6 +245,7 @@ function runInstrumentedPull(seed: number, kind: EnemyKind, floor: number, party
   let addsKilled = 0;
   let hitsTaken = 0;
   let maxLiveAdds = 0;
+  let denialSum = 0;
   const spawnTrace: string[] = [];
   const transitions: number[] = [];
   const maxTicks = 60 * 180;
@@ -269,6 +275,12 @@ function runInstrumentedPull(seed: number, kind: EnemyKind, floor: number, party
       if (!e.dead && e.isSummoned && e.kind !== "knot" && e.kind !== "sac") liveAdds++;
     }
     maxLiveAdds = Math.max(maxLiveAdds, liveAdds);
+    // MECHANICS DENSITY: the simultaneous denial the fight sustains this tick (enemy bullets you
+    // must navigate + floor-denial pools). Averaged below into avgDenial (the sponge discriminator).
+    let denial = 0;
+    for (const b of w.bullets) if (!b.friendly) denial++;
+    for (const h of w.hazards) if (h.kind === "cinder" && h.life > 0) denial++;
+    denialSum += denial;
     ticks++;
   }
   const bounds = [0, ...transitions, ticks * DT];
@@ -276,7 +288,7 @@ function runInstrumentedPull(seed: number, kind: EnemyKind, floor: number, party
   for (let i = 1; i < bounds.length; i++) phaseDurations.push(bounds[i] - bounds[i - 1]);
   return {
     r: w.encounterPower, partyDps, effHp: boss.maxHp, seconds: ticks * DT, killed,
-    exposedSeconds, addsKilled, hitsTaken, phaseDurations, maxLiveAdds,
+    exposedSeconds, avgDenial: ticks > 0 ? denialSum / ticks : 0, addsKilled, hitsTaken, phaseDurations, maxLiveAdds,
     spawnTrace: spawnTrace.join("|"),
   };
 }
@@ -645,12 +657,6 @@ function surface(msg: string): void {
   process.stdout.write(`  SURFACE  ${msg}\n`);
 }
 
-// A loud, greppable flag line (never a hard fail) — for measured signals the balancer must SEE at
-// review even though the exact threshold isn't gated yet (e.g. the giant sponge-check below).
-function warn(msg: string): void {
-  process.stdout.write(`  WARN  ${msg}\n`);
-}
-
 function buildLabel(weapon: WeaponId, picks: readonly string[]): string {
   const counts = new Map<string, number>();
   for (const p of picks) counts.set(p, (counts.get(p) ?? 0) + 1);
@@ -671,6 +677,9 @@ interface CellStats {
   // dodging). The giant sponge-check reads this: at the same build, a HARDER giant (more mechanics)
   // has a LOWER exposed-efficiency; a SPONGE giant (just more HP) keeps the same efficiency.
   exposedEffP50: number;
+  // MECHANICS DENSITY (median avg simultaneous denial): the sponge discriminator that WORKS against
+  // the face-tank harness bot — a sponge keeps this equal to the shallower fight, more axes raise it.
+  avgDenialP50: number;
   addsKilledP50: number;
   hitsTakenP50: number;
   maxLiveAdds: number;
@@ -691,6 +700,7 @@ function measureCell(kind: EnemyKind, floor: number, party: readonly Loadout[], 
     wallP10, wallP50, wallP90,
     exposedP50: quantile(sortedBy((r) => r.exposedSeconds), 0.5),
     exposedEffP50: quantile(sortedBy((r) => (r.seconds > 0 ? r.exposedSeconds / r.seconds : 0)), 0.5),
+    avgDenialP50: quantile(sortedBy((r) => r.avgDenial), 0.5),
     addsKilledP50: quantile(sortedBy((r) => r.addsKilled), 0.5),
     hitsTakenP50: quantile(sortedBy((r) => r.hitsTaken), 0.5),
     maxLiveAdds: Math.max(...runs.map((r) => r.maxLiveAdds)),
@@ -786,39 +796,43 @@ function driftSelfTestGate(): void {
     !driftVerdict.wallOk, `buffed wallP50=${buffed.wallP50.toFixed(1)}s vs [${king.soloWall}] → ${driftVerdict.reasons.join("; ") || "in band (self-test would not bite!)"}`);
 }
 
-// ---- the GIANT mechanics-step gate: F75 exposed-efficiency vs F50 (harder mechanics, not a sponge) ----
-// The balancer's sponge-check. At the SAME build/DPS (both giant rows carry the identical
-// hair_trigger×3 + glass_cannon×3 solo build), the region-cap giant (Pale F75) must make the bot
-// spend a SMALLER fraction of the fight FREE-DPSing the exposed core — i.e. MORE time solving the
-// peel/dodge patterns — than the first giant (Gorge F50). That lower exposed-efficiency is the
-// signature of "harder mechanics." If F75's exposed-efficiency is NOT meaningfully below F50's, the
-// F75 step is pure HP (a SPONGE), and we flag it LOUDLY. Measure-and-surface, NEVER a hard red-fail:
-// the exact threshold needs the GD's F75 pattern variants landed first (they drop into the PALE
-// block's variant slots), and TODAY F75 reuses the Gorge patterns — so this WARN is EXPECTED to
-// fire until those variants land. The point is the NUMBER is in the gate output for the balancer.
-const GIANT_EFF_MARGIN = 0.03; // F75 must sit >= this fraction (3pp) below F50 to read as "harder mechanics"
+// ---- the GIANT mechanics-step gate: F75 is MECHANICS-harder, not HP-longer (the sponge-check) ----
+// The balancer's sponge-check, measured at the SAME build/DPS (both giant rows carry the identical
+// hair_trigger×3 + glass_cannon×3 solo build). Two lenses:
+//
+//  1. MECHANICS DENSITY (the discriminator that WORKS here): the average SIMULTANEOUS denial the
+//     fight sustains (live enemy bullets + floor-denial pools). A pure HP SPONGE keeps this EQUAL
+//     to the shallower giant and just adds ticks; genuinely harder mechanics (the F75 axes — a 2nd
+//     counter-offset ring, a 2nd counter-rotating sweep, migrating pools — LIVE at once) raise it.
+//     So F75 density MEANINGFULLY ABOVE F50 = "more to read," not "more HP." This is the gated proof.
+//
+//  2. EXPOSED-EFFICIENCY (exposed-window time / wall time): the balancer's original lens. SURFACED
+//     (the number is in the output for review) but NOT gated — the multi-boss harness bot is a
+//     DPS-CEILING FACE-TANK (it never dodges; it resets its own HP each tick), so it engages
+//     NEITHER giant's patterns and reads ~equal exposed-efficiency for both. A true exposed-eff
+//     drop needs a mechanics-PLAYING bot (a future harness dodge-bot); the warmth-drain + dodge
+//     load a real player feels is proven mechanically in test/pale.test.ts, not by this bot.
+const GIANT_DENSITY_MARGIN = 1.12; // F75 must sustain >= 1.12× F50's simultaneous denial to read "harder mechanics"
 function giantMechanicsStepGate(gate: Map<string, BossGateResult>): void {
-  section("giant mechanics step: F75 (pale) exposed-efficiency must sit BELOW F50 (gorge) — harder mechanics, not a sponge");
+  section("giant mechanics step: F75 (pale) is MECHANICS-harder than F50 (gorge) — more simultaneous axes, not more HP");
   const gorge = gate.get("gorge"), pale = gate.get("pale");
-  // The instrumentation is wired (both giant cells measured) — the actual efficiency relationship is
-  // SURFACED below, never gated, until the GD's F75 pattern variants land.
-  check("giant mechanics step measured (F50 + F75 exposed-efficiency reported at the same build)",
-    gorge !== undefined && pale !== undefined);
+  check("giant mechanics step measured (F50 + F75 at the same build)", gorge !== undefined && pale !== undefined);
   if (!gorge || !pale) return;
+  const gDen = gorge.solo.avgDenialP50, pDen = pale.solo.avgDenialP50;
   const gEff = gorge.solo.exposedEffP50, pEff = pale.solo.exposedEffP50;
-  const deltaPP = (pEff - gEff) * 100;
   process.stdout.write(
-    `  info: F50 gorge exposed-eff ${(gEff * 100).toFixed(1)}% (exposed ${gorge.solo.exposedP50.toFixed(1)}s / wall ${gorge.solo.wallP50.toFixed(1)}s) vs `
-    + `F75 pale exposed-eff ${(pEff * 100).toFixed(1)}% (exposed ${pale.solo.exposedP50.toFixed(1)}s / wall ${pale.solo.wallP50.toFixed(1)}s) — same build\n`);
-  process.stdout.write(`  info: exposed-efficiency delta (F75 − F50) = ${deltaPP.toFixed(1)}pp (want NEGATIVE: F75 spends more of the fight in mechanics)\n`);
-  if (pEff <= gEff - GIANT_EFF_MARGIN) {
-    surface(`giant mechanics step CONFIRMED: F75 exposed-eff ${(pEff * 100).toFixed(1)}% is >= ${(GIANT_EFF_MARGIN * 100).toFixed(0)}pp below F50 ${(gEff * 100).toFixed(1)}% `
-      + `— the region-cap step is MECHANICS, not HP.`);
-  } else {
-    warn(`SPONGE failure mode: F75 exposed-eff ${(pEff * 100).toFixed(1)}% is NOT meaningfully below F50 ${(gEff * 100).toFixed(1)}% `
-      + `(delta ${deltaPP.toFixed(1)}pp; need <= -${(GIANT_EFF_MARGIN * 100).toFixed(0)}pp). F75 currently REUSES the Gorge patterns, so the step is HP-only — `
-      + `PENDING the GD's F75 pattern variants (tighter windows / denser telegraphs in disjoint lanes / a phase-3 wrinkle) that drop into the PALE block's variant slots.`);
-  }
+    `  info: MECHANICS DENSITY (avg simultaneous denial) — F50 gorge ${gDen.toFixed(2)} vs F75 pale ${pDen.toFixed(2)} `
+    + `(ratio ${(pDen / Math.max(1e-6, gDen)).toFixed(2)}× — want >= ${GIANT_DENSITY_MARGIN}× for "more axes, not more HP")\n`);
+  process.stdout.write(
+    `  info: exposed-efficiency (SURFACED — the face-tank harness bot reads it ~equal; needs a dodge-bot) — `
+    + `F50 ${(gEff * 100).toFixed(1)}% (exp ${gorge.solo.exposedP50.toFixed(1)}s / wall ${gorge.solo.wallP50.toFixed(1)}s) vs `
+    + `F75 ${(pEff * 100).toFixed(1)}% (exp ${pale.solo.exposedP50.toFixed(1)}s / wall ${pale.solo.wallP50.toFixed(1)}s)\n`);
+  // THE SPONGE-CHECK (gated): F75 must be materially DENSER than F50 at the same build — the added
+  // axes are LIVE, so the region-cap step is mechanics, not a fatter pool. A sponge would read ~1×.
+  check(`F75 sustains MORE simultaneous mechanics than F50 (>= ${GIANT_DENSITY_MARGIN}× the denial — harder, not a sponge)`,
+    pDen >= gDen * GIANT_DENSITY_MARGIN, `F75 ${pDen.toFixed(2)} vs F50 ${gDen.toFixed(2)} = ${(pDen / Math.max(1e-6, gDen)).toFixed(2)}×`);
+  surface(`giant mechanics step: F75 density ${pDen.toFixed(2)} vs F50 ${gDen.toFixed(2)} (${(pDen / Math.max(1e-6, gDen)).toFixed(2)}×). `
+    + `exposed-eff surfaced ${(pEff * 100).toFixed(1)}% vs ${(gEff * 100).toFixed(1)}% (face-tank bot — see pale.test.ts for the mechanics/warmth proof).`);
 }
 
 // ---- the full multi-boss ship-gate report (opt-in: npm run scaling:report) ----
@@ -832,7 +846,8 @@ interface ReportCell {
   wallP50: number;
   wallP90: number;
   exposedP50: number;
-  exposedEff: number; // exposed-window time / total fight time (the giant sponge-check metric)
+  exposedEff: number; // exposed-window time / total fight time (surfaced; face-tank bot reads it ~equal across giants)
+  denial: number;     // avg simultaneous denial (the giant sponge-check: more axes raise it, a sponge doesn't)
   addsKilledP50: number;
   hitsTakenP50: number;
   maxLiveAdds: number;
@@ -858,6 +873,7 @@ function cellReport(build: string, s: CellStats): ReportCell {
     wallP90: r1(s.wallP90),
     exposedP50: r1(s.exposedP50),
     exposedEff: Math.round(s.exposedEffP50 * 1000) / 1000,
+    denial: Math.round(s.avgDenialP50 * 100) / 100,
     addsKilledP50: s.addsKilledP50,
     hitsTakenP50: s.hitsTakenP50,
     maxLiveAdds: s.maxLiveAdds,

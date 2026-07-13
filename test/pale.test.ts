@@ -25,8 +25,9 @@ import { LOCAL_ID } from "../src/sim/input.js";
 import type { Bullet, Enemy, EnemyKind, Prop } from "../src/sim/types.js";
 import { TILE } from "../src/sim/types.js";
 import {
-  PALE, paleHpForFloor, paleSeamCountFor, paleShellFracFor, gorgeHpForFloor,
+  PALE, GORGE, PLAYER, paleHpForFloor, paleSeamCountFor, paleShellFracFor, gorgeHpForFloor,
 } from "../src/sim/balance.js";
+import { CHILL_SLOW } from "../src/sim/constants.js";
 import { bossKindForFloor, PALE_FLOOR, isBossKind, ENEMY_ARCHETYPES } from "../src/sim/enemies.js";
 
 const DT = 1 / 60;
@@ -349,12 +350,16 @@ function telegraphGates(): void {
   // Observe the P1 ring in-sim: a windup precedes the shockwave bullets, and the fired ring
   // carries a gap (fewer bullets than a full ring, leaving the safe wedge).
   const { w, boss } = paleArena(0x70E7);
-  let sawWindup = false, ringShards = 0, bulletsBeforeActive = 0;
+  // Capture the PRIMARY ring's shards on the first 0→>0 enemy-bullet transition (Pale fires a
+  // SECOND ring ~0.45s later — see axisRingGates — so counting at recover would double it).
+  let sawWindup = false, ringShards = 0, bulletsBeforeActive = 0, prevEnemy = 0;
   for (let t = 0; t < 60 * 8 && ringShards === 0; t++) {
     const a = boss.attack;
     if (a.move === "slam" && a.phase === "windup") { sawWindup = true; bulletsBeforeActive = w.bullets.filter((b) => !b.friendly).length; }
     step(w, idle(t));
-    if (a.move === "slam" && a.phase === "recover" && ringShards === 0) ringShards = w.bullets.filter((b) => !b.friendly).length;
+    const enemyNow = w.bullets.filter((b) => !b.friendly).length;
+    if (a.move === "slam" && ringShards === 0 && prevEnemy === 0 && enemyNow > 0) ringShards = enemyNow;
+    prevEnemy = enemyNow;
   }
   check("the P1 ring telegraphs a windup BEFORE any shockwave fires", sawWindup && bulletsBeforeActive === 0);
   check("the fired ring omits a gap wedge (fewer shards than a full ring — the safe pocket)",
@@ -387,6 +392,194 @@ function determinismGates(): void {
     a === b, `trace=${a.length} chars`);
 }
 
+function moveCmd(seq: number, mx: number, my: number): InputCmd {
+  return { seq, moveX: mx, moveY: my, aim: 0, firing: false, dash: false };
+}
+
+// The widest angular gap (safe wedge) in a set of spoke/ring angles: sort, scan cyclic gaps.
+function widestGap(anglesRad: number[]): { centerDeg: number; widthDeg: number } {
+  const TAU = Math.PI * 2;
+  const norm = anglesRad.map((a) => ((a % TAU) + TAU) % TAU).sort((x, y) => x - y);
+  let maxGap = -1, center = 0;
+  for (let i = 0; i < norm.length; i++) {
+    const a = norm[i], b = i + 1 < norm.length ? norm[i + 1] : norm[0] + TAU;
+    if (b - a > maxGap) { maxGap = b - a; center = (a + b) / 2; }
+  }
+  return { centerDeg: ((center * 180) / Math.PI) % 360, widthDeg: (maxGap * 180) / Math.PI };
+}
+function angleDiffDeg(a: number, b: number): number {
+  let d = Math.abs(a - b) % 360;
+  return d > 180 ? 360 - d : d;
+}
+
+// ---- 9. P1 SEQUENCING axis: a SECOND counter-offset ring (the "new read", not a tighter gap) ----
+
+function axisRingGates(): void {
+  section("P1 axis — a SECOND counter-offset ring: sequence (dash gap A → gap B), each gap Gorge-width, never closes");
+  check("the second-ring axis is configured (offset ~100°, ~0.45s behind)",
+    PALE.ring2OffsetDeg !== undefined && PALE.ring2DelaySec !== undefined
+    && PALE.ring2OffsetDeg! >= 90 && PALE.ring2OffsetDeg! <= 120
+    && PALE.ring2DelaySec! >= 0.4 && PALE.ring2DelaySec! <= 0.5);
+  check("each ring KEEPS Gorge's gap width (the 2nd ring is the difficulty, NOT a narrower gap)",
+    PALE.ringGap === GORGE.ringGap && PALE.ringCount === GORGE.ringCount);
+
+  // Observe a single P1 slam in-sim: the primary ring, then the counter-offset second ring ~0.45s
+  // behind. Each must leave a full-width gap (a standable wedge — never fully closes), the gaps offset.
+  const { w, boss } = paleArena(0x7A11);
+  // Fire angle rides the bullet VELOCITY (a fresh shard sits at the giant center, so a position
+  // angle is degenerate) — the robust read of each ring's gap.
+  let ring0: number[] = [];
+  const wave0 = new Set<Bullet>();
+  for (let t = 0; t < 60 * 10 && ring0.length === 0; t++) {
+    const before = w.bullets.filter((b) => !b.friendly).length;
+    step(w, idle(t));
+    const enemy = w.bullets.filter((b) => !b.friendly);
+    if (boss.attack.move === "slam" && before === 0 && enemy.length > 0) {
+      for (const b of enemy) wave0.add(b);
+      ring0 = enemy.map((b) => Math.atan2(b.vy, b.vx));
+    }
+  }
+  let ring1: number[] = [];
+  const ticks = Math.ceil((PALE.ring2DelaySec! + 0.15) / DT);
+  for (let t = 0; t < ticks && ring1.length === 0; t++) {
+    step(w, idle(2000 + t));
+    const fresh = w.bullets.filter((b) => !b.friendly && !wave0.has(b));
+    if (fresh.length > 0) ring1 = fresh.map((b) => Math.atan2(b.vy, b.vx));
+  }
+  const full = PALE.ringCount - PALE.ringGap;
+  check("the PRIMARY ring fires with a full-width gap (a standable wedge)", ring0.length === full,
+    `shards=${ring0.length} full=${full}`);
+  check("the SECOND ring fires (the sequencing axis is live), also with a full-width gap",
+    ring1.length === full, `shards=${ring1.length} full=${full}`);
+  if (ring0.length > 0 && ring1.length > 0) {
+    const g0 = widestGap(ring0), g1 = widestGap(ring1);
+    const offset = angleDiffDeg(g0.centerDeg, g1.centerDeg);
+    // Discretized to ring slots: round(100/360×16)=4 slots = 90°. The point: the gaps are OFFSET
+    // (a genuine sequence — the gap you dashed becomes the next wall), never the same wedge.
+    check("the two gaps are OFFSET (dash gap A, reposition to gap B — a real sequence, not the same wedge)",
+      offset >= 60 && offset <= 130, `offset=${offset.toFixed(0)}° (want ~90°)`);
+    check("each ring leaves a genuinely standable wedge (never fully closes)",
+      g0.widthDeg > 40 && g1.widthDeg > 40, `gaps=${g0.widthDeg.toFixed(0)}°/${g1.widthDeg.toFixed(0)}°`);
+  }
+}
+
+// ---- 10. P2 POSITIONING-OVER-TIME axis: the denial MIGRATES + stays capped (safe pocket holds) ----
+
+function axisPoolGates(): void {
+  section("P2 axis — MIGRATING pools: the denied floor drifts (can't camp a corner), capped so the safe pocket holds");
+  check("the pool-migration axis is configured (edge reseed + a denial cap)",
+    PALE.poolReseedEdgeDist !== undefined && PALE.poolDenialCap !== undefined && PALE.poolDenialCap! > 0);
+
+  // Drive the peeling bot; while the giant is in phase 2 (the zoning shell), sample the pool field.
+  const { w, boss } = paleArena(0x7A22);
+  let maxCinders = 0, maxDist = 0, sawPhase2 = false;
+  for (let t = 0; t < 60 * 90 && !boss.dead; t++) {
+    for (const s of liveSeams(w)) plantBullet(w, s.x, s.y, 9999);
+    if (isBossExposed(boss)) plantBullet(w, boss.x, boss.y, 100000);
+    step(w, idle(t));
+    if (boss.boss?.phase === 2) {
+      sawPhase2 = true;
+      const cinders = w.hazards.filter((h) => h.kind === "cinder" && h.life > 0);
+      maxCinders = Math.max(maxCinders, cinders.length);
+      for (const c of cinders) maxDist = Math.max(maxDist, Math.hypot(c.x - boss.x, c.y - boss.y));
+    }
+  }
+  check("reached the P2 zoning shell", sawPhase2);
+  check("the denial is CAPPED (live pools never exceed poolDenialCap — the safe pocket always holds)",
+    maxCinders <= PALE.poolDenialCap!, `maxPools=${maxCinders} cap=${PALE.poolDenialCap}`);
+  check("the denial MIGRATES outward (pools creep past the initial ring — a corner can't be camped)",
+    maxDist > PALE.zoneRing + PALE.poolReseedEdgeDist! * 0.5, `maxDist=${maxDist.toFixed(0)} vs ring=${PALE.zoneRing}`);
+}
+
+// ---- 11. P3 DUAL-READ axis: a SPARSE counter-rotating second sweep — the wedge NEVER fully closes ----
+
+function axisSweepGates(): void {
+  section("P3 axis — a SPARSE counter-rotating second sweep: the safe intersection drifts but NEVER fully closes (fairness)");
+  check("the second-sweep axis is configured (counter-rotating, sparse)",
+    PALE.sweep2Count !== undefined && PALE.sweep2Step !== undefined && PALE.sweep2Count! > 0);
+  // BY CONSTRUCTION: sweep2Count spaced 360/sweep2Count APART must exceed the primary lane so ≤1
+  // ever crosses it — sweep2Count < spokeCount/spokeGap guarantees it (3 < 9/2 = 4.5).
+  check("the counter-sweep is SPARSE by construction (spacing exceeds the primary lane → ≤1 crosses it)",
+    PALE.sweep2Count! < PALE.spokeCount / PALE.spokeGap,
+    `sweep2Count=${PALE.sweep2Count} < spokeCount/spokeGap=${(PALE.spokeCount / PALE.spokeGap).toFixed(2)}`);
+
+  // Replicate the sim's per-emission spoke angles (both wheels) over the whole sweep, for BOTH
+  // burst-parity phases, and assert a standable wedge always persists — the intersection never seals.
+  const TAU = Math.PI * 2;
+  const emissions = Math.ceil(PALE.spokeDuration / PALE.spokeInterval);
+  let minWedge = 360;
+  for (const parity of [0, 1]) {
+    for (let em = 0; em <= emissions; em++) {
+      const angles: number[] = [];
+      const wheel = em * PALE.spokeStep + parity;
+      for (let i = PALE.spokeGap; i < PALE.spokeCount; i++) angles.push(wheel + (i / PALE.spokeCount) * TAU);
+      const wheel2 = parity - em * PALE.sweep2Step!;
+      for (let i = 0; i < PALE.sweep2Count!; i++) angles.push(wheel2 + (i / PALE.sweep2Count!) * TAU);
+      minWedge = Math.min(minWedge, widestGap(angles).widthDeg);
+    }
+  }
+  check("a standable safe wedge PERSISTS at every emission (the dual-sweep intersection never fully closes)",
+    minWedge >= 18, `minWedge=${minWedge.toFixed(1)}° over the whole sweep (both parities)`);
+}
+
+// ---- 12. THE PALE SIGNATURE — WARMTH-DRAIN: camping chills the walk (a slow, never damage, clears on move) ----
+
+function warmthDrainGates(): void {
+  section("PALE signature — WARMTH-DRAIN: idle too long → ×0.5 walk (never damage, never stacks, clears on move, deterministic)");
+  check("warmth-drain is configured (idle threshold, chill mult = CHILL_SLOW, clear distance, ramp)",
+    PALE.warmthIdleSec !== undefined && PALE.warmthChillMult === CHILL_SLOW
+    && PALE.warmthClearDist !== undefined && PALE.warmthRampSec !== undefined);
+
+  // A ready pale arena resolves w.warmthDrain (a live pale giant is present).
+  const chillRun = (): { chilledPerTick: number; freePerTick: number; hp0: number; hp1: number; clearedT: number } => {
+    const { w } = paleArena(0x7A33);
+    const p = w.players.get(LOCAL_ID)!;
+    // Park the player in open floor away from the giant (spawned at p.x+220), then STAND STILL past
+    // the idle threshold. God mode isolates the slow (the giant's patterns deal no damage here).
+    const hp0 = p.hp;
+    for (let t = 0; t < Math.ceil((PALE.warmthIdleSec! + 0.5) / DT); t++) step(w, idle(t));
+    const st = w.warmthIdle.get(LOCAL_ID);
+    const isChilled = (st?.t ?? 0) >= PALE.warmthIdleSec!;
+    const hp1 = p.hp;
+    // Move AWAY from the giant (−x). Measure the first few (still-chilled) ticks' displacement.
+    let x0 = p.x;
+    for (let t = 0; t < 3; t++) step(w, moveCmd(1000 + t, -1, 0));
+    const chilledPerTick = Math.abs(p.x - x0) / 3;
+    // Keep moving until the idle timer clears (displaced ≥ clearDist), then measure free-speed ticks.
+    let clearedT = -1;
+    for (let t = 0; t < 200; t++) {
+      step(w, moveCmd(2000 + t, -1, 0));
+      if ((w.warmthIdle.get(LOCAL_ID)?.t ?? 1) === 0) { clearedT = t; break; }
+    }
+    x0 = p.x;
+    for (let t = 0; t < 3; t++) step(w, moveCmd(3000 + t, -1, 0));
+    const freePerTick = Math.abs(p.x - x0) / 3;
+    return { chilledPerTick, freePerTick, hp0, hp1, clearedT: clearedT >= 0 ? clearedT : -1 };
+  };
+  const r = chillRun();
+  check("standing still past the idle threshold CHILLS the walk to ×chillMult (a ×0.5 slow)",
+    r.chilledPerTick > 0 && Math.abs(r.chilledPerTick / r.freePerTick - PALE.warmthChillMult!) < 0.08,
+    `chilled=${r.chilledPerTick.toFixed(3)} free=${r.freePerTick.toFixed(3)} ratio=${(r.chilledPerTick / r.freePerTick).toFixed(2)} want=${PALE.warmthChillMult}`);
+  check("warmth-drain is NEVER damage (idling under god mode costs no HP — it is a slow only)", r.hp0 === r.hp1,
+    `hp ${r.hp1}/${r.hp0}`);
+  check("it NEVER stacks past one ×0.5 (a single chill, not a compounding stun — ratio ~0.5, not ~0.25)",
+    r.chilledPerTick / r.freePerTick > PALE.warmthChillMult! - 0.08, `ratio=${(r.chilledPerTick / r.freePerTick).toFixed(2)}`);
+  check("it CLEARS the instant the player moves a meaningful distance (a genuine dodge always thaws)",
+    r.clearedT >= 0, `clearedAfter=${r.clearedT} ticks`);
+
+  // Deterministic: two identical warmth-drain runs match.
+  const a = chillRun(), b = chillRun();
+  check("warmth-drain is deterministic (seeded, tick-based idle timer — same run twice matches)",
+    a.chilledPerTick === b.chilledPerTick && a.freePerTick === b.freePerTick && a.clearedT === b.clearedT);
+
+  // Off a giant floor, warmth-drain is INERT (no pale giant → no chill → byte-identical movement).
+  const w2 = createWorld(0x7A44, 12, { isSandbox: true });
+  w2.isGodMode = true;
+  for (let t = 0; t < Math.ceil((PALE.warmthIdleSec! + 0.5) / DT); t++) stepWorld(w2, new Map([[LOCAL_ID, idle(t)]]), DT);
+  check("warmth-drain is INERT off a giant floor (no warmth-drain giant → w.warmthDrain null)",
+    w2.warmthDrain === null && (w2.warmthIdle.get(LOCAL_ID)?.t ?? 0) === 0);
+}
+
 function main(): void {
   pinGates();
   stationaryGates();
@@ -395,6 +588,10 @@ function main(): void {
   peelPhaseGates();
   debrisGates();
   telegraphGates();
+  axisRingGates();
+  axisPoolGates();
+  axisSweepGates();
+  warmthDrainGates();
   determinismGates();
   process.stdout.write(`\n${passed} checks passed, ${failed} failed\n`);
   if (failed > 0) { process.stdout.write(`FAILURES:\n${failures.map((f) => "  - " + f).join("\n")}\n`); process.exit(1); }

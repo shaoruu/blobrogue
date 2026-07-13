@@ -152,12 +152,48 @@ function waveOneFairnessTests(): void {
   check("only cosmetic ambient is culled under the 4P starvation budget", plan.culled.every((s) => !s.isFairnessCue && s.register === VisualRegister.ambient));
 }
 
+// The PALE THRONE F75 giant stacks the soup risk at 4P: the P1 dual rings, the P2 migrating pools,
+// the P3 dual counter-rotating sweeps, AND the warmth-drain frost vignette are all LIVE at once.
+// Every one is a fairness cue (the giant's telegraphs classify as giantPhase tells; the warmth
+// vignette is the signature's warning) — so under a 4P starvation budget they ALL render, and only
+// the cosmetic ambient (frost motes, shell dust) is culled. This locks "budget the 2nd ring/sweep +
+// the warmth vignette, cull ambient-only, NEVER the fairness tells" for the F75 mechanics step.
+function giantFairnessTests(): void {
+  section("PALE THRONE F75 mechanics route their tells through Gate 2 (all fairness, exempt at 4P)");
+  // The giant's per-phase pattern tells (both rings, the pools, both sweeps) — giant-phase cues.
+  const ringA = classifyTelegraph({ id: 1, phase: "windup", move: "slam", isBoss: false, isGiantPhaseCue: true });
+  const ringB = classifyTelegraph({ id: 2, phase: "active", move: "slam", isBoss: false, isGiantPhaseCue: true });
+  const pools = classifyTelegraph({ id: 3, phase: "windup", move: "spew", isBoss: false, isGiantPhaseCue: true });
+  const sweepA = classifyTelegraph({ id: 4, phase: "active", move: "sweep", isBoss: false, isGiantPhaseCue: true });
+  const sweepB = classifyTelegraph({ id: 5, phase: "active", move: "sweep", isBoss: false, isGiantPhaseCue: true });
+  // The warmth-drain frost vignette: the signature's player-facing fairness tell (never cullable).
+  const warmthVignette: TelegraphSource = {
+    id: "warmth", priority: TelegraphPriority.giantPhase, register: VisualRegister.enemyTell, isFairnessCue: true, cost: 1,
+  };
+  const giantTells = [ringA, ringB, pools, sweepA, sweepB, warmthVignette];
+  check("every F75 mechanic tell is a fairness cue (both rings + pools + both sweeps + warmth vignette)",
+    giantTells.every((t) => t.isFairnessCue));
+  // 4P: four players' ambient cosmetics (frost motes, shell dust) + their weapon FX under a
+  // starvation budget. Every giant fairness tell survives; only cosmetic ambient is culled.
+  const ambient = Array.from({ length: 60 }, (_, i) => ambientSource(`frost${i}`));
+  const weapon = Array.from({ length: 8 }, (_, i) => playerWeaponSource(`w${i}`));
+  const plan = planBudget([...giantTells, ...ambient, ...weapon], 0);
+  const rendered = new Set(plan.rendered.map((s) => s.id));
+  check("all F75 fairness tells render at a 4P starvation budget (the 2nd ring/sweep + warmth never culled)",
+    giantTells.every((t) => rendered.has(t.id)));
+  check("the SECOND ring + SECOND sweep specifically survive (the new axes are never the thing dropped)",
+    rendered.has(2) && rendered.has(5));
+  check("only cosmetic ambient (frost motes / shell dust) is culled under the 4P budget",
+    plan.culled.every((s) => !s.isFairnessCue && s.register === VisualRegister.ambient) && plan.culled.length === 60);
+}
+
 function main(): void {
   fairnessCulledTests();
   registerTests();
   priorityTests();
   arbitrationTests();
   waveOneFairnessTests();
+  giantFairnessTests();
   process.stdout.write(`\n${passed} checks passed, ${failed} failed\n`);
   if (failed > 0) { process.stdout.write(`FAILURES:\n${failures.map((f) => "  - " + f).join("\n")}\n`); process.exit(1); }
   process.stdout.write("\nGate 2 (4-player telegraph/effect-density controller) holds.\n");
