@@ -27,8 +27,12 @@ import {
   READY_LABEL, NOT_READY_LABEL, START_ANYWAY_IDLE, START_ANYWAY_HOLD_MS, startAnywayHoldLabel,
   COPY_INVITE_LABEL, INVITE_COPIED_LABEL, INVITE_SHARED_LABEL, INVITE_COPY_FAILED_LABEL, INVITE_SHARE_HINT,
   INVITE_OFFLINE_NOTE, INVITE_UNREACHABLE_NOTE, INVITE_TRY_AGAIN_LABEL, inviteJoiningNote, inviteFailState,
+  ARENA_LABEL, ARENA_PATCHING_LABEL,
 } from "./onlineCopy.js";
 import { inviteUrlFor, shareInviteUrl, stripInviteFromLocation } from "../net/inviteLink.js";
+import { PVP_PUBLIC_ENABLED, PVP_DISABLED_MESSAGE, PVP_DISABLED_CODE } from "../net/pvpFlag.js";
+import { normalizeOnlineError } from "../net/onlineError.js";
+import type { NormalizedOnlineError } from "../net/onlineError.js";
 import { CHANGELOG, LATEST_VERSION } from "../generated/changelog.js";
 
 // The build's changelog version key: the vite `define` (__BUILD_VERSION__) at build time,
@@ -1940,14 +1944,22 @@ export class Menu {
     quick.appendChild(quickSub);
     const modeRow = el("div", "actrow mode-toggle");
     const coopBtn = el("button", "secondary", "CO-OP");
-    const pvpBtn = el("button", "secondary", "ARENA");
+    // TEMP kill switch: while PVP is disabled the ARENA toggle stays visible but disabled with
+    // the patching copy, and CO-OP is force-selected. Any stale click still hits the typed
+    // backend pvp_disabled guard (create/quickPlay/join all enforce it independently).
+    const pvpBtn = el("button", "secondary", PVP_PUBLIC_ENABLED ? ARENA_LABEL : ARENA_PATCHING_LABEL);
+    if (!PVP_PUBLIC_ENABLED) {
+      this.onlineMode = "coop";
+      pvpBtn.disabled = true;
+      pvpBtn.title = PVP_DISABLED_MESSAGE;
+    }
     const syncMode = (): void => {
       coopBtn.classList.toggle("sel", this.onlineMode === "coop");
       pvpBtn.classList.toggle("sel", this.onlineMode === "pvp");
       quickSub.textContent = this.onlineMode === "pvp" ? "drop into an open arena deathmatch" : "drop into an open public room";
     };
     coopBtn.addEventListener("click", () => { this.onlineMode = "coop"; syncMode(); });
-    pvpBtn.addEventListener("click", () => { this.onlineMode = "pvp"; syncMode(); });
+    pvpBtn.addEventListener("click", () => { if (!PVP_PUBLIC_ENABLED) return; this.onlineMode = "pvp"; syncMode(); });
     modeRow.append(coopBtn, pvpBtn);
     wrap.appendChild(modeRow);
 
@@ -1981,7 +1993,9 @@ export class Menu {
     row.appendChild(back);
     wrap.appendChild(row);
 
-    const buttons = [quick, create, join, coopBtn, pvpBtn];
+    // While PVP is disabled the ARENA toggle is permanently disabled — keep it OUT of the
+    // busy-toggle set so re-arming after a busy cycle never re-enables the kill-switched button.
+    const buttons = PVP_PUBLIC_ENABLED ? [quick, create, join, coopBtn, pvpBtn] : [quick, create, join, coopBtn];
     const setBusy = (isBusy: boolean, text: string) => {
       buttons.forEach((b) => (b.disabled = isBusy));
       status.textContent = text;
@@ -2041,8 +2055,10 @@ export class Menu {
         clearTimeout(timer);
         if (!isTimedOut) stripInviteFromLocation();
       },
-      onFail: (raw) => {
-        const fail = inviteFailState(raw);
+      onFail: (e) => {
+        // A pvp_disabled rejection (the kill switch) is a definitive, non-retryable refusal with
+        // its own clean copy; every other failure maps through the invite spec copy.
+        const fail = e.code === PVP_DISABLED_CODE ? { note: e.message, isRetryable: false } : inviteFailState(e.message);
         void this.showOnlineHome(fail.note, fail.isRetryable ? { retry: () => void this.joinInvite(code) } : {});
       },
     });
@@ -2058,7 +2074,7 @@ export class Menu {
       // The public pool has no start gate: the room is live, drop straight in.
       this.launchOnline(lobby, profile, false);
     } catch (err) {
-      setBusy(false, this.cleanErr(err instanceof Error ? err.message : "could not find a room"));
+      setBusy(false, normalizeOnlineError(err, "could not find a room").message);
     }
   }
 
@@ -2071,7 +2087,7 @@ export class Menu {
       await lobby.create(this.onlineMode);
       this.showOnlineLobby(lobby, profile);
     } catch (err) {
-      setBusy(false, this.cleanErr(err instanceof Error ? err.message : "could not create room"));
+      setBusy(false, normalizeOnlineError(err, "could not create room").message);
     }
   }
 
@@ -2081,12 +2097,12 @@ export class Menu {
   // settled after its caller already moved on (the unreachable-timeout landing).
   private async doJoinOnline(code: string, status: HTMLElement, opts: {
     joiningNote?: string;
-    onFail?: (rawMessage: string) => void;
+    onFail?: (err: NormalizedOnlineError) => void;
     isStale?: () => boolean;
     onSettled?: () => void;
   } = {}) {
-    const fail = opts.onFail ?? ((raw: string) => { status.textContent = raw; });
-    if (!this.client || code.trim().length < 4) { fail("enter a valid code"); return; }
+    const fail = opts.onFail ?? ((e: NormalizedOnlineError) => { status.textContent = e.message; });
+    if (!this.client || code.trim().length < 4) { fail({ code: null, message: "enter a valid code" }); return; }
     status.textContent = opts.joiningNote ?? "joining\u2026";
     try {
       const profile = await this.session.login();
@@ -2100,7 +2116,7 @@ export class Menu {
     } catch (err) {
       opts.onSettled?.();
       if (opts.isStale?.()) return;
-      fail(this.cleanErr(err instanceof Error ? err.message : "could not join"));
+      fail(normalizeOnlineError(err, "could not join"));
     }
   }
 
@@ -2506,7 +2522,7 @@ export class Menu {
       await lobby.quickPlay();
       this.launchOnline(lobby, profile, false);
     } catch (err) {
-      await this.showOnlineHome(this.cleanErr(err instanceof Error ? err.message : "could not find a room"));
+      await this.showOnlineHome(normalizeOnlineError(err, "could not find a room").message);
     }
   }
 
@@ -2523,9 +2539,6 @@ export class Menu {
     this.countupRaf = requestAnimationFrame(tick);
   }
 
-  private cleanErr(msg: string): string {
-    return msg.replace(/^\[.*?\]\s*/, "").replace(/^Uncaught Error:\s*/, "");
-  }
 }
 
 // The Google "G" mark, inline so it needs no network fetch and stays crisp at any DPI.

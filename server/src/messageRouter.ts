@@ -8,7 +8,8 @@
 // legitimate high-refresh client (whose input cadence is fixed-step ~20/s regardless of FPS)
 // stays far below every cap.
 
-import { jsonCodec, PROTOCOL_VERSION, ProtocolError, INTERP_DELAY_MIN_MS, INTERP_DELAY_MAX_MS, type ClientMsg, type Codec } from "../../src/net/protocol.js";
+import { jsonCodec, PROTOCOL_VERSION, ProtocolError, INTERP_DELAY_MIN_MS, INTERP_DELAY_MAX_MS, isPvpWorldId, type ClientMsg, type Codec } from "../../src/net/protocol.js";
+import { PVP_DISABLED_CODE, PVP_DISABLED_MESSAGE } from "../../src/net/pvpFlag.js";
 import { mintResumeToken, resumeTokensEqual, verifyTicket, type AuthResult } from "./auth.js";
 import type { ServerConfig } from "./config.js";
 import type { Clock } from "./clock.js";
@@ -141,6 +142,15 @@ export class MessageRouter {
     // player proved membership in that room, so friends sharing a code land in the same
     // isolated world and a client can never assert a world id. No claim -> the public default.
     const worldId = auth.worldId ?? DEFAULT_WORLD_ID;
+    // TEMP kill switch (last line of defense): if a stale/already-minted pvp ticket somehow
+    // reaches here while PVP is disabled, reject the join rather than create/bind a pvp world.
+    // This guards BOTH plain join and resume — the branch below never runs — and never falls
+    // back to co-op (a co-op world id would be a different, unauthorized world). The flag
+    // defaults to the shared build constant (see config.pvpPublicEnabled).
+    if (isPvpWorldId(worldId) && !this.ctx.config.pvpPublicEnabled) {
+      this.ctx.reject(conn, PVP_DISABLED_CODE, PVP_DISABLED_MESSAGE);
+      return;
+    }
     // A join presenting a resume token reclaims the reserved body instead of spawning one.
     if (msg.resume !== undefined) { this.onResume(conn, worldId, msg.resume, auth); return; }
 
