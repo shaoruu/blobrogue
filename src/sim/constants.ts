@@ -393,6 +393,9 @@ export const PROP_HP: Record<PropKind, number> = {
   // GORGE shell debris: a heavy chunk (a peeled layer of the giant) — sturdier cover than a
   // crate so a peel's evidence stands as a real barricade the fight can be fought around.
   gorge_debris: 6,
+  // PALE THRONE shell debris (F75): the same heavy-chunk cover primitive as gorge_debris — a
+  // peeled layer of the second giant's cold-stone shell.
+  pale_debris: 6,
 };
 // Physical world impacts (damagePropsInRadius): a committed charge or slam does not chip
 // cover, it obliterates it — one figure comfortably above every PROP_HP entry.

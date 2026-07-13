@@ -1108,6 +1108,9 @@ export const PHASE_TIME_BASE: Readonly<Partial<Record<EnemyKind, number>>> = {
   // GORGE (F50 giant): a three-shell fight, so a longer per-phase budget than the lean roster
   // (each shell is its own mini earned-window fight). PROVISIONAL — the balancer tunes on build.
   gorge: 18,
+  // PALE THRONE (F75 giant): the region cap — heavier shells (1.3× Gorge) + a tighter per-phase
+  // window bank make each shell a touch longer than Gorge's. PROVISIONAL — the balancer tunes.
+  pale: 20,
 };
 
 // One curated pool entry: a known readable creature at a tier, weighted for the draw.
@@ -1872,6 +1875,16 @@ export function quorumHpForFloor(floor: number): number {
   return anchoredBossHp(QUORUM.baseHp, QUORUM.baseHpFloor, floor);
 }
 
+// ---- THE GIANT GRAMMAR (shared tunable surface) ----
+// GORGE (below) is the reference shape; every giant — GORGE (F50), PALE (F75), and the future
+// F100 Unmaker — declares the SAME field set so ONE shared giant-encounter core (world.ts
+// updateGiant) drives them all, parameterized only by this constants block + material/colors.
+// The as-const literals are widened here (scalars → number, tuples → readonly number[]) so a
+// tuned giant (PALE) is assignable alongside the reference (GORGE) without fighting the types.
+export type GiantConst = {
+  readonly [K in keyof typeof GORGE]: (typeof GORGE)[K] extends readonly number[] ? readonly number[] : number;
+};
+
 // ---- GORGE (F50 GIANT #1 — the Sump cap; the AD-LOCKED giant TEMPLATE for F75/F100) ----
 // A colossal ~192px STATIONARY front-facing set-piece PINNED to floor 50 (never in the seeded
 // deep rotation). It does not chase; its whole threat is SPACE-CONTROL (rings / zones / spokes)
@@ -1989,6 +2002,72 @@ export function gorgeSeamCountFor(phase: number, players: number): number {
   return Math.min(GORGE.seamCap, base + (p - 1) * GORGE.seamPerPlayer);
 }
 
+// ---- PALE THRONE (F75 GIANT #2 — the Pale region cap; the SECOND giant, reusing the AD-LOCKED
+// Gorge shell-peel template EXACTLY via the shared giant-encounter core) ----
+// A colossal ~192px STATIONARY front-facing set-piece PINNED to floor 75, mechanically IDENTICAL
+// to Gorge (same 3-phase shell-peel, same weak-point peel verb, same rings/zones/spokes) — only
+// the MATERIAL is COLD (warmth-drain, never amber; a client-render/telegraph swap, no sim impact)
+// and the calibration is the region-cap step. PALE is Gorge's grammar with the balancer's five
+// tuned fields overridden; everything else is inherited by spread so the two giants can never
+// drift structurally (and F100 Unmaker slots in the same way).
+//
+// CALIBRATION (balancer, F75 EXPLICIT anchor — see paleHpForFloor for why NOT the §3 curve):
+//   - total 1220 = a modest 1.3× Gorge's 930 (a felt PRESTIGE step for the region cap, NOT a
+//     sponge; hard ceiling ~1.35× = 1260, never exceeded). The F50→F75 difficulty is carried by
+//     MECHANICS (the tightened per-phase bank + the higher min-legal floor), not HP — because
+//     player DPS is flat this deep, HP can't be the lever without sponging (which the giant rule
+//     forbids).
+//   - per-shell [340, 380, 500] (stone/cracked/core), still BACK-LOADED (rind<chitin<core) so the
+//     fight escalates INTO the cold core reveal.
+//   - windowBankFrac 0.20 (TIGHTER than Gorge's 0.22): a deep high-roll build sits at the top of
+//     the flat DPS band, so the region-cap giant needs the full ~5 windows/phase with NO slack —
+//     0.20 caps the core window at ~100 dmg (500/100 = 5 windows; rind 68, chitin 76 → 5 each).
+export const PALE = {
+  ...GORGE,
+  shellHp: [340, 380, 500] as readonly number[], // stone / cracked / core (F75 explicit anchor)
+  baseHpFloor: 75,
+  // phaseAt[k] = the cumulative-from-full complement of shellHp = [1 - 340/1220, 1 - 720/1220] =
+  // [0.7213, 0.4098] (kept in lockstep with shellHp; pale.test.ts asserts the two agree). phaseFloor
+  // is the anti-burst floor (queued overflow lands after the crack-off), ~0.08 under each threshold.
+  phaseAt: [0.7213, 0.4098] as readonly number[],
+  phaseFloor: [0.64, 0.33] as readonly number[],
+  windowBankFrac: 0.20,
+} as const;
+
+export function paleHpForFloor(): number {
+  // F75 is a FRESH EXPLICIT anchor, deliberately NOT ridden up the §3 floor curve from Gorge's
+  // F50. The FLOOR_HP_MULT curve CLAMPS flat past F10, so floorHpMult(75)/floorHpMult(50) === 1.00
+  // — riding the curve would hand F75 the SAME 930 as F50 (no increase at all). refDpsForFloor
+  // also clamps flat this deep, so players are NOT out-DPSing F50 at F75. HP therefore cannot be
+  // the difficulty lever without pure sponge (the giant rule forbids it): the F50→F75 step lives
+  // in MECHANICS (the tightened bank + the higher min-legal), with HP a modest 1.3× prestige bump.
+  // So the giant's pool is the LITERAL per-shell F75 anchor, summed — floor-independent by design.
+  let hp = 0;
+  for (const shell of PALE.shellHp) hp += shell;
+  return hp;
+}
+
+// The fraction of the giant's pool held by shell `phase` (1..3) — drives the PER-PHASE window bank
+// (0.20 × this shell's HP chunk). Back-loaded: stone < cracked < core. Mirrors gorgeShellFracFor.
+export function paleShellFracFor(phase: number): number {
+  const total = PALE.shellHp.reduce((a, b) => a + b, 0);
+  return PALE.shellHp[Math.max(0, Math.min(PALE.shellHp.length - 1, phase - 1))] / total;
+}
+
+// One weak-point's HP at a floor (the peel-task pacing — a mechanic body, NEVER part of the giant's
+// own pool). Anchored at F75. Mirrors gorgeSeamHpForFloor.
+export function paleSeamHpForFloor(floor: number): number {
+  return Math.max(1, anchoredBossHp(PALE.seamHp, PALE.baseHpFloor, floor));
+}
+
+// N weak-points for a shell phase (1..3) at the snapshotted party size — the co-op TASK scale
+// (more players = more seams, never fatter HP). Capped for readability. Mirrors gorgeSeamCountFor.
+export function paleSeamCountFor(phase: number, players: number): number {
+  const base = PALE.seamBaseByShell[Math.max(0, Math.min(PALE.seamBaseByShell.length - 1, phase - 1))];
+  const p = Math.max(1, Math.min(4, players));
+  return Math.min(PALE.seamCap, base + (p - 1) * PALE.seamPerPlayer);
+}
+
 // ---- §5f the F10 MINIBOSS GAUNTLET (corrected gate §3, exact formula) ----
 // Three sequential CAPTAINS derived from calibrated Marrow HP — commander round10(.28×),
 // elite round10(.32×), brute round10(.40×), total 1.00× — with 5s intermissions after
@@ -2068,6 +2147,9 @@ export const BOSS_DPS_CEILING: Readonly<Partial<Record<EnemyKind, number>>> = {
   // sweep tops out ~47.9 practical DPS, so 55 is a safe non-breaking guard). The multi-boss health
   // gate CALIBRATES the giant's real bands (its per-shell HP + peel task pace the true TTK).
   gorge: 55,
+  // PALE THRONE (F75 giant): PROVISIONAL backstop ceiling, same 55 as the deep roster / Gorge (the
+  // giant's real bands are calibrated by the multi-boss health gate). Re-measure on build.
+  pale: 55,
 };
 
 // ---- the balancer envelope's canonical unit ----

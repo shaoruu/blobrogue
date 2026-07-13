@@ -53,7 +53,7 @@ import { LOCAL_ID, IDLE_INPUT } from "./input.js";
 import * as C from "./constants.js";
 import {
   PLAYER, SUSTAIN, SHOP, REVIVE, FANG_PROC_COOLDOWN, BOSS, MARROW, CHOIR, WEAVER, GILDED,
-  JET, TITHE, QUORUM, GORGE, jetSimulCapFor, titheSlabHpForFloor, gorgeSeamHpForFloor, gorgeSeamCountFor, gorgeShellFracFor, weaponResonanceFamily, RESONANCE_FAMILIES, RESONANCE_TELEGRAPH_COLOR,
+  JET, TITHE, QUORUM, GORGE, PALE, jetSimulCapFor, titheSlabHpForFloor, gorgeSeamHpForFloor, gorgeSeamCountFor, gorgeShellFracFor, paleSeamHpForFloor, paleSeamCountFor, paleShellFracFor, weaponResonanceFamily, RESONANCE_FAMILIES, RESONANCE_TELEGRAPH_COLOR,
   GAUNTLET, gauntletCaptainHp, TIERS, coopBossHpMult, EXPOSE_WINDOW_CAP,
   activeThreatCap, clampPlayers, coopThreatMult, coopHeartRateMult,
   REINFORCE_STAGGER, BIOME_PRESSURE, BRUTE_HEAVY_DAMAGE, ELITE_BRACE, BOSS_VULN_CAP,
@@ -66,7 +66,7 @@ import {
   MYSTERY, LEGENDARY_MIN_FLOOR,
   PREMIUM, CAPS, coinChanceTaper, coopCoinGainMult, premiumMysteryLegendaryWeight,
 } from "./balance.js";
-import type { EnemyTier, AddPoolEntry, ResonanceFamily } from "./balance.js";
+import type { EnemyTier, AddPoolEntry, ResonanceFamily, GiantConst } from "./balance.js";
 import { isControllerKind } from "./bestiary.js";
 import { biomeIndexForFloor } from "./biomes.js";
 import { resolveFloorDescriptor, floorHazardMutation, floorExtraElites, floorDashProfile } from "./floorRolls.js";
@@ -2188,9 +2188,10 @@ function tickPendingBlessings(w: WorldState, dt: number, ev: SimEvent[]): void {
 // ---- knockback ----
 
 function applyKnockbackDir(weapon: WeaponId, e: Enemy, dirX: number, dirY: number): void {
-  // The GORGE giant is a half-sunk anchored SET-PIECE (and its tectonic weak-points jut from a
-  // fixed spot on the shell): they absorb the hit, they never slide. Immovable at the source.
-  if (e.kind === "gorge" || e.kind === "gorge_seam") return;
+  // The GIANTS (Gorge F50 / Pale Throne F75) are anchored SET-PIECES (and their tectonic
+  // weak-points jut from a fixed spot on the shell): they absorb the hit, they never slide.
+  // Immovable at the source.
+  if (e.kind === "gorge" || e.kind === "gorge_seam" || e.kind === "pale" || e.kind === "pale_seam") return;
   const sp = Math.hypot(dirX, dirY) || 1;
   const v = (C.WEAPON_KB[weapon] * C.KB_LAMBDA) / e.kbResist;
   e.vx += (dirX / sp) * v;
@@ -2368,10 +2369,18 @@ const BOSS_BEATS: Readonly<Partial<Record<Enemy["kind"], BossBeatDef>>> = {
   },
   // GORGE (F50 giant): each phase boundary is a SHELL CRACK-OFF (roar semantics) — a big
   // punctuated screen-punch that sloughs the layer, swaps the sprite (rind → chitin → core) and
-  // drops the shell as debris cover (gorgeShellSlough, called from checkBossTransition). No adds.
+  // drops the shell as debris cover (giantShellSlough, called from checkBossTransition). No adds.
   gorge: {
     phaseAt: GORGE.phaseAt, phaseFloor: GORGE.phaseFloor, move: "roar",
     damageReduction: GORGE.roarDamageReduction, bulletClearRadius: GORGE.roarBulletClearRadius,
+    addCount: 0, isBreakable: false,
+  },
+  // PALE THRONE (F75 giant): the same SHELL CRACK-OFF transition as Gorge (roar semantics — a
+  // punctuated screen-punch that sloughs the layer, swaps the sprite stone → cracked → core, and
+  // drops the cold shell as debris cover via giantShellSlough). No adds.
+  pale: {
+    phaseAt: PALE.phaseAt, phaseFloor: PALE.phaseFloor, move: "roar",
+    damageReduction: PALE.roarDamageReduction, bulletClearRadius: PALE.roarBulletClearRadius,
     addCount: 0, isBreakable: false,
   },
 };
@@ -2406,6 +2415,46 @@ const EARNED_WINDOWS: Readonly<Partial<Record<Enemy["kind"], EarnedWindowDef>>> 
   // GORGE (F50 giant): the shell is the wall — ZERO body damage while sealed (guardMult 0.0,
   // like the Tithe). The ONLY damage path is PEELING (destroy the weak-points → openBossWindow).
   gorge: { guardMult: GORGE.guardMult, bankFrac: GORGE.windowBankFrac },
+  // PALE THRONE (F75 giant): the same hard-gate shell as Gorge (guardMult 0.0), with the region-cap
+  // TIGHTER per-window bank (0.20 vs Gorge's 0.22) — the ONLY damage path is peeling the cold seams.
+  pale: { guardMult: PALE.guardMult, bankFrac: PALE.windowBankFrac },
+};
+
+// ---- THE GIANT ENCOUNTER (shared core: Gorge F50 / Pale Throne F75 / — F100 Unmaker) ----
+// The AD-LOCKED giant template runs ONE encounter core (updateGiant + its giant* helpers), keyed
+// by a per-giant SPEC: the tuned constants block, the seam/debris kinds, the two telegraph colors
+// (the ONLY material difference — Gorge warm-amber, Pale cold-blue — never touches determinism),
+// and the per-giant balance functions. Every giant is byte-identical in behavior save these
+// parameters, so the second giant is a spec entry, not a second 300-line encounter (and the third
+// will be too). The giant's boss update dispatch, the per-phase window bank (openBossWindow) and
+// the shell-slough transition (checkBossTransition) all route through GIANT_SPEC.
+interface GiantSpec {
+  bodyKind: EnemyKind;   // the giant boss body ("gorge" | "pale")
+  seamKind: EnemyKind;   // the tectonic weak-point mechanic body ("gorge_seam" | "pale_seam")
+  debrisKind: PropKind;  // the sloughed-shell cover prop ("gorge_debris" | "pale_debris")
+  C: GiantConst;         // the tuned constants block (GORGE | PALE)
+  ringColor: string;     // P1 ring + P2 slag-glob bullet color (material telegraph — cosmetic only)
+  spokeColor: string;    // P3 spoke bullet color (material telegraph — cosmetic only)
+  shellFracFor: (phase: number) => number;             // the phase's share of the pool (window bank)
+  seamCountFor: (phase: number, players: number) => number; // co-op TASK scale (more seams, not HP)
+  seamHpForFloor: (floor: number) => number;           // one weak-point's HP (peel-task pacing)
+}
+
+const GIANT_SPEC: Readonly<Partial<Record<EnemyKind, GiantSpec>>> = {
+  // GORGE (F50): the reference giant — warm-amber slag material (the players' stolen amber).
+  gorge: {
+    bodyKind: "gorge", seamKind: "gorge_seam", debrisKind: "gorge_debris", C: GORGE,
+    ringColor: "#ffcf6b", spokeColor: "#ffb43b",
+    shellFracFor: gorgeShellFracFor, seamCountFor: gorgeSeamCountFor, seamHpForFloor: gorgeSeamHpForFloor,
+  },
+  // PALE THRONE (F75): the same encounter, COLD material — cold-blue seams (#57b6ff) and a
+  // cold-white/blue core blaze (#bfeaff), the "blazing absence of warmth" (never amber). The
+  // colors are the ONLY per-giant render difference; the sim path is Gorge's, byte-for-byte.
+  pale: {
+    bodyKind: "pale", seamKind: "pale_seam", debrisKind: "pale_debris", C: PALE,
+    ringColor: "#57b6ff", spokeColor: "#bfeaff",
+    shellFracFor: paleShellFracFor, seamCountFor: paleSeamCountFor, seamHpForFloor: paleSeamHpForFloor,
+  },
 };
 
 export function isBossExposed(e: Enemy): boolean {
@@ -2418,13 +2467,14 @@ function openBossWindow(e: Enemy, seconds: number, ev: SimEvent[]): void {
   const boss = e.boss;
   const def = EARNED_WINDOWS[e.kind];
   if (!boss || !def) return;
-  // GORGE banks PER PHASE: a window caps at bankFrac × the CURRENT SHELL's HP chunk (not the whole
-  // pool), so every one of its 3 phases needs ~5 windows and no phase can be one-burst regardless
+  // GIANTS bank PER PHASE: a window caps at bankFrac × the CURRENT SHELL's HP chunk (not the whole
+  // pool), so every one of their 3 phases needs ~5 windows and no phase can be one-burst regardless
   // of the pool size — the K=3 structure enforces the anti-burst without a fat pool. Every other
   // boss banks off the whole maxHp (the shipped single-pool contract).
+  const giant = GIANT_SPEC[e.kind];
   if (boss.exposed <= 0) {
-    boss.windowBank = e.kind === "gorge"
-      ? def.bankFrac * gorgeShellFracFor(boss.phase) * e.maxHp
+    boss.windowBank = giant
+      ? def.bankFrac * giant.shellFracFor(boss.phase) * e.maxHp
       : def.bankFrac * e.maxHp;
   }
   boss.exposed = Math.min(boss.exposed + seconds, EXPOSE_WINDOW_CAP);
@@ -2553,11 +2603,12 @@ function checkBossTransition(w: WorldState, e: Enemy, ev: SimEvent[]): void {
   // toward corruption (P1 clean → P2 edges creep in → P3 floor mostly corrupted, safe pockets on
   // the last tiles). Pure zoning: it leaves ≥1 readable safe interior and NEVER opens a window.
   if (e.kind === "jet") jetReshape(w, e, ev);
-  // GORGE (F50 giant): the phase boundary IS the SHELL CRACK-OFF (the punctuated peel beat). The
-  // sloughed layer drops as debris cover at the base, any half-peeled seams crumble with it, and
-  // the sprite advances (rind → chitin → core) off the new boss.phase. Pure presentation +
-  // topology: it never opens/extends the earned window (only clearing a seam set does that).
-  if (e.kind === "gorge") gorgeShellSlough(w, e, ev);
+  // GIANTS (Gorge F50 / Pale Throne F75): the phase boundary IS the SHELL CRACK-OFF (the punctuated
+  // peel beat). The sloughed layer drops as debris cover at the base, any half-peeled seams crumble
+  // with it, and the sprite advances (stone → cracked → core) off the new boss.phase. Pure
+  // presentation + topology: it never opens/extends the earned window (only a seam set clear does).
+  const giantSlough = GIANT_SPEC[e.kind];
+  if (giantSlough) giantShellSlough(w, e, ev, giantSlough);
   ev.push({ t: "bossPhase", eid: e.id, x: e.x, y: e.y });
   ev.push({ t: "bossTransition", eid: e.id, phase: boss.phase, entering: true, queued: boss.roar.queued, hpFrac: e.hp / e.maxHp });
 }
@@ -2648,9 +2699,9 @@ function isDecoyKind(kind: Enemy["kind"]): boolean {
     // JET's mirror-image echo is a fake body (your own reflection): popping it early is
     // counterplay, never a kill/economy. Its concurrency is capped separately (jetEchoCap).
     || kind === "jet_echo"
-    // The GORGE giant's tectonic WEAK-POINT (seam): destroying it is the peel counterplay,
+    // The GIANTS' tectonic WEAK-POINTS (Gorge/Pale seams): destroying one is the peel counterplay,
     // never an economy — no loot, no combo (like the Weaver knot / the Tithe slab).
-    || kind === "gorge_seam";
+    || kind === "gorge_seam" || kind === "pale_seam";
 }
 
 function isQuorumHusk(kind: Enemy["kind"]): boolean {
@@ -4426,8 +4477,10 @@ function updateEnemyAI(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): voi
     case "tithe_tribute": updateTitheTribute(w, e, dt, ev); return;
     case "quorum_splinter": updateQuorumSplinter(w, e, dt); return;
     case "jet_echo": updateJetEcho(w, e, dt, ev); return;
-    case "gorge": updateGorge(w, e, dt, ev); return;
+    case "gorge": updateGiant(w, e, dt, ev, GIANT_SPEC.gorge!); return;
     case "gorge_seam": return; // inert: a tectonic weak-point is a peel target, not an actor
+    case "pale": updateGiant(w, e, dt, ev, GIANT_SPEC.pale!); return;
+    case "pale_seam": return; // inert: a tectonic weak-point is a peel target, not an actor
     default: updateChaser(w, e, dt); return;
   }
 }
@@ -9063,37 +9116,42 @@ function updateQuorumSplinter(w: WorldState, e: Enemy, dt: number): void {
   if (findTarget(w, e.x, e.y)) applyChaseStep(w, e, dt, chaseAngle(w, e), e.speed * dt);
 }
 
-// ---- GORGE (F50 GIANT #1): the shell-peel giant, the AD-LOCKED template ----
-// A colossal STATIONARY set-piece: it NEVER chases. Its threat is SPACE-CONTROL (rings/zones/
-// spokes) plus a MULTI-PHASE SHELL-PEEL task, and it is GUARDED behind its shell (guardMult 0.0
-// — a TRUE hard gate, the shell IS the wall). Two loops run in parallel:
-//  (1) the WEAK-POINT loop (gorgeSeamLoop): periodically juts N tectonic seams out of the shell;
+// ---- THE GIANT ENCOUNTER CORE (Gorge F50 / Pale Throne F75 / — F100 Unmaker) ----
+// The AD-LOCKED shell-peel giant, run as ONE shared core parameterized by a per-giant GiantSpec
+// (constants + material colors + seam/debris kinds + balance fns). A colossal STATIONARY set-piece:
+// it NEVER chases. Its threat is SPACE-CONTROL (rings/zones/spokes) plus a MULTI-PHASE SHELL-PEEL
+// task, and it is GUARDED behind its shell (guardMult 0.0 — a TRUE hard gate, the shell IS the
+// wall). Two loops run in parallel:
+//  (1) the WEAK-POINT loop (giantSeamLoop): periodically juts N tectonic seams out of the shell;
 //      clearing the whole set routes through the SHIPPED openBossWindow plumbing (guard chip +
 //      per-window bank + calibration) — the ONLY damage path. Missing the set → it re-seals + re-
 //      exposes (it LOOPS). Co-op = MORE seams (the TASK scales), never fatter HP.
 //  (2) the SPATIAL-PATTERN loop (the attack machine): P1 RADIAL ring-with-a-gap / P2 ZONING slag
 //      pools / P3 CONVERGENT rotating spokes (P2 zones still live), each on its own ≥0.6s tell.
-// Per-shell HP (shellFrac) is spent across the peel windows; when a shell's chunk is gone the
-// layer SLOUGHS at the phase transition (gorgeShellSlough: sprite swaps + debris cover drops).
-function updateGorge(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void {
+// Per-shell HP (shellFrac) is spent across the peel windows; when a shell's chunk is gone the layer
+// SLOUGHS at the phase transition (giantShellSlough: sprite swaps + debris cover drops). Gorge and
+// Pale are byte-identical in behavior save the spec — Pale's tuned HP/bank + its COLD telegraph
+// colors (spec.ringColor/spokeColor) — and the material colors never touch determinism.
+function updateGiant(w: WorldState, e: Enemy, dt: number, ev: SimEvent[], spec: GiantSpec): void {
   const boss = e.boss;
   if (!boss) return;
   const a = e.attack;
+  const gc = spec.C;
 
   // The weak-point loop runs EVERY tick, in parallel with (and independent of) the pattern loop —
   // the seams stand while the giant fires its rings/zones/spokes (paused only during the crack-off
   // beat, which sloughs them anyway).
-  gorgeSeamLoop(w, e, dt, ev);
+  giantSeamLoop(w, e, dt, ev, spec);
 
-  if (a.phase === "windup") { gorgeWindup(w, e, dt, ev); return; }
-  if (a.phase === "active") { gorgeActive(w, e, dt, ev); return; }
+  if (a.phase === "windup") { giantWindup(w, e, dt, ev, spec); return; }
+  if (a.phase === "active") { giantActive(w, e, dt, ev, spec); return; }
   if (a.phase === "recover") {
     a.time += dt;
-    const recDur = a.move === "sweep" ? GORGE.spokeRecover : a.move === "spew" ? GORGE.zoneRecover : GORGE.ringRecover;
+    const recDur = a.move === "sweep" ? gc.spokeRecover : a.move === "spew" ? gc.zoneRecover : gc.ringRecover;
     if (a.time >= recDur) enterIdle(e);
     return;
   }
-  if (a.cooldown === 0 && e.spawnTimer === 0 && !boss.roar) { gorgeBeginAttack(e, ev); return; }
+  if (a.cooldown === 0 && e.spawnTimer === 0 && !boss.roar) { giantBeginAttack(e, ev, spec); return; }
   // STATIONARY: no chase step — the giant holds the arena center and lets its patterns do the work.
 }
 
@@ -9101,8 +9159,9 @@ function updateGorge(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void 
 // seam ids ride windowAddIds (the "kill all to open the window" set); the exposure CADENCE reuses
 // the generic addTimer (the giant runs no add drip); seamLife is the current exposure's retract
 // countdown. Clearing the whole set → openBossWindow (the peel); a timeout → re-seal (no window).
-function gorgeSeamLoop(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void {
+function giantSeamLoop(w: WorldState, e: Enemy, dt: number, ev: SimEvent[], spec: GiantSpec): void {
   const boss = e.boss!;
+  const gc = spec.C;
   if (boss.roar) return; // the shell is mid-slough (crack-off beat) — seam logic pauses
   if (boss.windowAddIds.length > 0) {
     // Seams are exposed (some may have just died this tick).
@@ -9111,8 +9170,8 @@ function gorgeSeamLoop(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): voi
       // earned-window plumbing (guard chip, window bank, determinism, calibration all inherited).
       boss.windowAddIds.length = 0;
       boss.seamLife = 0;
-      boss.addTimer = GORGE.seamExposeInterval; // re-expose a fresh set after the window plays out
-      openBossWindow(e, GORGE.peelExpose, ev);
+      boss.addTimer = gc.seamExposeInterval; // re-expose a fresh set after the window plays out
+      openBossWindow(e, gc.peelExpose, ev);
       ev.push({ t: "chargeCrash", x: e.x, y: e.y });
       ev.push({ t: "cue", name: "bossSpawn", x: e.x, y: e.y, rate: 0.55, gain: 0.85, trauma: 0.12 });
       return;
@@ -9122,10 +9181,10 @@ function gorgeSeamLoop(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): voi
       // Not cleared in time — the shell RE-SEALS (the seams retract unspent, no window). It loops.
       for (const id of boss.windowAddIds) {
         const seam = w.enemies.find((o) => !o.dead && o.id === id);
-        if (seam) { seam.dead = true; ev.push({ t: "puff", x: seam.x, y: seam.y, n: 4, color: ENEMY_ARCHETYPES.gorge_seam.tint }); }
+        if (seam) { seam.dead = true; ev.push({ t: "puff", x: seam.x, y: seam.y, n: 4, color: ENEMY_ARCHETYPES[spec.seamKind].tint }); }
       }
       boss.windowAddIds.length = 0;
-      boss.addTimer = GORGE.seamExposeInterval;
+      boss.addTimer = gc.seamExposeInterval;
     }
     return;
   }
@@ -9133,30 +9192,31 @@ function gorgeSeamLoop(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): voi
   // window is still being spent (let the bared material be worked before re-sealing behind seams).
   if (e.spawnTimer > 0 || boss.exposed > 0) return;
   boss.addTimer -= dt;
-  if (boss.addTimer <= 0) gorgeExposeSeams(w, e, ev);
+  if (boss.addTimer <= 0) giantExposeSeams(w, e, ev, spec);
 }
 
 // Jut N tectonic weak-points out of the current shell, FACING the threatened player (always
-// reachable), the arc widening per shell: RIND a tight front cluster (easy — teaches the verb) →
-// CHITIN wider → CORE the widest (out to the giant's sides), so players must TRACK + REPOSITION
+// reachable), the arc widening per shell: P1 a tight front cluster (easy — teaches the verb) →
+// P2 wider → P3 the widest (out to the giant's sides), so players must TRACK + REPOSITION
 // across the front to hit them all (space pressure) without an unfair orbit behind the body. The
 // seams are mechanic bodies (decoy kind: no loot/combo), linked to the giant via seq, on the
 // shared windowAddIds set.
-function gorgeExposeSeams(w: WorldState, e: Enemy, ev: SimEvent[]): void {
+function giantExposeSeams(w: WorldState, e: Enemy, ev: SimEvent[], spec: GiantSpec): void {
   const boss = e.boss!;
-  const n = gorgeSeamCountFor(boss.phase, w.encounterPlayers);
-  const hp = gorgeSeamHpForFloor(w.floor);
+  const gc = spec.C;
+  const n = spec.seamCountFor(boss.phase, w.encounterPlayers);
+  const hp = spec.seamHpForFloor(w.floor);
   boss.windowAddIds.length = 0;
   // The shell cracks FACING the threatened player (always reachable), the arc widening per shell
-  // (RIND tight front → CHITIN half-wrap → CORE wide wrap: reposition, never a full orbit).
+  // (P1 tight front → P2 half-wrap → P3 wide wrap: reposition, never a full orbit).
   const facing = findTarget(w, e.x, e.y) ? Math.atan2(w.targetY - e.y, w.targetX - e.x) : 0;
-  const arc = GORGE.seamArcByShell[Math.max(0, Math.min(GORGE.seamArcByShell.length - 1, boss.phase - 1))];
+  const arc = gc.seamArcByShell[Math.max(0, Math.min(gc.seamArcByShell.length - 1, boss.phase - 1))];
   for (let i = 0; i < n; i++) {
     const ang = facing + (n > 1 ? (i / (n - 1) - 0.5) * arc : 0);
-    const x = e.x + Math.cos(ang) * GORGE.seamRingDist;
-    const y = e.y + Math.sin(ang) * GORGE.seamRingDist;
-    if (!settleSpawnPoint(w, x, y, ENEMY_ARCHETYPES.gorge_seam.radius)) continue;
-    const seam = createEnemy("gorge_seam", settlePoint.x, settlePoint.y, w.floor, w.rng, w.nextEnemyId++, {
+    const x = e.x + Math.cos(ang) * gc.seamRingDist;
+    const y = e.y + Math.sin(ang) * gc.seamRingDist;
+    if (!settleSpawnPoint(w, x, y, ENEMY_ARCHETYPES[spec.seamKind].radius)) continue;
+    const seam = createEnemy(spec.seamKind, settlePoint.x, settlePoint.y, w.floor, w.rng, w.nextEnemyId++, {
       isSummoned: true, players: w.encounterPlayers,
     });
     seam.hp = seam.maxHp = hp;
@@ -9166,18 +9226,19 @@ function gorgeExposeSeams(w: WorldState, e: Enemy, ev: SimEvent[]): void {
     boss.windowAddIds.push(seam.id);
     ev.push({ t: "enemySpawn", eid: seam.id, kind: seam.kind, tier: seam.tier, x: seam.x, y: seam.y });
   }
-  boss.seamLife = GORGE.seamLifeByShell[Math.max(0, Math.min(GORGE.seamLifeByShell.length - 1, boss.phase - 1))];
+  boss.seamLife = gc.seamLifeByShell[Math.max(0, Math.min(gc.seamLifeByShell.length - 1, boss.phase - 1))];
   // The shell cracks/juts as the seams emerge — a readable tell that the peel window is open.
   ev.push({ t: "cue", name: "enemyAttack", x: e.x, y: e.y, rate: 0.7, gain: 0.6, trauma: 0.04 });
 }
 
 // The spatial-pattern cadence: P1 RADIAL ring, P2 ZONING pools, P3 CONVERGENT spokes (interleaving
 // a zone refresh every other beat so the P2 floor-denial stays live under the spoke sweep).
-function gorgeBeginAttack(e: Enemy, ev: SimEvent[]): void {
+function giantBeginAttack(e: Enemy, ev: SimEvent[], spec: GiantSpec): void {
   const boss = e.boss!;
+  const gc = spec.C;
   boss.attackCount++;
   boss.spinCount = 0;
-  e.attack.cooldown = GORGE.attackCd[boss.phase] ?? GORGE.attackCd[3];
+  e.attack.cooldown = gc.attackCd[boss.phase] ?? gc.attackCd[3];
   let move: AttackMove;
   if (boss.phase <= 1) move = "slam";                                   // P1: the shockwave ring
   else if (boss.phase === 2) move = "spew";                             // P2: the slag zones
@@ -9186,78 +9247,85 @@ function gorgeBeginAttack(e: Enemy, ev: SimEvent[]): void {
   ev.push({ t: "cue", name: "enemyHit", x: e.x, y: e.y, rate: 0.5, gain: 0.7, trauma: 0 });
 }
 
-function gorgeWindup(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void {
+function giantWindup(w: WorldState, e: Enemy, dt: number, ev: SimEvent[], spec: GiantSpec): void {
   const a = e.attack;
+  const gc = spec.C;
   if (a.move === "roar") {
-    // The SHELL CRACK-OFF beat (phase transition): the layer sloughs on exit (gorgeShellSlough
+    // The SHELL CRACK-OFF beat (phase transition): the layer sloughs on exit (giantShellSlough
     // already dropped the debris + swapped the phase in checkBossTransition).
     a.time += dt;
-    a.windup = Math.min(1, a.time / GORGE.roarDuration);
-    if (a.time >= GORGE.roarDuration) { enterIdle(e); endBossTransition(w, e, ev); }
+    a.windup = Math.min(1, a.time / gc.roarDuration);
+    if (a.time >= gc.roarDuration) { enterIdle(e); endBossTransition(w, e, ev); }
     return;
   }
-  const windupT = a.move === "slam" ? GORGE.ringWindup : a.move === "spew" ? GORGE.zoneWindup : GORGE.spokeWindup;
+  const windupT = a.move === "slam" ? gc.ringWindup : a.move === "spew" ? gc.zoneWindup : gc.spokeWindup;
   a.time += dt;
   a.windup = Math.min(1, a.time / windupT);
   if (a.time < windupT) return;
-  if (a.move === "slam") { gorgeRing(w, e, ev); enterRecover(e); }
-  else if (a.move === "spew") { gorgeZones(w, e, ev); enterRecover(e); }
+  if (a.move === "slam") { giantRing(w, e, ev, spec); enterRecover(e); }
+  else if (a.move === "spew") { giantZones(w, e, ev, spec); enterRecover(e); }
   else { a.phase = "active"; a.time = 0; a.windup = 0; } // sweep: the multi-beat rotating spoke wheel
 }
 
-function gorgeActive(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void {
+function giantActive(w: WorldState, e: Enemy, dt: number, ev: SimEvent[], spec: GiantSpec): void {
   const a = e.attack;
   const boss = e.boss!;
+  const gc = spec.C;
   if (a.move !== "sweep") { enterRecover(e); return; }
   a.time += dt;
   // The rotating spoke wheel: a fresh spoke set every interval, the whole wheel advancing by
   // spokeStep each emission so its ONE gap sweeps around as a moving safe lane.
-  while (boss.spinCount * GORGE.spokeInterval <= a.time && a.time <= GORGE.spokeDuration) {
-    gorgeSpokes(w, e, boss.spinCount, ev);
+  while (boss.spinCount * gc.spokeInterval <= a.time && a.time <= gc.spokeDuration) {
+    giantSpokes(w, e, boss.spinCount, ev, spec);
     boss.spinCount++;
   }
-  if (a.time >= GORGE.spokeDuration) enterRecover(e);
+  if (a.time >= gc.spokeDuration) enterRecover(e);
 }
 
 // P1 RADIAL: an expanding shockwave ring WITH an authored GAP (a stand-in-the-gap safe wedge that
 // rotates each ring), plus a couple of debris blooms near the gap so it isn't the only read.
-function gorgeRing(w: WorldState, e: Enemy, ev: SimEvent[]): void {
+function giantRing(w: WorldState, e: Enemy, ev: SimEvent[], spec: GiantSpec): void {
   const boss = e.boss!;
-  const gapStart = ((boss.attackCount * 5) % GORGE.ringCount); // rotate the gap each ring (deterministic)
-  const gapCenterAng = ((gapStart + GORGE.ringGap / 2) / GORGE.ringCount) * Math.PI * 2;
-  for (let i = 0; i < GORGE.ringCount; i++) {
-    const inGap = ((i - gapStart + GORGE.ringCount) % GORGE.ringCount) < GORGE.ringGap;
+  const gc = spec.C;
+  const gapStart = ((boss.attackCount * 5) % gc.ringCount); // rotate the gap each ring (deterministic)
+  const gapCenterAng = ((gapStart + gc.ringGap / 2) / gc.ringCount) * Math.PI * 2;
+  for (let i = 0; i < gc.ringCount; i++) {
+    const inGap = ((i - gapStart + gc.ringCount) % gc.ringCount) < gc.ringGap;
     if (inGap) continue; // the authored safe wedge
-    const ang = (i / GORGE.ringCount) * Math.PI * 2;
-    spawnEnemyBullet(w, e.x, e.y, ang, GORGE.ringSpeed, GORGE.globRadius, GORGE.globDamage, "#ffcf6b", GORGE.globLife);
+    const ang = (i / gc.ringCount) * Math.PI * 2;
+    spawnEnemyBullet(w, e.x, e.y, ang, gc.ringSpeed, gc.globRadius, gc.globDamage, spec.ringColor, gc.globLife);
   }
   // Debris blooms flanking the gap (area-deny — the ring isn't the only read), scaled by 4p surplus.
-  const debris = bossAddCapFor(GORGE.ringDebris, w.encounterPower);
+  const debris = bossAddCapFor(gc.ringDebris, w.encounterPower);
   for (let i = 0; i < debris; i++) {
     const off = (i - (debris - 1) / 2) * 0.32;
-    plantAffixCharge(w, e.x + Math.cos(gapCenterAng + off) * GORGE.ringDebrisDist, e.y + Math.sin(gapCenterAng + off) * GORGE.ringDebrisDist);
+    plantAffixCharge(w, e.x + Math.cos(gapCenterAng + off) * gc.ringDebrisDist, e.y + Math.sin(gapCenterAng + off) * gc.ringDebrisDist);
   }
   ev.push({ t: "bossSlam", x: e.x, y: e.y });
 }
 
 // P2 ZONING: persistent SLAG pools (reusing the cinder floor-denial primitive) ringed AROUND the
 // party — their CURRENT spot stays open (the authored safe pocket), while the pools accumulate and
-// shrink the safe floor. Hard-capped (gorgePlantSlag evicts the nearest-to-expiring), so the floor
+// shrink the safe floor. Hard-capped (giantPlantSlag evicts the nearest-to-expiring), so the floor
 // never fully seals — tension is "space is dangerous," never "you're cornered."
-function gorgeZones(w: WorldState, e: Enemy, ev: SimEvent[]): void {
+function giantZones(w: WorldState, e: Enemy, ev: SimEvent[], spec: GiantSpec): void {
+  const gc = spec.C;
   if (!findTarget(w, e.x, e.y)) return;
   const base = w.rng.next() * Math.PI * 2;
-  for (let i = 0; i < GORGE.zoneCount; i++) {
-    const ang = base + (i / GORGE.zoneCount) * Math.PI * 2;
-    gorgePlantSlag(w, w.targetX + Math.cos(ang) * GORGE.zoneRing, w.targetY + Math.sin(ang) * GORGE.zoneRing);
+  for (let i = 0; i < gc.zoneCount; i++) {
+    const ang = base + (i / gc.zoneCount) * Math.PI * 2;
+    giantPlantSlag(w, w.targetX + Math.cos(ang) * gc.zoneRing, w.targetY + Math.sin(ang) * gc.zoneRing, spec);
   }
   ev.push({ t: "cue", name: "enemyAttack", x: e.x, y: e.y, rate: 0.6, gain: 0.6, trauma: 0.03 });
 }
 
 // Plant one persistent slag pool (a cinder = a protection-gated 1-damage floor-denial zone). The
 // giant's pools are hard-capped: at the cap the nearest-to-expiring pool is evicted first, so the
-// denied floor is a rolling, shrinking-then-shifting area — never a sealed room.
-function gorgePlantSlag(w: WorldState, x: number, y: number): void {
+// denied floor is a rolling, shrinking-then-shifting area — never a sealed room. (The pool rides
+// the shared cinder floor-denial primitive for both giants; only the giant's telegraph BULLETS
+// carry the per-giant material color, so the sim/wire is untouched by the cold material swap.)
+function giantPlantSlag(w: WorldState, x: number, y: number, spec: GiantSpec): void {
+  const gc = spec.C;
   if (isWall(w, x, y)) return;
   let cinders = 0;
   let oldest: Hazard | null = null;
@@ -9266,23 +9334,24 @@ function gorgePlantSlag(w: WorldState, x: number, y: number): void {
     cinders++;
     if (oldest === null || h.life < oldest.life) oldest = h;
   }
-  if (cinders >= GORGE.zoneCap && oldest !== null) oldest.life = 0; // evict the nearest-to-expiring
+  if (cinders >= gc.zoneCap && oldest !== null) oldest.life = 0; // evict the nearest-to-expiring
   w.hazards.push({
     id: w.nextHazardId++, kind: "cinder", x, y,
-    radius: GORGE.zoneRadius, life: GORGE.zoneLife, maxLife: GORGE.zoneLife,
+    radius: gc.zoneRadius, life: gc.zoneLife, maxLife: gc.zoneLife,
   });
 }
 
 // P3 CONVERGENT: one rotating spoke SET per emission — spokeCount arms minus a spokeGap-wide wedge,
 // the whole wheel advanced by spokeStep each emission so the gap is a MOVING safe lane (< walk
 // speed to ride). burstParity carries a per-commitment phase offset so successive sweeps re-read.
-function gorgeSpokes(w: WorldState, e: Enemy, emission: number, ev: SimEvent[]): void {
+function giantSpokes(w: WorldState, e: Enemy, emission: number, ev: SimEvent[], spec: GiantSpec): void {
   const boss = e.boss!;
-  const wheel = emission * GORGE.spokeStep + boss.burstParity;
-  for (let i = 0; i < GORGE.spokeCount; i++) {
-    if (i < GORGE.spokeGap) continue; // the moving safe wedge (fixed vs the wheel, so it rotates with it)
-    const ang = wheel + (i / GORGE.spokeCount) * Math.PI * 2;
-    spawnEnemyBullet(w, e.x, e.y, ang, GORGE.spokeSpeed, GORGE.globRadius, GORGE.globDamage, "#ffb43b", GORGE.globLife);
+  const gc = spec.C;
+  const wheel = emission * gc.spokeStep + boss.burstParity;
+  for (let i = 0; i < gc.spokeCount; i++) {
+    if (i < gc.spokeGap) continue; // the moving safe wedge (fixed vs the wheel, so it rotates with it)
+    const ang = wheel + (i / gc.spokeCount) * Math.PI * 2;
+    spawnEnemyBullet(w, e.x, e.y, ang, gc.spokeSpeed, gc.globRadius, gc.globDamage, spec.spokeColor, gc.globLife);
   }
   if (emission === 0) ev.push({ t: "radialBurst", x: e.x, y: e.y });
 }
@@ -9290,39 +9359,41 @@ function gorgeSpokes(w: WorldState, e: Enemy, emission: number, ev: SimEvent[]):
 // The SHELL CRACK-OFF (the phase transition beat, from checkBossTransition): the sloughed layer
 // drops as debris cover at the base (material evidence + reusable line-of-sight/movement cover),
 // any half-peeled seams crumble with it, and the exposure cadence re-arms for the freshly-bared
-// shell. The sprite advance (rind → chitin → core) is automatic off the new boss.phase. Pure
+// shell. The sprite advance (stone → cracked → core) is automatic off the new boss.phase. Pure
 // presentation + topology — it NEVER opens/extends the earned window (only a seam clear does).
-function gorgeShellSlough(w: WorldState, e: Enemy, ev: SimEvent[]): void {
+function giantShellSlough(w: WorldState, e: Enemy, ev: SimEvent[], spec: GiantSpec): void {
   const boss = e.boss!;
+  const gc = spec.C;
   for (const id of boss.windowAddIds) {
     const seam = w.enemies.find((o) => !o.dead && o.id === id);
-    if (seam) { seam.dead = true; ev.push({ t: "puff", x: seam.x, y: seam.y, n: 4, color: ENEMY_ARCHETYPES.gorge_seam.tint }); }
+    if (seam) { seam.dead = true; ev.push({ t: "puff", x: seam.x, y: seam.y, n: 4, color: ENEMY_ARCHETYPES[spec.seamKind].tint }); }
   }
   boss.windowAddIds.length = 0;
   boss.seamLife = 0;
-  boss.addTimer = GORGE.seamExposeInterval; // the fresh shell re-exposes on the normal cadence
+  boss.addTimer = gc.seamExposeInterval; // the fresh shell re-exposes on the normal cadence
   boss.burstParity = (boss.burstParity + 1) & 1; // shift the spoke wheel's phase so P3 re-reads
-  gorgeDropDebris(w, e, ev);
+  giantDropDebris(w, e, ev, spec);
   ev.push({ t: "bossSlam", x: e.x, y: e.y });
 }
 
 // Drop the sloughed shell as debris CHUNKS at the giant's base — destructible props (movement +
 // line-of-sight cover, like the marshal's shatter-crates / the Warden's clinker ring), deterministic
 // and cheap. Never dropped on a player or into a wall/prop; the nav obstacle field is bumped.
-function gorgeDropDebris(w: WorldState, e: Enemy, ev: SimEvent[]): void {
+function giantDropDebris(w: WorldState, e: Enemy, ev: SimEvent[], spec: GiantSpec): void {
+  const gc = spec.C;
   const base = w.rng.next() * Math.PI * 2;
   let placed = 0;
-  for (let i = 0; i < GORGE.debrisPerPeel; i++) {
-    const ang = base + (i / Math.max(1, GORGE.debrisPerPeel)) * Math.PI * 2;
-    const x = e.x + Math.cos(ang) * GORGE.debrisRingDist;
-    const y = e.y + Math.sin(ang) * GORGE.debrisRingDist;
+  for (let i = 0; i < gc.debrisPerPeel; i++) {
+    const ang = base + (i / Math.max(1, gc.debrisPerPeel)) * Math.PI * 2;
+    const x = e.x + Math.cos(ang) * gc.debrisRingDist;
+    const y = e.y + Math.sin(ang) * gc.debrisRingDist;
     if (isWall(w, x, y) || blockedByProp(w, x, y, C.PROP_RADIUS)) continue;
     if (isNearAnyPlayer(w, x, y, C.PROP_RADIUS + 40)) continue; // never bury a player under a chunk
     w.props.push({
-      id: w.nextPropId++, kind: "gorge_debris", x, y,
-      radius: C.PROP_RADIUS, hp: C.PROP_HP.gorge_debris, dead: false, owner: e.id,
+      id: w.nextPropId++, kind: spec.debrisKind, x, y,
+      radius: C.PROP_RADIUS, hp: C.PROP_HP[spec.debrisKind], dead: false, owner: e.id,
     });
-    ev.push({ t: "puff", x, y, n: 6, color: ENEMY_ARCHETYPES.gorge.tint });
+    ev.push({ t: "puff", x, y, n: 6, color: ENEMY_ARCHETYPES[spec.bodyKind].tint });
     placed++;
   }
   if (placed > 0) w.obstacleRev++;

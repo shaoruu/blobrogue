@@ -5,11 +5,11 @@ import { Rng } from "./rng.js";
 import { biomeIndexForFloor } from "./biomes.js";
 import {
   TIERS, BIOME_PRESSURE, BOSS, MARROW, CHOIR, WEAVER, GILDED, GAUNTLET,
-  JET, TITHE, QUORUM, GORGE,
+  JET, TITHE, QUORUM, GORGE, PALE,
   MINIBOSS, ELITE_BULWARK, ELITE_COST_CAP, ENVELOPE, LIVE_CAPS, activeMoverCapFor,
   floorHpMult, floorSpeedMult, floorThreat, activeThreatCap, roundHalfToEven,
   bossHpForFloor, marrowHpForFloor, choirHpForFloor, weaverHpForFloor, gildedHpForFloor,
-  jetHpForFloor, titheHpForFloor, quorumHpForFloor, gorgeHpForFloor,
+  jetHpForFloor, titheHpForFloor, quorumHpForFloor, gorgeHpForFloor, paleHpForFloor,
   captainHpForFloor, bossHpFracFor,
   coopMobHpMult, coopBossHpMult, coopThreatMult, coopKbResistMult,
   MAX_COMPLEX_PER_ROOM, BRUTE_ELITE_COMBO_FLOOR,
@@ -386,6 +386,22 @@ export const ENEMY_ARCHETYPES: Record<EnemyKind, EnemyArchetype> = {
     radius: 13, drawSize: 34, alpha: 1, tint: "#ffcf6b", kbResist: 100,
     baseHp: GORGE.seamHp, baseSpeed: 0, touchDamage: 0, threat: 0.25,
   },
+  // PALE THRONE (F75 GIANT #2): the second giant, mechanically identical to Gorge (a stationary
+  // ~192px set-piece the client swaps stone → cracked → core off boss.phase, radius ~60 hittable
+  // core). Only the MATERIAL differs: tint = COLD crystalline core-blaze (#bfeaff), never amber.
+  // baseHp is nominal (the real pool is paleHpForFloor, the explicit F75 back-loaded per-shell sum).
+  pale: {
+    kind: "pale", sprite: "pale", movement: "boss", isPhasing: false,
+    radius: 60, drawSize: 192, alpha: 1, tint: "#bfeaff", kbResist: 200,
+    baseHp: paleHpForFloor(), baseSpeed: 0, touchDamage: PALE.contactDamage, threat: 0,
+  },
+  // The PALE THRONE's tectonic WEAK-POINT: the same peel-target mechanic body as gorge_seam (no
+  // loot/combo), its material COLD — a cold-blue crack-node (#57b6ff) showing through the shell.
+  pale_seam: {
+    kind: "pale_seam", sprite: "pale_seam", movement: "drift", isPhasing: false,
+    radius: 13, drawSize: 34, alpha: 1, tint: "#57b6ff", kbResist: 100,
+    baseHp: PALE.seamHp, baseSpeed: 0, touchDamage: 0, threat: 0.25,
+  },
 };
 
 // Which archetypes each tier may inhabit: swarms are small fast bodies, brutes are the
@@ -425,6 +441,7 @@ export const ELITE_AFFIXES: Readonly<Record<EnemyKind, EliteAffix>> = {
   tithe_tribute: "brace", quorum_splinter: "brace", // surplus adds never roll elite
   jet_echo: "brace", // JET's mirror echo is a summon-only reflection, never an elite roll
   gorge: "brace", gorge_seam: "brace", // the giant + its weak-points never roll elite
+  pale: "brace", pale_seam: "brace", // the F75 giant + its weak-points never roll elite
 };
 
 export function eliteAffixOf(kind: EnemyKind): EliteAffix {
@@ -439,7 +456,7 @@ export function isBossFloor(floor: number): boolean {
 // Only the three FIGHT bodies are boss kinds (chest drop, danger-end, HP scaling, the
 // HUD bar). The Tithe's slab and the Quorum husks are satellite/mechanic bodies, never
 // boss kinds themselves.
-const BOSS_KINDS: readonly EnemyKind[] = ["boss", "marrow", "choir", "weaver", "gilded", "jet", "tithe", "quorum", "gorge"];
+const BOSS_KINDS: readonly EnemyKind[] = ["boss", "marrow", "choir", "weaver", "gilded", "jet", "tithe", "quorum", "gorge", "pale"];
 
 export function isBossKind(kind: EnemyKind): boolean {
   return BOSS_KINDS.indexOf(kind) !== -1;
@@ -459,6 +476,7 @@ const BOSS_DISPLAY_NAME: Readonly<Partial<Record<EnemyKind, string>>> = {
   tithe: "The Tithe",
   quorum: "Quorum",
   gorge: "The Gorge",
+  pale: "The Pale Throne",
 };
 
 export function bossDisplayName(kind: EnemyKind): string {
@@ -488,6 +506,9 @@ export const BOSS_KIN: Readonly<Partial<Record<EnemyKind, EnemyKind>>> = {
   // The GORGE giant summons NO adds itself (its threat is space-control patterns, not chasing);
   // this kin is only the approach-room escort the floor scatters (the Sump hoard).
   gorge: "skeleton",
+  // The PALE THRONE giant likewise summons no adds; its kin is only the F75 approach-room escort
+  // (the Pale region's frozen hoard) — same space-control-not-chasing giant contract as Gorge.
+  pale: "skeleton",
 };
 
 // The F10 Arena Gauntlet floor (curriculum §2): sequential authored minibosses instead of
@@ -540,6 +561,11 @@ export function bossKindForFloor(seed: number, floor: number): EnemyKind | null 
   // from the F45 Quorum finale, so F55's "no immediate repeats" reads exactly as it always did
   // (F55 trivially never repeats the gorge, which the rotation can't pick).
   if (floor === GORGE_FLOOR) return "gorge";
+  // F75 is the PALE THRONE GIANT — the SECOND fixed set-piece (the Pale region cap), pinned the
+  // exact same way as the F50 gorge: a pure early return that never touches the RNG, so the seeded
+  // ladder stays byte-identical (deepBossIndex still walks unchanged, and pale — like gorge — can
+  // never be a rotation pick, so no seeded floor repeats it either).
+  if (floor === PALE_FLOOR) return "pale";
   const ladder = Math.floor(floor / BOSS_EVERY);
   if (ladder <= AUTHORED_BOSS_LADDER.length) return AUTHORED_BOSS_LADDER[Math.max(1, ladder) - 1];
   return DEEP_BOSS_ROSTER[deepBossIndex(seed, ladder - AUTHORED_BOSS_LADDER.length - 1)];
@@ -548,6 +574,10 @@ export function bossKindForFloor(seed: number, floor: number): EnemyKind | null 
 // The floor the GORGE giant caps (the Sump). Kept as a named constant so the F75 Pale Throne /
 // F100 Unmaker giants (which inherit this LOCKED template) slot in the same way.
 export const GORGE_FLOOR = 50;
+
+// The floor the PALE THRONE giant caps (the Pale region — F71-90). The SECOND giant set-piece,
+// pinned exactly like GORGE_FLOOR; F100 Unmaker will add its own pin the same way.
+export const PALE_FLOOR = 75;
 
 // Walk the seeded ladder from the top so "no immediate repeats" is well-defined and
 // deterministic at any depth (each step rerolls, shifting off the previous pick). Step 0
@@ -576,6 +606,7 @@ export function enemyHpForFloor(kind: EnemyKind, floor: number): number {
     case "tithe": return titheHpForFloor(floor);
     case "quorum": return quorumHpForFloor(floor);
     case "gorge": return gorgeHpForFloor(floor);
+    case "pale": return paleHpForFloor(); // F75 fixed anchor (floor-independent — see paleHpForFloor)
     default: return roundHalfToEven(ENEMY_ARCHETYPES[kind].baseHp * floorHpMult(floor));
   }
 }
@@ -686,6 +717,7 @@ const BOSS_ENTRANCE_GRACE: Readonly<Partial<Record<EnemyKind, number>>> = {
   weaver: WEAVER.entranceGrace, gilded: GILDED.entranceGrace,
   jet: JET.entranceGrace, tithe: TITHE.entranceGrace, quorum: QUORUM.entranceGrace,
   gorge: GORGE.entranceGrace,
+  pale: PALE.entranceGrace,
 };
 
 // The summoner bosses run a cadence add drip; the Choir's timer paces its earned-window
@@ -697,6 +729,9 @@ const BOSS_ADD_FIRST_AT: Readonly<Partial<Record<EnemyKind, number>>> = {
   // GORGE runs no add drip — it reuses the generic addTimer as its WEAK-POINT exposure cadence,
   // so this is when the first tectonic seams jut out after the pull settles.
   gorge: GORGE.seamFirstAt,
+  // PALE THRONE runs the same weak-point exposure cadence (no add drip) — when its first cold
+  // seams jut out after the pull settles.
+  pale: PALE.seamFirstAt,
 };
 
 // The per-floor enemy pool is now Gate 1's biome-selective encounter deck (roster.ts): a
@@ -1157,12 +1192,13 @@ export function spawnFloorEnemies(dungeon: Dungeon, seed: number, floor: number,
     const minionKind: EnemyKind = BOSS_KIN[bossKind] ?? "slime";
     const bossRoom = roomCount - 1;
     // pointInRoom is called unconditionally (it advances the seeded RNG the same way for every
-    // boss). The GORGE giant is a STATIONARY set-piece that must anchor at the arena CENTER so
-    // its radial rings/spokes have symmetric dodge space on every side (a wall-hugged giant would
-    // be unfair); every other boss uses the sampled interior point.
+    // boss). The GIANTS (Gorge F50, Pale Throne F75) are STATIONARY set-pieces that must anchor at
+    // the arena CENTER so their radial rings/spokes have symmetric dodge space on every side (a
+    // wall-hugged giant would be unfair); every other boss uses the sampled interior point.
     const b = pointInRoom(rng, dungeon, bossRoom);
     const room = dungeon.rooms[bossRoom];
-    const spawn = bossKind === "gorge" ? { x: (room.cx + 0.5) * TILE, y: (room.cy + 0.5) * TILE } : b;
+    const isGiant = bossKind === "gorge" || bossKind === "pale";
+    const spawn = isGiant ? { x: (room.cx + 0.5) * TILE, y: (room.cy + 0.5) * TILE } : b;
     active.push(createEnemy(bossKind, spawn.x, spawn.y, floor, rng, active.length, { players, power }));
     const minions = 2 + Math.floor(floor / BOSS_EVERY);
     for (let i = 0; i < minions; i++) {

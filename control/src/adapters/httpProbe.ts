@@ -72,7 +72,9 @@ import type {
 // `gorge_debris` (the shell phase rides bph + the exposed state rides aux, so no new EnemyWire field).
 // v28: the PVP MVP — PlayerWire.tm (FFA team), SelfWire.rsp (respawn countdown), the top-level
 // `match` block, and the reliable pvpKill / pvpMatchOver events (all inert in co-op).
-export const SYNTHETIC_JOIN_PROTOCOL = 28;
+// v29: the PALE THRONE F75 GIANT — new enemy kinds `pale` + `pale_seam` and a new PropKind
+// `pale_debris` (the shell phase rides bph + the exposed state rides aux, so no new EnemyWire field).
+export const SYNTHETIC_JOIN_PROTOCOL = 29;
 
 export interface HttpProbeConfig {
   baseUrl: string;

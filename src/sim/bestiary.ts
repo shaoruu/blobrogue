@@ -71,6 +71,8 @@ export const ENEMY_WAVE: Readonly<Record<EnemyKind, EnemyWave>> = {
   // GORGE (F50 giant) is boss-grade; its tectonic weak-point is a Wave-B mechanic body (a
   // summon, never in a common deck — like the Weaver's knot).
   gorge: "boss", gorge_seam: "B",
+  // PALE THRONE (F75 giant) is boss-grade; its cold tectonic weak-point is a Wave-B mechanic body.
+  pale: "boss", pale_seam: "B",
 };
 
 // Topology workers: bodies whose commitment EDITS the room (persistent destructible
@@ -101,6 +103,7 @@ export const WAVE_B_SYNTHESIS: Readonly<Partial<Record<EnemyKind, readonly Enemy
   quorum_splinter: ["skeleton"],       // the aggressor-chaser verb, a role-echo shard
   jet_echo: ["spitter"],               // the ranged warn/lock/fire verb, turned into your own reflection
   gorge_seam: ["caskbellows"],         // the locked-lane shoot-this-target lesson, made a tectonic weak-point (like the knot/sac)
+  pale_seam: ["caskbellows"],          // the F75 giant's cold weak-point — the same shoot-this-target peel verb as gorge_seam
 };
 
 // Biome specialists (the capacity envelope's third bucket): archetypes whose identity
@@ -306,6 +309,10 @@ export const ENEMY_MOVESET: Readonly<Record<EnemyKind, readonly AttackMove[]>> =
   // telegraphed danger-move), so they add no move here; its weak-point body commits nothing.
   gorge: ["slam", "spew", "sweep", "roar"],
   gorge_seam: [],
+  // PALE THRONE (F75 giant): the same shared-grammar moveset as Gorge — "slam"/"spew"/"sweep" the
+  // three spatial patterns, "roar" the shell crack-off transition. Its weak-point commits nothing.
+  pale: ["slam", "spew", "sweep", "roar"],
+  pale_seam: [],
 };
 
 // ---- the directional-art contract (QA render manifest) ----
@@ -373,6 +380,10 @@ export const SPRITE_CONTRACT: Readonly<Record<EnemyKind, SpriteContract>> = {
   // the decoy (idle-loop) contract like the other mechanic bodies.
   gorge: "mass",
   gorge_seam: "decoy",
+  // PALE THRONE (F75 giant): the same single front-facing SHELL-per-state "mass" contract as Gorge
+  // (no orientations — the client swaps stone/cracked/core off boss.phase); its weak-point is a decoy.
+  pale: "mass",
+  pale_seam: "decoy",
 };
 
 // ---- band helpers (the 5-floor intro-cadence unit) ----

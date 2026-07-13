@@ -1626,6 +1626,14 @@ export const WAVE_TELLS: Readonly<Record<string, Readonly<Record<string, MoveTel
     spew: { windup: "warden.glyphWarn", active: "warden.turretFire" },
     sweep: { windup: "warden.glyphWarn", active: "warden.turretFire" },
   },
+  // PALE THRONE (F75 giant) — PLACEHOLDER tells mirroring Gorge (the Warden's heavy-slammer bank)
+  // until the audio director's cold-giant stems land: the P1 ring (slam), P2 zones (spew) and P3
+  // spokes (sweep) each get a >=0.6s windup tell (the shell crack-off roar rides the boss-phase row).
+  pale: {
+    slam: { windup: "warden.prisonWarn", impact: "warden.prisonClose" },
+    spew: { windup: "warden.glyphWarn", active: "warden.turretFire" },
+    sweep: { windup: "warden.glyphWarn", active: "warden.turretFire" },
+  },
   skeleton: {
     lunge: { windup: "skeleton.commit" },
   },

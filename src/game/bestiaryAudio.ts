@@ -80,6 +80,7 @@ export const AUDIO_BEHAVIOR: Readonly<Record<EnemyKind, AudioBehavior>> = {
   tithe_tribute: "hunt", quorum_splinter: "hunt", // surplus adds: simple chasers
   jet_echo: "kite", // the reflection warns, locks, and fires ONE salvo (ranged-hold grammar)
   gorge: "boss", gorge_seam: "decoy", // the F50 giant + its planted weak-point (decoy grammar)
+  pale: "boss", pale_seam: "decoy", // the F75 giant + its cold planted weak-point (decoy grammar)
 };
 
 // ---- body materials ----
@@ -130,6 +131,9 @@ export const AUDIO_MATERIAL: Readonly<Record<EnemyKind, AudioMaterial>> = {
   // Weaver's lattice mechanic-body rows (chitin, like the Tithe slab) — until the audio director's
   // bespoke giant stems land (half-time footfall + colossal downbeat; see the manifest).
   gorge: "gold", gorge_seam: "chitin",
+  // PALE THRONE (F75 giant) — PLACEHOLDER audio material mirroring Gorge (the Warden's heavy-slam
+  // bank) until the audio director's cold-giant stems land (see the F75 manifest's audio section).
+  pale: "gold", pale_seam: "chitin",
 };
 
 // SAME-MATERIAL fallback law: until a row's generated stem lands, its declared fallback
@@ -307,6 +311,13 @@ export const BESTIARY_CUES: Readonly<Record<EnemyKind, Readonly<Record<string, W
     recover: "warden.exposed", entrance: "gilded.entrance", phase: "warden.phase", special: "warden.glyphWarn", death: "warden.death",
   },
   gorge_seam: { fuse: "weaver.latticeWarn", toll: "weaver.latticeFire" },
+  // PALE THRONE (F75 giant) — PLACEHOLDER cues mirroring Gorge (the Warden's heavy-slam bank) until
+  // the audio director's cold-giant stems land; its weak-points sing the lattice mechanic-body rows.
+  pale: {
+    windup: "warden.prisonWarn", lock: "warden.turretLock", active: "warden.turretFire", impact: "warden.prisonClose",
+    recover: "warden.exposed", entrance: "gilded.entrance", phase: "warden.phase", special: "warden.glyphWarn", death: "warden.death",
+  },
+  pale_seam: { fuse: "weaver.latticeWarn", toll: "weaver.latticeFire" },
 };
 
 export function bestiaryCue(kind: EnemyKind, hook: string): WaveEventId | null {
