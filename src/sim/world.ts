@@ -150,6 +150,17 @@ export interface PlayerSim {
   mods: PlayerMods;
   // Post-hit protection (0.80s). SEPARATE from the dash iframe: neither may extend the other.
   invuln: number;
+  // The world tick a landed hit last reduced this player's HP (-1 = never damaged). Server-only,
+  // absolute + monotonic like the ult lockout ticks. Drives the MENDER post-damage SELF-heal
+  // delay (a Mender's own healing pauses briefly after it is hit); it is set only when real HP is
+  // lost, so a fully-soaked/invuln hit never arms it. Off the wire — self-heal resolves in the
+  // authoritative world phase, which client prediction never runs.
+  lastDamagedTick: number;
+  // The earliest world tick at which this player's next 1 HP of MENDER SELF-heal may land — the
+  // sustained self-heal CEILING (guard), advanced by SELF_HEAL_TICKS_PER_HP on each self-HP so
+  // combined self output stays ≤ selfHpPerSec while Lifebloom's slower cadence passes untouched.
+  // Server-only + monotonic like the ult lockout ticks; off the wire (self-heal is world-phase only).
+  selfHealReadyTick: number;
   // Dash iframe (0.18s), set once per dash — non-refreshing, non-overlapping.
   dashInvuln: number;
   dashCd: number; dashTime: number; dashDx: number; dashDy: number;
@@ -463,7 +474,7 @@ export function createPlayer(id: PlayerId, x: number, y: number): PlayerSim {
     id, x, y, pr: 18,
     hp: PLAYER.baseMaxHp, maxHp: PLAYER.baseMaxHp,
     mods: createMods(),
-    invuln: 0, dashInvuln: 0,
+    invuln: 0, lastDamagedTick: -1, selfHealReadyTick: 0, dashInvuln: 0,
     dashCd: 0, dashTime: 0, dashDx: 0, dashDy: 0,
     fireCd: 0, chargeT: 0, fangCd: 0,
     facing: 1, aimAngle: 0, weapon: DEFAULT_WEAPON,
@@ -731,26 +742,54 @@ function onKitDamageDealt(w: WorldState, p: PlayerSim | null, dmg: number): void
   }
 }
 
-// §10 per-target incoming-heal ROOM (whole HP) allowed RIGHT NOW under the shared Mender clamp:
-// the rolling 1s per-target budget AND the party-wide budget, so combined Mender output (any
-// number of Menders, Lifebloom + Sanctuary) never double-stacks or out-heals incoming damage.
-function incomingHealRoom(w: WorldState, target: PlayerSim): number {
+// The MENDER post-damage SELF-heal delay in ticks: after a Mender takes a landed hit, its OWN
+// healing pauses this long (a hit dents and matters for a beat). Ally healing is never gated.
+const SELF_HEAL_DELAY_TICKS = Math.round(MENDER_HEAL_CLAMP.selfHealDelaySec * TICKS_PER_SECOND);
+
+// Is `p`'s SELF-heal currently paused by a recent hit? A pure tick comparison (no wall-clock), so
+// it is fully deterministic. -1 (never damaged) reads as not-delayed.
+function isSelfHealDelayed(w: WorldState, p: PlayerSim): boolean {
+  return p.lastDamagedTick >= 0 && w.tick - p.lastDamagedTick < SELF_HEAL_DELAY_TICKS;
+}
+
+// The min ticks between two 1-HP SELF-heals — the sustained self-heal CEILING (guard). ceil so the
+// realized rate stays ≤ selfHpPerSec (at 0.6/s → 34 ticks → ~0.588 HP/s). Slower than Lifebloom's
+// 40-tick cadence, so a Lifebloom-only Mender self-heals at its natural ~0.5/s untouched; only
+// STACKED self output (Sanctuary-on-self + self-pulse) is throttled to the ceiling.
+const SELF_HEAL_TICKS_PER_HP = Math.ceil(TICKS_PER_SECOND / MENDER_HEAL_CLAMP.selfHpPerSec);
+
+// §10 incoming-heal ROOM (whole HP) allowed RIGHT NOW. For an ALLY it's the shared rolling 1s
+// per-target budget AND the party-wide budget, so combined Mender output (any Mender count,
+// Lifebloom + Sanctuary) never double-stacks or out-heals incoming damage. For a SELF-heal the
+// per-target term is instead the selfHpPerSec CEILING (≤1 HP per SELF_HEAL_TICKS_PER_HP); the
+// party budget is shared and unchanged.
+function incomingHealRoom(w: WorldState, target: PlayerSim, isSelf: boolean): number {
   const now = w.tick;
   const win = TICKS_PER_SECOND; // 1s rolling window
-  const tw = w.incomingHealWindows.get(target.id);
-  const targetHealed = tw && now - tw.tick < win ? tw.hp : 0;
   const partyHealed = now - w.partyHealWindow.tick < win ? w.partyHealWindow.hp : 0;
-  const perTargetRoom = MENDER_HEAL_CLAMP.perTargetHpPerSec - targetHealed;
   const partyRoom = MENDER_HEAL_CLAMP.partyHpPerSec - partyHealed;
+  let perTargetRoom: number;
+  if (isSelf) {
+    perTargetRoom = now >= target.selfHealReadyTick ? 1 : 0; // the sustained self-heal ceiling
+  } else {
+    const tw = w.incomingHealWindows.get(target.id);
+    const targetHealed = tw && now - tw.tick < win ? tw.hp : 0;
+    perTargetRoom = MENDER_HEAL_CLAMP.perTargetHpPerSec - targetHealed;
+  }
   return Math.max(0, Math.floor(Math.min(perTargetRoom, partyRoom) + 1e-9));
 }
 
-// Commit `hp` of actually-applied Mender healing against the per-target + party rolling budgets.
-function consumeIncomingHeal(w: WorldState, target: PlayerSim, hp: number): void {
+// Commit `hp` of actually-applied Mender healing against the party budget and, per target type,
+// either the SELF ceiling (advance the next-self-heal tick) or the shared ally per-target window.
+function consumeIncomingHeal(w: WorldState, target: PlayerSim, hp: number, isSelf: boolean): void {
   const now = w.tick;
   const win = TICKS_PER_SECOND;
-  const tw = w.incomingHealWindows.get(target.id);
-  if (tw && now - tw.tick < win) tw.hp += hp; else w.incomingHealWindows.set(target.id, { tick: now, hp });
+  if (isSelf) {
+    target.selfHealReadyTick = now + SELF_HEAL_TICKS_PER_HP; // hold the next self-HP to the ceiling cadence
+  } else {
+    const tw = w.incomingHealWindows.get(target.id);
+    if (tw && now - tw.tick < win) tw.hp += hp; else w.incomingHealWindows.set(target.id, { tick: now, hp });
+  }
   if (now - w.partyHealWindow.tick < win) w.partyHealWindow.hp += hp; else w.partyHealWindow = { tick: now, hp };
 }
 
@@ -762,13 +801,24 @@ function consumeIncomingHeal(w: WorldState, target: PlayerSim, hp: number): void
 // clamp (it is not sustained output) but is still maxHp-clamped. Returns HP restored.
 function menderHeal(w: WorldState, healer: PlayerSim | null, target: PlayerSim, amount: number, ev: SimEvent[], throughClamp: boolean): number {
   if (target.isDown || target.hp <= 0) return 0; // a HoT never revives (spec §7)
-  if (throughClamp) amount = Math.min(amount, incomingHealRoom(w, target));
+  const isSelf = healer !== null && healer === target;
+  if (isSelf) {
+    // SELF-heal: PRIMARY gate is the post-hit delay (no top-off for a beat after a hit); the
+    // selfHpPerSec ceiling is the guard. Both apply to the HoT AND the on-cast burst, so a Mender
+    // can't stack self-heal above the ceiling by casting Sanctuary on itself.
+    if (isSelfHealDelayed(w, target)) return 0;
+    amount = Math.min(amount, incomingHealRoom(w, target, true));
+  } else if (throughClamp) {
+    // ALLY HoT: the shared per-target/party rate clamp (unchanged). The on-cast burst
+    // (throughClamp false) bypasses it exactly as before — a clutch save is never rate-limited.
+    amount = Math.min(amount, incomingHealRoom(w, target, false));
+  }
   if (amount <= 0) return 0;
   const before = target.hp;
   target.hp = Math.min(target.maxHp, target.hp + amount);
   const healed = target.hp - before; // overheal discarded (never counts against the budget)
   if (healed <= 0) return 0;
-  if (throughClamp) consumeIncomingHeal(w, target, healed);
+  if (isSelf || throughClamp) consumeIncomingHeal(w, target, healed, isSelf);
   ev.push({ t: "heal", pid: target.id, x: target.x, y: target.y });
   if (healer && isRealKit(healer.kitId)) accrueUlt(healer, "heal", ultChargeFromHealDone(healed));
   return healed;
@@ -855,12 +905,24 @@ function resolveHealPulse(w: WorldState, p: PlayerSim, ev: SimEvent[]): void {
   if (p.kitId !== "mender" || w.tick < p.pulseReadyAtTick) return;
   const target = aimedAllyInRange(w, p, HEAL_PULSE.range);
   if (target === null) return; // no ally under the reticle: the button is not spent
+  // An ALLY pulse is the full burst that bypasses the rate clamp (a responsive clutch save). A
+  // SELF-targeted pulse (solo fallback) instead respects BOTH self levers: the post-hit delay (no
+  // instant self-clutch after a hit) AND the selfHpPerSec ceiling (it counts against the sustained
+  // self-heal budget). The button is not spent while a self-pulse is gated, so it stays ready for
+  // the moment the delay/ceiling lapses.
+  const isSelf = target === p;
+  let healAmount: number = HEAL_PULSE.heal;
+  if (isSelf) {
+    if (isSelfHealDelayed(w, p)) return;
+    healAmount = Math.min(healAmount, incomingHealRoom(w, p, true));
+    if (healAmount <= 0) return;
+  }
   p.pulseReadyAtTick = w.tick + HEAL_PULSE.cooldownTicks;
   const before = target.hp;
-  target.hp = Math.min(target.maxHp, target.hp + HEAL_PULSE.heal);
+  target.hp = Math.min(target.maxHp, target.hp + healAmount);
   const healed = target.hp - before; // overheal discarded (never charges, never counts to budget)
   if (healed <= 0) return;
-  consumeIncomingHeal(w, target, healed); // counts FULLY against the shared per-target/party clamp
+  consumeIncomingHeal(w, target, healed, isSelf); // counts against the shared per-target/party (or self) budget
   ev.push({ t: "heal", pid: target.id, x: target.x, y: target.y });
   accrueUlt(p, "heal", ultChargeFromHealDone(healed));
 }
@@ -10419,6 +10481,7 @@ function damagePlayer(w: WorldState, p: PlayerSim, amount: number, ev: SimEvent[
   }
   p.hp -= amount;
   p.invuln = PLAYER.postHitInvuln;
+  p.lastDamagedTick = w.tick; // arms the MENDER post-damage SELF-heal delay (self-heal only; ally heal is never gated)
   // Damage to the CHANNELER cancels the revive it was powering (gate §6) — identity-exact:
   // a bystander inside the radius taking a hit resets nothing.
   cancelReviveChannelBy(w, p.id);

@@ -180,9 +180,26 @@ export const SANCTUARY = {
 // number of Menders) share, so combined Mender output to one ally never exceeds perTargetHpPerSec
 // and party-wide never exceeds partyHpPerSec — regardless of Mender count. Overheal is discarded
 // on top. HP is integer, so a fractional per-second budget admits whole HP up to its floor.
+//
+// SELF vs ALLY (balancer 2026-07-13): a Mender is a great healer OF OTHERS and a POOR
+// SELF-sustainer. TWO self-ONLY levers, and which does the work matters:
+//   PRIMARY — selfHealDelaySec: after the Mender takes a hit its OWN healing pauses this long. Solo
+//     Lifebloom self-heal is only ~0.5 HP/s, yet that still out-paced the player's ~0.3-0.5/s
+//     intake → permanent full. The 1.5s post-damage pause drops EFFECTIVE self-heal to ~0.13 HP/s
+//     during active combat (poked ~every 2s), so HP drifts DOWN in a fight and heals back only in a
+//     quiet 1.5s+ beat between fights. This is what restores tension.
+//   GUARD  — selfHpPerSec: the sustained SELF-heal CEILING, so a Mender can't park in its own
+//     Sanctuary + self-pulse to stack self-heal back above the delay's intent even when the delay
+//     is inactive. It admits Lifebloom's slower ~0.5 HP/s untouched and only caps STACKED self
+//     output. It is the guard, not the main effect.
+// ALLY healing is NEVER rate-reduced (perTargetHpPerSec / partyHpPerSec unchanged) and NEVER
+// delayed — a Mender under fire still instantly saves a teammate. LIFEBLOOM.fraction is untouched
+// (lowering it would weaken ALLY healing, which is not the problem).
 export const MENDER_HEAL_CLAMP = {
-  perTargetHpPerSec: 1.5, // one ally: combined Mender HoT ≤ this
-  partyHpPerSec: 3.0,     // whole party: combined Mender HoT ≤ this
+  perTargetHpPerSec: 1.5, // one ALLY: combined Mender HoT ≤ this (tops a focused teammate) — unchanged
+  partyHpPerSec: 3.0,     // whole party: combined Mender HoT ≤ this — unchanged
+  selfHpPerSec: 0.6,      // SELF ceiling (guard): sustained self-heal ≤ this; admits Lifebloom's ~0.5/s
+  selfHealDelaySec: 1.5,  // SELF-heal pauses this long after the Mender takes a hit (PRIMARY; ally never pauses)
 } as const;
 
 // MENDER HEAL-PULSE (Wave 2 SIGNATURE): a short-CD DIRECTED active heal — a felt VERB on top of
