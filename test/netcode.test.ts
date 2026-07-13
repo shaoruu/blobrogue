@@ -50,9 +50,9 @@ interface Rig {
 }
 
 // A rig: a server-shaped world + a WSTransport bound to a fake socket with a controlled clock.
-// worldMode shapes the SERVER world (co-op dungeon vs pvp arena); the client derives its own
-// mode from each snapshot's authoritative world id.
 async function makeRig(seed = 0xAB12, worldMode: WorldMode = "coop"): Promise<Rig> {
+  // worldMode shapes the SERVER world (co-op dungeon vs pvp arena); the client derives its own
+  // mode from each snapshot's authoritative world id.
   const world = createWorld(seed, 1, { isShared: true, skipLocalPlayer: true, mode: worldMode });
   const pid = "p1";
   spawnPlayerInWorld(world, pid);
@@ -253,14 +253,12 @@ async function worldRebuildTests(): Promise<void> {
   rig.transport.stop();
 }
 
-// PVP seam regression: the world MODE is part of the authoritative world identity (the pvp:
-// prefix). A pvp-prefixed `wid` must make the client rebuild its LOCAL predicted/render world as
-// the fixed pvp ARENA — not a co-op dungeon. The shipped bug (PR #121 wired every server/wire/sim
-// layer but never the client transport): WSTransport always rebuilt co-op, so a pvp arena
-// rendered as a walk-through-walls co-op floor (procedural rooms + a GO DOWN exit) even though
-// the server ran the arena. A plain room id must still rebuild the seeded co-op dungeon.
 async function pvpWorldModeTests(): Promise<void> {
   section("pvp world id rebuilds the LOCAL world as the arena; a co-op id stays a dungeon");
+  // Regression for the shipped PVP seam (hyp B): PR #121 wired the server/wire/sim/lobby but not
+  // the client transport, so WSTransport always rebuilt a co-op dungeon over the pvp arena (a
+  // walk-through-walls co-op floor with procedural rooms + a GO DOWN exit). The client's local
+  // mode must be DERIVED from the authoritative world id — and co-op must stay a seeded dungeon.
   const pvp = await makeRig(0x9911, "pvp");
   pvp.sock.deliver(pvp.snap({ full: true, worldId: "pvp:room:ARENA" }));
   const pw = pvp.transport.poll().state;
