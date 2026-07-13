@@ -229,7 +229,7 @@ function safetyTests(): void {
   const d = diffSnapshot(snapshotToWire(base), snapshotToWire(next), next.sseq, fullWorld(next));
   check("a delta advertises its baseline sseq so a client can refuse a gap", d.b === base.sseq && d.q === 7);
 
-  check("protocol version is current (v28: the PVP MVP — PlayerWire.tm + SelfWire.rsp + the top-level match block)", PROTOCOL_VERSION === 28);
+  check("protocol version is current (v29: the PALE THRONE F75 giant — pale + pale_seam kinds + pale_debris prop)", PROTOCOL_VERSION === 29);
 }
 
 function main(): void {

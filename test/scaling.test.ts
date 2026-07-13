@@ -139,6 +139,10 @@ const WINDOW_OPENERS: Readonly<Partial<Record<EnemyKind, WindowOpener>>> = {
   // arc one direction instead of zig-zagging; the shared driver bursts the body during the exposed
   // window. A bot that can't reach the seams never opens a window → FAILS LOUD via the (A) gate.
   gorge: (w, boss) => w.enemies.find((e) => !e.dead && e.kind === "gorge_seam") ?? boss,
+  // Pale Throne (F75 giant): the SECOND giant — REUSES Gorge's per-phase opener wholesale (same
+  // machinery), only the weak-point kind differs (cold pale_seam). Peel the live seams (stone →
+  // cracked → core) in spawn/arc order; the shared driver bursts the bared body in the window.
+  pale: (w, boss) => w.enemies.find((e) => !e.dead && e.kind === "pale_seam") ?? boss,
   // Marrow/Gilded/Jet/King: no not-exposed body — the driver just fires the boss (Marrow's
   // crash is baited by botMoveFor; Gilded/Jet windows ride their own commitment-recover cadence;
   // King has no guard at all). Absent from the map → the driver falls back to the boss body.
@@ -181,12 +185,12 @@ function botMoveFor(kind: EnemyKind, boss: Enemy, px: number, py: number, aimAt:
     }
     return { x: 0, y: 0 };
   }
-  if (kind === "gorge" && !boss.dead) {
-    // The GIANT is a stationary set-piece with a GUARDED body: bullets must reach the tectonic
-    // seams (which jut out FACING the player, capped to a front arc so each has clear LOS past it
-    // to the shell). A competent player holds a firing standoff facing the giant and tracks the
-    // seam arc; only close in if too far. aimAt is the current target seam (sealed) or the body
-    // (exposed) — approach it to a mid firing range, then hold and let aim track the arc.
+  if ((kind === "gorge" || kind === "pale") && !boss.dead) {
+    // The GIANTS (Gorge F50 / Pale Throne F75) are stationary set-pieces with a GUARDED body:
+    // bullets must reach the tectonic seams (which jut out FACING the player, capped to a front arc
+    // so each has clear LOS past it to the shell). A competent player holds a firing standoff facing
+    // the giant and tracks the seam arc; only close in if too far. aimAt is the current target seam
+    // (sealed) or the body (exposed) — approach it to a mid firing range, then hold and track the arc.
     const d = Math.hypot(aimAt.x - px, aimAt.y - py);
     if (d > 220) { const t = Math.atan2(aimAt.y - py, aimAt.x - px); return { x: Math.cos(t), y: Math.sin(t) }; }
     return { x: 0, y: 0 };
@@ -619,6 +623,16 @@ const BOSS_BANDS: Readonly<Record<string, BossBand>> = {
   // WINDOW_OPENERS.gorge opener peels whatever shell is current (rind → chitin → core).
   gorge: { floor: 50, weapon: "pistol", build: [...L3("hair_trigger"), ...L3("glass_cannon")],
     soloWall: [56, 78], exposed: [26, 40], minLegal: 22, party4: [40, 58], calibrated: false, calibrated4: false },
+  // PALE THRONE (F75 GIANT #2): the region cap — the SAME K=3 shell-peel giant as Gorge, reusing its
+  // machinery, with the region-cap calibration (total 1220 = 1.3× Gorge, a TIGHTER 0.20 per-phase
+  // bank, and a higher min-legal). PROVISIONAL bands from the balancer (measured + surfaced, never
+  // failed red — hardens when the harness bot measures it). The HARD gates STILL apply: (A) the bot
+  // MUST open windows (peel the cold pale_seams) + kill it — else FAIL LOUD — and (C) the 4-strong
+  // P10 must stay >= min-legal 25 (a stack can't one-burst the giant: the 0.20 per-phase bank + the
+  // 3-phase structure hold it). The WINDOW_OPENERS.pale opener peels whatever shell is current.
+  // (Balancer label "pale_throne" maps to the EnemyKind `pale` — the harness keys rows by kind.)
+  pale: { floor: 75, weapon: "pistol", build: [...L3("hair_trigger"), ...L3("glass_cannon")],
+    soloWall: [62, 86], exposed: [34, 50], minLegal: 25, party4: [44, 64], calibrated: false, calibrated4: false },
 };
 
 const GOD_PARTY: readonly Loadout[] = [BUILDS.god, BUILDS.god, BUILDS.god, BUILDS.god];

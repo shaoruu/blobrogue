@@ -269,7 +269,7 @@ function serverRoundTripTests(): void {
 // who is actually there (the Sev-0 readout).
 function worldBindingWireTests(): void {
   section("v4: authoritative world id + roster are required, strict, and round-trip");
-  check("protocol version covers the PVP MVP (v28: PlayerWire.tm + SelfWire.rsp + top-level match block + pvpKill/pvpMatchOver events)", PROTOCOL_VERSION === 28, `v=${PROTOCOL_VERSION}`);
+  check("protocol version covers the PALE THRONE F75 giant (v29: pale + pale_seam kinds + pale_debris prop; no new EnemyWire field)", PROTOCOL_VERSION === 29, `v=${PROTOCOL_VERSION}`);
   check("room code maps to its world id", worldIdForRoomCode(" abcd ") === "room:ABCD");
   check("room world ids pass the shared charset gate", isValidWorldId(worldIdForRoomCode("ZZZZ")) && isValidWorldId("arena-1"));
   check("junk world ids fail the shared charset gate", !isValidWorldId("room:../../etc") && !isValidWorldId(""));

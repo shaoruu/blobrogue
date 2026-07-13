@@ -159,6 +159,8 @@ function twoWaveGates(): void {
     jet_echo: 35,
     // The GORGE giant's tectonic weak-point first appears on the F50 giant floor.
     gorge_seam: 50,
+    // The PALE THRONE giant's cold tectonic weak-point first appears on the F75 giant floor.
+    pale_seam: 75,
   };
   check("every synthesized verb was TAUGHT first (source intro <= B first floor)",
     bKinds.every((k) => (WAVE_B_SYNTHESIS[k] ?? []).every((src) =>
