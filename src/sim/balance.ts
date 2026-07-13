@@ -2007,9 +2007,11 @@ export function gorgeSeamCountFor(phase: number, players: number): number {
 // A colossal ~192px STATIONARY front-facing set-piece PINNED to floor 75, mechanically IDENTICAL
 // to Gorge (same 3-phase shell-peel, same weak-point peel verb, same rings/zones/spokes) — only
 // the MATERIAL is COLD (warmth-drain, never amber; a client-render/telegraph swap, no sim impact)
-// and the calibration is the region-cap step. PALE is Gorge's grammar with the balancer's five
-// tuned fields overridden; everything else is inherited by spread so the two giants can never
-// drift structurally (and F100 Unmaker slots in the same way).
+// and the calibration is the region-cap step. PALE is Gorge's grammar with (a) the balancer's
+// HP/bank calibration overridden and (b) the per-phase PATTERN params surfaced as explicit GD
+// variant slots; the shared giant MACHINERY (guard, the roar crack-off transition, contact damage,
+// entrance grace, seam durability, debris) is inherited by spread so it can never drift (and F100
+// Unmaker slots in the same way).
 //
 // CALIBRATION (balancer, F75 EXPLICIT anchor — see paleHpForFloor for why NOT the §3 curve):
 //   - total 1220 = a modest 1.3× Gorge's 930 (a felt PRESTIGE step for the region cap, NOT a
@@ -2032,6 +2034,33 @@ export const PALE = {
   phaseAt: [0.7213, 0.4098] as readonly number[],
   phaseFloor: [0.64, 0.33] as readonly number[],
   windowBankFrac: 0.20,
+  // ---- per-phase PATTERN + PEEL-TASK params (the GD's F75 variant slots) ----
+  // For NOW these MIRROR Gorge (the encounter reuses the Gorge patterns — see the scaling gate's
+  // exposed-efficiency check, which surfaces this as the sponge failure mode until the variants
+  // land). The GD's F75 variants — tighter windows, denser telegraphs in disjoint lanes, a phase-3
+  // wrinkle — drop in HERE, in one obvious place, without touching the shared giant core. Named
+  // explicitly (overriding the spread) so a variant lands cleanly and the two giants' patterns
+  // diverge independently. The scaling gate then proves F75's exposed-efficiency drops below F50's.
+  //
+  // Peel task + earned windows (tighter windows = shorter seamLife / peelExpose, denser = more/wider seams):
+  peelExpose: 3.2,
+  seamBaseByShell: [2, 3, 4] as readonly number[],       // seams per exposure, per shell (solo base)
+  seamPerPlayer: 1,
+  seamCap: 6,
+  seamRingDist: 96,
+  seamArcByShell: [Math.PI * 0.55, Math.PI * 0.85, Math.PI * 1.0] as readonly number[], // front-arc width per shell (disjoint lanes)
+  seamExposeInterval: 1.4,
+  seamFirstAt: 2.0,
+  seamLifeByShell: [11.0, 9.5, 8.0] as readonly number[], // the exposure retract window, per shell (the "tighten" knob)
+  attackCd: [0, 3.0, 2.8, 2.4] as readonly number[],      // spatial-pattern cadence, per phase
+  // P1 RADIAL ring (denser telegraph = more shards / narrower gap):
+  ringWindup: 0.9, ringRecover: 0.7, ringCount: 16, ringGap: 3, ringSpeed: 240, ringDebris: 2, ringDebrisDist: 150,
+  // P2 ZONING slag pools (denser = more/bigger/longer-lived pools, higher cap):
+  zoneWindup: 0.8, zoneRecover: 0.7, zoneCount: 3, zoneRing: 150, zoneRadius: 30, zoneLife: 9.0, zoneCap: 10,
+  // P3 CONVERGENT spokes (the phase-3 wrinkle lands here — count/gap/step/speed/duration/interval):
+  spokeWindup: 0.9, spokeRecover: 0.6, spokeDuration: 3.0, spokeInterval: 0.16, spokeCount: 9, spokeGap: 2, spokeStep: 0.13, spokeSpeed: 250,
+  // The shared projectile glob (shape across all three patterns):
+  globRadius: 8, globDamage: 1, globLife: 2.8,
 } as const;
 
 export function paleHpForFloor(): number {
