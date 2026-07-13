@@ -31,9 +31,11 @@ export function resolvePvpPublicEnabled(flag: boolean | undefined): boolean {
 // under either setting without tsc flagging a constant condition.
 export const PVP_PUBLIC_ENABLED: boolean = resolvePvpPublicEnabled(false);
 
-// The typed rejection every layer throws for a PVP action while the kill switch is off. Its
-// message IS the clean player-facing copy (so a stale client surfaces the right text), and its
-// `code` is the stable machine token the newer client/server layers key on.
+// The CLIENT-SIDE PREFLIGHT rejection: thrown locally by the OnlineLobby entry guards before a
+// pvp request ever leaves the browser. It never crosses an RPC boundary — that is the BACKEND's
+// job, and the backend deliberately uses a tagged ConvexError instead (convex/pvpFlag.ts), whose
+// structured `.data` survives Convex's production error redaction where a plain Error would not.
+// Both funnel through the same normalizer (src/net/onlineError.ts) to the identical clean copy.
 export class PvpDisabledError extends Error {
   readonly code = PVP_DISABLED_CODE;
   constructor() {
@@ -42,9 +44,10 @@ export class PvpDisabledError extends Error {
   }
 }
 
-// The single guard used at every client + game-server PVP entry: reject a pvp action while
+// The single client-side guard used at every OnlineLobby PVP entry: reject a pvp action while
 // disabled, pass co-op (and any non-pvp mode) through untouched. Pure so it is trivially
-// unit-testable and so the co-op path provably never changes.
+// unit-testable and so the co-op path provably never changes. (The game server enforces the
+// same policy via config.pvpPublicEnabled; the Convex backend via convex/pvpFlag.ts.)
 export function assertPvpModeAllowed(mode: "coop" | "pvp" | undefined): void {
   if (mode === "pvp" && !PVP_PUBLIC_ENABLED) throw new PvpDisabledError();
 }
