@@ -18,7 +18,7 @@ import {
   isWaveEventId, waveSpecOf, spatialGainFor, tellCuesFor, isBurrowUnderground,
   bossWaveEvents, PET_SIDECHAIN, BOSS_LOCK_AMBIENT_MUTE_MS, WAVE_PRIORITY,
   WAVE_BOSS_PHASE, WAVE_BOSS_DEATH, WAVE_BOSS_ENTRANCE, WAVE_WEAPON_FIRE,
-  AMBIENT_ZONE_EVENTS, HAZARD_WAVE_EVENTS,
+  AMBIENT_ZONE_EVENTS, HAZARD_WAVE_EVENTS, PVP_WAVE_EVENTS,
   ALWAYS_REACHABLE_EVENTS, BEAM_WEAPON_ID, BEAM_START_IDLE_MS, BEAM_STOP_GAP_MS, BEAM_FIRE_CUE_GAP_MS,
   BURROW_EMITTER, BURROW_THUD_EVENT, DEEP_EMITTER, takeStemsOf, emitterRand,
 } from "./waveSpec.js";
@@ -617,6 +617,14 @@ class WaveAudioDirector {
     }
     this.engine.preloadWave(stems);
     this.engine.preloadSamples(samples);
+  }
+
+  // Decode the PvP kill/death/match-flow cues on match entry so the FIRST frag/death/GO never
+  // races its load (a frag is never culled — it must also never be silent on the first kill).
+  preloadPvp(): void {
+    const stems: string[] = [];
+    for (const event of PVP_WAVE_EVENTS) this.collectStems(event, stems);
+    this.engine.preloadWave(stems);
   }
 
   // The bespoke entrance for a boss-grade body (bosses at floor load, captains on spawn).

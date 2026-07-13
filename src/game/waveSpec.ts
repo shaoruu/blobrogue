@@ -1516,6 +1516,42 @@ export const WAVE_SOUNDS = {
     duck: [dM(0.3, 0.5, 1.0)],
     fallback: { sample: "floorClear", rate: 0.85 },
   },
+
+  // ---- PVP (FFA arena deathmatch): the KILL / DEATH / MATCH-FLOW layer (client-only audio) ----
+  // A SNAPPIER, brighter arcade kit — its own voice, distinct from the moody PvE cues. Bound to
+  // the shipped sim events (pvpKill / pvpMatchOver / match.ph / SelfWire.rsp). Shots + impacts
+  // during a match REUSE the arsenal — only this kill/death/match-flow layer is new.
+  //
+  // THE #1 RULE: `pvpKill{by,victim}` broadcasts to EVERY client, so the wiring branches on the
+  // LOCAL player id (pvpKillCue below): by===self -> FRAG (the money cue, non-spatial, full gain);
+  // victim===self -> DEATH (non-spatial); neither -> a quiet SPATIAL distant thud, hard-rate-limited
+  // (cooldownMs 300, global) so a 6-player lobby never spams. Priorities: frag 92 (above weapon/
+  // impact — a frag is NEVER culled), death 95 (own death always reads), fight/win/lose 96.
+  "pvp.frag": { stem: "pvp/frag", variants: 3, gain: 0.85, bus: "ui", priority: 92, jitter: 0.03, cooldownMs: 40 },
+  // FRAG STREAK escalation: rapid local frags pitch the base variants up ~2 safe-band steps
+  // (see pvpFragStreakRate). Beyond that wants these dedicated escalation takes — registered as
+  // asset hooks, pending generation (they sound once the files land; absence never fails).
+  // TODO(pvp-audio): route pvpFragStreakStep past the safe-band cap to these instead of the base.
+  "pvp.fragStreak2": { stem: "pvp/frag_streak2", variants: 1, gain: 0.88, bus: "ui", priority: 92, jitter: 0 },
+  "pvp.fragStreak3": { stem: "pvp/frag_streak3", variants: 1, gain: 0.9, bus: "ui", priority: 92, jitter: 0 },
+  "pvp.death": { stem: "pvp/death", variants: 2, gain: 0.8, bus: "ui", priority: 95, jitter: 0.02 },
+  "pvp.killDistant": {
+    stem: "pvp/kill_distant", variants: 2, gain: 0.35, bus: "sfx", priority: WAVE_PRIORITY.impact,
+    jitter: 0.05, spatial: true, cooldownMs: 300,
+  },
+  "pvp.countTick": { stem: "pvp/count_tick", variants: 1, gain: 0.6, bus: "ui", priority: 90, jitter: 0 },
+  "pvp.fight": { stem: "pvp/fight_go", variants: 1, gain: 0.9, bus: "ui", priority: 96, jitter: 0 },
+  "pvp.win": { stem: "pvp/match_win", variants: 1, gain: 0.9, bus: "ui", priority: 96, jitter: 0 },
+  "pvp.lose": { stem: "pvp/match_lose", variants: 1, gain: 0.8, bus: "ui", priority: 96, jitter: 0 },
+  // respawnTick (optional, subtle) is registered as a hook but NOT fired in v1; respawnIn is the
+  // "weapons hot" blip the instant the local rsp countdown hits 0 and control returns.
+  "pvp.respawnTick": {
+    stem: "pvp/respawn_tick", variants: 1, gain: 0.3, bus: "ui", priority: WAVE_PRIORITY.ui, jitter: 0, cooldownMs: 400,
+  },
+  "pvp.respawnIn": { stem: "pvp/respawn_in", variants: 1, gain: 0.6, bus: "ui", priority: 90, jitter: 0 },
+  // TODO(pvp-audio): optional TENSION tier (pvp.takeLead / pvp.lostLead / pvp.matchPoint /
+  // pvp.finalFrag) — deferred; needs client-side lead-change + fraglimit tracking off the match
+  // scoreboard block. Ship after the core beats (1-6) gate.
 } as const satisfies Record<string, WaveSoundSpec>;
 
 export type WaveEventId = keyof typeof WAVE_SOUNDS;
@@ -1867,6 +1903,76 @@ export function spatialGainFor(distPx: number, isOffCamera: boolean, isUncapped:
   if (isOffCamera && !isUncapped) return Math.min(base, 0.35);
   return base;
 }
+
+// ---- PVP (client-only) trigger helpers -------------------------------------------------
+// pvpKill fires to EVERY client; the LOCAL player id decides which cue and whether it is
+// spatial. This branch is the whole point of the PvP audio pass — the killer hears the
+// money FRAG, the victim hears DEATH (both in-your-head, non-spatial), and everyone else a
+// quiet SPATIAL distant thud (hard rate-limited by the row's cooldown). Factored pure so the
+// role logic is asserted headlessly, exactly like the tell/attenuation helpers above.
+export type PvpKillRole = "frag" | "death" | "distant";
+
+export interface PvpKillCue {
+  readonly event: WaveEventId;
+  readonly isSpatial: boolean; // frag/death play at full gain in your head; distant is positional
+}
+
+export const PVP_KILL_CUES: Readonly<Record<PvpKillRole, PvpKillCue>> = {
+  frag: { event: "pvp.frag", isSpatial: false },
+  death: { event: "pvp.death", isSpatial: false },
+  distant: { event: "pvp.killDistant", isSpatial: true },
+};
+
+export function pvpKillRole(isLocalKiller: boolean, isLocalVictim: boolean): PvpKillRole {
+  if (isLocalKiller) return "frag";
+  if (isLocalVictim) return "death";
+  return "distant";
+}
+
+export function pvpKillCue(isLocalKiller: boolean, isLocalVictim: boolean): PvpKillCue {
+  return PVP_KILL_CUES[pvpKillRole(isLocalKiller, isLocalVictim)];
+}
+
+// Match-over branches on winner===self: a triumphant win sting vs a light defeat cue. Never
+// the co-op gameOver (too heavy/final — a PvP loss is a fast requeue).
+export function pvpMatchOverCue(isLocalWinner: boolean): WaveEventId {
+  return isLocalWinner ? "pvp.win" : "pvp.lose";
+}
+
+// FRAG STREAK escalation: rapid local frags step the base frag pitch up a semitone each,
+// clamped into a SAFE repitch band (~2 steps) so the base variants never pitch out of range.
+// A gap longer than the window resets the ladder. Beyond the cap wants the dedicated
+// pvp.fragStreak2/3 stems (registered as hooks) rather than pitching further.
+export const PVP_FRAG_STREAK_WINDOW_MS = 4000;
+export const PVP_FRAG_STREAK_MAX_STEPS = 2;   // safe-band steps on the base frag variants
+export const PVP_FRAG_STREAK_SEMITONES = 1;   // per rapid frag
+
+// The streak index for a frag landing `gapMs` after the previous one (0 = fresh / window lapsed).
+export function pvpFragStreakStep(prevStep: number, gapMs: number): number {
+  if (gapMs > PVP_FRAG_STREAK_WINDOW_MS) return 0;
+  return prevStep + 1;
+}
+
+// Playback rate for a streak step, clamped into the safe repitch band on the base variants.
+export function pvpFragStreakRate(step: number): number {
+  const clamped = Math.max(0, Math.min(step, PVP_FRAG_STREAK_MAX_STEPS));
+  const rate = Math.pow(2, (clamped * PVP_FRAG_STREAK_SEMITONES) / 12);
+  return Math.min(SAFE_DERIVE_RATE_MAX, rate);
+}
+
+// Rising countdown-tick pitch: the final second(s) rise so the 3..2..1 ramps into the GO.
+// countTick has zero jitter, so this rate plays exactly. `secondsLeft` is the whole-second
+// readout (3, 2, 1); earlier/longer countdowns clamp to the base rate.
+export function pvpCountTickRate(secondsLeft: number): number {
+  const step = Math.max(0, Math.min(2, 3 - secondsLeft));
+  return 1 + 0.06 * step;
+}
+
+// The events the PvP kill/death/match-flow layer actually FIRES (excludes the pending
+// streak/tension hooks). Preloaded on match entry so a first frag never races its decode.
+export const PVP_WAVE_EVENTS: readonly WaveEventId[] = [
+  "pvp.frag", "pvp.death", "pvp.killDistant", "pvp.countTick", "pvp.fight", "pvp.win", "pvp.lose", "pvp.respawnIn",
+];
 
 // The attack-state snapshot the tell watcher diffs, structurally satisfied by both the sim
 // Enemy (enemy.attack) and any wire-decoded enemy view.

@@ -67,7 +67,9 @@ import type { SfxName, SfxOptions } from "./audio.js";
 import { waveAudio } from "./waveAudio.js";
 import type { WaveFramePlayer } from "./waveAudio.js";
 import { WAVE_HAZARDS, WEAPON_AUDIO, STATUS_AUDIO } from "./waveSpec.js";
+import { pvpKillCue, pvpMatchOverCue, pvpFragStreakStep, pvpFragStreakRate, pvpCountTickRate } from "./waveSpec.js";
 import type { WaveEventId } from "./waveSpec.js";
+import type { MatchPhase } from "../sim/pvp.js";
 import { ShockwaveField, ScreenFlash, AmbienceField } from "./vfx.js";
 import { LightingRenderer } from "./lighting.js";
 import type { StaticLightSpec } from "./lighting.js";
@@ -745,6 +747,15 @@ export class Game {
   private isBreachReleaseSeen = false;
   private isRiskBandOpen = false;
   private audioOrbitSector = -1;
+  // PvP (client-only) audio edge memory. The match block only exists online; these track the
+  // phase/countdown/respawn edges the match-flow cues fire on, plus the local frag-streak
+  // pitch ladder (reset on the window gap, on match end, and on run/floor teardown).
+  private isPvpMatchSeen = false;
+  private pvpPrevPhase: MatchPhase | null = null;
+  private pvpLastCountSecond = -1;
+  private pvpPrevRespawnT: number | null = null;
+  private pvpFragStreakStep = 0;
+  private pvpLastFragMs = -Infinity;
   // Short-fuse scheduled cues (the sentry's place -> unfold beat).
   private pendingCues: Array<{ t: number; name: string; x: number; y: number }> = [];
   private seed = 0;
@@ -1715,6 +1726,7 @@ export class Game {
 
     this.tickShop(dt);
     this.tickWeaponAudio(dt);
+    this.tickPvpAudio();
     this.tickCosmetics(dt, cmd);
     this.tickUltCue(dt);
 
@@ -1838,6 +1850,71 @@ export class Game {
       if (lowHp >= 0.5) { waveAudio.cueAt(audio_.payoff, e.x, e.y); return true; }
     }
     return false;
+  }
+
+  // The pvpKill role branch (THE #1 PvP audio rule). `isSelfPid` resolves the local player in
+  // both online (server pid) and local worlds, so the same branch is correct everywhere.
+  //  - by === self    -> FRAG CONFIRM: the money cue, non-spatial + full gain, with the rapid
+  //                      streak pitch-step laddered up a safe-band semitone per frag.
+  //  - victim === self -> YOU DIED: non-spatial, full gain.
+  //  - neither        -> NEUTRAL KILL: a quiet SPATIAL distant thud at the kill point, hard
+  //                      rate-limited by the cue's own 300ms cooldown so a full lobby never spams.
+  private playPvpKillCue(e: Extract<SimEvent, { t: "pvpKill" }>): void {
+    const cue = pvpKillCue(this.isSelfPid(e.by), this.isSelfPid(e.victim));
+    if (cue.event === "pvp.frag") {
+      const nowMs = performance.now();
+      this.pvpFragStreakStep = pvpFragStreakStep(this.pvpFragStreakStep, nowMs - this.pvpLastFragMs);
+      this.pvpLastFragMs = nowMs;
+      // TODO(pvp-audio): route pvpFragStreakStep past the safe-band cap to the dedicated
+      // pvp.fragStreak2/3 stems once they are generated, instead of pitching the base variants.
+      waveAudio.play("pvp.frag", { rate: pvpFragStreakRate(this.pvpFragStreakStep) });
+    } else if (cue.isSpatial) {
+      waveAudio.play(cue.event, { x: e.x, y: e.y });
+    } else {
+      waveAudio.play(cue.event);
+    }
+  }
+
+  // The PvP match-flow observer (client-only). The authoritative match block only exists in an
+  // online PvP snapshot; from its phase + countdown timer + the local respawn countdown it
+  // fires the non-event beats: a rising countTick on each whole second of the countdown, the
+  // GO stinger the instant the phase flips to "live", and the "weapons hot" blip the instant
+  // the local rsp countdown reaches 0 and control returns. Win/lose ride the reliable
+  // pvpMatchOver event (handleSimEvent), never re-fired here.
+  private tickPvpAudio(): void {
+    if (this.mode !== "online" || !this.wsTransport) { if (this.isPvpMatchSeen) this.resetPvpAudioState(); return; }
+    const snap = this.wsTransport.getLatestSnapshot();
+    const match = snap?.match ?? null;
+    if (!snap || match === null) { if (this.isPvpMatchSeen) this.resetPvpAudioState(); return; }
+    if (!this.isPvpMatchSeen) { this.isPvpMatchSeen = true; waveAudio.preloadPvp(); }
+
+    const prevPhase = this.pvpPrevPhase;
+    if (match.ph === "countdown") {
+      if (prevPhase !== "countdown") this.pvpLastCountSecond = -1; // a fresh countdown
+      const secondsLeft = Math.max(0, Math.ceil((match.end - snap.tick) * FIXED_DT));
+      if (secondsLeft >= 1 && secondsLeft !== this.pvpLastCountSecond) {
+        this.pvpLastCountSecond = secondsLeft;
+        waveAudio.play("pvp.countTick", { rate: pvpCountTickRate(secondsLeft) });
+      }
+    }
+    if (match.ph === "live" && prevPhase !== null && prevPhase !== "live") waveAudio.play("pvp.fight");
+    if (match.ph === "over" && prevPhase !== "over") this.pvpFragStreakStep = 0;
+    this.pvpPrevPhase = match.ph;
+
+    const rsp = snap.self?.rsp ?? null;
+    if (rsp !== null) {
+      if (this.pvpPrevRespawnT !== null && this.pvpPrevRespawnT > 0 && rsp === 0) waveAudio.play("pvp.respawnIn");
+      this.pvpPrevRespawnT = rsp;
+    }
+  }
+
+  private resetPvpAudioState(): void {
+    this.isPvpMatchSeen = false;
+    this.pvpPrevPhase = null;
+    this.pvpLastCountSecond = -1;
+    this.pvpPrevRespawnT = null;
+    this.pvpFragStreakStep = 0;
+    this.pvpLastFragMs = -Infinity;
   }
 
   // Per-tick semantic weapon audio: equip edges, the Breach charge lifecycle (prime /
@@ -2796,6 +2873,19 @@ export class Game {
         break;
       case "gameOver":
         this.gameOver();
+        break;
+      case "pvpKill":
+        // Fires to EVERY client — branch on the LOCAL player id (never "play frag on every
+        // kill"): your kill = FRAG, your death = DEATH (both non-spatial), any other = a quiet
+        // SPATIAL distant thud, hard rate-limited by the cue's own 300ms cooldown.
+        this.playPvpKillCue(e);
+        break;
+      case "pvpMatchOver":
+        // Reliable, id-tagged (never lost): the winner hears the victory sting, everyone else
+        // the light defeat cue. The ph->"over" observer edge is intentionally NOT a second
+        // trigger, so the result never double-sounds.
+        waveAudio.play(pvpMatchOverCue(this.isSelfPid(e.winner)));
+        this.pvpFragStreakStep = 0;
         break;
       case "flash":
         triggerFlash(this.animForId(e.eid));
@@ -4073,6 +4163,7 @@ export class Game {
     this.transport.stop();
     audio.setMusic(null);
     waveAudio.reset();
+    this.resetPvpAudioState();
     sfx("gameOver");
     this.hud.hideStats();
     this.hud.clear();

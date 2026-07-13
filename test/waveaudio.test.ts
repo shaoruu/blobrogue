@@ -37,6 +37,9 @@ const {
   BURROW_EMITTER, BURROW_THUD_EVENT, DEEP_EMITTER,
   SELECTED_BURROW_TAKES, SELECTED_DEEP_TAKES, takeStemsOf,
   tellCuesFor, isBurrowUnderground, spatialGainFor, isWaveEventId,
+  PVP_WAVE_EVENTS, pvpKillRole, pvpKillCue, pvpMatchOverCue,
+  pvpFragStreakStep, pvpFragStreakRate, pvpCountTickRate,
+  PVP_FRAG_STREAK_MAX_STEPS, PVP_FRAG_STREAK_WINDOW_MS,
 } = await import("../src/game/waveSpec.js");
 type WaveSoundSpec = import("../src/game/waveSpec.js").WaveSoundSpec;
 type WaveEventId = import("../src/game/waveSpec.js").WaveEventId;
@@ -336,6 +339,82 @@ section("distance attenuation");
   check("floor .25 at/past 700px", spatialGainFor(700, false, false) === 0.25 && spatialGainFor(2000, false, false) === 0.25);
   check("off-camera cap .35", spatialGainFor(100, true, false) === 0.35);
   check("boss/hazard locks exempt from the cap", spatialGainFor(100, true, true) === 1);
+}
+
+// ---- 3b. PVP (client-only kill/death/match-flow layer) ----
+section("pvp cue registry + wiring rules");
+{
+  // Every FIRED pvp cue ships its files (both codecs, .ogg probed like every other row) and
+  // sits inside the manifest's gain/rate/priority lanes.
+  let isPvpShipped = true;
+  let isPvpSane = true;
+  for (const event of PVP_WAVE_EVENTS) {
+    const spec = WAVE_SOUNDS[event];
+    const files = stemsOf(spec);
+    if (!files.every((s) => existsSync(join(AUDIO_ROOT, `${s}.ogg`)) && existsSync(join(AUDIO_ROOT, `${s}.mp3`)))) {
+      isPvpShipped = false;
+      console.log(`    pvp cue not fully shipped (.ogg+.mp3): ${event}`);
+    }
+    if (spec.gain <= 0 || spec.gain > 1 || spec.jitter > 0.05 || spec.priority < 1 || spec.priority > 100) isPvpSane = false;
+  }
+  check("every fired pvp cue ships .ogg + .mp3 for its stem/variants", isPvpShipped);
+  check("every fired pvp cue sits in the gain/jitter/priority lanes", isPvpSane);
+
+  // The manifest's exact PvP rows: a frag is NEVER culled (92, above weapon/impact); own death
+  // always reads (95); the stingers ride the top band (96); the neutral kill is quiet + SPATIAL
+  // + hard rate-limited (300ms). frag/death/fight/win/lose are non-spatial ui-bus cues.
+  check("frag: priority 92, ui bus, 3 variants, 40ms anti-machinegun cooldown",
+    WAVE_SOUNDS["pvp.frag"].priority === 92 && WAVE_SOUNDS["pvp.frag"].bus === "ui"
+    && WAVE_SOUNDS["pvp.frag"].variants === 3 && WAVE_SOUNDS["pvp.frag"].cooldownMs === 40
+    && WAVE_SOUNDS["pvp.frag"].spatial !== true);
+  check("death: priority 95, non-spatial", WAVE_SOUNDS["pvp.death"].priority === 95 && WAVE_SOUNDS["pvp.death"].spatial !== true);
+  check("killDistant: quiet, SPATIAL, sfx impact tier, hard 300ms rate limit",
+    WAVE_SOUNDS["pvp.killDistant"].spatial === true && WAVE_SOUNDS["pvp.killDistant"].bus === "sfx"
+    && WAVE_SOUNDS["pvp.killDistant"].cooldownMs === 300 && WAVE_SOUNDS["pvp.killDistant"].gain <= 0.4
+    && WAVE_SOUNDS["pvp.killDistant"].isPerEntityCooldown !== true); // global, not per-entity
+  check("fight/win/lose ride the top stinger band (96), non-spatial",
+    ["pvp.fight", "pvp.win", "pvp.lose"].every((e) => WAVE_SOUNDS[e as WaveEventId].priority === 96
+      && WAVE_SOUNDS[e as WaveEventId].spatial !== true));
+
+  // THE #1 RULE, as a pure function: by===self -> frag, victim===self -> death, neither ->
+  // distant. Killer precedence when both flags are set (a self-frag reads as YOUR kill).
+  check("role branch: killer -> frag", pvpKillRole(true, false) === "frag");
+  check("role branch: victim -> death", pvpKillRole(false, true) === "death");
+  check("role branch: bystander -> distant", pvpKillRole(false, false) === "distant");
+  check("role branch: killer precedence when both", pvpKillRole(true, true) === "frag");
+  check("frag/death play in your head (non-spatial); distant is positional",
+    pvpKillCue(true, false).event === "pvp.frag" && !pvpKillCue(true, false).isSpatial
+    && pvpKillCue(false, true).event === "pvp.death" && !pvpKillCue(false, true).isSpatial
+    && pvpKillCue(false, false).event === "pvp.killDistant" && pvpKillCue(false, false).isSpatial);
+  check("every kill cue maps to a registered row", [pvpKillCue(true, false), pvpKillCue(false, true), pvpKillCue(false, false)]
+    .every((c) => isWaveEventId(c.event)));
+
+  // Match over branches on winner===self and NEVER reuses the co-op gameOver cue.
+  check("match over: winner -> win, else -> lose (never gameOver)",
+    pvpMatchOverCue(true) === "pvp.win" && pvpMatchOverCue(false) === "pvp.lose"
+    && WAVE_SOUNDS["pvp.win"].stem === "pvp/match_win" && WAVE_SOUNDS["pvp.lose"].stem === "pvp/match_lose");
+
+  // FRAG STREAK: the step ladders up per rapid frag, resets past the window, and the base-variant
+  // rate stays inside the safe repitch band for the capped step count (dedicated stems beyond).
+  check("streak step ladders within the window, resets past it",
+    pvpFragStreakStep(0, 100) === 1 && pvpFragStreakStep(1, 100) === 2 && pvpFragStreakStep(2, 100) === 3
+    && pvpFragStreakStep(3, PVP_FRAG_STREAK_WINDOW_MS + 1) === 0);
+  const rates = [0, 1, 2, 3, 4, 5].map((s) => pvpFragStreakRate(s));
+  check("streak rate rises then clamps in the safe band (never out of range)",
+    rates[0] === 1 && rates[1] > rates[0] && rates[2] > rates[1]
+    && rates.every((r) => r >= SAFE_DERIVE_RATE_MIN && r <= SAFE_DERIVE_RATE_MAX)
+    && rates[PVP_FRAG_STREAK_MAX_STEPS] === rates[5]); // capped past the max step
+  check("countdown ticks rise into the GO (final second highest, all in band)",
+    pvpCountTickRate(3) < pvpCountTickRate(2) && pvpCountTickRate(2) < pvpCountTickRate(1)
+    && [1, 2, 3, 5].every((s) => pvpCountTickRate(s) >= SAFE_DERIVE_RATE_MIN && pvpCountTickRate(s) <= SAFE_DERIVE_RATE_MAX));
+
+  // The dedicated streak / respawn-tick stems are registered HOOKS (pending generation): present
+  // in the registry with stems, but not on disk and not in the fired set. Absence must not fail.
+  check("deferred streak/tick stems are registered hooks, not fired, not on disk",
+    ["pvp.fragStreak2", "pvp.fragStreak3", "pvp.respawnTick"].every((e) => isWaveEventId(e)
+      && WAVE_SOUNDS[e as WaveEventId].stem !== null
+      && !PVP_WAVE_EVENTS.includes(e as WaveEventId)
+      && !existsSync(join(AUDIO_ROOT, `${WAVE_SOUNDS[e as WaveEventId].stem}.ogg`))));
 }
 
 // ---- 4. director policy: cooldowns, variants, jitter, weapons, combat gating ----
