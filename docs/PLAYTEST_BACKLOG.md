@@ -50,7 +50,7 @@ I iterate through this until done. Newest feedback appended; status kept current
 - 🟢 SHIPPED (#80) — Wave 1 boss ENCOUNTERS: JET F35 (mirror), Tithe F40 (feeder+2-state slab), Quorum F45 (3-husk shared-HP+tether+merge). All 3 bosses' art AD-locked + on main (#74/#75/#78); randomness layer live (#76). This is the 'more bosses / repeats at 35' fix.
 
 ## Next Wave (captured 2026-07-10 — Wave 1 DONE, gated art→encounter→in-engine)
-- 🔴 GORGE F50 encounter: needs peeled-shell DEBRIS chunks (drop stripped layer as cover entities) + full encounter wiring (multi-phase shell-peel, per-phase HP on exposed-time ~1.4-1.6x via phase count). Art done (#79, giant reference).
+- 🟢 GORGE F50 encounter SHIPPED (#119, merged 5b884de): full multi-phase shell-peel (rind→chitin→core), weak-point peel verb, per-phase back-loaded HP 260/290/380, debris cover chunks, 3 distinct spatial phases. LOCKED giant template for F75/F100.
 - 🔴 F75 PALE THRONE + F100 UNMAKER: inherit the LOCKED Gorge giant grammar (same silhouette/peel/reveal, derive from Gorge shape). Pale = cold/warmth-drain material, Null = void/subtraction. Don't re-invent the silhouette (see docs/art_manifests/GORGE_F50_GIANT.md).
 - 🔴 Flower cosmetic re-gen someday (source amber-drifted vs greener/multi-color brief — needs re-gen not re-snap).
 - 🔴 choir.png 6% teal — minor cleanup (re-snap on choir_cyan/bone lane when convenient).
