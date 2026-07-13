@@ -1881,9 +1881,39 @@ export function quorumHpForFloor(floor: number): number {
 // updateGiant) drives them all, parameterized only by this constants block + material/colors.
 // The as-const literals are widened here (scalars → number, tuples → readonly number[]) so a
 // tuned giant (PALE) is assignable alongside the reference (GORGE) without fighting the types.
+//
+// GIANT AXES + SIGNATURE (the "mechanics step" between giants): each deeper giant escalates NOT by
+// tightening the base pattern but by adding ONE NEW READABLE AXIS per phase plus a cross-cutting
+// regional SIGNATURE. These are OPTIONAL fields — ABSENT on Gorge (so Gorge plays exactly as
+// shipped, byte-identical), PRESENT on Pale (its F75 axes below), and F100 adds its own. The
+// shared giant core reads each `!== undefined` to switch the axis on. Gorge is the base fight;
+// Pale is base + these axes; F100 will be base + compounded axes + a "subtraction" signature.
+interface GiantAxes {
+  // P1 SEQUENCING axis — a SECOND counter-offset ring (undefined = single ring, like Gorge).
+  readonly ring2OffsetDeg?: number;   // the 2nd ring's gap offset from the 1st (deg): the gap you dashed becomes the next wall
+  readonly ring2DelaySec?: number;    // the 2nd ring follows this long behind the 1st (the sequence read)
+  // P2 POSITIONING-OVER-TIME axis — MIGRATING pools (undefined = static pools, like Gorge). New
+  // pools seed at the edge of the existing field (biased outward from the giant), so the safe
+  // floor DRIFTS and a corner can't be camped; capped so the safe pocket always survives.
+  readonly poolReseedEdgeDist?: number; // new pools seed this far past an existing pool, outward from the giant
+  readonly poolDenialCap?: number;       // hard cap on live pools (the ~⅓-arena denial ceiling — the safe-pocket floor)
+  // P3 DUAL-READ axis — a SPARSE COUNTER-ROTATING second sweep (undefined = single sweep, like
+  // Gorge). Sparse BY DESIGN (few spokes, spaced WIDER than the primary lane) so at most one ever
+  // crosses the moving lane → it SPLITS the safe wedge but provably NEVER seals it (fairness).
+  readonly sweep2Count?: number;      // spokes in the counter-sweep (must be < spokeCount/spokeGap to stay fair)
+  readonly sweep2Step?: number;       // the counter-rotation per emission (opposite sign; ~the primary's, slightly slower reads better)
+  readonly sweep2Speed?: number;      // the counter-sweep's bullet speed
+  // The regional SIGNATURE — WARMTH-DRAIN (undefined = none, like Gorge). A per-player stillness
+  // chill that punishes CAMPING: idle too long → move ×chillMult, cleared by moving a real
+  // distance, telegraphed by a ramping frost vignette. A SLOW, never damage; reuses CHILL_SLOW.
+  readonly warmthIdleSec?: number;    // stillness before the chill creeps in
+  readonly warmthChillMult?: number;  // the move-speed multiplier while chilled (= CHILL_SLOW 0.5)
+  readonly warmthClearDist?: number;  // move at least this far (px) to clear the idle timer (thaw)
+  readonly warmthRampSec?: number;    // the frost-vignette telegraph ramp (client render only)
+}
 export type GiantConst = {
   readonly [K in keyof typeof GORGE]: (typeof GORGE)[K] extends readonly number[] ? readonly number[] : number;
-};
+} & GiantAxes;
 
 // ---- GORGE (F50 GIANT #1 — the Sump cap; the AD-LOCKED giant TEMPLATE for F75/F100) ----
 // A colossal ~192px STATIONARY front-facing set-piece PINNED to floor 50 (never in the seeded
@@ -2061,6 +2091,31 @@ export const PALE = {
   spokeWindup: 0.9, spokeRecover: 0.6, spokeDuration: 3.0, spokeInterval: 0.16, spokeCount: 9, spokeGap: 2, spokeStep: 0.13, spokeSpeed: 250,
   // The shared projectile glob (shape across all three patterns):
   globRadius: 8, globDamage: 1, globLife: 2.8,
+  // ---- THE F75 MECHANICS STEP: one NEW READABLE AXIS per phase + the PALE cross-cutting SIGNATURE
+  // (GD doctrine — escalate by adding a second thing to READ, never by tightening the same pattern;
+  // the shared giant core switches each axis on because these fields are present, absent on Gorge) ----
+  // P1 SEQUENCING — a 2nd ring ~0.45s behind the 1st, its gap offset ~100° so the gap you just
+  // dashed becomes the next wall (dash gap A → reposition to gap B). Each gap stays Gorge-width.
+  ring2OffsetDeg: 100,
+  ring2DelaySec: 0.45,
+  // P2 POSITIONING-OVER-TIME — pools seed at the edge of the existing field (1 tile out, away from
+  // the giant), so the denied floor MIGRATES and can't be camped; capped (churns, never fills).
+  poolReseedEdgeDist: 48,   // one tile
+  poolDenialCap: 12,        // the ~⅓-arena ceiling (up from Gorge's 10; the safe pocket always holds)
+  // P3 DUAL-READ — a SPARSE counter-rotating 2nd sweep. sweep2Count 3 < spokeCount/spokeGap (9/2 =
+  // 4.5) GUARANTEES its 120° spacing exceeds the 80° primary lane, so ≤1 crosses the lane at once →
+  // it SPLITS the wedge (two standable halves) but never seals it. Counter-step slightly slower.
+  sweep2Count: 3,
+  sweep2Step: 0.11,
+  sweep2Speed: 250,
+  // THE PALE SIGNATURE — WARMTH-DRAIN. Stand still > warmthIdleSec → move ×warmthChillMult (the
+  // shipped CHILL_SLOW); clears the instant you move warmthClearDist. Punishes camping — coherent
+  // with the three motion-demanding axes above. A slow, never damage; telegraphed by a ramping
+  // frost vignette (warmthRampSec, client render). Per-player, deterministic (tick-based idle timer).
+  warmthIdleSec: 1.5,
+  warmthChillMult: 0.5,     // = CHILL_SLOW (constants.ts) — a single ×0.5, never stacks into a stun
+  warmthClearDist: 28,      // a meaningful step clears it (a genuine dodge always thaws)
+  warmthRampSec: 1.5,       // the frost-vignette warning ramp (well past the 0.6s readability bar)
 } as const;
 
 export function paleHpForFloor(): number {
