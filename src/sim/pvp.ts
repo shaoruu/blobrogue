@@ -91,13 +91,18 @@ export function pvpPerHitCap(): number {
   return PVP.perHitCapFrac * PVP.maxHp;
 }
 
+// A participant in the foe test: the (team, id) pair the damage funnel already carries for the
+// attacker and the target. A named struct (not four same-typed positional args) so a call site
+// can never silently transpose team/id or attacker/target — the swap-prone shape the audit flagged.
+export interface PvpActor { team: number; id: PlayerId }
+
 // FFA foe test: distinct players are foes unless they share a NON-ZERO team. team 0 = "no
 // team" (every-man-for-himself), so in the MVP every distinct player is a foe. The team axis
 // exists purely so future team modes drop in without touching the damage funnel.
-export function arePvpFoes(aTeam: number, aId: PlayerId, bTeam: number, bId: PlayerId): boolean {
-  if (aId === bId) return false;
-  if (aTeam === 0 || bTeam === 0) return true;
-  return aTeam !== bTeam;
+export function arePvpFoes(a: PvpActor, b: PvpActor): boolean {
+  if (a.id === b.id) return false;
+  if (a.team === 0 || b.team === 0) return true;
+  return a.team !== b.team;
 }
 
 // ---- match state --------------------------------------------------------------------------
