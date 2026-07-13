@@ -27,6 +27,7 @@ import { LocalTransport } from "../client/transport.js";
 import type { Transport } from "../client/transport.js";
 import { WSTransport } from "../client/wsTransport.js";
 import { STAGE_B_SEED, STAGE_B_FLOOR, PROTOCOL_VERSION, FIXED_DT } from "../net/protocol.js";
+import type { MatchWire } from "../net/protocol.js";
 import { resolveSpectateTarget, cycleSpectateTarget, isReconnectingTeammate } from "./spectate.js";
 import { drawLoadoutOverlays } from "./cosmeticArt.js";
 import { bodyPaletteIndex } from "./cosmetics.js";
@@ -35,7 +36,7 @@ import { PartyGate } from "../net/partyGate.js";
 import type { ExpectedMember, PartyGateView } from "../net/partyGate.js";
 import { onlineHudLabel, netDetailsLine, reconnectOverlayCopy, BACK_ONLINE_TOAST, CONNECT_CANCEL_HINT, OFFER_EXPIRED_TOAST } from "../ui/onlineCopy.js";
 import type { OnlineExitReason, OnlinePhase } from "../ui/onlineCopy.js";
-import { applyItemToWorld, chooseBlessingInWorld, dismissBlessingOfferInWorld, applyMaxHpBonus, loadFloorIntoWorld, descend, devSpawnEnemy, devSpawnProp, devSpawnChest, acquireWeaponInWorld, isFloorCleared, navDebugField, workerBuildSites, nearestShopSlot, isPlayerInCombat, consumeBlessingReroll, setPlayerKit } from "../sim/world.js";
+import { applyItemToWorld, chooseBlessingInWorld, dismissBlessingOfferInWorld, applyMaxHpBonus, loadFloorIntoWorld, descend, devSpawnEnemy, devSpawnProp, devSpawnChest, acquireWeaponInWorld, isFloorCleared, isPvp, navDebugField, workerBuildSites, nearestShopSlot, isPlayerInCombat, consumeBlessingReroll, setPlayerKit } from "../sim/world.js";
 import type { WorldState, PlayerSim, MeleeSwing, RemoteTarget } from "../sim/world.js";
 import { ULT, isRealKit, canCastUlt, KIT_META, MOMENTUM, OVERSHIELD, HEAL_PULSE, LIFEBLOOM } from "../sim/kits.js";
 import type { KitId } from "../sim/kits.js";
@@ -53,6 +54,7 @@ import { Minimap } from "./minimap.js";
 import type { MinimapDot } from "./minimap.js";
 import { Hud } from "./hud.js";
 import type { ProfileStats, HudState } from "./hud.js";
+import { buildMatchHud } from "./matchHud.js";
 import type { CoopBridge, LocalPlayerState } from "./coop.js";
 import {
   createAnim, resetAnim, stepAnim, triggerRecoil, triggerFlash, triggerBounce,
@@ -903,6 +905,10 @@ export class Game {
   private get aimAngle(): number { return this.p.aimAngle; }
   private get shotSeq(): number { return this.p.shotSeq; }
   private get isDown(): boolean { return this.p.isDown; }
+  // The ONE client-side "this is a PVP arena" predicate: the transport renderState carries the
+  // authoritative world mode (#124), so every arena-only render/HUD branch keys off this and the
+  // co-op path stays byte-identical when it is false.
+  private get isArena(): boolean { return isPvp(this.world); }
   private get kills(): number { return this.p.kills; }
   private get coins(): number { return this.p.coins; }
   private get combo(): number { return this.p.combo; }
@@ -1695,8 +1701,10 @@ export class Game {
     this.handleSimEvents(events);
 
     // Online: terminal run state is derivable from SNAPSHOT state too, so a backpressure-dropped
-    // gameOver event (or its final snapshot) can never strand this client in a dead run.
-    if (this.mode === "online" && this.wsTransport && this.wsTransport.isRunOver() && (this.isDown || this.hp <= 0)) {
+    // gameOver event (or its final snapshot) can never strand this client in a dead run. NEVER in
+    // a PVP arena: there hp<=0 is a respawn (the match-over result screen owns the ending), so a
+    // dead-but-respawning arena player must not be hijacked into the co-op YOU DIED terminal path.
+    if (this.mode === "online" && !this.isArena && this.wsTransport && this.wsTransport.isRunOver() && (this.isDown || this.hp <= 0)) {
       this.gameOver();
       return;
     }
@@ -1915,6 +1923,51 @@ export class Game {
     this.pvpPrevRespawnT = null;
     this.pvpFragStreakStep = 0;
     this.pvpLastFragMs = -Infinity;
+  }
+
+  // ---- PVP arena presentation (client-only reads of the authoritative match block) ----
+
+  // The authoritative PVP match block — non-null only on an online arena snapshot (null in co-op
+  // and before the first snapshot). The ONE source every arena HUD/overlay reads, exactly like
+  // tickPvpAudio does for the audio beats.
+  private matchWire(): MatchWire | null {
+    return this.wsTransport?.getLatestSnapshot()?.match ?? null;
+  }
+
+  // Wire -> HUD match block (frag scoreboard / timer / countdown / result); null in co-op.
+  private matchHud(): HudState["match"] {
+    const snap = this.wsTransport?.getLatestSnapshot() ?? null;
+    if (snap === null || snap.match === null) return null;
+    return buildMatchHud(snap.match, {
+      selfId: this.wsTransport?.getSelfServerId() ?? null,
+      tick: snap.tick,
+      nameOf: (id, isSelf) => this.matchNameOf(id, isSelf),
+    });
+  }
+
+  // A scoreboard display name: "YOU" for the local player, else the verified roster/cosmetic name
+  // (interest-independent roster first), falling back to the raw id so a row is never blank.
+  private matchNameOf(id: PlayerId, isSelf: boolean): string {
+    if (isSelf) return "YOU";
+    const seat = this.wsTransport?.getWorldRoster().find((r) => r.pid === id);
+    if (seat?.nm) return seat.nm;
+    const remote = this.remotes().find((r) => r.playerId === id);
+    return remote?.name ?? id;
+  }
+
+  // The authoritative local-player death read for the arena: dead (hp<=0) or mid-respawn (rsp>0).
+  // A PVP death sets hp=0 + respawnT (NEVER isDown), so the co-op down/revive/spectate flow never
+  // sees it — this is the arena's own death signal.
+  private isSelfArenaDead(): boolean {
+    if (!this.isArena) return false;
+    const self = this.wsTransport?.getLatestSnapshot()?.self;
+    return self != null && (self.hp <= 0 || self.rsp > 0);
+  }
+
+  // Whole seconds left on the local respawn countdown (SelfWire.rsp ticks -> seconds).
+  private arenaRespawnSeconds(): number {
+    const self = this.wsTransport?.getLatestSnapshot()?.self;
+    return self ? Math.max(0, Math.ceil(self.rsp * FIXED_DT)) : 0;
   }
 
   // Per-tick semantic weapon audio: equip edges, the Breach charge lifecycle (prime /
@@ -2218,6 +2271,10 @@ export class Game {
   // The floor-clear beat: the moment the last enemy (and queued reinforcement) is gone,
   // celebrate once — fanfare, a banner pointing at the stairs, and a sparkle at the exit.
   private checkFloorCleared() {
+    // A PVP arena has 0 enemies by design, so the co-op floor-clear beat (fanfare / flash / GO
+    // DOWN banner / exit sparkle) would fire instantly and falsely — the arena's objective is the
+    // match, never clearing a floor. Suppress it entirely.
+    if (this.isArena) return;
     const isClearedNow = this.isCurrentFloorCleared();
     if (!isClearedNow) { this.isClearCelebrated = false; return; }
     if (this.isClearCelebrated) return;
@@ -2872,7 +2929,8 @@ export class Game {
         this.shockwaves.spawn(e.x, e.y, 8, 46, 0.4, "#8affe0", 3);
         break;
       case "gameOver":
-        this.gameOver();
+        // Co-op party wipe only; a PVP arena death is a respawn, never a terminal game over.
+        if (!this.isArena) this.gameOver();
         break;
       case "pvpKill":
         // Fires to EVERY client — branch on the LOCAL player id (never "play frag on every
@@ -3788,8 +3846,10 @@ export class Game {
         connected,
         away: roster.length - connected,
         // Teammates still deciding a pick — the visible reason a cleared floor isn't
-        // descending yet (own overlay covers the self case).
-        waitingPicks: this.wsTransport.getPartyWait().filter((w) => w.pid !== selfId).length,
+        // descending yet (own overlay covers the self case). No blessings in an arena.
+        waitingPicks: this.isArena ? 0 : this.wsTransport.getPartyWait().filter((w) => w.pid !== selfId).length,
+        // PVP arena: the line reads ARENA, not CONNECTED (a deathmatch room, not a co-op party).
+        isArena: this.isArena,
       });
     }
     const comboTier = this.comboTier();
@@ -3829,6 +3889,9 @@ export class Game {
       party: this.partyHud(),
       ult: this.ultHud(),
       sig: this.sigHud(),
+      // PVP arena match block (frag scoreboard / timer / countdown / result); null in co-op, which
+      // keeps the whole HUD on the byte-identical co-op path.
+      match: this.matchHud(),
     });
   }
 
@@ -3854,8 +3917,10 @@ export class Game {
   }
 
   // Teammate HP for the party HUD (spec §6, the Mender dependency): the live nameplate rows.
+  // In a PVP arena the other players are FOES, not teammates (and their HP is a 100-pool at a
+  // different scale) — the frag scoreboard represents them instead, so the party rows are empty.
   private partyHud(): HudState["party"] {
-    if (this.mode === "solo") return [];
+    if (this.mode === "solo" || this.isArena) return [];
     return this.remotes().map((r) => ({
       id: r.playerId, name: r.name, hp: r.hp, maxHp: r.maxHp,
       colorIndex: r.colorIndex, isDown: r.isDown, isAbsent: r.isAbsent,
@@ -4452,6 +4517,7 @@ export class Game {
     this.screenFlash.render(ctx, canvas.width, canvas.height);
     this.renderHurtVignette();
     this.renderDownOverlay();
+    this.renderArenaDeathOverlay();
     this.renderSpectateBanner();
     this.renderReticle();
     this.renderCoinFlies();     // coins arcing into the top-left wallet
@@ -5003,6 +5069,9 @@ export class Game {
   }
 
   private renderExit() {
+    // A PVP arena has no dungeon stairs and no "GO DOWN" — the center tile is a neutral spawn/
+    // objective point, not an exit. Skip the whole co-op exit chrome.
+    if (this.isArena) return;
     const { ctx, renderCam: cam } = this;
     const d = this.dungeon;
     const ex = d.exit.x * TILE + TILE / 2 - cam.x, ey = d.exit.y * TILE + TILE / 2 - cam.y;
@@ -8411,8 +8480,12 @@ export class Game {
         this.fxLayer("glow_round", isBoil ? "#ffd479" : BURN_TINT, psx, psy, glowSize, glowSize, glowA, 0);
       }
     }
+    // PVP death grays the body (hp<=0 / mid-respawn) — the arena's equivalent of the co-op down
+    // fade, keyed off the authoritative SelfWire, not isDown (which never sets in pvp).
+    const isArenaDead = this.isSelfArenaDead();
     let alpha = 1;
-    if (this.isDown) alpha = 0.4;
+    if (isArenaDead) alpha = 0.25;
+    else if (this.isDown) alpha = 0.4;
     else if (isInvulnBlinkFrame(this.invuln, this.p.dashInvuln)) alpha = 0.4;
     const clip: SheetClip = this.playerAnim.move > 0.5 ? "walk" : "idle";
     const xf = characterXform(this.playerAnim, CHARACTER_STYLE);
@@ -8435,7 +8508,7 @@ export class Game {
       }
       this.drawCosmetics(this.selfCosmetics.hat, this.selfCosmetics.face, psx, psy, 52, this.facing, xf, alpha, !!sheet, cosmeticFrame);
     }
-    if (!this.isDown) {
+    if (!this.isDown && !isArenaDead) {
       // Anchor the held weapon to the blob's VISUAL body offset (lean/bob/hop + recoil nudge)
       // so the gun stays glued to the body while moving. The bullet/muzzle ORIGIN stays at the
       // true sim center (psx/psy) — the weapon art is cosmetic and just follows the body.
@@ -8529,6 +8602,9 @@ export class Game {
   // teammates stand staged there, and — once staged yourself — chevrons toward each living
   // teammate the gate still needs. Pure reads of the authoritative exr; nothing sim-side.
   private renderExitCoordination() {
+    // No party descend gate in a PVP arena (no stairs, no "READY TO GO DOWN") — the FFA has no
+    // shared exit to coordinate at.
+    if (this.isArena) return;
     if (this.mode !== "online" || !this.wsTransport || this.isDown || !this.isRunning) return;
     if (!this.wsTransport.isFloorCleared()) return;
     const remotes = this.remotes();
@@ -8673,6 +8749,32 @@ export class Game {
       const dist = Math.max(1, Math.round(Math.hypot(mate.x - this.px, mate.y - this.py) / TILE));
       ctx.fillText(`${mate.name.toUpperCase()} ${dist}m`, ax, ay + 22);
     }
+    ctx.restore();
+    ctx.textAlign = "left";
+  }
+
+  // The PVP death/respawn overlay — the arena's replacement for the co-op down/revive/spectate
+  // flow (which never fires in pvp). Keyed on the authoritative SelfWire (hp<=0 / rsp>0): a
+  // "YOU DIED" banner + the respawn countdown from rsp. The body + reticle gray out elsewhere
+  // (renderPlayer / renderReticle). Never shown once the match is over — the result screen
+  // (matchcenter) owns that ending, and there are no more respawns.
+  private renderArenaDeathOverlay() {
+    if (!this.isRunning || !this.isSelfArenaDead()) return;
+    if (this.matchWire()?.ph === "over") return;
+    const { ctx, canvas } = this;
+    const cx = canvas.width / 2;
+    const y = 118;
+    ctx.save();
+    ctx.textAlign = "center";
+    ctx.fillStyle = "#ff6a6a";
+    ctx.font = '700 22px "Silkscreen", monospace';
+    ctx.globalAlpha = 0.85 + 0.15 * Math.sin(this.animClock * 2.4);
+    ctx.fillText("YOU DIED", cx, y);
+    ctx.globalAlpha = 0.9;
+    ctx.fillStyle = "#ffd27a";
+    ctx.font = '700 11px "Silkscreen", monospace';
+    const secs = this.arenaRespawnSeconds();
+    ctx.fillText(secs > 0 ? `RESPAWNING IN ${secs}\u2026` : "RESPAWNING\u2026", cx, y + 20);
     ctx.restore();
     ctx.textAlign = "left";
   }
@@ -8902,6 +9004,8 @@ export class Game {
   // A proper crosshair (ring + four tick marks + center dot) rather than a bare circle,
   // so the aim point reads clearly against a busy floor. Screen-space, drawn last.
   private renderReticle() {
+    // No aiming reticle while dead in the arena (movement + fire are frozen until respawn).
+    if (this.isSelfArenaDead()) return;
     const { ctx } = this;
     const cx = this.input.mouseX, cy = this.input.mouseY;
     const r = 8, tick = 4, gap = 3;
@@ -8935,8 +9039,10 @@ export class Game {
     this.minimap.render({
       dungeon: this.dungeon,
       playerX: this.px, playerY: this.py,
-      exit: this.dungeon.exit,
-      isCleared: isFloorCleared(this.world),
+      // A PVP arena has no exit/stairs to mark and no dungeon "cleared" state — walls + player +
+      // opponent dots only.
+      exit: this.isArena ? null : this.dungeon.exit,
+      isCleared: this.isArena ? false : isFloorCleared(this.world),
       dots,
     });
   }

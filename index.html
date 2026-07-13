@@ -86,6 +86,10 @@
       /* KIT/XP §6: HP numeric readout beside the heart row (mode toggle in settings). */
       .hprow{ display:flex; align-items:center; gap:8px; }
       .hp-num{ font-family:var(--f-num); font-variant-numeric:tabular-nums; font-size:var(--fs-num); line-height:1; color:var(--cream); }
+      /* PVP arena: one continuous HP bar (a 100-HP pool, never 100 heart sprites). Fixed size, so
+         swapping in for the heart row never shifts the stat panel. */
+      .hpbar{ position:relative; width:120px; height:12px; background:var(--dun-0); box-shadow:inset 0 0 0 2px var(--dun-3); }
+      .hpbar i{ position:absolute; top:2px; left:2px; bottom:2px; width:calc((100% - 4px) * var(--hpfill,1)); background:linear-gradient(180deg,#ff7a7a,var(--red)); box-shadow:0 0 6px rgba(255,90,90,.5); transition:width .12s linear; }
       /* Teammate HP party panel (the Mender dependency): compact nameplate rows. */
       .party{ display:none; flex-direction:column; gap:3px; }
       .party.has-party{ display:flex; }
@@ -532,6 +536,30 @@
         background:var(--combo-c,var(--amber)); box-shadow:0 0 6px var(--combo-c,var(--amber)); transition:transform .08s linear; }
       .combo.low .combo-bar i{ animation:comboLow .38s steps(2,jump-none) infinite; }
       @keyframes comboLow{ 0%{opacity:1;} 100%{opacity:.3;} }
+
+      /* --- PVP arena HUD (frag scoreboard + center countdown/result) --- */
+      /* Corner frag scoreboard: stacks under the minimap in the TR corner. Right-aligned rows,
+         the local player's row highlighted amber, dead rows dimmed. Fixed width, so a frag tick
+         never shifts the column. */
+      .matchboard{ display:flex; flex-direction:column; gap:2px; min-width:132px; padding:6px 8px;
+        background:rgba(5,3,11,.62); box-shadow:inset 0 0 0 2px var(--dun-3),0 3px 0 rgba(0,0,0,.4); }
+      .mb-head{ font-family:var(--f-ui); font-size:var(--fs-2xs); letter-spacing:2px; color:var(--amber); text-transform:uppercase; }
+      .mb-row{ display:flex; align-items:baseline; justify-content:space-between; gap:10px;
+        font-family:var(--f-ui); font-size:var(--fs-2xs); letter-spacing:1px; }
+      .mb-name{ color:var(--cream); text-transform:uppercase; max-width:96px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+      .mb-frags{ font-family:var(--f-num); font-size:var(--fs-num); line-height:1; color:var(--cream); font-variant-numeric:tabular-nums; }
+      .mb-row.me .mb-name, .mb-row.me .mb-frags{ color:var(--amber-hi); }
+      .mb-row.dead{ opacity:.45; }
+      .mb-row.dead .mb-name{ text-decoration:line-through; }
+      /* Center readout: the pre-fight countdown and the win/lose result, dead-center and huge.
+         Fixed/centered + opacity-only, so it never touches the layout. */
+      .matchcenter{ position:absolute; top:38%; left:50%; transform:translate(-50%,-50%);
+        font-family:var(--f-logo),monospace; font-size:var(--fs-title); letter-spacing:4px; text-transform:uppercase;
+        color:var(--cream); text-shadow:0 4px 0 var(--dun-0),0 0 22px rgba(0,0,0,.55); pointer-events:none; text-align:center; }
+      .matchcenter.k-countdown{ color:var(--amber); font-size:56px; }
+      .matchcenter.k-fight{ color:var(--amber-hi); }
+      .matchcenter.k-win{ color:var(--ok); text-shadow:0 4px 0 var(--dun-0),0 0 26px rgba(124,252,152,.5); }
+      .matchcenter.k-lose{ color:var(--red); text-shadow:0 4px 0 var(--dun-0),0 0 26px rgba(255,90,90,.5); }
 
       #overlay, .pause-overlay, .blessing-overlay { position: fixed; inset: 0; z-index: 10; display: flex; align-items: center; justify-content: center; color: var(--cream); text-align: center;
         background: radial-gradient(ellipse at center, rgba(20,16,36,0.82) 0%, rgba(8,6,16,0.94) 100%); zoom:var(--ui-scale,1); }

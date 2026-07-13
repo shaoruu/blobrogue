@@ -6,6 +6,8 @@
 // mid-run.
 
 import { renderHearts, mountIcons, itemIconEl, weaponIconEl } from "./hudIcons.js";
+import { matchLaneCopy, matchCenter, hpReadout } from "./matchHud.js";
+import type { MatchHudState } from "./matchHud.js";
 import { MAX_ITEM_LEVEL } from "../sim/items.js";
 import { ULT, ticksToSec } from "../sim/kits.js";
 import { settings } from "./settings.js";
@@ -83,6 +85,11 @@ export interface HudState {
     overshield: { chips: number; max: number } | null;
     pulse: { cd: number; isReady: boolean } | null;
   } | null;
+  // The PVP arena match block (frag scoreboard / match timer / countdown / result), already
+  // resolved for presentation by buildMatchHud. null in co-op — its non-null-ness is the ONE
+  // HUD-side "this is an arena" signal, and every arena-specific readout keys off it, so the
+  // co-op HUD path is byte-identical when it is null.
+  match: MatchHudState | null;
 }
 
 export interface HotbarActions {
@@ -444,7 +451,7 @@ export function buildMoreChip(hiddenCount: number): HTMLElement {
 //   BC  hotbar (weapons + blessing summary)
 const HUD_MARKUP = `
   <div class="hud-corner tl"><div class="statpanel">
-    <div class="hprow"><div class="hearts" data-hearts></div><span class="oshield" data-oshield hidden></span><span class="hp-num" data-hpnum>0/0</span></div>
+    <div class="hprow"><div class="hearts" data-hearts></div><span class="oshield" data-oshield hidden></span><span class="hpbar hidden" data-hpbar><i data-hpfill></i></span><span class="hp-num" data-hpnum>0/0</span></div>
     <div class="party" data-party></div>
     <div class="statrow">
       <span class="chip kills"><span class="ic" data-ic="skull"></span><span class="v" data-kills>0</span></span>
@@ -468,7 +475,7 @@ const HUD_MARKUP = `
       <div class="combo-bar"><i data-combo-fill></i></div>
     </div>
   </div>
-  <div class="hud-corner tr"><div class="minimap"><span class="mm-title">MAP</span></div></div>
+  <div class="hud-corner tr"><div class="minimap"><span class="mm-title">MAP</span></div><div class="matchboard hidden" data-matchboard></div></div>
   <div class="hud-corner bl">
     <div class="klcluster" data-klcluster>
       <div class="kitbadge" data-kitbadge hidden><span class="ki" data-kit-icon></span><span class="kn" data-kit-name></span></div>
@@ -485,6 +492,7 @@ const HUD_MARKUP = `
     <div class="hb-slots" data-hb-slots></div>
     <div class="hb-hint" data-hb-hint>CLICK EQUIP &middot; DRAG REORDER &middot; Q DROP</div>
   </div>
+  <div class="matchcenter hidden" data-matchcenter></div>
 `;
 
 // In-flight hotbar drag. Exists from pointerdown; isActive flips once the pointer travels
@@ -541,6 +549,10 @@ export class Hud {
   private hud: HTMLElement;
   private heartsEl: HTMLElement;
   private hpNumEl!: HTMLElement;
+  private hpBarEl!: HTMLElement;
+  private hpFillEl!: HTMLElement;
+  private matchboardEl!: HTMLElement;
+  private matchCenterEl!: HTMLElement;
   private partyEl!: HTMLElement;
   private ultEl!: HTMLElement;
   private ultFillEl!: HTMLElement;
@@ -634,6 +646,10 @@ export class Hud {
   private prevHp = -1;
   private prevMaxHp = -1;
   private prevHpDisplay = "";
+  // PVP arena readouts: cached keys so a steady match never churns the DOM (same no-layout-shift
+  // discipline as the rest of the HUD).
+  private prevMatchBoardKey = "";
+  private prevMatchCenterKey = "";
   private prevPartyKey = "";
   private prevUltKey = "";
 
@@ -647,6 +663,10 @@ export class Hud {
 
     this.heartsEl = hud.querySelector("[data-hearts]")!;
     this.hpNumEl = hud.querySelector("[data-hpnum]")!;
+    this.hpBarEl = hud.querySelector("[data-hpbar]")!;
+    this.hpFillEl = hud.querySelector("[data-hpfill]")!;
+    this.matchboardEl = hud.querySelector("[data-matchboard]")!;
+    this.matchCenterEl = hud.querySelector("[data-matchcenter]")!;
     this.partyEl = hud.querySelector("[data-party]")!;
     this.ultEl = hud.querySelector("[data-ult]")!;
     this.ultFillEl = hud.querySelector("[data-ult-fill]")!;
@@ -1440,20 +1460,35 @@ export class Hud {
   }
 
   update(s: HudState) {
-    // HP readability (spec §6): hearts and/or a numeric current/max readout, per the player's
-    // setting. The hearts only re-raster on a value change; the mode toggles visibility without
-    // reflowing (both slots reserve their space), so there is never a layout shift.
-    const mode = settings.hpDisplay;
+    const match = s.match ?? null;
+    // HP readability (spec §6): co-op shows hearts and/or a numeric readout per the player's
+    // setting; a PVP arena (a 100-HP pool) shows ONE continuous bar + the numeric — NEVER maxHp
+    // heart sprites (100 canvases). Both slots reserve their space and the value re-renders only
+    // on change, so switching modes or ticking HP never reflows the layout.
+    const hpMode = hpReadout(match !== null, settings.hpDisplay);
     if (s.hp !== this.prevHp || s.maxHp !== this.prevMaxHp) {
-      renderHearts(this.heartsEl, s.hp, s.maxHp);
+      // A heart mode rasters the hearts; the arena bar mode never does (the fill tracks hp/maxHp).
+      if (hpMode === "bar") {
+        const frac = s.maxHp > 0 ? Math.max(0, Math.min(1, s.hp / s.maxHp)) : 0;
+        this.hpFillEl.style.setProperty("--hpfill", String(frac));
+      } else {
+        renderHearts(this.heartsEl, s.hp, s.maxHp);
+      }
       this.hpNumEl.textContent = `${s.hp}/${s.maxHp}`;
       this.prevHp = s.hp;
       this.prevMaxHp = s.maxHp;
     }
-    if (mode !== this.prevHpDisplay) {
-      this.heartsEl.classList.toggle("hidden", mode === "number");
-      this.hpNumEl.classList.toggle("hidden", mode === "hearts");
-      this.prevHpDisplay = mode;
+    if (hpMode !== this.prevHpDisplay) {
+      this.prevHpDisplay = hpMode;
+      // Hearts show only in a heart mode; the arena bar and number-only mode both hide them.
+      this.heartsEl.classList.toggle("hidden", hpMode === "number" || hpMode === "bar");
+      // The number hides only in hearts-only (the bar mode keeps the numeric beside the bar).
+      this.hpNumEl.classList.toggle("hidden", hpMode === "hearts");
+      this.hpBarEl.classList.toggle("hidden", hpMode !== "bar");
+      // Entering the bar drops any heart canvases (a 100-HP pool never leaves a stale sprite row
+      // behind the bar); entering a heart mode with none rasters them once.
+      if (hpMode === "bar") this.heartsEl.replaceChildren();
+      else if (this.heartsEl.childElementCount === 0) renderHearts(this.heartsEl, s.hp, s.maxHp);
     }
     // Defensive against a loosely-typed caller (older test state builders): treat a missing
     // party/ult as empty/none rather than throwing.
@@ -1551,24 +1586,36 @@ export class Hud {
       this.bossFillEl.style.transform = `scaleX(${bf})`;
       this.bossbarEl.classList.toggle("low", bf < 0.25);
     }
-    // The objective line ALWAYS leads with the floor (UI designer: "what floor am I on" is
-    // answered where the eye already goes). During a boss it reads FLOOR N (the boss bar owns
-    // the rest); the dev sandbox hides it. `what` is the state copy (enemy count / cleared).
-    let what = s.isObjectiveHidden ? "" : s.isBossActive ? "" : objectiveCopy(s.isCleared, s.enemiesLeft, s.isParty);
-    // The cleared copy starts with "FLOOR CLEAR ..." which would double the FLOOR N lead token;
-    // drop that leading word so it reads "FLOOR N · CLEAR · GO DOWN".
-    if (what.startsWith("FLOOR ")) what = what.slice("FLOOR ".length);
-    const objKey = s.isObjectiveHidden ? "" : `${s.floor}|${what}|${s.isCleared ? 1 : 0}`;
-    if (objKey !== this.prevObjective) {
-      this.prevObjective = objKey;
-      if (objKey === "") {
-        this.objectiveEl.textContent = "";
-        this.objectiveEl.classList.remove("show", "clear");
-      } else {
-        const floorTok = `<span class="obj-floor">FLOOR ${s.floor}</span>`;
-        this.objectiveEl.innerHTML = what ? `${floorTok}<span class="obj-sep"> \u00b7 </span><span class="obj-what">${what}</span>` : floorTok;
+    if (match !== null) {
+      // PVP arena: the lane IS the match readout (phase/timer/frags) — the co-op FLOOR/GO-DOWN
+      // objective is suppressed entirely (and a boss bar never shows in an arena).
+      const laneCopy = matchLaneCopy(match);
+      if (laneCopy !== this.prevObjective) {
+        this.prevObjective = laneCopy;
+        this.objectiveEl.textContent = laneCopy;
         this.objectiveEl.classList.add("show");
-        this.objectiveEl.classList.toggle("clear", s.isCleared);
+        this.objectiveEl.classList.remove("clear");
+      }
+    } else {
+      // The objective line ALWAYS leads with the floor (UI designer: "what floor am I on" is
+      // answered where the eye already goes). During a boss it reads FLOOR N (the boss bar owns
+      // the rest); the dev sandbox hides it. `what` is the state copy (enemy count / cleared).
+      let what = s.isObjectiveHidden ? "" : s.isBossActive ? "" : objectiveCopy(s.isCleared, s.enemiesLeft, s.isParty);
+      // The cleared copy starts with "FLOOR CLEAR ..." which would double the FLOOR N lead token;
+      // drop that leading word so it reads "FLOOR N · CLEAR · GO DOWN".
+      if (what.startsWith("FLOOR ")) what = what.slice("FLOOR ".length);
+      const objKey = s.isObjectiveHidden ? "" : `${s.floor}|${what}|${s.isCleared ? 1 : 0}`;
+      if (objKey !== this.prevObjective) {
+        this.prevObjective = objKey;
+        if (objKey === "") {
+          this.objectiveEl.textContent = "";
+          this.objectiveEl.classList.remove("show", "clear");
+        } else {
+          const floorTok = `<span class="obj-floor">FLOOR ${s.floor}</span>`;
+          this.objectiveEl.innerHTML = what ? `${floorTok}<span class="obj-sep"> \u00b7 </span><span class="obj-what">${what}</span>` : floorTok;
+          this.objectiveEl.classList.add("show");
+          this.objectiveEl.classList.toggle("clear", s.isCleared);
+        }
       }
     }
 
@@ -1606,6 +1653,52 @@ export class Hud {
       this.buildPillEl.setAttribute("aria-label", `${s.items.length} blessings. Open the full build.`);
       this.buildPillEl.classList.toggle("has", s.items.length > 0);
     }
+
+    // PVP arena chrome (both no-ops + hidden in co-op): the corner frag scoreboard and the big
+    // center countdown/result readout.
+    this.renderMatchBoard(match);
+    this.renderMatchCenter(match);
+  }
+
+  // The corner FRAG SCOREBOARD (PVP only): one row per player, id-sorted for a stable order on
+  // every client, the local player's row highlighted and dead rows dimmed. Rebuilt only when a
+  // score/liveness/name changes (cheap string key), so a steady match never churns the DOM.
+  private renderMatchBoard(match: MatchHudState | null): void {
+    const key = match === null ? ""
+      : match.scores.map((r) => `${r.id}:${r.frags}:${r.isAlive ? 1 : 0}:${r.isSelf ? 1 : 0}:${r.name}`).join("|");
+    if (key === this.prevMatchBoardKey) return;
+    this.prevMatchBoardKey = key;
+    this.matchboardEl.classList.toggle("hidden", match === null);
+    this.matchboardEl.replaceChildren();
+    if (match === null) return;
+    const head = el("div", "FRAGS");
+    head.className = "mb-head";
+    this.matchboardEl.appendChild(head);
+    for (const r of match.scores) {
+      const row = el("div", "");
+      row.className = "mb-row" + (r.isSelf ? " me" : "") + (r.isAlive ? "" : " dead");
+      const name = el("span", "", r.name);
+      name.className = "mb-name";
+      const frags = el("span", "", String(r.frags));
+      frags.className = "mb-frags";
+      row.append(name, frags);
+      this.matchboardEl.appendChild(row);
+    }
+  }
+
+  // The big center readout (PVP only): the pre-fight countdown (3..2..1 -> FIGHT) and the
+  // win/lose result. Opacity/transform only (fixed, centered) so it never shifts the layout;
+  // rebuilt only when the text/kind changes.
+  private renderMatchCenter(match: MatchHudState | null): void {
+    const center = match === null ? null : matchCenter(match);
+    const key = center === null ? "" : `${center.kind}:${center.text}`;
+    if (key === this.prevMatchCenterKey) return;
+    this.prevMatchCenterKey = key;
+    this.matchCenterEl.classList.remove("k-countdown", "k-fight", "k-win", "k-lose");
+    this.matchCenterEl.classList.toggle("hidden", center === null);
+    if (center === null) { this.matchCenterEl.textContent = ""; return; }
+    this.matchCenterEl.textContent = center.text;
+    this.matchCenterEl.classList.add(`k-${center.kind}`);
   }
 
   // The full-hotbar swap prompt, anchored above the bar (absolute — it never shifts the
@@ -1790,6 +1883,16 @@ export class Hud {
     this.objectiveEl.classList.remove("show", "clear");
     this.prevObjective = "";
     this.objLaneEl.classList.remove("boss");
+    // PVP arena chrome: drop the scoreboard + center readout and force a rebuild next run.
+    this.matchboardEl.replaceChildren();
+    this.matchboardEl.classList.add("hidden");
+    this.prevMatchBoardKey = "";
+    this.matchCenterEl.textContent = "";
+    this.matchCenterEl.classList.add("hidden");
+    this.matchCenterEl.classList.remove("k-countdown", "k-fight", "k-win", "k-lose");
+    this.prevMatchCenterKey = "";
+    // Reset the HP readout mode so the next run re-resolves hearts/bar from scratch.
+    this.prevHpDisplay = "";
     this.comboEl.classList.remove("show", "low");
     this.comboMultEl.style.transform = "scale(1)";
     this.prevCombo = -1;

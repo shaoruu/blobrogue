@@ -41,14 +41,17 @@ export interface OnlineHudState {
   away: number;            // reserved/reconnecting seats
   // OTHER players still deciding a blessing offer (the held-descend explanation).
   waitingPicks?: number;
+  // PVP arena: the connected verb reads ARENA (a deathmatch room, not a co-op party) — the frag
+  // scoreboard/timer carry the rest, so only the lead word changes.
+  isArena?: boolean;
 }
 
 // Normal play reads `CONNECTED · ABCD · 3 PLAYERS` (the contract's exact shape); transitional
 // phases swap the verb; mid-outage members and teammates mid-blessing-pick append
-// explicitly. Debug details (world id / rev / protocol) live in the hold-Tab details panel,
-// not here.
+// explicitly. A PVP arena reads `ARENA · ABCD · 3 PLAYERS`. Debug details (world id / rev /
+// protocol) live in the hold-Tab details panel, not here.
 export function onlineHudLabel(s: OnlineHudState): string {
-  const verb = s.phase === "connected" ? "CONNECTED"
+  const verb = s.phase === "connected" ? (s.isArena ? "ARENA" : "CONNECTED")
     : s.phase === "reconnecting" ? "RECONNECTING"
       : s.phase === "waiting" ? "WAITING FOR PARTY" : "CONNECTING";
   const where = s.roomCode ?? s.worldId;
