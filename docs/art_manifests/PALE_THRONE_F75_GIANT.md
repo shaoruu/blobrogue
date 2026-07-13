@@ -39,3 +39,37 @@ darken body*0.45 preserving brights so it holds dark on a light floor) → pixel
 Reuses the shipped Gorge F50 encounter code (src/sim: the gorge boss kind's 3-phase shell-peel state
 machine, weak-point peel verb, per-phase back-loaded HP, debris cover, 3 distinct spatial phases) with the
 Pale material + F75 floor pin + cold-blue VFX instead of amber. Balancer sets F75 HP band (deeper than F50).
+
+## ENCOUNTER MECHANICS — the F75 escalation (GD doctrine + balancer numbers, locked 2026-07-12)
+DOCTRINE (sets the giant ladder): each giant adds a NEW READABLE AXIS per phase + ONE regional cross-cutting
+mechanic — NEVER escalate by tightening the same pattern (that reads as "same fight, less margin" = punishing).
+- F50 Gorge = the pattern (3 phases + peel verb).
+- F75 Pale = pattern + one new axis/phase + regional signature (warmth-drain).
+- F100 Unmaker = pattern + axes COMPOUNDED + Null "subtraction" signature (periodically REMOVE an affordance:
+  delete cover / drop the safe-lane telegraph so you must have LEARNED it — "you know this fight, prove it").
+
+F75 PER-PHASE DELTA vs Gorge (reuse shipped primitives, base params like Gorge, add the axis):
+- P1 rings: + SECOND COUNTER-OFFSET ring (RING_BAND ×2), gap offset ~90-120°, ~0.4-0.5s behind; each gap SAME
+  width as Gorge (the 2nd ring is the difficulty). Read = SEQUENCE (dash gap A → reposition to gap B).
+- P2 pools: pools DRIFT/spread (~1 tile/1.5s) or seed at old edges → safe floor MIGRATES; denial cap ~⅓ arena,
+  churn not fill (old expire as new seed). Read = motion-under-denial. Reuse cinder/slag pool + slow-spread tick.
+- P3 sweeps: + SECOND COUNTER-ROTATING sweep (SWEEP_ARC ×2 opposite sign), ~same speed; safe = drifting
+  INTERSECTION of two gaps, which must NEVER fully close (fairness assert). Read = track two rotations.
+
+PALE SIGNATURE (cross-cutting, re-colors all 3 phases): WARMTH-DRAIN — per-player stillness timer, idle >~1.5s
+→ move ×0.5 chill (reuse CHILL_SLOW 0.5), telegraphed by a ramping frost vignette (~1.5s), clears on moving a
+meaningful distance. Punishes camping; all three axes already demand motion so it enforces intent coherently.
+Slow only (never damage), capped at one ×0.5 (no stun stack), per-player at 4P. Deterministic.
+
+BALANCER NUMBERS (fresh anchor — NOT floor-curve, which clamps at F10 → would give F75=F50=sponge):
+total 1210, back-loaded per-shell [340,380,500], windowBankFrac 0.20/phase (tightened from Gorge 0.22),
+minLegal 25, BOSS_DPS_CEILING 55 (provisional). Gate row pale_throne { floor:75, soloWall:[62,86],
+exposed:[34,50], minLegal:25, party4P50:[44,64] } (provisional, measure-and-surface; reuse Gorge per-phase
+windowOpener). The minLegal/bank are ONLY honest because the mechanics are a real step — PROOF METRIC: harness
+must show F75 exposed-efficiency LOWER than F50 at same build (mechanic-time not HP-time), else it's a sponge (gate flag).
+
+FAIRNESS (all held): ≥0.6s telegraphs (2nd ring/sweep telegraph like the 1st; warmth ~1.5s ramp), a real
+safe pocket/lane ALWAYS exists (dual-ring gaps + dual-sweep intersection never fully close — asserted in test),
+tighter windows only to the floor (≥0.30s dodge / ≥0.35s recover / ≥0.6s windup), overlap arbiter never relaxes
+(max 2 committed + 1 arena denial, no 2 releases <0.30s same lane), 4P density controller budgets the doubled
+patterns + culls ambient, never the fairness tells. Difficulty = execution density, never +damage/+HP/+guarded-time.
