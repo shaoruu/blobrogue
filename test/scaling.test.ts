@@ -212,6 +212,12 @@ interface PullResult {
   // HP sponge keeps the same per-tick denial and just adds ticks; genuinely harder mechanics (more
   // readable axes live at once — a 2nd ring, a 2nd sweep, migrating pools) raise the average.
   avgDenial: number;
+  // PER-PHASE attribution (index 0=P1, 1=P2, 2=P3): the exposed-efficiency and mechanics-density
+  // in each shell phase, so the F75-vs-F50 delta is readable PER AXIS (which new axis moved the
+  // metric most — the F100-design input). exposedEff = exposed ticks / phase ticks; density = avg
+  // simultaneous denial in the phase.
+  phaseExposedEff: number[];
+  phaseDensity: number[];
   addsKilled: number;
   hitsTaken: number;
   phaseDurations: number[];
@@ -246,6 +252,10 @@ function runInstrumentedPull(seed: number, kind: EnemyKind, floor: number, party
   let hitsTaken = 0;
   let maxLiveAdds = 0;
   let denialSum = 0;
+  // Per-phase (P1/P2/P3) buckets for the exposed-eff + density attribution.
+  const phaseTicks = [0, 0, 0];
+  const phaseExposedTicks = [0, 0, 0];
+  const phaseDenialSum = [0, 0, 0];
   const spawnTrace: string[] = [];
   const transitions: number[] = [];
   const maxTicks = 60 * 180;
@@ -281,6 +291,11 @@ function runInstrumentedPull(seed: number, kind: EnemyKind, floor: number, party
     for (const b of w.bullets) if (!b.friendly) denial++;
     for (const h of w.hazards) if (h.kind === "cinder" && h.life > 0) denial++;
     denialSum += denial;
+    // Attribute this tick to the giant's current shell phase (1..3) for the per-axis breakdown.
+    const pi = Math.max(0, Math.min(2, (boss.boss ? boss.boss.phase : 1) - 1));
+    phaseTicks[pi]++;
+    if (isExp) phaseExposedTicks[pi]++;
+    phaseDenialSum[pi] += denial;
     ticks++;
   }
   const bounds = [0, ...transitions, ticks * DT];
@@ -288,7 +303,10 @@ function runInstrumentedPull(seed: number, kind: EnemyKind, floor: number, party
   for (let i = 1; i < bounds.length; i++) phaseDurations.push(bounds[i] - bounds[i - 1]);
   return {
     r: w.encounterPower, partyDps, effHp: boss.maxHp, seconds: ticks * DT, killed,
-    exposedSeconds, avgDenial: ticks > 0 ? denialSum / ticks : 0, addsKilled, hitsTaken, phaseDurations, maxLiveAdds,
+    exposedSeconds, avgDenial: ticks > 0 ? denialSum / ticks : 0,
+    phaseExposedEff: phaseTicks.map((n, i) => (n > 0 ? phaseExposedTicks[i] / n : 0)),
+    phaseDensity: phaseTicks.map((n, i) => (n > 0 ? phaseDenialSum[i] / n : 0)),
+    addsKilled, hitsTaken, phaseDurations, maxLiveAdds,
     spawnTrace: spawnTrace.join("|"),
   };
 }
@@ -680,6 +698,10 @@ interface CellStats {
   // MECHANICS DENSITY (median avg simultaneous denial): the sponge discriminator that WORKS against
   // the face-tank harness bot — a sponge keeps this equal to the shallower fight, more axes raise it.
   avgDenialP50: number;
+  // PER-PHASE (P1/P2/P3) medians — the per-axis attribution surfaced to the balancer/GD (which new
+  // axis moved the metric most, feeding the F100 compound-difficulty design).
+  phaseExposedEffP50: number[];
+  phaseDensityP50: number[];
   addsKilledP50: number;
   hitsTakenP50: number;
   maxLiveAdds: number;
@@ -701,6 +723,8 @@ function measureCell(kind: EnemyKind, floor: number, party: readonly Loadout[], 
     exposedP50: quantile(sortedBy((r) => r.exposedSeconds), 0.5),
     exposedEffP50: quantile(sortedBy((r) => (r.seconds > 0 ? r.exposedSeconds / r.seconds : 0)), 0.5),
     avgDenialP50: quantile(sortedBy((r) => r.avgDenial), 0.5),
+    phaseExposedEffP50: [0, 1, 2].map((i) => quantile(sortedBy((r) => r.phaseExposedEff[i]), 0.5)),
+    phaseDensityP50: [0, 1, 2].map((i) => quantile(sortedBy((r) => r.phaseDensity[i]), 0.5)),
     addsKilledP50: quantile(sortedBy((r) => r.addsKilled), 0.5),
     hitsTakenP50: quantile(sortedBy((r) => r.hitsTaken), 0.5),
     maxLiveAdds: Math.max(...runs.map((r) => r.maxLiveAdds)),
@@ -823,16 +847,31 @@ function giantMechanicsStepGate(gate: Map<string, BossGateResult>): void {
   process.stdout.write(
     `  info: MECHANICS DENSITY (avg simultaneous denial) — F50 gorge ${gDen.toFixed(2)} vs F75 pale ${pDen.toFixed(2)} `
     + `(ratio ${(pDen / Math.max(1e-6, gDen)).toFixed(2)}× — want >= ${GIANT_DENSITY_MARGIN}× for "more axes, not more HP")\n`);
+  // (1) EXPOSED-EFFICIENCY with the DELTA MAGNITUDE (the number, not just pass/fail), same build.
+  const effDeltaPts = (pEff - gEff) * 100;
   process.stdout.write(
-    `  info: exposed-efficiency (SURFACED — the face-tank harness bot reads it ~equal; needs a dodge-bot) — `
-    + `F50 ${(gEff * 100).toFixed(1)}% (exp ${gorge.solo.exposedP50.toFixed(1)}s / wall ${gorge.solo.wallP50.toFixed(1)}s) vs `
-    + `F75 ${(pEff * 100).toFixed(1)}% (exp ${pale.solo.exposedP50.toFixed(1)}s / wall ${pale.solo.wallP50.toFixed(1)}s)\n`);
+    `  info: exposed-efficiency (SURFACED, same build) — F50 ${(gEff * 100).toFixed(1)}% → F75 ${(pEff * 100).toFixed(1)}% `
+    + `(delta ${effDeltaPts >= 0 ? "+" : ""}${effDeltaPts.toFixed(1)}pts). The face-tank harness bot engages NEITHER giant's `
+    + `patterns, so this reads ~equal — the per-AXIS load is the density-by-phase line below + pale.test.ts.\n`);
+  // (2) PER-PHASE / PER-AXIS attribution (P1 rings / P2 pools / P3 sweeps+warmth), F50 → F75, so
+  // the F100 design can see WHICH new axis moved the metric most.
+  const phLabel = ["P1 rings", "P2 pools", "P3 sweep+warmth"];
+  const gEffPh = gorge.solo.phaseExposedEffP50, pEffPh = pale.solo.phaseExposedEffP50;
+  const gDenPh = gorge.solo.phaseDensityP50, pDenPh = pale.solo.phaseDensityP50;
+  const sgn = (v: number): string => (v >= 0 ? "+" : "");
+  process.stdout.write("  info:   exposed-eff by phase (F50 → F75) — "
+    + [0, 1, 2].map((i) => `${phLabel[i]} ${(gEffPh[i] * 100).toFixed(0)}%→${(pEffPh[i] * 100).toFixed(0)}% (${sgn((pEffPh[i] - gEffPh[i]) * 100)}${((pEffPh[i] - gEffPh[i]) * 100).toFixed(0)}pts)`).join("  ") + "\n");
+  const denRatio = [0, 1, 2].map((i) => pDenPh[i] / Math.max(1e-6, gDenPh[i]));
+  const topAxis = denRatio.indexOf(Math.max(...denRatio));
+  process.stdout.write("  info:   density by phase    (F50 → F75) — "
+    + [0, 1, 2].map((i) => `${phLabel[i]} ${gDenPh[i].toFixed(1)}→${pDenPh[i].toFixed(1)} (${denRatio[i].toFixed(2)}×)`).join("  ")
+    + ` ← ${phLabel[topAxis]} adds the most simultaneous load (${denRatio[topAxis].toFixed(2)}×)\n`);
   // THE SPONGE-CHECK (gated): F75 must be materially DENSER than F50 at the same build — the added
   // axes are LIVE, so the region-cap step is mechanics, not a fatter pool. A sponge would read ~1×.
   check(`F75 sustains MORE simultaneous mechanics than F50 (>= ${GIANT_DENSITY_MARGIN}× the denial — harder, not a sponge)`,
     pDen >= gDen * GIANT_DENSITY_MARGIN, `F75 ${pDen.toFixed(2)} vs F50 ${gDen.toFixed(2)} = ${(pDen / Math.max(1e-6, gDen)).toFixed(2)}×`);
-  surface(`giant mechanics step: F75 density ${pDen.toFixed(2)} vs F50 ${gDen.toFixed(2)} (${(pDen / Math.max(1e-6, gDen)).toFixed(2)}×). `
-    + `exposed-eff surfaced ${(pEff * 100).toFixed(1)}% vs ${(gEff * 100).toFixed(1)}% (face-tank bot — see pale.test.ts for the mechanics/warmth proof).`);
+  surface(`giant mechanics step: F75 density ${pDen.toFixed(2)} vs F50 ${gDen.toFixed(2)} (${(pDen / Math.max(1e-6, gDen)).toFixed(2)}×); `
+    + `exposed-eff ${(gEff * 100).toFixed(1)}%→${(pEff * 100).toFixed(1)}% (${sgn(effDeltaPts)}${effDeltaPts.toFixed(1)}pts); biggest axis = ${phLabel[topAxis]} (${denRatio[topAxis].toFixed(2)}×).`);
 }
 
 // ---- the full multi-boss ship-gate report (opt-in: npm run scaling:report) ----
