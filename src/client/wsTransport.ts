@@ -12,6 +12,7 @@
 import type { Transport, PollResult } from "./transport.js";
 import { createWorld, stepPlayerPhase, loadFloorIntoWorld } from "../sim/world.js";
 import type { WorldState } from "../sim/world.js";
+import type { WorldMode } from "../sim/pvp.js";
 import type { SimEvent } from "../sim/events.js";
 import type { InputCmd, PlayerId } from "../sim/input.js";
 import { LOCAL_ID } from "../sim/input.js";
@@ -23,7 +24,7 @@ import {
   jsonCodec, applySelfWire, enemyFromWire, bulletFromWire,
   propFromWire, pickupFromWire, chestFromWire, hazardFromWire, shopFromWire,
   validateSnap,
-  STAGE_B_SEED, STAGE_B_FLOOR, PROTOCOL_VERSION, FIXED_DT, RESUME_GRACE_MS,
+  STAGE_B_SEED, STAGE_B_FLOOR, PROTOCOL_VERSION, FIXED_DT, RESUME_GRACE_MS, isPvpWorldId,
   type RosterWire, type ServerMsg, type SnapMsg, type WaitWire,
 } from "../net/protocol.js";
 import { applySnapshotDelta, snapshotToWire } from "../net/snapshotDelta.js";
@@ -232,6 +233,10 @@ export class WSTransport implements Transport {
   // the game to refresh its cosmetic floor state (biome/torches/music) off the new world.
   private curSeed = -1;
   private curFloor = -1;
+  // The world MODE the local pred/render worlds are currently built in. Part of the authoritative
+  // world IDENTITY (the pvp: prefix), so a pvp arena join builds the arena locally instead of a
+  // co-op dungeon; re-derived from every snapshot's `wid` alongside seed/floor.
+  private curMode: WorldMode = "coop";
   private isWorldRebuilt = false;
   // Terminal world-binding violation (expectedWorldId asserted against snapshot wid).
   private worldMismatch: WorldMismatch | null = null;
@@ -262,12 +267,16 @@ export class WSTransport implements Transport {
 
   start(): void {
     // The server owns the world; the passed args (a random solo seed) are ignored. Build a
-    // placeholder real-dungeon world for pre-join prediction; the first snapshot's seed/floor
-    // rebuilds it to match the authoritative geometry (see maybeRebuildWorld).
+    // placeholder world for pre-join prediction; the first snapshot's seed/floor/mode rebuilds
+    // it to match the authoritative geometry (see maybeRebuildWorld). The MODE is part of the
+    // world identity (the pvp: prefix): seed it from the lobby's expected world id so a pvp room
+    // predicts against the arena from the first frame, and every snapshot's `wid` re-confirms it.
+    const mode: WorldMode = this.opts.expectedWorldId != null && isPvpWorldId(this.opts.expectedWorldId) ? "pvp" : "coop";
+    this.curMode = mode;
     this.curSeed = STAGE_B_SEED;
     this.curFloor = STAGE_B_FLOOR;
-    this.predState = createWorld(STAGE_B_SEED, STAGE_B_FLOOR, {});
-    this.renderState = createWorld(STAGE_B_SEED, STAGE_B_FLOOR, {});
+    this.predState = createWorld(STAGE_B_SEED, STAGE_B_FLOOR, { mode });
+    this.renderState = createWorld(STAGE_B_SEED, STAGE_B_FLOOR, { mode });
     this.pendingOffer = null;
     this.pending = [];
     this.nextInput = null;
@@ -555,12 +564,19 @@ export class WSTransport implements Transport {
   // Rebuild the client's predicted + render dungeon geometry to match the authoritative seed +
   // floor (initial join and every party-wide descend). Enemies/bullets/props ride the snapshot,
   // so only the walls + a local player need to exist; the next reconcile snaps self to truth.
-  private maybeRebuildWorld(seed: number, floor: number, playerCountAtLock: number): void {
-    if (seed === this.curSeed && floor === this.curFloor) return;
+  private maybeRebuildWorld(seed: number, floor: number, playerCountAtLock: number, mode: WorldMode): void {
+    if (seed === this.curSeed && floor === this.curFloor && mode === this.curMode) return;
     this.curSeed = seed;
     this.curFloor = floor;
+    this.curMode = mode;
     this.predState.seed = seed;
     this.renderState.seed = seed;
+    // Carry the authoritative world MODE onto the local worlds so loadFloorIntoWorld builds the
+    // SAME geometry the server did — the fixed pvp arena for a pvp world, the seeded dungeon for
+    // co-op. Without it the client always rebuilt a co-op dungeon, so a pvp arena rendered as a
+    // walk-through-walls co-op floor (the shipped PVP seam: the transport never learned the mode).
+    this.predState.mode = mode;
+    this.renderState.mode = mode;
     // Pass the AUTHORITATIVE floor-locked player count (SnapWire.pcl): the pred/render worlds
     // hold only the local seat, so without it they would resolve the floor descriptor at
     // playerCount=1 and derive the WRONG mutators/hazards/dash tuning for a multiplayer floor.
@@ -611,7 +627,9 @@ export class WSTransport implements Transport {
     this.snapsBySseq.set(snap.sseq, snap);
     this.lastSnapSseq = snap.sseq;
     this.pruneSnapBaselines();
-    this.maybeRebuildWorld(snap.seed, snap.floor, snap.pcl);
+    // The world MODE rides the authoritative world id (isPvpWorldId(wid)) — the SAME predicate
+    // the server's room factory keys off — so the client rebuilds the matching arena/dungeon.
+    this.maybeRebuildWorld(snap.seed, snap.floor, snap.pcl, isPvpWorldId(snap.wid) ? "pvp" : "coop");
     this.latestSnap = snap;
     this.isEverReady = true;
     this.isSnapSeenOnSocket = true;
