@@ -4762,7 +4762,7 @@ export class Game {
   // Mode-agnostic (reads the rendered position + the active giant's params); the authoritative
   // ×0.5 slow is sim-side (updatePlayer). Inert (and reset) whenever no warmth-drain giant is live.
   private updateWarmthVignette(dt: number) {
-    const wd = this.isRunning ? resolveWarmthDrain(this.world.enemies) : null;
+    const wd = this.isRunning ? resolveWarmthDrain(this.world.enemies.map((e) => ({ kind: e.kind, dead: e.dead, phase: e.boss ? e.boss.phase : 0 }))) : null;
     if (!wd || this.isDown || this.hp <= 0) { this.warmthIdleT = 0; this.warmthRefX = this.px; this.warmthRefY = this.py; return; }
     if (Math.hypot(this.px - this.warmthRefX, this.py - this.warmthRefY) >= wd.clearDist) {
       this.warmthIdleT = 0; this.warmthRefX = this.px; this.warmthRefY = this.py;
@@ -4775,7 +4775,7 @@ export class Game {
   // idle timer climbs toward the chill, then holds + breathes once chilled (move ×0.5). Cold, never
   // amber — the Pale "blazing absence of warmth". A single screen effect (never ambient soup).
   private renderWarmthVignette() {
-    const wd = this.isRunning ? resolveWarmthDrain(this.world.enemies) : null;
+    const wd = this.isRunning ? resolveWarmthDrain(this.world.enemies.map((e) => ({ kind: e.kind, dead: e.dead, phase: e.boss ? e.boss.phase : 0 }))) : null;
     if (!wd || this.warmthIdleT <= 0) return;
     const { ctx, canvas } = this;
     const cx = canvas.width / 2, cy = canvas.height / 2;
@@ -7711,13 +7711,14 @@ export class Game {
         for (let i = 0; i < shown; i++) {
           this.tgLane(sx, sy, rot + (i / gc.spokeCount) * 6.28, 240, TILE, hue, isActive ? fix : { locked: false, dynamic: false, dashed: true });
         }
-        // P3 DUAL-READ axis (Pale): the SPARSE COUNTER-rotating second sweep — draw its lanes
-        // turning the OTHER way, so the "two moving gaps, safe spot at their intersection" read is
-        // legible before the live bullets arrive.
-        if (gc.sweep2Count !== undefined) {
+        // P3 DUAL-READ axis (Pale): the COUNTER-rotating second sweep — draw its (wider-gap) lanes
+        // turning the OTHER way, so the "two moving gaps, safe spot at their drifting intersection"
+        // read is legible before the live bullets arrive.
+        if (gc.spoke2Step !== undefined) {
+          const gap2 = gc.spoke2Gap ?? gc.spokeGap;
           const rot2 = -this.animClock * 0.9;
-          for (let i = 0; i < gc.sweep2Count; i++) {
-            this.tgLane(sx, sy, rot2 + (i / gc.sweep2Count) * 6.28, 240, TILE, hue, isActive ? fix : { locked: false, dynamic: false, dashed: true });
+          for (let i = gap2; i < gc.spokeCount; i++) {
+            this.tgLane(sx, sy, rot2 + (i / gc.spokeCount) * 6.28, 240, TILE, hue, isActive ? fix : { locked: false, dynamic: false, dashed: true });
           }
         }
       }
