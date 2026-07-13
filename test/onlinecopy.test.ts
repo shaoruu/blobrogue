@@ -46,6 +46,10 @@ function main(): void {
   check("teammates mid-pick append the held-gate explanation",
     onlineHudLabel({ phase: "connected", roomCode: "ABCD", worldId: null, connected: 2, away: 0, waitingPicks: 1 }) === "CONNECTED \u00b7 ABCD \u00b7 2 PLAYERS \u00b7 WAITING ON 1 PICK"
     && onlineHudLabel({ phase: "connected", roomCode: "ABCD", worldId: null, connected: 3, away: 0, waitingPicks: 2 }).endsWith("WAITING ON 2 PICKS"));
+  check("a PVP arena reads ARENA · CODE · N PLAYERS (a deathmatch room, not a co-op party)",
+    onlineHudLabel({ phase: "connected", roomCode: "ARENA1", worldId: "pvp:room:ARENA1", connected: 2, away: 0, isArena: true }) === "ARENA \u00b7 ARENA1 \u00b7 2 PLAYERS");
+  check("isArena only swaps the CONNECTED verb (a co-op room is unchanged)",
+    onlineHudLabel({ phase: "connected", roomCode: "ABCD", worldId: null, connected: 2, away: 0, isArena: false }) === "CONNECTED \u00b7 ABCD \u00b7 2 PLAYERS");
   check("details panel line carries world/rev/version", netDetailsLine("room:ABCD", 3, 4) === "world room:ABCD \u00b7 rev 3 \u00b7 protocol v4");
   check("details panel line degrades before the first snapshot", netDetailsLine(null, null, 4) === "world \u2014 \u00b7 rev \u2014 \u00b7 protocol v4");
 

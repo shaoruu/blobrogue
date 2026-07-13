@@ -86,6 +86,24 @@ function mkState(over: Partial<HudState> = {}): HudState {
     items: [],
     party: [],
     ult: null,
+    match: null,
+    ...over,
+  };
+}
+
+// A PVP arena match block (the presentation contract the Hud renders). Defaults to a live match
+// with the local player + one dead rival; override per assertion.
+function mkMatch(over: Partial<NonNullable<HudState["match"]>> = {}): NonNullable<HudState["match"]> {
+  return {
+    phase: "live",
+    scores: [
+      { id: "p1", name: "YOU", frags: 3, isAlive: true, isSelf: true },
+      { id: "p2", name: "RIVAL", frags: 5, isAlive: false, isSelf: false },
+    ],
+    timeLeft: 90,
+    countdown: 0,
+    selfFrags: 3,
+    isSelfWinner: null,
     ...over,
   };
 }
@@ -557,6 +575,91 @@ function hierarchyTests(): void {
   check("party cleared copy points at the MEET", objectiveCopy(true, 0, true) === "FLOOR CLEAR \u00b7 MEET AT EXIT");
 }
 
+// PVP arena HUD (the client half that shipped broken): with a match block present the HUD must
+// present as an ARENA — a frag scoreboard, a match readout in the objective lane (never the co-op
+// FLOOR/GO-DOWN banner), one HP bar (never 100 heart sprites), a center countdown/result — and
+// with match null it must be byte-identical co-op. These are the DOM assertions that would have
+// caught "a pvp arena renders with the co-op HUD".
+function matchHudTests(): void {
+  section("PVP arena HUD: the objective lane is the MATCH readout, never FLOOR/GO-DOWN");
+  settings.setHpDisplay("both"); // deterministic co-op control regardless of prior tests
+  const root = document.createElement("div");
+  document.body.appendChild(root);
+  const hud = new Hud(root);
+  const objective = root.querySelector<HTMLElement>("[data-objective]")!;
+
+  // Co-op control: the FLOOR · CLEAR · GO DOWN banner (the shipped-bug chrome) IS present.
+  hud.update(mkState({ isCleared: true, enemiesLeft: 0, match: null }));
+  check("co-op still shows FLOOR · CLEAR · GO DOWN", objective.textContent === "FLOOR 2 \u00b7 CLEAR \u00b7 GO DOWN", objective.textContent ?? "");
+
+  // Arena: the SAME cleared/empty-board state must show the match readout, never FLOOR/GO-DOWN.
+  hud.update(mkState({ isCleared: true, enemiesLeft: 0, match: mkMatch({ phase: "live", timeLeft: 90, selfFrags: 3 }) }));
+  check("an arena lane shows the ARENA match readout", objective.textContent === "ARENA \u00b7 1:30 \u00b7 3 FRAGS", objective.textContent ?? "");
+  check("an arena lane NEVER shows FLOOR/GO-DOWN/CLEAR (the exact shipped symptom)",
+    !/FLOOR|GO DOWN|CLEAR/.test(objective.textContent ?? ""));
+  check("the arena lane drops the co-op clear accent", !objective.classList.contains("clear"));
+
+  section("PVP arena HUD: HP is ONE bar, never maxHp heart sprites");
+  const hearts = root.querySelector<HTMLElement>("[data-hearts]")!;
+  const hpbar = root.querySelector<HTMLElement>("[data-hpbar]")!;
+  const hpfill = root.querySelector<HTMLElement>("[data-hpfill]")!;
+  const hpnum = root.querySelector<HTMLElement>("[data-hpnum]")!;
+  hud.update(mkState({ hp: 60, maxHp: 100, match: mkMatch() }));
+  check("the HP bar is shown in an arena", !hpbar.classList.contains("hidden"));
+  check("the heart row is hidden in an arena", hearts.classList.contains("hidden"));
+  check("NO heart canvases render (a 100-HP pool never draws 100 sprites)", hearts.childElementCount === 0, `hearts=${hearts.childElementCount}`);
+  check("the bar fill tracks hp/maxHp (60/100 = 0.6)", hpfill.style.getPropertyValue("--hpfill") === "0.6", hpfill.style.getPropertyValue("--hpfill"));
+  check("the numeric HP rides alongside the bar", hpnum.textContent === "60/100" && !hpnum.classList.contains("hidden"));
+
+  // Co-op control: hearts render, the bar hides.
+  hud.update(mkState({ hp: 4, maxHp: 6, match: null }));
+  check("co-op renders heart sprites again (bar mode never leaks into co-op)",
+    hearts.querySelectorAll("canvas").length === 6 && !hearts.classList.contains("hidden"), `hearts=${hearts.childElementCount}`);
+  check("co-op hides the HP bar", hpbar.classList.contains("hidden"));
+
+  section("PVP arena HUD: the corner frag scoreboard (self highlighted, dead dimmed)");
+  const board = root.querySelector<HTMLElement>("[data-matchboard]")!;
+  hud.update(mkState({ match: mkMatch({
+    scores: [
+      { id: "p1", name: "YOU", frags: 7, isAlive: true, isSelf: true },
+      { id: "p2", name: "RIVAL", frags: 2, isAlive: false, isSelf: false },
+    ],
+  }) }));
+  check("the scoreboard is shown in an arena", !board.classList.contains("hidden"));
+  const rows = [...board.querySelectorAll(".mb-row")];
+  check("one row per player", rows.length === 2, `rows=${rows.length}`);
+  check("rows carry name + frags", rows[0].querySelector(".mb-name")?.textContent === "YOU" && rows[0].querySelector(".mb-frags")?.textContent === "7");
+  check("the local player's row is highlighted", rows[0].classList.contains("me") && !rows[1].classList.contains("me"));
+  check("a dead player's row is dimmed", rows[1].classList.contains("dead") && !rows[0].classList.contains("dead"));
+
+  // Co-op control: the scoreboard is hidden and empty.
+  hud.update(mkState({ match: null }));
+  check("co-op hides the scoreboard", board.classList.contains("hidden"));
+  check("co-op leaves the scoreboard empty (no rows)", board.querySelectorAll(".mb-row").length === 0);
+
+  section("PVP arena HUD: the center countdown -> FIGHT and the win/lose result");
+  const center = root.querySelector<HTMLElement>("[data-matchcenter]")!;
+  hud.update(mkState({ match: mkMatch({ phase: "countdown", countdown: 3, timeLeft: 0 }) }));
+  check("the countdown shows the whole-second number", !center.classList.contains("hidden") && center.textContent === "3" && center.classList.contains("k-countdown"));
+  hud.update(mkState({ match: mkMatch({ phase: "live", timeLeft: 90 }) }));
+  check("live clears the center readout (the lane + board carry it)", center.classList.contains("hidden") && center.textContent === "");
+  hud.update(mkState({ match: mkMatch({ phase: "over", isSelfWinner: true }) }));
+  check("a win shows VICTORY", !center.classList.contains("hidden") && center.textContent === "VICTORY" && center.classList.contains("k-win"));
+  hud.update(mkState({ match: mkMatch({ phase: "over", isSelfWinner: false }) }));
+  check("a loss shows DEFEATED", center.textContent === "DEFEATED" && center.classList.contains("k-lose"));
+
+  section("PVP arena HUD: co-op teammate rows never mix with the arena scoreboard");
+  // game.ts feeds party: [] in an arena; the HUD honors it (the scoreboard represents opponents).
+  hud.update(mkState({ party: [], match: mkMatch() }));
+  check("no co-op party rows render in an arena", root.querySelectorAll("[data-party] .party-row").length === 0);
+
+  hud.clear();
+  check("clear() tears the arena chrome down for the next run",
+    board.classList.contains("hidden") && board.childElementCount === 0
+    && center.classList.contains("hidden") && center.textContent === "");
+  root.remove();
+}
+
 // ---- Patch's shop: the state-copy matrix + the compact panel (accepted UX call) ----
 
 function shopCopyTests(): void {
@@ -908,6 +1011,7 @@ function main(): void {
   drawerTests();
   hudIntegrationTests();
   hierarchyTests();
+  matchHudTests();
   shopCopyTests();
   shopPanelTests();
   process.stdout.write(`\n${passed} checks passed, ${failed} failed\n`);

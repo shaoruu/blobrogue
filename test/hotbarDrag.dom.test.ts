@@ -63,6 +63,7 @@ function mkState(currentIndex = 1, ids = FIVE): HudState {
     coopLabel: null, waitLabel: null, dashFill: 1,
     combo: 0, comboMult: 1, comboColor: "#fff", comboFrac: 0,
     items: [],
+    match: null,
   };
 }
 
