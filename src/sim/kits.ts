@@ -180,9 +180,19 @@ export const SANCTUARY = {
 // number of Menders) share, so combined Mender output to one ally never exceeds perTargetHpPerSec
 // and party-wide never exceeds partyHpPerSec — regardless of Mender count. Overheal is discarded
 // on top. HP is integer, so a fractional per-second budget admits whole HP up to its floor.
+//
+// SELF vs ALLY split (balancer 2026-07-13): a Mender is a great healer OF OTHERS and a POOR
+// SELF-sustainer. A SELF-heal (the heal target is the Mender healer itself) draws the smaller
+// selfHpPerSec budget; healing a DIFFERENT ally still draws the full perTargetHpPerSec. The
+// party-wide budget is shared and unchanged. On top of the rate split, a SELF-heal is GATED for
+// selfHealDelaySec after the Mender takes a hit (a landed hit dents and matters for a beat — no
+// instant top-off/clutch). ALLY healing is NEVER rate-reduced or delayed by this — a Mender under
+// fire still instantly saves a teammate.
 export const MENDER_HEAL_CLAMP = {
-  perTargetHpPerSec: 1.5, // one ally: combined Mender HoT ≤ this
+  selfHpPerSec: 0.6,      // SELF only: a Mender heals ITSELF at ≤ this (poor self-sustain)
+  perTargetHpPerSec: 1.5, // one ALLY: combined Mender HoT ≤ this (tops a focused teammate)
   partyHpPerSec: 3.0,     // whole party: combined Mender HoT ≤ this
+  selfHealDelaySec: 1.5,  // SELF-heal pauses this long after the Mender takes a hit (ally heal never pauses)
 } as const;
 
 // MENDER HEAL-PULSE (Wave 2 SIGNATURE): a short-CD DIRECTED active heal — a felt VERB on top of

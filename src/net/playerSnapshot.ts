@@ -99,7 +99,10 @@ type ClientOwnedField = "id" | "pr" | "aimAngle" | "shotSeq" | "rewindTicks" | "
 //   server upkeep and never accrues in prediction, so it stays off the wire.
 // - team:      pvp FFA team id — always 0 for the local player (self) in the FFA MVP, so it need
 //              not ride SelfWire; other players' teams ride PlayerWire.tm (built in toPlayerWire).
-type ServerOnlyField = "reviveBy" | "downsThisFloor" | "ultSources" | "ultWasted" | "overshieldRegenT" | "team";
+// - lastDamagedTick: the tick a landed hit last cut this player, driving the MENDER post-damage
+//              SELF-heal delay. Self-heal resolves only in the authoritative world phase (never in
+//              prediction), so this is pure server upkeep and never crosses the wire.
+type ServerOnlyField = "reviveBy" | "downsThisFloor" | "ultSources" | "ultWasted" | "overshieldRegenT" | "team" | "lastDamagedTick";
 
 // Compile-time exhaustiveness: every PlayerSim key must be classified exactly once. The
 // MustBeNever constraint fails to instantiate for any non-empty type, so adding a PlayerSim
