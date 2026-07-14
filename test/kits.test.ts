@@ -160,6 +160,64 @@ function overdriveTests(): void {
   check("the 8s lockout refuses a re-cast even at full meter", g.ultCharge === ULT.meterMax);
 }
 
+function ultRefillAfterCastTests(): void {
+  section("ult meter: capped sources reset for every post-cast fill");
+  const w = freshWorld();
+  w.enemies = [];
+  spawnPlayerInWorld(w, "m"); setPlayerKit(w, "m", "mender");
+  const ally = spawnPlayerInWorld(w, "a"); setPlayerKit(w, "a", "gunner");
+  const m = w.players.get("m")!;
+  ally.x = m.x + 40;
+  ally.y = m.y;
+  ally.hp = ally.maxHp - 1;
+
+  const healGrant = ultChargeFromHealDone(1);
+  const healCap = ultShareCapUnits("heal");
+  m.ultCharge = ULT.meterMax - healGrant;
+  m.ultSources.heal = healCap - healGrant;
+  tick(w, (p) => ({ ...idle(), aim: 0, pulse: p.id === "m" }));
+  check("a real Mender heal fills the first meter at its per-fill share cap",
+    m.ultCharge === ULT.meterMax && m.ultSources.heal === healCap,
+    `charge=${m.ultCharge} heal=${m.ultSources.heal}`);
+
+  const wastedBefore = m.ultWasted;
+  devSpawnEnemy(w, "slime", m.x + 400, m.y);
+  tick(w, () => idle());
+  check("uncapped combat-time overcharge still records ultWasted",
+    m.ultCharge === ULT.meterMax && m.ultWasted > wastedBefore,
+    `charge=${m.ultCharge} wasted=${m.ultWasted}`);
+  w.enemies = [];
+
+  const firstCastTick = w.tick;
+  const firstCastEvents = tick(w, (p) => ({ ...idle(), ult: p.id === "m" }));
+  check("Mender casts Sanctuary once after the first capped-source fill",
+    firstCastEvents.some((e) => e.t === "ultSanctuary"));
+  check("a successful cast resets every capped-source accumulator",
+    Object.values(m.ultSources).every((charge) => charge === 0),
+    `sources=${JSON.stringify(m.ultSources)}`);
+  check("the successful cast preserves the 8s lockout",
+    m.ultReadyAtTick === firstCastTick + ULT.lockoutTicks,
+    `ready=${m.ultReadyAtTick} cast=${firstCastTick}`);
+
+  m.ultCharge = ULT.meterMax;
+  const refusedEvents = tick(w, (p) => ({ ...idle(), ult: p.id === "m" }));
+  check("the lockout still refuses an immediate full-meter re-cast",
+    m.ultCharge === ULT.meterMax && !refusedEvents.some((e) => e.t === "ultSanctuary"));
+
+  while (w.tick < m.ultReadyAtTick) tick(w, () => idle());
+  m.ultCharge = ULT.meterMax - healGrant;
+  ally.hp = ally.maxHp - 1;
+  tick(w, (p) => ({ ...idle(), aim: 0, pulse: p.id === "m" }));
+  check("the same capped heal source fills the next meter",
+    m.ultCharge === ULT.meterMax && m.ultSources.heal === healGrant,
+    `charge=${m.ultCharge} heal=${m.ultSources.heal}`);
+
+  const secondCastEvents = tick(w, (p) => ({ ...idle(), ult: p.id === "m" }));
+  check("Mender can cast Sanctuary twice in one run",
+    firstCastEvents.filter((e) => e.t === "ultSanctuary").length
+      + secondCastEvents.filter((e) => e.t === "ultSanctuary").length === 2);
+}
+
 function sanctuaryTests(): void {
   section("MENDER SANCTUARY: burst + capped HoT, NEVER out-heals (spec §2.2/§7)");
   const w = freshWorld();
@@ -459,6 +517,7 @@ function main(): void {
   masteryTests();
   chargeFormulaTests();
   overdriveTests();
+  ultRefillAfterCastTests();
   overdriveCeilingTests();
   sanctuaryTests();
   healClampTests();
