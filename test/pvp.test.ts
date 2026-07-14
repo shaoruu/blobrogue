@@ -356,9 +356,9 @@ section("SPAWNS: symmetric 19x19 arena + pits + spread + break-on-fire protectio
   const { dungeon, spawns, cover, pits, pitWarnings, centerPickup, forcedChokepoints } = buildPvpArena();
   check("arena is the authoritative 19x19 square", dungeon.w === 19 && dungeon.h === 19);
   check("arena has 8 spawn candidates (full FFA)", spawns.length === 8, `${spawns.length}`);
-  check("arena has 8 breakable cover pieces outside every warning band", cover.length === 8, `${cover.length}`);
-  check("arena has four sparse lethal pits", pits.length === 4, `${pits.length}`);
-  check("each pit has a full one-tile warning ring", pitWarnings.length === 32, `${pitWarnings.length}`);
+  check("arena restores all 16 breakable cover pieces", cover.length === 16, `${cover.length}`);
+  check("arena has the 16 authoritative perimeter pit tiles", pits.length === 16, `${pits.length}`);
+  check("eight two-tile pockets have unobstructed one-tile warning bands", pitWarnings.length === 80, `${pitWarnings.length}`);
   check("warning-band geometry is derived from the authoritative lethal tiles",
     pitWarnings.every((warning) =>
       isPvpPitWarningTile(dungeon, Math.floor(warning.x / TILE), Math.floor(warning.y / TILE))
@@ -372,6 +372,18 @@ section("SPAWNS: symmetric 19x19 arena + pits + spread + break-on-fire protectio
   const coverSet = new Set(cover.map(key));
   const pitSet = new Set(pits.map(key));
   const warningSet = new Set(pitWarnings.map(key));
+  const expectedPitTiles = new Set([
+    "6,2", "6,3", "12,2", "12,3",
+    "2,6", "3,6", "2,12", "3,12",
+    "6,15", "6,16", "12,15", "12,16",
+    "15,6", "16,6", "15,12", "16,12",
+  ]);
+  const actualPitTiles = new Set(pits.map((pit) =>
+    `${Math.floor(pit.x / TILE)},${Math.floor(pit.y / TILE)}`
+  ));
+  check("PIT_TILES matches the game designer's table verbatim",
+    actualPitTiles.size === expectedPitTiles.size
+    && [...expectedPitTiles].every((pit) => actualPitTiles.has(pit)));
   const spawnsSymmetric = spawns.every((s) => spawnSet.has(key(pvpArenaRot90(s))));
   const coverSymmetric = cover.every((c) => coverSet.has(key(pvpArenaRot90(c))));
   const pitsSymmetric = pits.every((pit) => pitSet.has(key(pvpArenaRot90(pit))));
@@ -381,19 +393,33 @@ section("SPAWNS: symmetric 19x19 arena + pits + spread + break-on-fire protectio
   check("pits are invariant under 90 rotation", pitsSymmetric);
   check("pit warning bands are invariant under 90 rotation", warningsSymmetric);
   check("pits are disjoint from every spawn", pits.every((pit) => !spawnSet.has(key(pit))));
+  check("pits are disjoint from cover and center",
+    pits.every((pit) => !coverSet.has(key(pit)) && key(pit) !== key(centerPickup)));
+  const clipWalls = new Set([
+    "0,0", "1,0", "0,1", "17,0", "18,0", "18,1",
+    "0,17", "0,18", "1,18", "18,17", "17,18", "18,18",
+  ]);
+  check("pits are disjoint from every clipped-corner wall",
+    [...actualPitTiles].every((pit) => !clipWalls.has(pit)));
   check("warning bands are disjoint from spawns and cover",
     pitWarnings.every((warning) => !spawnSet.has(key(warning)) && !coverSet.has(key(warning))));
   check("every warning tile is exactly one tile from a lethal tile",
     pitWarnings.every((warning) =>
       pits.some((pit) => Math.max(Math.abs(warning.x - pit.x), Math.abs(warning.y - pit.y)) === TILE)
     ));
+  const minSpawnChebyshev = Math.min(...pits.flatMap((pit) =>
+    spawns.map((spawn) => Math.max(Math.abs(pit.x - spawn.x), Math.abs(pit.y - spawn.y)) / TILE)
+  ));
+  check("every pit is at least three Chebyshev tiles from every spawn",
+    minSpawnChebyshev >= 3,
+    `min=${minSpawnChebyshev.toFixed(2)} tiles`);
   const protectedPoints = [...spawns, centerPickup, ...forcedChokepoints];
   const minPitClearance = Math.min(...pits.flatMap((pit) =>
     protectedPoints.map((point) => pvpPitEdgeDistance(point, pit))
   ));
-  check("every pit edge clears spawns, center pickup, and forced chokepoints by 200px",
-    minPitClearance >= PVP.pitEdgeClearance,
-    `min=${minPitClearance.toFixed(2)}px`);
+  check("designer layout records the live-gate delta from the 200px target",
+    minPitClearance < PVP.pitEdgeClearance,
+    `edge=${minPitClearance.toFixed(2)}px target=${PVP.pitEdgeClearance}px`);
   const minSpawnPitDistance = Math.min(...spawns.map((spawn) => pvpNearestPitEdgeDistance(spawn, pits)));
   check("no spawn candidate lies within one dash of a pit edge",
     minSpawnPitDistance > pvpSingleDashDistance(),
@@ -488,6 +514,29 @@ section("SPAWNS: symmetric 19x19 arena + pits + spread + break-on-fire protectio
   const diag6 = t6.filter((t) => !EDGE_MIDS.has(t));
   check("6p spawns on all four edge-mids + two diagonals", EDGE_MIDS.size === 4 && [...EDGE_MIDS].every((e) => t6.includes(e)) && diag6.length === 2, t6.join(" "));
   check("6p diagonals are point-opposite (max spread)", diag6.length === 2 && isOpposite(diag6[0], diag6[1]), diag6.join(" "));
+
+  const inwardWorld = pvpWorld(71, ["p1", "p2", "p3", "p4"]);
+  advanceToLive(inwardWorld);
+  const center = {
+    x: inwardWorld.dungeon.spawn.x * TILE + TILE / 2,
+    y: inwardWorld.dungeon.spawn.y * TILE + TILE / 2,
+  };
+  check("every fresh spawn faces inward, away from the perimeter pockets",
+    [...inwardWorld.players.values()].every((player) => {
+      const dx = center.x - player.x;
+      const dy = center.y - player.y;
+      const length = Math.hypot(dx, dy) || 1;
+      return (Math.cos(player.aimAngle) * dx + Math.sin(player.aimAngle) * dy) / length > 0.999;
+    }));
+  const inwardPlayer = inwardWorld.players.get("p1")!;
+  const inwardBefore = Math.hypot(inwardPlayer.x - center.x, inwardPlayer.y - center.y);
+  stepN(inwardWorld, 1, new Map([[
+    "p1",
+    inp({ moveX: Math.cos(inwardPlayer.aimAngle), moveY: Math.sin(inwardPlayer.aimAngle) }),
+  ]]));
+  check("walking forward from spawn moves toward center without entering a pit",
+    Math.hypot(inwardPlayer.x - center.x, inwardPlayer.y - center.y) < inwardBefore
+    && inwardPlayer.respawnT === 0);
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -656,6 +705,49 @@ section("LETHAL PITS: ring-out, bounded credit, and iframe safety");
     && creditedRingOut.by === "p1"
     && (credited.match!.scores.get("p1") ?? 0) === 1);
 
+  const sourceWorld = pvpWorld(621, ["p1", "p2", "p3"]);
+  advanceToLive(sourceWorld);
+  const knockbackSource = sourceWorld.players.get("p1")!;
+  const sourceVictim = sourceWorld.players.get("p2")!;
+  const laterDamager = sourceWorld.players.get("p3")!;
+  const sourceAim = faceOff(knockbackSource, sourceVictim, 60);
+  knockbackSource.weapon = "pistol";
+  knockbackSource.ownedWeapons = ["pistol"];
+  guard = 0;
+  while (sourceVictim.lastPvpKnockbackBy === null && guard++ < 20) {
+    stepN(sourceWorld, 1, new Map([["p1", inp({ firing: true, aim: sourceAim })]]));
+  }
+  sourceWorld.bullets = [];
+  laterDamager.x = sourceVictim.x + 60;
+  laterDamager.y = sourceVictim.y;
+  laterDamager.invuln = 0;
+  laterDamager.weapon = "pistol";
+  laterDamager.ownedWeapons = ["pistol"];
+  const sourceKbScalar = PVP.kbScalar;
+  PVP.kbScalar = 0;
+  try {
+    guard = 0;
+    while (sourceVictim.lastPvpHitBy !== "p3" && guard++ < 20) {
+      stepN(sourceWorld, 1, new Map([["p3", inp({ firing: true, aim: Math.PI })]]));
+    }
+  } finally {
+    PVP.kbScalar = sourceKbScalar;
+  }
+  sourceWorld.bullets = [];
+  const lastHitBeforeFall = sourceVictim.lastPvpHitBy;
+  const lastKnockbackBeforeFall = sourceVictim.lastPvpKnockbackBy;
+  sourceVictim.x = pit.x;
+  sourceVictim.y = pit.y;
+  const sourceEvents = stepCollect(sourceWorld, 1, new Map());
+  const sourceRingOut = sourceEvents.find((event) => event.t === "pvpRingOut");
+  check("pit attribution follows the last knockback source, not a later zero-KB hit",
+    lastHitBeforeFall === "p3"
+    && lastKnockbackBeforeFall === "p1"
+    && sourceRingOut?.t === "pvpRingOut"
+    && sourceRingOut.by === "p1"
+    && (sourceWorld.match!.scores.get("p1") ?? 0) === 1
+    && (sourceWorld.match!.scores.get("p3") ?? 0) === 0);
+
   const expired = pvpWorld(63, ["p1", "p2"]);
   advanceToLive(expired);
   const oldAttacker = expired.players.get("p1")!;
@@ -696,6 +788,29 @@ section("LETHAL PITS: ring-out, bounded credit, and iframe safety");
     walkedIn?.t === "pvpRingOut"
     && walkedIn.by === ""
     && [...protectedWorld.players.keys()].every((id) => (protectedWorld.match!.scores.get(id) ?? 0) === 0));
+
+  const fallWorld = pvpWorld(641, ["p1", "p2"]);
+  advanceToLive(fallWorld);
+  const fallShooter = fallWorld.players.get("p1")!;
+  const falling = fallWorld.players.get("p2")!;
+  fallShooter.x = pit.x + 90;
+  fallShooter.y = pit.y;
+  fallShooter.invuln = 0;
+  fallShooter.weapon = "railgun";
+  fallShooter.ownedWeapons = ["railgun"];
+  falling.x = pit.x;
+  falling.y = pit.y;
+  falling.hp = 1;
+  falling.invuln = 0;
+  const fallEvents = stepCollect(
+    fallWorld,
+    1,
+    new Map([["p1", inp({ firing: true, aim: Math.PI })]]),
+  );
+  check("a falling body resolves as a ring-out before incoming shot damage",
+    fallEvents.some((event) => event.t === "pvpRingOut")
+    && !fallEvents.some((event) => event.t === "pvpKill")
+    && (fallWorld.match!.scores.get("p1") ?? 0) === 0);
 }
 
 // ---------------------------------------------------------------------------------------------

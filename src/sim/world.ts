@@ -294,10 +294,13 @@ export interface PlayerSim {
   // deathmatch: a death schedules a respawn, never an elimination. Always 0 in co-op, so the
   // co-op movement/collision gates that read it (respawnT === 0) stay byte-identical.
   respawnT: number;
-  // Most recent PvP attacker and authoritative hit tick. A lethal pit reads these for the
-  // bounded environmental-frag credit window, then respawn clears them.
+  // Most recent PvP attacker and authoritative damage tick.
   lastPvpHitBy: PlayerId | null;
   lastPvpHitTick: number;
+  // Most recent player who actually displaced this body with PvP knockback. Pit attribution
+  // reads this pair specifically, so nearby damage never steals a walked-in suicide.
+  lastPvpKnockbackBy: PlayerId | null;
+  lastPvpKnockbackTick: number;
   // Per-player draft cadence and deterministic offer identity. These fields are inert in co-op
   // and stay server-side; online clients receive only the resulting validated choice set.
   pvpDraftFrags: number;
@@ -524,6 +527,8 @@ export function createPlayer(id: PlayerId, x: number, y: number): PlayerSim {
     respawnT: 0,
     lastPvpHitBy: null,
     lastPvpHitTick: -1,
+    lastPvpKnockbackBy: null,
+    lastPvpKnockbackTick: -1,
     pvpDraftFrags: 0,
     pvpNextDraftTick: 0,
     pvpDraftOrdinal: 0,
@@ -662,6 +667,13 @@ function initPvpPlayer(w: WorldState, p: PlayerSim): void {
 // Place a pvp player on the arena spawn farthest from every LIVE opponent (deterministic:
 // position-based, ties to the lowest spawn index) and arm spawn protection. Used for on-join
 // placement and mid-match respawns.
+function pvpFaceInward(w: WorldState, p: PlayerSim): void {
+  const centerX = w.dungeon.spawn.x * TILE + TILE / 2;
+  const centerY = w.dungeon.spawn.y * TILE + TILE / 2;
+  p.aimAngle = Math.atan2(centerY - p.y, centerX - p.x);
+  p.facing = Math.cos(p.aimAngle) >= 0 ? 1 : -1;
+}
+
 function pvpPlaceOnSpawn(w: WorldState, p: PlayerSim): void {
   const spawns = w.match?.spawns ?? [];
   const pits = w.match?.pits ?? [];
@@ -677,9 +689,12 @@ function pvpPlaceOnSpawn(w: WorldState, p: PlayerSim): void {
     p.x = spawns[idx].x;
     p.y = spawns[idx].y;
   }
+  pvpFaceInward(w, p);
   p.invuln = PVP.spawnIframeSec; // spawn protection: ends here or on first outgoing attack
   p.lastPvpHitBy = null;
   p.lastPvpHitTick = -1;
+  p.lastPvpKnockbackBy = null;
+  p.lastPvpKnockbackTick = -1;
 }
 
 // Assign a kit to a player (lobby kit-select at spawn / dev sandbox / the authoritative server
@@ -10622,6 +10637,19 @@ function applyPvpKnockback(w: WorldState, p: PlayerSim, hit: PvpHitContext | nul
   return Math.hypot(p.x - beforeX, p.y - beforeY);
 }
 
+function isPlayerCenterInPvpPit(w: WorldState, p: PlayerSim): boolean {
+  const tx = Math.floor(p.x / TILE);
+  const ty = Math.floor(p.y / TILE);
+  if (tx < 0 || ty < 0 || tx >= w.dungeon.w || ty >= w.dungeon.h) return false;
+  return w.dungeon.tiles[ty * w.dungeon.w + tx] === 2;
+}
+
+function recentPvpKnockbackSource(w: WorldState, p: PlayerSim): PlayerId | null {
+  const by = p.lastPvpKnockbackBy;
+  if (by === null || p.lastPvpKnockbackTick < 0) return null;
+  return w.tick - p.lastPvpKnockbackTick <= pvpEnvKillCreditWindowTicks() ? by : null;
+}
+
 function awardPvpFrag(w: WorldState, by: PlayerId, x: number, y: number): SimEvent | null {
   const m = w.match;
   if (m === null) return null;
@@ -10652,6 +10680,8 @@ function eliminatePvpPlayer(
   p.respawnT = pvpRespawnDelayTicks();
   p.lastPvpHitBy = null;
   p.lastPvpHitTick = -1;
+  p.lastPvpKnockbackBy = null;
+  p.lastPvpKnockbackTick = -1;
   if (kind === "ringOut") {
     ev.push({ t: "pvpRingOut", by: creditedBy ?? "", victim: p.id, x: p.x, y: p.y });
   } else {
@@ -10691,8 +10721,16 @@ function damagePlayerPvp(
     p.lastPvpHitTick = w.tick;
   }
   p.hp -= amount;
-  applyPvpKnockback(w, p, pvpHit);
+  const knockback = applyPvpKnockback(w, p, pvpHit);
+  if (knockback > 0 && by !== null && by !== p.id) {
+    p.lastPvpKnockbackBy = by;
+    p.lastPvpKnockbackTick = w.tick;
+  }
   ev.push({ t: "playerHurt", pid: p.id, x: p.x, y: p.y });
+  if (isPlayerCenterInPvpPit(w, p)) {
+    eliminatePvpPlayer(w, p, recentPvpKnockbackSource(w, p), "ringOut", ev);
+    return;
+  }
   if (p.hp <= 0) eliminatePvpPlayer(w, p, by, "combat", ev);
 }
 
@@ -10846,14 +10884,8 @@ function resolvePvpPits(w: WorldState, ev: SimEvent[]): void {
   for (const id of [...w.players.keys()].sort()) {
     const p = w.players.get(id);
     if (p === undefined || p.isAbsent || p.hp <= 0 || p.respawnT > 0 || isProtected(p)) continue;
-    const tx = Math.floor(p.x / TILE);
-    const ty = Math.floor(p.y / TILE);
-    if (tx < 0 || ty < 0 || tx >= w.dungeon.w || ty >= w.dungeon.h) continue;
-    if (w.dungeon.tiles[ty * w.dungeon.w + tx] !== 2) continue;
-    const isRecentHit = p.lastPvpHitBy !== null
-      && p.lastPvpHitTick >= 0
-      && w.tick - p.lastPvpHitTick <= pvpEnvKillCreditWindowTicks();
-    eliminatePvpPlayer(w, p, isRecentHit ? p.lastPvpHitBy : null, "ringOut", ev);
+    if (!isPlayerCenterInPvpPit(w, p)) continue;
+    eliminatePvpPlayer(w, p, recentPvpKnockbackSource(w, p), "ringOut", ev);
   }
 }
 
@@ -10899,6 +10931,7 @@ function pvpAssignSpreadSpawns(w: WorldState): void {
     const idx = farthestSpawnIndex(m.spawns, placed, m.pits);
     p.x = m.spawns[idx].x;
     p.y = m.spawns[idx].y;
+    pvpFaceInward(w, p);
     p.hp = p.maxHp;
     p.respawnT = 0;
     p.dashInvuln = 0;
@@ -11270,6 +11303,9 @@ export function stepWorldPhase(w: WorldState, dt: number, ev: SimEvent[]): void 
   const pvp = isPvp(w);
   // Reset the per-victim per-tick pvp damage-cap accumulator BEFORE any damage this tick.
   if (pvp && w.match !== null) w.match.dmgThisTick.clear();
+  // Movement/self-knockback ring-outs resolve before projectiles, so a body that has already
+  // crossed the edge cannot be converted into an ordinary shot kill while falling.
+  if (pvp) resolvePvpPits(w, ev);
   recordHistory(w);
   updateBullets(w, dt, ev);
   updateEffects(w, dt, ev);

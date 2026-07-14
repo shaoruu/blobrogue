@@ -105,7 +105,8 @@ type ClientOwnedField = "id" | "pr" | "aimAngle" | "shotSeq" | "rewindTicks" | "
 // - selfHealReadyTick: the earliest tick the next MENDER self-heal HP may land (the sustained
 //              self-heal ceiling). Same story as lastDamagedTick — world-phase-only self-heal
 //              bookkeeping, off the wire.
-// - lastPvpHitBy/lastPvpHitTick: authoritative ring-out credit bookkeeping.
+// - lastPvpHitBy/lastPvpHitTick: authoritative damage attribution bookkeeping.
+// - lastPvpKnockbackBy/lastPvpKnockbackTick: authoritative ring-out credit bookkeeping.
 // - pvpDraft*: authoritative offer cadence, deterministic seed identity, and comeback weighting.
 //              The server sends the validated offer itself; prediction never rolls an online pick.
 type ServerOnlyField =
@@ -119,6 +120,8 @@ type ServerOnlyField =
   | "selfHealReadyTick"
   | "lastPvpHitBy"
   | "lastPvpHitTick"
+  | "lastPvpKnockbackBy"
+  | "lastPvpKnockbackTick"
   | "pvpDraftFrags"
   | "pvpNextDraftTick"
   | "pvpDraftOrdinal"

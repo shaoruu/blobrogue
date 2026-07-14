@@ -67,6 +67,9 @@ export interface TileRenderScene<Img> {
   // the flat fill below is skipped. False = legacy flat darkness (lighting off, and the
   // headless readability scenes, which raster this pass alone).
   isAmbientGraded?: boolean;
+  // AD hook: future authored edge particles can opt into a stronger rim pulse without changing
+  // lethal geometry or the always-on baseline warning treatment.
+  isPitVfxEnabled?: boolean;
 }
 
 // Walls are drawn as extruded blocks: a lit top cap, a dark front face dropping down
@@ -383,7 +386,8 @@ function renderLethalVoidTiles<Img>(
   y1: number,
 ): void {
   const d = scene.dungeon;
-  const pulse = 0.72 + 0.16 * (0.5 + 0.5 * Math.sin(scene.animClock * 3.2));
+  const pulseRate = scene.isPitVfxEnabled === true ? 5.2 : 3.2;
+  const pulse = 0.72 + 0.16 * (0.5 + 0.5 * Math.sin(scene.animClock * pulseRate));
   for (let ty = y0; ty < y1; ty++) {
     for (let tx = x0; tx < x1; tx++) {
       if (d.tiles[ty * d.w + tx] !== 2) continue;

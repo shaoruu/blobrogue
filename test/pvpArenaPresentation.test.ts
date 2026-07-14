@@ -265,9 +265,9 @@ async function main(): Promise<void> {
   canvasLog.dangerStrokeCalls = 0;
   canvasLog.warningFillCalls = 0;
   game.renderTiles();
-  check("every lethal pit renders a readable red danger edge", canvasLog.dangerStrokeCalls >= 4,
+  check("every lethal pit renders a readable red danger edge", canvasLog.dangerStrokeCalls >= 16,
     `dangerEdges=${canvasLog.dangerStrokeCalls}`);
-  check("pit approaches render a full-tile amber warning band", canvasLog.warningFillCalls >= 4,
+  check("pit approaches render a full-tile amber warning band", canvasLog.warningFillCalls >= 16,
     `warningTiles=${canvasLog.warningFillCalls}`);
 
   game.renderMinimap();
@@ -275,8 +275,8 @@ async function main(): Promise<void> {
   check("arena minimap keeps geometry but has no exit marker",
     minimapView.dungeon.w === 19 && minimapView.dungeon.h === 19
     && minimapView.exit === null && !minimapView.isCleared);
-  check("arena minimap geometry carries all four lethal pit tiles",
-    minimapView.dungeon.tiles.filter((tile) => tile === 2).length === 4);
+  check("arena minimap geometry carries all 16 lethal pit tiles",
+    minimapView.dungeon.tiles.filter((tile) => tile === 2).length === 16);
 
   section("presentation work leaves the production kill switch off");
   check("PVP remains disabled", PVP_PUBLIC_ENABLED === false);

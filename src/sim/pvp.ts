@@ -65,7 +65,8 @@ export const PVP = {
   kbScalar: 1.0,
   kbMaxPerHit: 180,
   kbSelfDuringIframe: 0,
-  // Lethal geometry must leave more setup room than one maximum knockback hit.
+  // Documented balancer target. The authoritative perimeter layout is 3 tiles from its nearest
+  // spawn and intentionally falls short; spawn protection is the hard anti-grief rule.
   pitEdgeClearance: 200,
   // Walkable floor tiles telegraph every lethal edge by this many full tiles.
   pitWarningBandTiles: 1,
@@ -366,17 +367,20 @@ const SPAWN_TILES: ReadonlyArray<[number, number]> = [
   [12, 6], [6, 12], [6, 6], [12, 12], // diagonals (opposite pairs consecutive)
 ];
 
-// Breakable cover (8 props): center knot (center 9,9 stays OPEN) + four outer mids. The corner
-// blockers are removed so the pit warning rings remain fully readable and unobstructed.
+// Breakable cover (16 props): center knot (center 9,9 stays OPEN), four mid pairs, four corner
+// blockers. Every piece stays disjoint from the authoritative perimeter pit pockets.
 const COVER_TILES: ReadonlyArray<[number, number]> = [
   [8, 8], [10, 8], [8, 10], [10, 10],                 // center knot
-  [9, 6], [6, 9], [9, 12], [12, 9],                   // outer mids
+  [9, 6], [9, 7], [6, 9], [7, 9], [9, 12], [9, 11], [12, 9], [11, 9], // mid pairs
+  [3, 3], [15, 3], [3, 15], [15, 15],                 // corner blockers
 ];
 
-// The innermost 4-fold orbit that clears every protected point by >=200px. This moves the pits
-// from the contested center axes into corner-flank pockets; the PR calls out that design trade.
-const PIT_TILES: ReadonlyArray<[number, number]> = [
-  [2, 3], [3, 16], [16, 15], [15, 2],
+// Authoritative perimeter pockets: eight 2-tile falls, invariant under rot90(x,y)=(y,18-x).
+export const PIT_TILES: ReadonlyArray<[number, number]> = [
+  [6, 2], [6, 3], [12, 2], [12, 3],
+  [2, 6], [3, 6], [2, 12], [3, 12],
+  [6, 15], [6, 16], [12, 15], [12, 16],
+  [15, 6], [16, 6], [15, 12], [16, 12],
 ];
 
 const CENTER_PICKUP_TILE: readonly [number, number] = [9, 9];
@@ -427,6 +431,16 @@ export function buildPvpArena(): PvpArena {
     }
   }
   for (const [x, y] of CLIP_WALLS) tiles[y * n + x] = 1;
+  const reservedTileKeys = new Set([
+    ...CLIP_WALLS,
+    ...SPAWN_TILES,
+    ...COVER_TILES,
+    CENTER_PICKUP_TILE,
+    ...FORCED_CHOKE_TILES,
+  ].map(([x, y]) => `${x},${y}`));
+  for (const [x, y] of PIT_TILES) {
+    if (reservedTileKeys.has(`${x},${y}`)) throw new Error("PVP pit overlaps reserved arena geometry");
+  }
   for (const [x, y] of PIT_TILES) tiles[y * n + x] = 2;
   const spawns: Vec2[] = SPAWN_TILES.map(([tx, ty]) => tileCenter(tx, ty));
   const cover: Vec2[] = COVER_TILES.map(([tx, ty]) => tileCenter(tx, ty));
@@ -440,24 +454,21 @@ export function buildPvpArena(): PvpArena {
       if (isPvpPitWarningTile(dungeon, tx, ty)) pitWarnings.push(tileCenter(tx, ty));
     }
   }
-  const warningDiameter = PVP.pitWarningBandTiles * 2 + 1;
-  const expectedWarningTiles = pits.length * (warningDiameter * warningDiameter - 1);
-  if (pitWarnings.length !== expectedWarningTiles) {
-    throw new Error("PVP pit warning band is obstructed");
+  for (const [tx, ty] of PIT_TILES) {
+    for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) {
+      const nx = tx + dx;
+      const ny = ty + dy;
+      if (dungeon.tiles[ny * n + nx] === 2) continue;
+      if (!isPvpPitWarningTile(dungeon, nx, ny)) {
+        throw new Error("PVP pit warning band is obstructed");
+      }
+    }
   }
   if (PVP.pitWarningBandTiles * TILE > pvpSingleDashDistance()) {
     throw new Error("PVP pit warning band exceeds one dash");
   }
   const centerPickup = tileCenter(...CENTER_PICKUP_TILE);
   const forcedChokepoints = FORCED_CHOKE_TILES.map(([tx, ty]) => tileCenter(tx, ty));
-  const protectedPoints = [...spawns, centerPickup, ...forcedChokepoints];
-  for (const pit of pits) {
-    for (const point of protectedPoints) {
-      if (pvpPitEdgeDistance(point, pit) < PVP.pitEdgeClearance) {
-        throw new Error("PVP pit violates edge clearance");
-      }
-    }
-  }
   for (const spawn of spawns) {
     if (pvpNearestPitEdgeDistance(spawn, pits) <= pvpSingleDashDistance()) {
       throw new Error("PVP spawn violates pit dash clearance");
