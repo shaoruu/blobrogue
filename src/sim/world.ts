@@ -4311,12 +4311,8 @@ function updateEnemies(w: WorldState, dt: number, ev: SimEvent[]): void {
         // facet bounces it back as a hostile bolt (and cracks). Both frontal, non-piercing only.
         if (absorbOnRollSlab(e, b, ev)) continue;
         if (reflectFrontalBullet(w, e, b, ev)) continue;
-        const phaseDamageMult = b.isPhase === true && shooter !== null
-          && !hasLineOfSight(w, shooter.x, shooter.y, e.x, e.y)
-          ? PHASE_NO_LOS_DAMAGE_MULT
-          : 1;
         strikeEnemy(w, shooter, e, {
-          damage: b.damage * phaseDamageMult, isCrit: b.isCrit, critX: b.critX ?? 1, bossCoef: b.bossCoef ?? 1, puffX: sweptHit.x, puffY: sweptHit.y, kbDirX: b.vx, kbDirY: b.vy,
+          damage: b.damage * phaseLineOfSightDamageMult(w, b, btx, bty), isCrit: b.isCrit, critX: b.critX ?? 1, bossCoef: b.bossCoef ?? 1, puffX: sweptHit.x, puffY: sweptHit.y, kbDirX: b.vx, kbDirY: b.vy,
           burn: b.burn, chill: b.chill, shock: b.shock, isMelee: false,
           isPersistent: b.isPersistent,
           ownerId: b.owner, fxWeapon: b.fx ?? null,
@@ -9501,6 +9497,14 @@ function hasLineOfSight(w: WorldState, x0: number, y0: number, x1: number, y1: n
     x += sx; y += sy;
   }
   return true;
+}
+
+function phaseLineOfSightDamageMult(w: WorldState, b: Bullet, targetX: number, targetY: number): number {
+  if (b.isPhase !== true) return 1;
+  if (b.phaseFireX === undefined || b.phaseFireY === undefined) return PHASE_NO_LOS_DAMAGE_MULT;
+  return hasLineOfSight(w, b.phaseFireX, b.phaseFireY, targetX, targetY)
+    ? 1
+    : PHASE_NO_LOS_DAMAGE_MULT;
 }
 
 function refreshNav(w: WorldState, dt: number): void {

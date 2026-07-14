@@ -589,6 +589,7 @@ export function fire(spec: ShotSpec, x: number, y: number, aim: number, rng: Rng
   const extra = Math.max(0, spec.pellets - spec.basePellets);
   const native = spec.pellets - extra;
   const isHomingSplit = spec.homing !== undefined && extra > 0;
+  const allowedExtraHomers = Math.max(0, HOMING_SPLIT.maxHomingPellets - spec.basePellets);
   const extraDamageMult = isHomingSplit ? HOMING_SPLIT.extraDamageMult : 1;
   const volleyDamageWeight = native + extra * extraDamageMult;
   const effective = 1 + Math.max(0, native - 1) * BOSS_NATIVE_PELLET_COEF + extra * BOSS_EXTRA_PELLET_COEF;
@@ -597,9 +598,11 @@ export function fire(spec: ShotSpec, x: number, y: number, aim: number, rng: Rng
     const isExtra = i >= spec.basePellets;
     const damageMult = isExtra ? extraDamageMult : 1;
     let homing = spec.homing;
-    if (isHomingSplit) {
-      if (i >= HOMING_SPLIT.maxHomingPellets) homing = undefined;
-      else if (isExtra && homing !== undefined) homing *= HOMING_SPLIT.extraTurnRateMult;
+    if (isHomingSplit && isExtra) {
+      const extraIndex = i - spec.basePellets;
+      homing = homing !== undefined && extraIndex < allowedExtraHomers
+        ? homing * HOMING_SPLIT.extraTurnRateMult
+        : undefined;
     }
     const t = spec.pellets === 1 ? 0 : (i / (spec.pellets - 1)) - 0.5;
     const jitter = (rng.next() - 0.5) * (spec.spread * 0.3);
@@ -632,6 +635,8 @@ export function fire(spec: ShotSpec, x: number, y: number, aim: number, rng: Rng
       killShards: spec.killShards,
       accel: spec.accel,
       isPhase: spec.isPhase,
+      phaseFireX: spec.isPhase === true ? x : undefined,
+      phaseFireY: spec.isPhase === true ? y : undefined,
       implode: spec.implode,
       nova: spec.nova,
       paintSpacing: spec.paintSpacing,
