@@ -68,7 +68,7 @@ import type { SfxName, SfxOptions } from "./audio.js";
 import { waveAudio } from "./waveAudio.js";
 import type { WaveFramePlayer } from "./waveAudio.js";
 import { EXPEDITION_BAND_ENTRY_EVENT, WAVE_HAZARDS, WEAPON_AUDIO, STATUS_AUDIO } from "./waveSpec.js";
-import { pvpKillCue, pvpMatchOverCue, pvpFragStreakStep, pvpFragStreakRate, pvpCountTickRate } from "./waveSpec.js";
+import { pvpKillCue, pvpMatchOverCue, pvpFragStreakRate, pvpCountTickRate } from "./waveSpec.js";
 import type { WaveEventId } from "./waveSpec.js";
 import { PVP, pvpDraftSeed } from "../sim/pvp.js";
 import type { MatchPhase } from "../sim/pvp.js";
