@@ -86,7 +86,7 @@ async function main(): Promise<void> {
   });
 
   await test("adversarial E2E: two real sockets through damage -> exact-once pvpKill -> respawn -> match-over", async () => {
-    const s = await startTestServer();
+    const s = await startTestServer({ pvpPublicEnabled: true });
     try {
       const world = "pvp:room:E2E";
       // The shooter holds the trigger every frame (aim right); the countdown freeze means no round
@@ -153,7 +153,7 @@ async function main(): Promise<void> {
 
   await test("adversarial E2E: a disconnect inside the grace pauses the match; the seat resumes not-lost", async () => {
     const graceMs = 3000;
-    const s = await startTestServer({ resumeGraceMs: graceMs });
+    const s = await startTestServer({ pvpPublicEnabled: true, resumeGraceMs: graceMs });
     try {
       const world = "pvp:room:GRC";
       const a = new Bot({ url: s.url, secret: s.secret, playerId: "ga", world, name: "ga", colorIndex: 1, script: () => idle(), reconnect: { baseDelayMs: 80, maxDelayMs: 250, graceMs } });
