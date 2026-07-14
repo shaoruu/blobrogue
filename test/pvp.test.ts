@@ -467,6 +467,30 @@ section("PLAYER KNOCKBACK: weapon impulse, hard clamp, and iframe immunity");
     displacement <= PVP.kbMaxPerHit,
     `kb=${displacement.toFixed(2)}`);
 
+  const originalKbScalar = PVP.kbScalar;
+  let clampedDisplacement = Infinity;
+  try {
+    PVP.kbScalar = 100;
+    const clampWorld = pvpWorld(601, ["p1", "p2"]);
+    advanceToLive(clampWorld);
+    const clampShooter = clampWorld.players.get("p1")!;
+    const clampVictim = clampWorld.players.get("p2")!;
+    const clampAim = faceOff(clampShooter, clampVictim, 60);
+    clampShooter.weapon = "railgun";
+    clampShooter.ownedWeapons = ["railgun"];
+    const clampStartX = clampVictim.x;
+    let clampGuard = 0;
+    while (clampVictim.hp === PVP.maxHp && clampGuard++ < 20) {
+      stepN(clampWorld, 1, new Map([["p1", inp({ firing: true, aim: clampAim })]]));
+    }
+    clampedDisplacement = Math.hypot(clampVictim.x - clampStartX, clampVictim.y - 216);
+  } finally {
+    PVP.kbScalar = originalKbScalar;
+  }
+  check("an over-limit real hit is clamped to exactly 180px",
+    Math.abs(clampedDisplacement - PVP.kbMaxPerHit) < 1e-9,
+    `kb=${clampedDisplacement.toFixed(2)}`);
+
   const protectedWorld = pvpWorld(61, ["p1", "p2"]);
   advanceToLive(protectedWorld);
   const protectedShooter = protectedWorld.players.get("p1")!;
