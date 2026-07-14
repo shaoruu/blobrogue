@@ -46,6 +46,14 @@ function main(): void {
   check("teammates mid-pick append the held-gate explanation",
     onlineHudLabel({ phase: "connected", roomCode: "ABCD", worldId: null, connected: 2, away: 0, waitingPicks: 1 }) === "CONNECTED \u00b7 ABCD \u00b7 2 PLAYERS \u00b7 WAITING ON 1 PICK"
     && onlineHudLabel({ phase: "connected", roomCode: "ABCD", worldId: null, connected: 3, away: 0, waitingPicks: 2 }).endsWith("WAITING ON 2 PICKS"));
+  check("arena rooms use arena identity without co-op pick copy",
+    onlineHudLabel({ phase: "connected", roomCode: "ABCD", worldId: "pvp:room:ABCD", connected: 2, away: 0, waitingPicks: 1, isArena: true })
+      === "ARENA \u00b7 ABCD \u00b7 2 PLAYERS");
+  check("arena connection phases remain explicit",
+    onlineHudLabel({ phase: "connecting", roomCode: "ABCD", worldId: null, connected: 0, away: 0, isArena: true })
+      === "ARENA \u00b7 CONNECTING \u00b7 ABCD"
+    && onlineHudLabel({ phase: "waiting", roomCode: "ABCD", worldId: null, connected: 1, away: 0, isArena: true })
+      === "ARENA \u00b7 WAITING FOR PLAYERS \u00b7 ABCD \u00b7 1 PLAYER");
   check("details panel line carries world/rev/version", netDetailsLine("room:ABCD", 3, 4) === "world room:ABCD \u00b7 rev 3 \u00b7 protocol v4");
   check("details panel line degrades before the first snapshot", netDetailsLine(null, null, 4) === "world \u2014 \u00b7 rev \u2014 \u00b7 protocol v4");
 

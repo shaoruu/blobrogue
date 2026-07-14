@@ -6,6 +6,8 @@
 // mid-run.
 
 import { renderHearts, mountIcons, itemIconEl, weaponIconEl } from "./hudIcons.js";
+import { arenaCenterCopy, arenaHpView, arenaLaneCopy } from "./arenaHud.js";
+import type { ArenaMatchHudState } from "./arenaHud.js";
 import { MAX_ITEM_LEVEL } from "../sim/items.js";
 import { ULT, ticksToSec } from "../sim/kits.js";
 import { settings } from "./settings.js";
@@ -83,6 +85,8 @@ export interface HudState {
     overshield: { chips: number; max: number } | null;
     pulse: { cd: number; isReady: boolean } | null;
   } | null;
+  isArena: boolean;
+  arenaMatch: ArenaMatchHudState | null;
 }
 
 export interface HotbarActions {
@@ -133,6 +137,7 @@ export interface StatsPanelData {
   coins: number;
   runTime: number; // seconds
   weaponName: string;
+  isArena: boolean;
   profile: ProfileStats | null;
   roster: RosterEntry[] | null;
   // Online connection debug details (authoritative world / revision / protocol) — the UI
@@ -444,9 +449,9 @@ export function buildMoreChip(hiddenCount: number): HTMLElement {
 //   BC  hotbar (weapons + blessing summary)
 const HUD_MARKUP = `
   <div class="hud-corner tl"><div class="statpanel">
-    <div class="hprow"><div class="hearts" data-hearts></div><span class="oshield" data-oshield hidden></span><span class="hp-num" data-hpnum>0/0</span></div>
+    <div class="hprow"><div class="hearts" data-hearts></div><span class="oshield" data-oshield hidden></span><span class="arena-hp hidden" data-arena-hp><i data-arena-hp-fill></i></span><span class="hp-num" data-hpnum>0/0</span></div>
     <div class="party" data-party></div>
-    <div class="statrow">
+    <div class="statrow" data-statrow>
       <span class="chip kills"><span class="ic" data-ic="skull"></span><span class="v" data-kills>0</span></span>
       <span class="chip coins"><span class="ic" data-ic="coin"></span><span class="v" data-coins>0</span></span>
     </div>
@@ -468,7 +473,7 @@ const HUD_MARKUP = `
       <div class="combo-bar"><i data-combo-fill></i></div>
     </div>
   </div>
-  <div class="hud-corner tr"><div class="minimap"><span class="mm-title">MAP</span></div></div>
+  <div class="hud-corner tr"><div class="minimap"><span class="mm-title">MAP</span></div><section class="arena-board hidden" data-arena-board aria-label="Arena scoreboard"></section></div>
   <div class="hud-corner bl">
     <div class="klcluster" data-klcluster>
       <div class="kitbadge" data-kitbadge hidden><span class="ki" data-kit-icon></span><span class="kn" data-kit-name></span></div>
@@ -485,6 +490,7 @@ const HUD_MARKUP = `
     <div class="hb-slots" data-hb-slots></div>
     <div class="hb-hint" data-hb-hint>CLICK EQUIP &middot; DRAG REORDER &middot; Q DROP</div>
   </div>
+  <div class="arena-center hidden" data-arena-center aria-live="polite"></div>
 `;
 
 // In-flight hotbar drag. Exists from pointerdown; isActive flips once the pointer travels
@@ -541,6 +547,10 @@ export class Hud {
   private hud: HTMLElement;
   private heartsEl: HTMLElement;
   private hpNumEl!: HTMLElement;
+  private arenaHpEl!: HTMLElement;
+  private arenaHpFillEl!: HTMLElement;
+  private arenaBoardEl!: HTMLElement;
+  private arenaCenterEl!: HTMLElement;
   private partyEl!: HTMLElement;
   private ultEl!: HTMLElement;
   private ultFillEl!: HTMLElement;
@@ -565,6 +575,7 @@ export class Hud {
   private prevUltKit = "";
   private killsEl: HTMLElement;
   private coinsEl: HTMLElement;
+  private statRowEl: HTMLElement;
   private coinsChipEl: HTMLElement;
   private mutatorsEl: HTMLElement;
   private prevMutators = "";
@@ -620,6 +631,7 @@ export class Hud {
 
   private statsPanel: HTMLElement;
   private statsBody: HTMLElement;
+  private statsTitle: HTMLElement;
   private banner: HTMLElement;
   private objLaneEl!: HTMLElement;
   private objectiveEl!: HTMLElement;
@@ -634,6 +646,9 @@ export class Hud {
   private prevHp = -1;
   private prevMaxHp = -1;
   private prevHpDisplay = "";
+  private isPrevArena: boolean | null = null;
+  private prevArenaBoardKey = "";
+  private prevArenaCenterKey = "";
   private prevPartyKey = "";
   private prevUltKey = "";
 
@@ -647,6 +662,10 @@ export class Hud {
 
     this.heartsEl = hud.querySelector("[data-hearts]")!;
     this.hpNumEl = hud.querySelector("[data-hpnum]")!;
+    this.arenaHpEl = hud.querySelector("[data-arena-hp]")!;
+    this.arenaHpFillEl = hud.querySelector("[data-arena-hp-fill]")!;
+    this.arenaBoardEl = hud.querySelector("[data-arena-board]")!;
+    this.arenaCenterEl = hud.querySelector("[data-arena-center]")!;
     this.partyEl = hud.querySelector("[data-party]")!;
     this.ultEl = hud.querySelector("[data-ult]")!;
     this.ultFillEl = hud.querySelector("[data-ult-fill]")!;
@@ -667,6 +686,7 @@ export class Hud {
     this.mutatorsEl = hud.querySelector("[data-mutators]")!;
     this.killsEl = hud.querySelector("[data-kills]")!;
     this.coinsEl = hud.querySelector("[data-coins]")!;
+    this.statRowEl = hud.querySelector("[data-statrow]")!;
     this.coinsChipEl = hud.querySelector(".chip.coins")!;
     this.slotsEl = hud.querySelector("[data-hb-slots]")!;
     this.buffsEl = hud.querySelector("[data-hb-buffs]")!;
@@ -728,7 +748,8 @@ export class Hud {
       `min-width:320px;max-width:440px;padding:22px 26px;background:var(--dun-1);` +
       `box-shadow:var(--frame-strong),inset 0 0 0 2px var(--dun-2),0 12px 0 rgba(0,0,0,0.4);` +
       `color:var(--cream);font:var(--fs-md) var(--f-num),ui-monospace,monospace;font-variant-numeric:tabular-nums;`);
-    card.appendChild(el("h2", "color:var(--amber);font:var(--fs-md) var(--f-logo),monospace;letter-spacing:2px;margin-bottom:16px;", "RUN STATS"));
+    this.statsTitle = el("h2", "color:var(--amber);font:var(--fs-md) var(--f-logo),monospace;letter-spacing:2px;margin-bottom:16px;", "RUN STATS");
+    card.appendChild(this.statsTitle);
     this.statsBody = el("div", "display:flex;flex-direction:column;gap:6px;");
     card.appendChild(this.statsBody);
     card.appendChild(el("p", "margin-top:16px;font:var(--fs-2xs) var(--f-ui),monospace;letter-spacing:1px;color:var(--dun-4);", "RELEASE TAB TO CLOSE"));
@@ -740,6 +761,7 @@ export class Hud {
       `position:fixed;top:26%;left:0;right:0;z-index:6;text-align:center;pointer-events:none;` +
       `color:var(--amber);font:22px var(--f-logo),monospace;letter-spacing:4px;` +
       `text-shadow:0 4px 0 var(--dun-0),0 0 18px rgba(255,180,59,0.35);opacity:0;transition:opacity 0.35s ease;`);
+    this.banner.className = "floor-banner";
     root.appendChild(this.banner);
 
     // A drag can never outlive the surface it started on: losing the window (blur/tab
@@ -1440,28 +1462,43 @@ export class Hud {
   }
 
   update(s: HudState) {
-    // HP readability (spec §6): hearts and/or a numeric current/max readout, per the player's
-    // setting. The hearts only re-raster on a value change; the mode toggles visibility without
-    // reflowing (both slots reserve their space), so there is never a layout shift.
     const mode = settings.hpDisplay;
-    if (s.hp !== this.prevHp || s.maxHp !== this.prevMaxHp) {
-      renderHearts(this.heartsEl, s.hp, s.maxHp);
-      this.hpNumEl.textContent = `${s.hp}/${s.maxHp}`;
-      this.prevHp = s.hp;
-      this.prevMaxHp = s.maxHp;
+    const isHpChanged = s.hp !== this.prevHp || s.maxHp !== this.prevMaxHp;
+    const isArenaChanged = this.isPrevArena !== s.isArena;
+    if (s.isArena) {
+      if (isHpChanged || isArenaChanged) {
+        const hp = arenaHpView({ hp: s.hp, maxHp: s.maxHp });
+        this.arenaHpFillEl.style.transform = `scaleX(${hp.fill})`;
+        this.hpNumEl.textContent = hp.text;
+      }
+      if (this.heartsEl.childElementCount > 0) this.heartsEl.replaceChildren();
+      this.heartsEl.classList.add("hidden");
+      this.arenaHpEl.classList.remove("hidden");
+      this.hpNumEl.classList.remove("hidden");
+      this.prevHpDisplay = "arena";
+    } else {
+      if (isHpChanged || isArenaChanged || this.heartsEl.childElementCount === 0) {
+        renderHearts(this.heartsEl, s.hp, s.maxHp);
+        this.hpNumEl.textContent = `${s.hp}/${s.maxHp}`;
+      }
+      if (mode !== this.prevHpDisplay || isArenaChanged) {
+        this.heartsEl.classList.toggle("hidden", mode === "number");
+        this.hpNumEl.classList.toggle("hidden", mode === "hearts");
+        this.prevHpDisplay = mode;
+      }
+      this.arenaHpEl.classList.add("hidden");
     }
-    if (mode !== this.prevHpDisplay) {
-      this.heartsEl.classList.toggle("hidden", mode === "number");
-      this.hpNumEl.classList.toggle("hidden", mode === "hearts");
-      this.prevHpDisplay = mode;
-    }
+    this.prevHp = s.hp;
+    this.prevMaxHp = s.maxHp;
+    this.isPrevArena = s.isArena;
     // Defensive against a loosely-typed caller (older test state builders): treat a missing
     // party/ult as empty/none rather than throwing.
-    this.renderParty(s.party ?? []);
+    this.renderParty(s.isArena ? [] : (s.party ?? []));
     this.renderUlt(s.ult ?? null);
     this.renderSig(s.sig ?? null);
     this.killsEl.textContent = String(s.kills);
     this.coinsEl.textContent = String(s.coins);
+    this.statRowEl.classList.toggle("hidden", s.isArena);
     // The floor-mutator readout: a middot-joined list, updated only when it changes (textContent
     // only, fixed height — never a layout shift). Empty string on ordinary floors.
     const mutatorCopy = s.mutators.join(" \u00b7 ");
@@ -1537,9 +1574,10 @@ export class Hud {
     // The top-center objective lane: the boss bar WINS the lane (the normal objective
     // hides — the bar is the objective); otherwise the authoritative clear/enemies-left
     // copy owns the line. The `boss` class also scales the combo down to 70%.
-    this.objLaneEl.classList.toggle("boss", s.isBossActive);
-    this.bossbarEl.classList.toggle("show", s.isBossActive);
-    if (s.isBossActive) {
+    const isBossActive = !s.isArena && s.isBossActive;
+    this.objLaneEl.classList.toggle("boss", isBossActive);
+    this.bossbarEl.classList.toggle("show", isBossActive);
+    if (isBossActive) {
       // The bar titles the fight with the boss's authored name (CSS uppercases it);
       // an unauthored kind keeps the generic label rather than an empty line.
       const bossName = s.bossName !== "" ? s.bossName : "BOSS";
@@ -1551,35 +1589,50 @@ export class Hud {
       this.bossFillEl.style.transform = `scaleX(${bf})`;
       this.bossbarEl.classList.toggle("low", bf < 0.25);
     }
-    // The objective line ALWAYS leads with the floor (UI designer: "what floor am I on" is
-    // answered where the eye already goes). During a boss it reads FLOOR N (the boss bar owns
-    // the rest); the dev sandbox hides it. `what` is the state copy (enemy count / cleared).
-    let what = s.isObjectiveHidden ? "" : s.isBossActive ? "" : objectiveCopy(s.isCleared, s.enemiesLeft, s.isParty);
-    // The cleared copy starts with "FLOOR CLEAR ..." which would double the FLOOR N lead token;
-    // drop that leading word so it reads "FLOOR N · CLEAR · GO DOWN".
-    if (what.startsWith("FLOOR ")) what = what.slice("FLOOR ".length);
-    const objKey = s.isObjectiveHidden ? "" : `${s.floor}|${what}|${s.isCleared ? 1 : 0}`;
-    if (objKey !== this.prevObjective) {
-      this.prevObjective = objKey;
-      if (objKey === "") {
-        this.objectiveEl.textContent = "";
-        this.objectiveEl.classList.remove("show", "clear");
-      } else {
-        const floorTok = `<span class="obj-floor">FLOOR ${s.floor}</span>`;
-        this.objectiveEl.innerHTML = what ? `${floorTok}<span class="obj-sep"> \u00b7 </span><span class="obj-what">${what}</span>` : floorTok;
+    if (s.isArena) {
+      const copy = arenaLaneCopy(s.arenaMatch ?? null);
+      const objKey = `arena:${copy}`;
+      if (objKey !== this.prevObjective) {
+        this.prevObjective = objKey;
+        this.objectiveEl.textContent = copy;
         this.objectiveEl.classList.add("show");
-        this.objectiveEl.classList.toggle("clear", s.isCleared);
+        this.objectiveEl.classList.remove("clear");
+      }
+    } else {
+      // The objective line ALWAYS leads with the floor (UI designer: "what floor am I on" is
+      // answered where the eye already goes). During a boss it reads FLOOR N (the boss bar owns
+      // the rest); the dev sandbox hides it. `what` is the state copy (enemy count / cleared).
+      let what = s.isObjectiveHidden ? "" : isBossActive ? "" : objectiveCopy(s.isCleared, s.enemiesLeft, s.isParty);
+      // The cleared copy starts with "FLOOR CLEAR ..." which would double the FLOOR N lead token;
+      // drop that leading word so it reads "FLOOR N · CLEAR · GO DOWN".
+      if (what.startsWith("FLOOR ")) what = what.slice("FLOOR ".length);
+      const objKey = s.isObjectiveHidden ? "" : `${s.floor}|${what}|${s.isCleared ? 1 : 0}`;
+      if (objKey !== this.prevObjective) {
+        this.prevObjective = objKey;
+        if (objKey === "") {
+          this.objectiveEl.textContent = "";
+          this.objectiveEl.classList.remove("show", "clear");
+        } else {
+          const floorTok = `<span class="obj-floor">FLOOR ${s.floor}</span>`;
+          this.objectiveEl.innerHTML = what ? `${floorTok}<span class="obj-sep"> \u00b7 </span><span class="obj-what">${what}</span>` : floorTok;
+          this.objectiveEl.classList.add("show");
+          this.objectiveEl.classList.toggle("clear", s.isCleared);
+        }
       }
     }
 
     this.coopEl.textContent = s.coopLabel ?? "";
     this.coopEl.style.display = s.coopLabel ? "block" : "none";
 
-    if (s.waitLabel !== this.prevWaitLabel) {
-      this.prevWaitLabel = s.waitLabel;
-      this.waitLine.textContent = s.waitLabel ?? "";
-      this.waitLine.classList.toggle("show", s.waitLabel !== null);
+    const waitLabel = s.isArena ? null : s.waitLabel;
+    if (waitLabel !== this.prevWaitLabel) {
+      this.prevWaitLabel = waitLabel;
+      this.waitLine.textContent = waitLabel ?? "";
+      this.waitLine.classList.toggle("show", waitLabel !== null);
     }
+
+    this.renderArenaBoard(s.isArena, s.arenaMatch ?? null);
+    this.renderArenaCenter(s.isArena, s.arenaMatch ?? null);
 
     // The contextual interact prompt is world-anchored now (a floating [E] chip over the
     // target — see Game.renderInteractPrompt), so the bottom-left chrome carries only the
@@ -1605,6 +1658,62 @@ export class Hud {
       this.buildPillEl.textContent = `BUILD \u00b7 ${s.items.length}`;
       this.buildPillEl.setAttribute("aria-label", `${s.items.length} blessings. Open the full build.`);
       this.buildPillEl.classList.toggle("has", s.items.length > 0);
+    }
+  }
+
+  private renderArenaBoard(isArena: boolean, match: ArenaMatchHudState | null): void {
+    const key = !isArena
+      ? "hidden"
+      : match === null
+        ? "connecting"
+        : match.scores
+          .map((score) => `${score.id}:${score.name}:${score.frags}:${score.isAlive ? 1 : 0}:${score.isSelf ? 1 : 0}`)
+          .join("|");
+    if (key === this.prevArenaBoardKey) return;
+    this.prevArenaBoardKey = key;
+    this.arenaBoardEl.classList.toggle("hidden", !isArena);
+    this.arenaBoardEl.replaceChildren();
+    if (!isArena) return;
+    const heading = el("div", "", "FRAGS");
+    heading.className = "arena-board-title";
+    this.arenaBoardEl.appendChild(heading);
+    if (match === null) {
+      const status = el("div", "", "CONNECTING");
+      status.className = "arena-board-empty";
+      this.arenaBoardEl.appendChild(status);
+      return;
+    }
+    for (const score of match.scores) {
+      const row = el("div", "");
+      row.className = "arena-score"
+        + (score.isSelf ? " self" : "")
+        + (score.isAlive ? "" : " dead");
+      const name = el("span", "", score.name);
+      name.className = "arena-score-name";
+      const frags = el("span", "", String(score.frags));
+      frags.className = "arena-score-frags";
+      row.append(name, frags);
+      this.arenaBoardEl.appendChild(row);
+    }
+  }
+
+  private renderArenaCenter(isArena: boolean, match: ArenaMatchHudState | null): void {
+    const copy = isArena ? arenaCenterCopy(match) : null;
+    const key = copy === null ? "hidden" : `${copy.tone}:${copy.title}:${copy.detail ?? ""}`;
+    if (key === this.prevArenaCenterKey) return;
+    this.prevArenaCenterKey = key;
+    this.arenaCenterEl.replaceChildren();
+    this.arenaCenterEl.className = copy === null
+      ? "arena-center hidden"
+      : `arena-center tone-${copy.tone}`;
+    if (copy === null) return;
+    const title = el("div", "", copy.title);
+    title.className = "arena-center-title";
+    this.arenaCenterEl.appendChild(title);
+    if (copy.detail !== null) {
+      const detail = el("div", "", copy.detail);
+      detail.className = "arena-center-detail";
+      this.arenaCenterEl.appendChild(detail);
     }
   }
 
@@ -1695,14 +1804,22 @@ export class Hud {
       row.appendChild(el("span", "color:var(--cream);", value));
       return row;
     };
+    this.statsTitle.textContent = d.isArena ? "MATCH STATS" : "RUN STATS";
     this.statsBody.replaceChildren();
-    this.statsBody.append(
-      line("floor", String(d.floor)),
-      line("kills", String(d.kills)),
-      line("coins", String(d.coins)),
-      line("weapon", d.weaponName),
-      line("run time", fmtTime(d.runTime)),
-    );
+    if (d.isArena) {
+      this.statsBody.append(
+        line("weapon", d.weaponName),
+        line("session time", fmtTime(d.runTime)),
+      );
+    } else {
+      this.statsBody.append(
+        line("floor", String(d.floor)),
+        line("kills", String(d.kills)),
+        line("coins", String(d.coins)),
+        line("weapon", d.weaponName),
+        line("run time", fmtTime(d.runTime)),
+      );
+    }
     if (d.netInfo) {
       this.statsBody.appendChild(el("div", "color:var(--ink-mute);font-size:var(--fs-sm);letter-spacing:0.5px;", d.netInfo));
     }
@@ -1724,16 +1841,16 @@ export class Hud {
     }
     if (d.roster && d.roster.length) {
       this.statsBody.appendChild(el("div", "height:1px;background:rgba(255,180,59,0.2);margin:8px 0;"));
-      this.statsBody.appendChild(el("div", "color:var(--blu);font-size:var(--fs-sm);letter-spacing:1px;", "PARTY"));
+      this.statsBody.appendChild(el("div", "color:var(--blu);font-size:var(--fs-sm);letter-spacing:1px;", d.isArena ? "PLAYERS" : "PARTY"));
       for (const r of d.roster) {
         const row = el("div", "display:flex;align-items:center;gap:8px;");
         row.appendChild(el("span", `width:10px;height:10px;border-radius:50%;background:${r.color};display:inline-block;`));
         // A reconnecting member is neither dead nor departed — their body is reserved for
         // the reconnect grace (the Sev-0 coherence system); the roster says so explicitly.
         // OUT (down limit spent) outranks plain down: the party's move is the stairs.
-        const state = r.isReconnecting ? " \u2014 reconnecting\u2026" : r.isOut ? " \u2014 out (down limit)" : r.isDown ? " \u2014 down" : r.isAtExit ? " \u2014 at the stairs" : "";
+        const state = r.isReconnecting ? " \u2014 reconnecting\u2026" : r.isOut ? " \u2014 out (down limit)" : r.isDown ? " \u2014 down" : !d.isArena && r.isAtExit ? " \u2014 at the stairs" : "";
         const label = `${r.name}${r.isYou ? " (you)" : ""}${state}`;
-        row.appendChild(el("span", `color:${r.isReconnecting ? "var(--ink-mute)" : r.isDown || r.isOut ? "var(--red)" : r.isAtExit ? "var(--at-exit)" : "var(--cream)"};`, label));
+        row.appendChild(el("span", `color:${r.isReconnecting ? "var(--ink-mute)" : r.isDown || r.isOut ? "var(--red)" : !d.isArena && r.isAtExit ? "var(--at-exit)" : "var(--cream)"};`, label));
         this.statsBody.appendChild(row);
       }
     }
@@ -1789,6 +1906,21 @@ export class Hud {
     this.prevWaitLabel = null;
     this.objectiveEl.classList.remove("show", "clear");
     this.prevObjective = "";
+    this.arenaHpEl.classList.add("hidden");
+    this.arenaBoardEl.classList.add("hidden");
+    this.arenaBoardEl.replaceChildren();
+    this.arenaCenterEl.className = "arena-center hidden";
+    this.arenaCenterEl.replaceChildren();
+    this.prevArenaBoardKey = "";
+    this.prevArenaCenterKey = "";
+    this.prevHp = -1;
+    this.prevMaxHp = -1;
+    this.prevHpDisplay = "";
+    this.isPrevArena = null;
+    this.statRowEl.classList.remove("hidden");
+    this.banner.textContent = "";
+    this.banner.style.opacity = "0";
+    this.bannerTimer = 0;
     this.objLaneEl.classList.remove("boss");
     this.comboEl.classList.remove("show", "low");
     this.comboMultEl.style.transform = "scale(1)";
