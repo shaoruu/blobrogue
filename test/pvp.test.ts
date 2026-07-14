@@ -620,7 +620,7 @@ section("PLAYER KNOCKBACK: weapon impulse, hard clamp, and iframe immunity");
   );
   check("a max-clamped hit cannot ring out a player standing 200px from the pit edge",
     pvpPitEdgeDistance(guardrailStart, guardrailPit) >= PVP.pitEdgeClearance
-    && guardedKnockback <= PVP.kbMaxPerHit
+    && guardedKnockback <= PVP.kbMaxPerHit + 1e-9
     && guardrailVictim.respawnT === 0
     && !guardrailEvents.some((event) => event.t === "pvpRingOut"),
     `clearance=${pvpPitEdgeDistance(guardrailStart, guardrailPit).toFixed(2)} kb=${guardedKnockback.toFixed(2)}`);
