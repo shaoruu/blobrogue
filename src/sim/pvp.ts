@@ -309,7 +309,7 @@ export function farthestSpawnIndex(spawns: Vec2[], occupied: Vec2[], pits: reado
 const CROSSHAIR_CONE = 0.44; // ~25 degrees
 
 // The RESPAWN spawn index (anti-camp core): maximize distance to the nearest living opponent AND
-// avoid any opponent's crosshair. Pit distance shares the score, and candidates inside one dash
+// avoid opponents' crosshairs. Pit distance shares the score, and candidates inside one dash
 // of a lethal edge are ineligible. Deterministic ties break to the lowest index.
 export function pvpRespawnIndex(
   spawns: Vec2[],
