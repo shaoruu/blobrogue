@@ -18,8 +18,8 @@ import type { Difficulty } from "../src/sim/balance.js";
 import type { FloorHazard, FloorHazardKind } from "../src/sim/types.js";
 import { TILE } from "../src/sim/types.js";
 import {
-  BIOMES, EXPEDITION_BANDS, biomeIndexForFloor, biomeDepthForFloor, biomeForFloor,
-  expeditionBandEntryForFloor, expeditionBandForFloor, expeditionObjectiveForFloor,
+  BIOMES, EXPEDITION_REGIONS, biomeIndexForFloor, biomeDepthForFloor, biomeForFloor,
+  expeditionRegionEntryForFloor, expeditionRegionForFloor, expeditionObjectiveForFloor,
   floorBannerText, REGIONS, regionForFloor, regionIndexForFloor,
 } from "../src/sim/biomes.js";
 import { BIOME_PRESSURE, PLAYER } from "../src/sim/balance.js";
@@ -295,46 +295,51 @@ function biomeLadderTests(): void {
     BIOMES[6].floorA === "#16131a" && BIOMES[6].wallCap === "#3a2f2a" &&
     BIOMES[7].accent === "#ffb43b" && BIOMES[8].floorA === "#1c1e26" && BIOMES[9].wallCap === "#241a40");
 
-  section("F45+ expedition framing: deterministic objectives and entry beats");
-  check("the Unmaking proper starts after F45 and uses three presentation bands",
-    expeditionBandForFloor(45) === null && EXPEDITION_BANDS.length === 3 &&
-    expeditionBandForFloor(46)?.id === "sump-proper" &&
-    expeditionBandForFloor(60)?.id === "sump-proper" &&
-    expeditionBandForFloor(61)?.id === "veinworks-expedition" &&
-    expeditionBandForFloor(80)?.id === "veinworks-expedition" &&
-    expeditionBandForFloor(81)?.id === "pale-null-expedition" &&
-    expeditionBandForFloor(100)?.id === "pale-null-expedition");
-  check("the expedition objective is absent through F45",
-    expeditionObjectiveForFloor(1) === null && expeditionObjectiveForFloor(45) === null);
-  check("the Sump objective points at F50, then advances to the next named capstone",
-    expeditionObjectiveForFloor(46) === "THE SUMP \u2014 toward the Sump-Mother (F50)" &&
-    expeditionObjectiveForFloor(50) === "THE SUMP \u2014 toward the Sump-Mother (F50)" &&
-    expeditionObjectiveForFloor(51) === "THE SUMP \u2014 toward the Pale Throne (F75)" &&
-    expeditionObjectiveForFloor(60) === "THE SUMP \u2014 toward the Pale Throne (F75)");
-  check("the Veinworks objective advances from its F75 capstone to the finale",
-    expeditionObjectiveForFloor(61) === "THE VEINWORKS \u2014 toward the Pale Throne (F75)" &&
-    expeditionObjectiveForFloor(75) === "THE VEINWORKS \u2014 toward the Pale Throne (F75)" &&
-    expeditionObjectiveForFloor(76) === "THE VEINWORKS \u2014 toward the Unmaker (F100)" &&
-    expeditionObjectiveForFloor(80) === "THE VEINWORKS \u2014 toward the Unmaker (F100)");
-  check("the Pale-to-Null objective points at F100 and degrades gracefully beyond it",
-    expeditionObjectiveForFloor(81) === "THE PALE \u2192 NULL CORE \u2014 toward the Unmaker (F100)" &&
-    expeditionObjectiveForFloor(100) === "THE PALE \u2192 NULL CORE \u2014 toward the Unmaker (F100)" &&
+  section("F31+ expedition framing: canonical region objectives and entry beats");
+  check("the Unmaking proper starts at F31 and is exactly the four shipped deep regions",
+    expeditionRegionForFloor(30) === null && EXPEDITION_REGIONS.length === 4 &&
+    expeditionRegionForFloor(31)?.regionId === "sump" &&
+    expeditionRegionForFloor(50)?.regionId === "sump" &&
+    expeditionRegionForFloor(51)?.regionId === "veinworks" &&
+    expeditionRegionForFloor(70)?.regionId === "veinworks" &&
+    expeditionRegionForFloor(71)?.regionId === "pale" &&
+    expeditionRegionForFloor(90)?.regionId === "pale" &&
+    expeditionRegionForFloor(91)?.regionId === "nullcore");
+  check("the expedition objective is absent through the old F30 finale",
+    expeditionObjectiveForFloor(1) === null && expeditionObjectiveForFloor(30) === null);
+  check("the Sump objective points at its F50 landmark",
+    expeditionObjectiveForFloor(31) === "THE SUMP \u2014 toward the Sump-Mother (F50)" &&
+    expeditionObjectiveForFloor(50) === "THE SUMP \u2014 toward the Sump-Mother (F50)");
+  check("the Veinworks uses a generic F65 landmark, then advances to the next capstone",
+    expeditionObjectiveForFloor(51) === "THE VEINWORKS \u2014 toward the deep (F65)" &&
+    expeditionObjectiveForFloor(65) === "THE VEINWORKS \u2014 toward the deep (F65)" &&
+    expeditionObjectiveForFloor(66) === "THE VEINWORKS \u2014 toward the Pale Throne (F80)" &&
+    expeditionObjectiveForFloor(70) === "THE VEINWORKS \u2014 toward the Pale Throne (F80)");
+  check("the Pale points at F80, then advances to the F100 finale",
+    expeditionObjectiveForFloor(71) === "THE PALE \u2014 toward the Pale Throne (F80)" &&
+    expeditionObjectiveForFloor(80) === "THE PALE \u2014 toward the Pale Throne (F80)" &&
+    expeditionObjectiveForFloor(81) === "THE PALE \u2014 toward the Unmaker (F100)" &&
+    expeditionObjectiveForFloor(90) === "THE PALE \u2014 toward the Unmaker (F100)");
+  check("Null Core points at F100 and degrades gracefully beyond it",
+    expeditionObjectiveForFloor(91) === "NULL CORE \u2014 toward the Unmaker (F100)" &&
+    expeditionObjectiveForFloor(100) === "NULL CORE \u2014 toward the Unmaker (F100)" &&
     expeditionObjectiveForFloor(101) === "NULL CORE \u2014 descend toward the core");
   const entryFloors = Array.from({ length: 120 }, (_, i) => i + 1)
-    .filter((floor) => expeditionBandEntryForFloor(floor) !== null);
-  check("authored band-entry beats fire exactly at F46, F61, and F81",
-    entryFloors.join(",") === "46,61,81", entryFloors.join(","));
+    .filter((floor) => expeditionRegionEntryForFloor(floor) !== null);
+  check("authored region-entry beats fire exactly at the shipped biome boundaries",
+    entryFloors.join(",") === "31,51,71,91", entryFloors.join(","));
   check("entry beats carry a title and one-line creative placeholder",
-    EXPEDITION_BANDS.every((band) =>
-      expeditionBandEntryForFloor(band.fromFloor)?.entryTitle === band.entryTitle &&
-      band.entryFlavor.length > 0));
-  check("expedition framing leaves canonical region and biome boundaries unchanged",
-    regionForFloor(46).id === "sump" && regionForFloor(51).id === "veinworks" &&
-    regionForFloor(61).id === "veinworks" && regionForFloor(71).id === "pale" &&
-    regionForFloor(81).id === "pale" && regionForFloor(91).id === "nullcore" &&
-    biomeIndexForFloor(45) === biomeIndexForFloor(46) &&
-    biomeIndexForFloor(60) === biomeIndexForFloor(61) &&
-    biomeIndexForFloor(80) === biomeIndexForFloor(81));
+    EXPEDITION_REGIONS.every((framing) => {
+      const region = REGIONS.find((candidate) => candidate.id === framing.regionId);
+      return region !== undefined &&
+        expeditionRegionEntryForFloor(region.fromFloor)?.entryTitle === framing.entryTitle &&
+        framing.entryFlavor.length > 0;
+    }));
+  check("entry beats and palette shifts share REGIONS as their exact boundary source",
+    entryFloors.every((floor) => regionForFloor(floor).fromFloor === floor) &&
+    [31, 51, 71, 91].every((floor) =>
+      biomeIndexForFloor(floor) === regionIndexForFloor(floor) &&
+      biomeIndexForFloor(floor) !== biomeIndexForFloor(floor - 1)));
 }
 
 function hazardPlacementTests(): void {

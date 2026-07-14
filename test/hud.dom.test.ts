@@ -644,22 +644,22 @@ function hierarchyTests(): void {
   check("a party's cleared floor reads MEET AT EXIT (the coordination moment)",
     objective.textContent === "FLOOR 2 \u00b7 CLEAR \u00b7 MEET AT EXIT");
 
-  section("F45+ expedition objective reuses the fixed objective lane");
-  hud.update(mkState({ floor: 45 }));
-  check("the expedition slot stays hidden through F45",
+  section("F31+ expedition objective reuses the fixed objective lane");
+  hud.update(mkState({ floor: 30 }));
+  check("the expedition slot stays hidden through the old F30 finale",
     !expeditionObjective.classList.contains("show") && expeditionObjective.textContent === "");
-  hud.update(mkState({ floor: 46 }));
-  check("F46 states the named Sump destination",
+  hud.update(mkState({ floor: 31 }));
+  check("F31 states the named Sump destination",
     expeditionObjective.classList.contains("show") &&
     expeditionObjective.textContent === "THE SUMP \u2014 toward the Sump-Mother (F50)");
-  hud.update(mkState({ floor: 61 }));
-  check("F61 advances the presentation band without changing the combat objective",
-    expeditionObjective.textContent === "THE VEINWORKS \u2014 toward the Pale Throne (F75)" &&
-    objective.textContent === "FLOOR 61 \u00b7 3 ENEMIES LEFT");
-  hud.update(mkState({ floor: 81, isBossActive: true, bossHpFrac: 0.8 }));
+  hud.update(mkState({ floor: 51 }));
+  check("F51 advances to the Veinworks region without changing the combat objective",
+    expeditionObjective.textContent === "THE VEINWORKS \u2014 toward the deep (F65)" &&
+    objective.textContent === "FLOOR 51 \u00b7 3 ENEMIES LEFT");
+  hud.update(mkState({ floor: 71, isBossActive: true, bossHpFrac: 0.8 }));
   check("the destination remains readable under the boss-owned objective state",
-    expeditionObjective.textContent === "THE PALE \u2192 NULL CORE \u2014 toward the Unmaker (F100)");
-  hud.update(mkState({ floor: 81, isObjectiveHidden: true }));
+    expeditionObjective.textContent === "THE PALE \u2014 toward the Pale Throne (F80)");
+  hud.update(mkState({ floor: 71, isObjectiveHidden: true }));
   check("the sandbox suppresses expedition framing with its normal objective",
     !expeditionObjective.classList.contains("show") && expeditionObjective.textContent === "");
 

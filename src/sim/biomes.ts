@@ -388,73 +388,72 @@ export function regionForFloor(floor: number): Region {
 
 export interface ExpeditionDestination {
   readonly floor: number;
-  readonly name: string;
+  readonly name: string | null;
 }
 
-export interface ExpeditionBand {
-  readonly id: "sump-proper" | "veinworks-expedition" | "pale-null-expedition";
+export interface ExpeditionRegionFraming {
+  readonly regionId: Extract<RegionId, "sump" | "veinworks" | "pale" | "nullcore">;
   readonly name: string;
-  readonly fromFloor: number;
-  readonly toFloor: number;
   readonly entryTitle: string;
   readonly entryFlavor: string;
   readonly capstone: ExpeditionDestination;
 }
 
-// THE UNMAKING PROPER is presentation laid over the canonical region ladder. Its framing
-// boundaries intentionally do not alter REGIONS, biomeIndexForFloor, encounter decks, or rolls.
-// TODO(creative-director): finalize the entryTitle/entryFlavor copy for all three bands.
-export const EXPEDITION_BANDS: readonly ExpeditionBand[] = [
+// THE UNMAKING PROPER is the canonical post-F30 region ladder, not a second set of ranges.
+// TODO(creative-director): finalize the entryTitle/entryFlavor copy for all four regions.
+export const EXPEDITION_REGIONS: readonly ExpeditionRegionFraming[] = [
   {
-    id: "sump-proper",
+    regionId: "sump",
     name: "THE SUMP",
-    fromFloor: 46,
-    toFloor: 60,
     entryTitle: "THE SUMP",
     entryFlavor: "THE DRAINED DEEP",
     capstone: { floor: 50, name: "the Sump-Mother" },
   },
   {
-    id: "veinworks-expedition",
+    regionId: "veinworks",
     name: "THE VEINWORKS",
-    fromFloor: 61,
-    toFloor: 80,
     entryTitle: "THE VEINWORKS",
     entryFlavor: "THE WORLD FORGETS ITS OWN VEINS",
-    capstone: { floor: 75, name: "the Pale Throne" },
+    capstone: { floor: 65, name: null },
   },
   {
-    id: "pale-null-expedition",
-    name: "THE PALE \u2192 NULL CORE",
-    fromFloor: 81,
-    toFloor: 100,
-    entryTitle: "THE PALE \u2192 NULL CORE",
+    regionId: "pale",
+    name: "THE PALE",
+    entryTitle: "THE PALE",
     entryFlavor: "ONLY THE CORE REMEMBERS",
+    capstone: { floor: 80, name: "the Pale Throne" },
+  },
+  {
+    regionId: "nullcore",
+    name: "NULL CORE",
+    entryTitle: "NULL CORE",
+    entryFlavor: "THE SOURCE WAITS BELOW",
     capstone: { floor: 100, name: "the Unmaker" },
   },
 ];
 
-export function expeditionBandForFloor(floor: number): ExpeditionBand | null {
-  const f = Math.max(1, Math.floor(floor));
-  return EXPEDITION_BANDS.find((band) => f >= band.fromFloor && f <= band.toFloor) ?? null;
+export function expeditionRegionForFloor(floor: number): ExpeditionRegionFraming | null {
+  const region = regionForFloor(floor);
+  return EXPEDITION_REGIONS.find((framing) => framing.regionId === region.id) ?? null;
 }
 
 export function expeditionObjectiveForFloor(floor: number): string | null {
   const f = Math.max(1, Math.floor(floor));
-  if (f < EXPEDITION_BANDS[0].fromFloor) return null;
-  const band = expeditionBandForFloor(f);
-  const name = band?.name ?? regionForFloor(f).name.toUpperCase();
-  const destination = EXPEDITION_BANDS
+  const framing = expeditionRegionForFloor(f);
+  if (framing === null) return null;
+  const destination = EXPEDITION_REGIONS
     .map((candidate) => candidate.capstone)
     .find((candidate) => candidate.floor >= f);
-  return destination
-    ? `${name} \u2014 toward ${destination.name} (F${destination.floor})`
-    : `${name} \u2014 descend toward the core`;
+  if (destination === undefined) return `${framing.name} \u2014 descend toward the core`;
+  const target = destination.name === null ? "the deep" : destination.name;
+  return `${framing.name} \u2014 toward ${target} (F${destination.floor})`;
 }
 
-export function expeditionBandEntryForFloor(floor: number): ExpeditionBand | null {
+export function expeditionRegionEntryForFloor(floor: number): ExpeditionRegionFraming | null {
   const f = Math.max(1, Math.floor(floor));
-  return EXPEDITION_BANDS.find((band) => band.fromFloor === f) ?? null;
+  const region = regionForFloor(f);
+  if (region.fromFloor !== f) return null;
+  return EXPEDITION_REGIONS.find((framing) => framing.regionId === region.id) ?? null;
 }
 
 export function floorBannerText(floor: number, opts?: { isBoss?: boolean; isGauntlet?: boolean; isDescend?: boolean }): string {

@@ -81,7 +81,7 @@ import type { GameAction, InputContext } from "./input.js";
 import { PauseOverlay } from "../ui/pause.js";
 import { BlessingOverlay } from "../ui/blessing.js";
 import {
-  BIOMES, biomeForFloor, biomeIndexForFloor, expeditionBandEntryForFloor, floorBannerText,
+  BIOMES, biomeForFloor, biomeIndexForFloor, expeditionRegionEntryForFloor, floorBannerText,
 } from "../sim/biomes.js";
 import type { Biome } from "../sim/biomes.js";
 import { mutatorLabels, floorVisionMult } from "../sim/floorRolls.js";
@@ -1306,7 +1306,7 @@ export class Game {
     this.presentedFloor = this.floor;
     this.biomeIdx = biomeIndexForFloor(this.floor);
     this.currentBiome = biomeForFloor(this.floor);
-    const expeditionEntry = isNewFloor ? expeditionBandEntryForFloor(this.floor) : null;
+    const expeditionEntry = isNewFloor ? expeditionRegionEntryForFloor(this.floor) : null;
     const isBandReveal = isNewFloor && this.floor > 1
       && (this.biomeIdx !== prevBiomeIdx || expeditionEntry !== null);
     this.vignetteCache = null;
@@ -1389,7 +1389,7 @@ export class Game {
     floor: number,
     opts?: { isBoss?: boolean; isGauntlet?: boolean; isDescend?: boolean },
   ): void {
-    const expeditionEntry = expeditionBandEntryForFloor(floor);
+    const expeditionEntry = expeditionRegionEntryForFloor(floor);
     if (expeditionEntry) {
       this.hud.showBanner(expeditionEntry.entryTitle, expeditionEntry.entryFlavor);
       return;
