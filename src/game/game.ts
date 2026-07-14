@@ -68,7 +68,7 @@ import type { SfxName, SfxOptions } from "./audio.js";
 import { waveAudio } from "./waveAudio.js";
 import type { WaveFramePlayer } from "./waveAudio.js";
 import { WAVE_HAZARDS, WEAPON_AUDIO, STATUS_AUDIO } from "./waveSpec.js";
-import { pvpKillCue, pvpMatchOverCue, pvpCountTickRate } from "./waveSpec.js";
+import { pvpKillCue, pvpMatchOverCue, pvpFragStreakRate, pvpCountTickRate } from "./waveSpec.js";
 import type { WaveEventId } from "./waveSpec.js";
 import { PVP, pvpDraftSeed } from "../sim/pvp.js";
 import type { MatchPhase } from "../sim/pvp.js";
@@ -2940,7 +2940,7 @@ export class Game {
           this.spawnWorldLabel(e.x, e.y - 54, label, "#ffd166");
           this.flashScreen(255, 209, 102, 0.12, 2.6);
           this.addTrauma(0.24);
-          waveAudio.play(e.chain >= 3 ? "pvp.fragStreak3" : "pvp.fragStreak2");
+          waveAudio.play("pvp.frag", { rate: pvpFragStreakRate(e.chain - 1) });
         } else {
           this.spawnWorldLabel(e.x, e.y - 48, `CHAIN x${e.chain}`, "#ffb43b");
         }
