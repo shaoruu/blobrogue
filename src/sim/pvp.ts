@@ -68,7 +68,10 @@ export const PVP = {
   envKillCreditWindowSec: 2.0,
   // Two or more credited frags inside this window produce presentation-only chain juice.
   chainWindowSec: 5.0,
-  // A free draft arrives on either personal-frag cadence or match-clock cadence.
+  // Balance-layer switch: the draft system remains built, but physics-only playtests leave
+  // offer generation off until this is deliberately flipped.
+  draftEnabled: false,
+  // When enabled, a free draft arrives on either personal-frag cadence or match-clock cadence.
   draftEveryFrags: 3,
   draftEverySec: 45,
   draftChoices: 3,

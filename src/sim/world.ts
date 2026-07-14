@@ -10931,6 +10931,7 @@ function resetPvpDrafts(w: WorldState): void {
 }
 
 function raiseDuePvpDrafts(w: WorldState, ev: SimEvent[]): void {
+  if (!PVP.draftEnabled) return;
   const m = w.match;
   if (m === null || m.phase !== "live") return;
   const playerIds = [...w.players.keys()].sort();

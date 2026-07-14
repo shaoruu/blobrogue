@@ -114,6 +114,7 @@ section("damage model (balancer numbers)");
   check("player knockback constants are exact", PVP.kbScalar === 1.0 && PVP.kbMaxPerHit === 180 && PVP.kbSelfDuringIframe === 0);
   check("environmental credit window = 2.0s", PVP.envKillCreditWindowSec === 2.0);
   check("chain window = 5.0s", PVP.chainWindowSec === 5.0);
+  check("mid-match draft defaults off for physics-only playtests", PVP.draftEnabled === false);
   check("draft cadence = 3 personal frags or 45s", PVP.draftEveryFrags === 3 && PVP.draftEverySec === 45);
   check("comeback tier bump = +1", PVP.comebackDraftTierBump === 1);
   check("sudden-death distance = 1 frag", PVP.suddenDeathFrags === 1);
@@ -246,6 +247,19 @@ section("CHAIN FRAGS: deterministic juice with zero stat reward");
 // ---------------------------------------------------------------------------------------------
 section("MID-MATCH DRAFT: safe pool, cadence, deterministic offers, comeback bump");
 {
+  const disabledWorld = pvpWorld(650, ["p1", "p2"]);
+  advanceToLive(disabledWorld);
+  for (const player of disabledWorld.players.values()) {
+    player.pvpDraftFrags = PVP.draftEveryFrags;
+    player.pvpNextDraftTick = disabledWorld.tick;
+  }
+  const disabledEvents = stepCollect(disabledWorld, 1, new Map());
+  check("default-off draft emits no offers even when both cadences are due",
+    !disabledEvents.some((event) => event.t === "offerBlessing")
+    && disabledWorld.pendingBlessings.size === 0);
+
+  const isDraftPreviouslyEnabled = PVP.draftEnabled;
+  PVP.draftEnabled = true;
   check("every named PvP-blacklisted blessing is rejected",
     pvpBlessingBlacklist.every((id) => !isPvpBlessingId(id)));
   const rolledIds = new Set<string>();
@@ -329,6 +343,7 @@ section("MID-MATCH DRAFT: safe pool, cadence, deterministic offers, comeback bum
   check("third personal frag raises that player's draft before the clock",
     fragEvents.some((event) => event.t === "offerBlessing" && event.pid === "p1")
     && !fragEvents.some((event) => event.t === "offerBlessing" && event.pid === "p2"));
+  PVP.draftEnabled = isDraftPreviouslyEnabled;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -831,8 +846,11 @@ section("DETERMINISM: identical inputs -> byte-identical, and reconnect-stable s
       choices,
     });
   };
+  const isDraftPreviouslyEnabled = PVP.draftEnabled;
+  PVP.draftEnabled = true;
   const waveForward = runWaveOneReplay(["p1", "p2"]);
   const waveReversed = runWaveOneReplay(["p2", "p1"]);
+  PVP.draftEnabled = isDraftPreviouslyEnabled;
   check("draft offers, environmental attribution, and knockback replay identically",
     waveForward === waveReversed);
 
