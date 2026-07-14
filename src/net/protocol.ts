@@ -282,7 +282,8 @@ export const FIXED_DT = 1 / TICK_HZ; // 50ms authoritative step
 // v28: PVP MVP — PlayerWire.tm (FFA team), SelfWire.rsp (respawn countdown), a top-level `match`
 // block (phase / phase-end tick / per-player frags + alive / winner), and the reliable
 // pvpKill / pvpMatchOver events. All inert in co-op (team 0, respawn 0, match null).
-export const PROTOCOL_VERSION = 28;
+// v29: PVP Wave 1 presentation events — ring-out, chain-frag, and sudden-death crescendo.
+export const PROTOCOL_VERSION = 29;
 
 // How long the server reserves a disconnected player's body (their seat) before the
 // authoritative leave lifecycle applies. 90s per the studio balance gate's reconnect
@@ -901,6 +902,9 @@ const EVENT_SPECS: Record<SimEvent["t"], EventSpec> = {
   // PVP: positional elimination juice (everyone near the kill sees it); the authoritative
   // scoreboard rides the match block. Match-over is global (every client shows the result).
   pvpKill: { scope: "pos", fields: { by: "str", victim: "str", x: "num", y: "num" } },
+  pvpRingOut: { scope: "pos", fields: { by: "str", victim: "str", x: "num", y: "num" } },
+  pvpChainFrag: { scope: "pos", fields: { by: "str", chain: "num", x: "num", y: "num" } },
+  pvpSuddenDeath: { scope: "global", fields: { leader: "str" } },
   pvpMatchOver: { scope: "global", fields: { winner: "str" } },
   // flash/trauma carry no position — rare, tiny, and safe to deliver globally.
   flash: { scope: "global", fields: { eid: "num" } },

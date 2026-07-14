@@ -474,6 +474,8 @@ function arenaHudDomTests(): void {
   const root = document.createElement("div");
   document.body.appendChild(root);
   const hud = new Hud(root);
+  let requeues = 0;
+  hud.setArenaRematchAction(() => { requeues++; });
   hud.showBanner("FLOOR 9 \u00b7 CLEAR \u00b7 GO DOWN");
   hud.clear();
   const floorBanner = root.querySelector<HTMLElement>(".floor-banner")!;
@@ -533,7 +535,7 @@ function arenaHudDomTests(): void {
     board.querySelector(".arena-board-title")?.textContent === "FRAGS"
     && board.querySelectorAll(".arena-score").length === 2);
   check("self row and dead opponent state are distinct",
-    board.querySelector(".arena-score.self .arena-score-name")?.textContent === "YOU"
+    board.querySelector(".arena-score.self.leader .arena-score-name")?.textContent === "TARGET \u00b7 YOU"
     && board.querySelector(".arena-score.dead .arena-score-name")?.textContent === "RIVAL");
 
   section("arena HUD: countdown, respawn, and result share the fixed center slot");
@@ -567,7 +569,12 @@ function arenaHudDomTests(): void {
     nameOf: () => "YOU",
   });
   hud.update(mkState({ hp: 100, maxHp: 100, isArena: true, arenaMatch: result }));
-  check("result renders from match.win", center.textContent === "VICTORY");
+  check("result renders from match.win", center.querySelector(".arena-center-title")?.textContent === "VICTORY");
+  const playAgain = center.querySelector<HTMLButtonElement>(".arena-center-action");
+  check("match over exposes one fixed-slot PLAY AGAIN action",
+    playAgain?.textContent === "PLAY AGAIN" && center.querySelectorAll(".arena-center-action").length === 1);
+  playAgain?.click();
+  check("PLAY AGAIN invokes the immediate requeue action once", requeues === 1);
 
   section("arena stats panel has match identity and no floor or stairs state");
   hud.showStats({

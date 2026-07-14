@@ -105,7 +105,28 @@ type ClientOwnedField = "id" | "pr" | "aimAngle" | "shotSeq" | "rewindTicks" | "
 // - selfHealReadyTick: the earliest tick the next MENDER self-heal HP may land (the sustained
 //              self-heal ceiling). Same story as lastDamagedTick — world-phase-only self-heal
 //              bookkeeping, off the wire.
-type ServerOnlyField = "reviveBy" | "downsThisFloor" | "ultSources" | "ultWasted" | "overshieldRegenT" | "team" | "lastDamagedTick" | "selfHealReadyTick";
+// - lastPvpHitBy/lastPvpHitTick: authoritative damage attribution bookkeeping.
+// - lastPvpKnockbackBy/lastPvpKnockbackTick: authoritative ring-out credit bookkeeping.
+// - pvpDraft*: authoritative offer cadence, deterministic seed identity, and comeback weighting.
+//              The server sends the validated offer itself; prediction never rolls an online pick.
+type ServerOnlyField =
+  | "reviveBy"
+  | "downsThisFloor"
+  | "ultSources"
+  | "ultWasted"
+  | "overshieldRegenT"
+  | "team"
+  | "lastDamagedTick"
+  | "selfHealReadyTick"
+  | "lastPvpHitBy"
+  | "lastPvpHitTick"
+  | "lastPvpKnockbackBy"
+  | "lastPvpKnockbackTick"
+  | "pvpDraftFrags"
+  | "pvpNextDraftTick"
+  | "pvpDraftOrdinal"
+  | "pvpDraftTick"
+  | "pvpDraftTierBump";
 
 // Compile-time exhaustiveness: every PlayerSim key must be classified exactly once. The
 // MustBeNever constraint fails to instantiate for any non-empty type, so adding a PlayerSim

@@ -538,7 +538,7 @@
       .combo.low .combo-bar i{ animation:comboLow .38s steps(2,jump-none) infinite; }
       @keyframes comboLow{ 0%{opacity:1;} 100%{opacity:.3;} }
 
-      .arena-board{ box-sizing:border-box; width:156px; height:104px; padding:7px 9px;
+      .arena-board{ box-sizing:border-box; width:156px; height:164px; padding:7px 9px;
         display:flex; flex-direction:column; gap:3px; overflow:hidden;
         background:rgba(5,3,11,.72); box-shadow:inset 0 0 0 2px var(--dun-3),0 3px 0 rgba(0,0,0,.4); }
       .arena-board-title{ font-family:var(--f-ui); font-size:var(--fs-2xs); letter-spacing:2px;
@@ -552,8 +552,9 @@
       .arena-score-frags{ min-width:18px; text-align:right; font-family:var(--f-num);
         font-size:var(--fs-num); line-height:1; color:var(--cream); font-variant-numeric:tabular-nums; }
       .arena-score.self .arena-score-name,.arena-score.self .arena-score-frags{ color:var(--amber-hi); }
+      .arena-score.leader .arena-score-name{ color:var(--red); text-shadow:0 0 8px rgba(255,90,90,.45); }
       .arena-score.dead{ opacity:.45; }
-      .arena-center{ position:absolute; top:38%; left:50%; width:min(520px,88vw); height:112px;
+      .arena-center{ position:absolute; top:38%; left:50%; width:min(520px,88vw); height:148px;
         transform:translate(-50%,-50%); display:flex; flex-direction:column; align-items:center;
         justify-content:center; gap:10px; pointer-events:none; text-align:center; text-transform:uppercase; }
       .arena-center-title{ font-family:var(--f-logo),monospace; font-size:var(--fs-title);
@@ -566,6 +567,11 @@
       .arena-center.tone-defeat .arena-center-title,.arena-center.tone-respawn .arena-center-title{ color:var(--red);
         text-shadow:0 4px 0 var(--dun-0),0 0 26px rgba(255,90,90,.5); }
       .arena-center.tone-respawn .arena-center-title{ font-size:var(--fs-lg); }
+      .arena-center-action{ width:176px; height:34px; padding:0 18px; pointer-events:auto;
+        font-family:var(--f-ui); font-size:var(--fs-xs); letter-spacing:2px; color:var(--dun-0);
+        background:var(--amber); border:0; box-shadow:0 3px 0 var(--dun-0),inset 0 0 0 2px var(--amber-hi);
+        cursor:pointer; text-transform:uppercase; }
+      .arena-center-action:focus-visible{ outline:3px solid var(--cream); outline-offset:3px; }
 
       #overlay, .pause-overlay, .blessing-overlay { position: fixed; inset: 0; z-index: 10; display: flex; align-items: center; justify-content: center; color: var(--cream); text-align: center;
         background: radial-gradient(ellipse at center, rgba(20,16,36,0.82) 0%, rgba(8,6,16,0.94) 100%); zoom:var(--ui-scale,1); }

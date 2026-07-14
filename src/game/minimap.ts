@@ -1,5 +1,6 @@
 import type { Dungeon } from "../sim/dungeon.js";
 import { TILE } from "../sim/types.js";
+import { isPvpPitWarningTile } from "../sim/pvp.js";
 
 export interface MinimapDot { x: number; y: number; color: string; size: number; }
 
@@ -53,8 +54,20 @@ export class Minimap {
     const s = this.scale;
     for (let ty = 0; ty < d.h; ty++) {
       for (let tx = 0; tx < d.w; tx++) {
-        if (d.tiles[ty * d.w + tx] === 0) {
+        const tile = d.tiles[ty * d.w + tx];
+        if (tile === 0) {
+          g.fillStyle = isPvpPitWarningTile(d, tx, ty) ? "#8a5424" : "#3a2d5e";
           g.fillRect(Math.floor(tx * s), Math.floor(ty * s), Math.ceil(s), Math.ceil(s));
+        } else if (tile === 2) {
+          const x = Math.floor(tx * s);
+          const y = Math.floor(ty * s);
+          const size = Math.max(1, Math.ceil(s));
+          g.fillStyle = "#1a050b";
+          g.fillRect(x, y, size, size);
+          g.strokeStyle = "#ff5a4f";
+          g.lineWidth = 1;
+          g.strokeRect(x + 0.5, y + 0.5, Math.max(0, size - 1), Math.max(0, size - 1));
+          g.fillStyle = "#3a2d5e";
         }
       }
     }

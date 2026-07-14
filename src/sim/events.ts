@@ -147,6 +147,13 @@ export type SimEvent =
   // (bullet.owner / melee owner; "" = unattributed), `victim` the fragged player. Reliable so a
   // dropped snapshot never loses a kill (the scoreboard rides the match block; this is the juice).
   | { t: "pvpKill"; by: PlayerId; victim: PlayerId; x: number; y: number }
+  // PVP lethal-pit elimination. `by` is the recent attacker receiving credit, or "" for a
+  // neutral suicide outside the environmental-credit window.
+  | { t: "pvpRingOut"; by: PlayerId; victim: PlayerId; x: number; y: number }
+  // PVP presentation-only chain-frag event. It grants no stat or power reward.
+  | { t: "pvpChainFrag"; by: PlayerId; chain: number; x: number; y: number }
+  // PVP presentation-only match-point/final-clock crescendo.
+  | { t: "pvpSuddenDeath"; leader: PlayerId }
   // PVP: the match resolved — `winner` is the frag leader (id-sorted tiebreak; "" = no winner).
   | { t: "pvpMatchOver"; winner: PlayerId }
   // generic atoms (residual one-off FX)

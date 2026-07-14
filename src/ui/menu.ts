@@ -2519,7 +2519,7 @@ export class Menu {
     try {
       const profile = await this.session.login();
       const lobby = new OnlineLobby(this.client, this.session);
-      await lobby.quickPlay();
+      await lobby.quickPlay(old.mode);
       this.launchOnline(lobby, profile, false);
     } catch (err) {
       await this.showOnlineHome(normalizeOnlineError(err, "could not find a room").message);

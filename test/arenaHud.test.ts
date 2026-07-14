@@ -48,6 +48,9 @@ section("authoritative match snapshot to stable presentation");
   const live = build({ ph: "live", end: 6080, sc: SCORES, win: null });
   check("scoreboard rows are stable by player id", live.scores.map((row) => row.id).join(",") === "p1,p2,p3");
   check("the local row is named and marked as self", live.scores[1].name === "YOU" && live.scores[1].isSelf);
+  check("the frag leader alone carries the focus-target marker",
+    live.scores.find((row) => row.id === "p1")?.isLeader === true
+    && live.scores.filter((row) => row.isLeader).length === 1);
   check("authoritative alive flags survive intact", live.scores[2].isAlive === false);
   check("the local frag count comes from the match score block", live.selfFrags === 2);
   check("the live timer derives from match.end minus snapshot.tick", live.secondsLeft === 299, `seconds=${live.secondsLeft}`);
