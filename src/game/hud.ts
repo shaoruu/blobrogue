@@ -651,6 +651,7 @@ export class Hud {
   private prevArenaCenterKey = "";
   private prevPartyKey = "";
   private prevUltKey = "";
+  private arenaRematchAction: (() => void) | null = null;
 
   constructor(root: HTMLElement) {
     const hud = el("div", "");
@@ -792,6 +793,11 @@ export class Hud {
 
   setHotbarActions(actions: HotbarActions) {
     this.hotbarActions = actions;
+  }
+
+  setArenaRematchAction(action: (() => void) | null): void {
+    this.arenaRematchAction = action;
+    this.prevArenaCenterKey = "";
   }
 
   // ---- hotbar slot interactions (click equip, drag/drop reorder, keyboard activate) ----
@@ -1667,7 +1673,7 @@ export class Hud {
       : match === null
         ? "connecting"
         : match.scores
-          .map((score) => `${score.id}:${score.name}:${score.frags}:${score.isAlive ? 1 : 0}:${score.isSelf ? 1 : 0}`)
+          .map((score) => `${score.id}:${score.name}:${score.frags}:${score.isAlive ? 1 : 0}:${score.isSelf ? 1 : 0}:${score.isLeader ? 1 : 0}`)
           .join("|");
     if (key === this.prevArenaBoardKey) return;
     this.prevArenaBoardKey = key;
@@ -1687,8 +1693,9 @@ export class Hud {
       const row = el("div", "");
       row.className = "arena-score"
         + (score.isSelf ? " self" : "")
+        + (score.isLeader ? " leader" : "")
         + (score.isAlive ? "" : " dead");
-      const name = el("span", "", score.name);
+      const name = el("span", "", score.isLeader ? `TARGET \u00b7 ${score.name}` : score.name);
       name.className = "arena-score-name";
       const frags = el("span", "", String(score.frags));
       frags.className = "arena-score-frags";
@@ -1699,7 +1706,8 @@ export class Hud {
 
   private renderArenaCenter(isArena: boolean, match: ArenaMatchHudState | null): void {
     const copy = isArena ? arenaCenterCopy(match) : null;
-    const key = copy === null ? "hidden" : `${copy.tone}:${copy.title}:${copy.detail ?? ""}`;
+    const isRematchAvailable = match?.phase === "over" && this.arenaRematchAction !== null;
+    const key = copy === null ? "hidden" : `${copy.tone}:${copy.title}:${copy.detail ?? ""}:${isRematchAvailable ? 1 : 0}`;
     if (key === this.prevArenaCenterKey) return;
     this.prevArenaCenterKey = key;
     this.arenaCenterEl.replaceChildren();
@@ -1714,6 +1722,13 @@ export class Hud {
       const detail = el("div", "", copy.detail);
       detail.className = "arena-center-detail";
       this.arenaCenterEl.appendChild(detail);
+    }
+    if (isRematchAvailable) {
+      const action = el("button", "", "PLAY AGAIN");
+      action.className = "arena-center-action";
+      action.type = "button";
+      action.addEventListener("click", () => this.arenaRematchAction?.());
+      this.arenaCenterEl.appendChild(action);
     }
   }
 

@@ -9,7 +9,7 @@ import type { SpriteName, SheetClip, TileName, FxName, PropSpriteName } from "./
 import { ENEMY_ARCHETYPES, isBossFloor, isBossKind, isGauntletFloor, eliteAffixOf, bossDisplayName } from "../sim/enemies.js";
 import { WEAPONS, WEAPON_RARITY_COLOR, MYSTERY_COLOR } from "../sim/weapons.js";
 import { weaponDisplayStats, lowHpFrac } from "../sim/weaponStats.js";
-import { rollItemChoicesWith, itemById, itemDesc, itemLevelsOf, MAX_ITEM_LEVEL } from "../sim/items.js";
+import { rollItemChoicesWith, rollPvpDraftChoicesWith, itemById, itemDesc, itemLevelsOf, isPvpBlessingId, MAX_ITEM_LEVEL } from "../sim/items.js";
 import type { PlayerMods, ItemDef } from "../sim/items.js";
 import { PLAYER, REVIVE, BOSS, MARROW, WEAVER, GILDED, GORGE, TIERS, ELITE_BULWARK, MARSHAL, ROLL_AFFIX, RESONANCE_FAMILIES, RESONANCE_TELEGRAPH_COLOR } from "../sim/balance.js";
 import { petSpriteFor } from "./pets.js";
@@ -68,8 +68,9 @@ import type { SfxName, SfxOptions } from "./audio.js";
 import { waveAudio } from "./waveAudio.js";
 import type { WaveFramePlayer } from "./waveAudio.js";
 import { WAVE_HAZARDS, WEAPON_AUDIO, STATUS_AUDIO } from "./waveSpec.js";
-import { pvpKillCue, pvpMatchOverCue, pvpFragStreakStep, pvpFragStreakRate, pvpCountTickRate } from "./waveSpec.js";
+import { pvpKillCue, pvpMatchOverCue, pvpCountTickRate } from "./waveSpec.js";
 import type { WaveEventId } from "./waveSpec.js";
+import { PVP, pvpDraftSeed } from "../sim/pvp.js";
 import type { MatchPhase } from "../sim/pvp.js";
 import { ShockwaveField, ScreenFlash, AmbienceField } from "./vfx.js";
 import { LightingRenderer } from "./lighting.js";
@@ -689,6 +690,7 @@ export class Game {
   // floor progressively (so depth is recorded even when the run ends by disconnect/quit,
   // not just a clean full-party-wipe game over). Optional: solo tooling passes nothing.
   private onFloorReached: (floor: number) => void;
+  private onArenaRequeue: () => void;
   private pause: PauseOverlay;
   private blessing: BlessingOverlay;
   private shopPanel: ShopPanel;
@@ -701,6 +703,7 @@ export class Game {
   private shopBoughtT = 0;
   private isPaused = false;
   private isChoosing = false; // a between-floor blessing overlay is up (freezes the sim)
+  private isArenaRequeuePending = false;
   // Online: whether gameplay has been revealed yet. Until then the run sits behind the
   // readiness veil: first CONNECTING (no authoritative snapshot), then — for a party-started
   // run — WAITING FOR PARTY until the server's own roster contains every expected member.
@@ -749,14 +752,11 @@ export class Game {
   private isRiskBandOpen = false;
   private audioOrbitSector = -1;
   // PvP (client-only) audio edge memory. The match block only exists online; these track the
-  // phase/countdown/respawn edges the match-flow cues fire on, plus the local frag-streak
-  // pitch ladder (reset on the window gap, on match end, and on run/floor teardown).
+  // phase/countdown/respawn edges the match-flow cues fire on.
   private isPvpMatchSeen = false;
   private pvpPrevPhase: MatchPhase | null = null;
   private pvpLastCountSecond = -1;
   private pvpPrevRespawnT: number | null = null;
-  private pvpFragStreakStep = 0;
-  private pvpLastFragMs = -Infinity;
   // Short-fuse scheduled cues (the sentry's place -> unfold beat).
   private pendingCues: Array<{ t: number; name: string; x: number; y: number }> = [];
   private seed = 0;
@@ -985,7 +985,15 @@ export class Game {
   private isFlowDebug = false; // draw the pathfinding flow-field arrows over the floor
   private fps = 0;             // smoothed frames/sec, surfaced via devSnapshot()
 
-  constructor(canvas: HTMLCanvasElement, minimapCanvas: HTMLCanvasElement, hudRoot: HTMLElement, onGameOver: (result: RunResult) => void, onExit: (reason?: ExitReason, detail?: string) => void, onFloorReached: (floor: number) => void = () => {}) {
+  constructor(
+    canvas: HTMLCanvasElement,
+    minimapCanvas: HTMLCanvasElement,
+    hudRoot: HTMLElement,
+    onGameOver: (result: RunResult) => void,
+    onExit: (reason?: ExitReason, detail?: string) => void,
+    onFloorReached: (floor: number) => void = () => {},
+    onArenaRequeue: () => void = () => {},
+  ) {
     this.canvas = canvas;
     this.ctx = canvas.getContext("2d")!;
     this.minimap = new Minimap(minimapCanvas);
@@ -1004,6 +1012,8 @@ export class Game {
     this.onGameOver = onGameOver;
     this.onExit = onExit;
     this.onFloorReached = onFloorReached;
+    this.onArenaRequeue = onArenaRequeue;
+    this.hud.setArenaRematchAction(() => this.requeueArena());
     this.pause = new PauseOverlay(() => this.setPaused(false), () => this.quitToMenu());
     this.blessing = new BlessingOverlay();
     this.shopPanel = new ShopPanel();
@@ -1226,6 +1236,7 @@ export class Game {
     this.hurtFlash = 0;
     this.isPaused = false;
     this.isChoosing = false;
+    this.isArenaRequeuePending = false;
     this.isWorldRevealed = this.mode !== "online";
     this.partyView = null;
     this.pendingWorld = null;
@@ -1471,6 +1482,18 @@ export class Game {
     this.hud.hideStats();
     this.hud.clear();
     this.onExit(reason, detail);
+  }
+
+  private requeueArena(): void {
+    if (this.isArenaRequeuePending || !this.isArena || this.arenaMatchHud()?.phase !== "over") return;
+    this.isArenaRequeuePending = true;
+    this.stop();
+    this.syncInputContext();
+    audio.setMusic(null);
+    waveAudio.reset();
+    this.hud.clear();
+    this.hud.setVisible(false);
+    this.onArenaRequeue();
   }
 
   private addFreeze(seconds: number) {
@@ -1864,15 +1887,10 @@ export class Game {
   //  - victim === self -> YOU DIED: non-spatial, full gain.
   //  - neither        -> NEUTRAL KILL: a quiet SPATIAL distant thud at the kill point, hard
   //                      rate-limited by the cue's own 300ms cooldown so a full lobby never spams.
-  private playPvpKillCue(e: Extract<SimEvent, { t: "pvpKill" }>): void {
+  private playPvpKillCue(e: Extract<SimEvent, { t: "pvpKill" | "pvpRingOut" }>): void {
     const cue = pvpKillCue(this.isSelfPid(e.by), this.isSelfPid(e.victim));
     if (cue.event === "pvp.frag") {
-      const nowMs = performance.now();
-      this.pvpFragStreakStep = pvpFragStreakStep(this.pvpFragStreakStep, nowMs - this.pvpLastFragMs);
-      this.pvpLastFragMs = nowMs;
-      // TODO(pvp-audio): route pvpFragStreakStep past the safe-band cap to the dedicated
-      // pvp.fragStreak2/3 stems once they are generated, instead of pitching the base variants.
-      waveAudio.play("pvp.frag", { rate: pvpFragStreakRate(this.pvpFragStreakStep) });
+      waveAudio.play("pvp.frag");
     } else if (cue.isSpatial) {
       waveAudio.play(cue.event, { x: e.x, y: e.y });
     } else {
@@ -1903,7 +1921,6 @@ export class Game {
       }
     }
     if (match.ph === "live" && prevPhase !== null && prevPhase !== "live") waveAudio.play("pvp.fight");
-    if (match.ph === "over" && prevPhase !== "over") this.pvpFragStreakStep = 0;
     this.pvpPrevPhase = match.ph;
 
     const rsp = snap.self?.rsp ?? null;
@@ -1918,8 +1935,6 @@ export class Game {
     this.pvpPrevPhase = null;
     this.pvpLastCountSecond = -1;
     this.pvpPrevRespawnT = null;
-    this.pvpFragStreakStep = 0;
-    this.pvpLastFragMs = -Infinity;
   }
 
   private arenaMatchHud(): HudState["arenaMatch"] {
@@ -2912,12 +2927,35 @@ export class Game {
         // SPATIAL distant thud, hard rate-limited by the cue's own 300ms cooldown.
         this.playPvpKillCue(e);
         break;
+      case "pvpRingOut":
+        this.playPvpKillCue(e);
+        this.spawnWorldLabel(e.x, e.y - 38, "RING OUT", "#ff7a4f");
+        this.spawnParticles(e.x, e.y, 18, "#ff5a4f");
+        this.shockwaves.spawn(e.x, e.y, 10, 64, 0.42, "#ff7a4f", 4);
+        if (this.isNearCamera(e.x, e.y)) this.addTrauma(0.2);
+        break;
+      case "pvpChainFrag":
+        if (this.isSelfPid(e.by)) {
+          const label = `CHAIN x${e.chain} \u00b7 +1 FRAG`;
+          this.spawnWorldLabel(e.x, e.y - 54, label, "#ffd166");
+          this.flashScreen(255, 209, 102, 0.12, 2.6);
+          this.addTrauma(0.24);
+          waveAudio.play(e.chain >= 3 ? "pvp.fragStreak3" : "pvp.fragStreak2");
+        } else {
+          this.spawnWorldLabel(e.x, e.y - 48, `CHAIN x${e.chain}`, "#ffb43b");
+        }
+        break;
+      case "pvpSuddenDeath":
+        waveAudio.play("pvp.fight", { rate: 1.12 });
+        this.flashScreen(255, 90, 74, 0.14, 2.2);
+        this.addTrauma(0.16);
+        this.hud.showBanner("SUDDEN DEATH");
+        break;
       case "pvpMatchOver":
         // Reliable, id-tagged (never lost): the winner hears the victory sting, everyone else
         // the light defeat cue. The ph->"over" observer edge is intentionally NOT a second
         // trigger, so the result never double-sounds.
         waveAudio.play(pvpMatchOverCue(this.isSelfPid(e.winner)));
-        this.pvpFragStreakStep = 0;
         break;
       case "flash":
         triggerFlash(this.animForId(e.eid));
@@ -3126,17 +3164,33 @@ export class Game {
   // sim's pending-offer state (releasing the descend gate the exit is holding).
   private offerBlessing(rare = false) {
     const owned = this.p.ownedItemIds;
+    if (this.isArena) {
+      const rng = new Rng(pvpDraftSeed(this.world.seed, this.p.id, this.p.pvpDraftTick, this.p.pvpDraftOrdinal));
+      const choices = rollPvpDraftChoicesWith(
+        PVP.draftChoices,
+        () => rng.next(),
+        owned,
+        { tierBump: this.p.pvpDraftTierBump },
+      );
+      if (choices.length === 0) { dismissBlessingOfferInWorld(this.world, this.p.id); return; }
+      this.showLocalBlessingChoices(choices);
+      return;
+    }
     // A reroll-everything purchase armed one offer reroll: burn a full choice-set draw
     // from the offer stream first (the server does the identical burn online).
     if (consumeBlessingReroll(this.world, LOCAL_ID)) rollItemChoicesWith(3, () => this.blessingRng.next(), owned, { rareOnly: rare });
     const choices = rollItemChoicesWith(3, () => this.blessingRng.next(), owned, { rareOnly: rare });
     if (choices.length === 0) { dismissBlessingOfferInWorld(this.world, LOCAL_ID); return; }
+    this.showLocalBlessingChoices(choices);
+  }
+
+  private showLocalBlessingChoices(choices: ItemDef[]): void {
     this.isChoosing = true;
     this.isPaused = false;
     this.syncInputContext();
     this.blessing.show(this.toBlessingCards(choices), (item) => {
       this.playBlessingPickSfx(item);
-      const events = chooseBlessingInWorld(this.world, LOCAL_ID, item);
+      const events = chooseBlessingInWorld(this.world, this.p.id, item);
       if (events.length > 0) this.ownedItemDefs.push(item);
       this.handleSimEvents(events);
       this.isChoosing = false;
@@ -3157,7 +3211,11 @@ export class Game {
   // exactly that offer, applies the mods, and reflects them via SelfWire; this client never
   // mutates its own run stats. Choices arrive as item ids we resolve to defs.
   private offerServerBlessing(offer: { id: number; choices: string[] }) {
-    const choices = offer.choices.map((id) => itemById(id)).filter((it): it is ItemDef => it !== undefined);
+    const choices = offer.choices
+      .map((id) => itemById(id))
+      .filter((item): item is ItemDef =>
+        item !== undefined && (!this.isArena || isPvpBlessingId(item.id))
+      );
     if (choices.length === 0 || !this.wsTransport) return;
     this.isChoosing = true;
     this.isPaused = false;

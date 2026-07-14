@@ -1528,10 +1528,7 @@ export const WAVE_SOUNDS = {
   // (cooldownMs 300, global) so a 6-player lobby never spams. Priorities: frag 92 (above weapon/
   // impact — a frag is NEVER culled), death 95 (own death always reads), fight/win/lose 96.
   "pvp.frag": { stem: "pvp/frag", variants: 3, gain: 0.85, bus: "ui", priority: 92, jitter: 0.03, cooldownMs: 40 },
-  // FRAG STREAK escalation: rapid local frags pitch the base variants up ~2 safe-band steps
-  // (see pvpFragStreakRate). Beyond that wants these dedicated escalation takes — registered as
-  // asset hooks, pending generation (they sound once the files land; absence never fails).
-  // TODO(pvp-audio): route pvpFragStreakStep past the safe-band cap to these instead of the base.
+  // Dedicated escalation takes for the authoritative chain-frag event.
   "pvp.fragStreak2": { stem: "pvp/frag_streak2", variants: 1, gain: 0.88, bus: "ui", priority: 92, jitter: 0 },
   "pvp.fragStreak3": { stem: "pvp/frag_streak3", variants: 1, gain: 0.9, bus: "ui", priority: 92, jitter: 0 },
   "pvp.death": { stem: "pvp/death", variants: 2, gain: 0.8, bus: "ui", priority: 95, jitter: 0.02 },
@@ -1971,7 +1968,8 @@ export function pvpCountTickRate(secondsLeft: number): number {
 // The events the PvP kill/death/match-flow layer actually FIRES (excludes the pending
 // streak/tension hooks). Preloaded on match entry so a first frag never races its decode.
 export const PVP_WAVE_EVENTS: readonly WaveEventId[] = [
-  "pvp.frag", "pvp.death", "pvp.killDistant", "pvp.countTick", "pvp.fight", "pvp.win", "pvp.lose", "pvp.respawnIn",
+  "pvp.frag", "pvp.fragStreak2", "pvp.fragStreak3", "pvp.death", "pvp.killDistant",
+  "pvp.countTick", "pvp.fight", "pvp.win", "pvp.lose", "pvp.respawnIn",
 ];
 
 // The attack-state snapshot the tell watcher diffs, structurally satisfied by both the sim

@@ -335,6 +335,47 @@ export function renderDungeonTiles<Img>(ctx: TileRenderContext<Img>, scene: Tile
     ctx.fillRect(wx, wy, ww, wh);
   }
   ctx.restore();
+  renderLethalVoidTiles(ctx, scene, x0, y0, x1, y1);
+}
+
+function renderLethalVoidTiles<Img>(
+  ctx: TileRenderContext<Img>,
+  scene: TileRenderScene<Img>,
+  x0: number,
+  y0: number,
+  x1: number,
+  y1: number,
+): void {
+  const d = scene.dungeon;
+  const pulse = 0.72 + 0.16 * (0.5 + 0.5 * Math.sin(scene.animClock * 3.2));
+  for (let ty = y0; ty < y1; ty++) {
+    for (let tx = x0; tx < x1; tx++) {
+      if (d.tiles[ty * d.w + tx] !== 2) continue;
+      const sx = tx * TILE - scene.camX;
+      const sy = ty * TILE - scene.camY;
+      ctx.save();
+      ctx.globalCompositeOperation = "source-over";
+      ctx.globalAlpha = 1;
+      ctx.fillStyle = "#030108";
+      ctx.fillRect(sx, sy, TILE, TILE);
+      ctx.globalAlpha = pulse;
+      ctx.strokeStyle = "#ff5a4f";
+      ctx.lineWidth = 4;
+      ctx.strokeRect(sx + 2, sy + 2, TILE - 4, TILE - 4);
+      ctx.globalAlpha = 0.95;
+      ctx.strokeStyle = "#ffd166";
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      for (let offset = 8; offset < TILE - 4; offset += 12) {
+        ctx.moveTo(sx + offset, sy + 3);
+        ctx.lineTo(sx + offset + 5, sy + 8);
+        ctx.moveTo(sx + TILE - offset, sy + TILE - 3);
+        ctx.lineTo(sx + TILE - offset - 5, sy + TILE - 8);
+      }
+      ctx.stroke();
+      ctx.restore();
+    }
+  }
 }
 
 // Per-archetype room lighting (screen-cropped, gradient fills only). Cheap: a handful

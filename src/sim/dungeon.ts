@@ -31,7 +31,7 @@ export type RoomShape = "rect" | "cell" | "hall" | "pillars" | "arena" | "cavern
 export interface Dungeon {
   w: number;
   h: number;
-  tiles: TileKind[]; // row-major, 1 = wall, 0 = floor
+  tiles: TileKind[]; // row-major, 0 = floor, 1 = wall, 2 = walkable lethal void
   rooms: Room[];
   spawn: { x: number; y: number }; // tile coords
   exit: { x: number; y: number };  // tile coords

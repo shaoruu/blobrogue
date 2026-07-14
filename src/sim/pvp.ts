@@ -19,6 +19,17 @@ import type { KitId } from "./kits.js";
 // "pvp" swaps ONLY the four gated concerns. Orthogonal to isSandbox/isShared/isCoop.
 export type WorldMode = "coop" | "pvp";
 
+export const pvpBlessingBlacklist = [
+  "vampire_fang",
+  "adrenaline",
+  "berserk",
+  "second_wind",
+  "greed",
+  "coin_magnet",
+  "vitality",
+  "juggernaut",
+] as const;
+
 // ---- PVP CONFIG (balancer + designer surface) ---------------------------------------------
 // Numbers are the shipped balancer finals (2026-07-12): FIXED 100 HP + a global 2.0x scalar
 // (PvE damage 100% untouched) tuned to a ~4.0s median TTK (3-5s band), a small per-weapon
@@ -45,6 +56,55 @@ export const PVP = {
   // player (35 of 100). Enforced as a per-victim-per-tick cumulative clamp, so even a
   // point-blank pellet stack can never one-shot.
   perHitCapFrac: 0.35,
+  // The committed median 1v1 TTK band, including a fully drafted build.
+  ttkMinSec: 3.5,
+  ttkMaxSec: 5.5,
+  // Player knockback uses the shipped per-weapon impulse in pixel space. Protection windows
+  // null it entirely, and one hit can never cross the hard displacement ceiling.
+  kbScalar: 1.0,
+  kbMaxPerHit: 180,
+  kbSelfDuringIframe: 0,
+  // Ring-out attribution remains attached to the most recent PvP attacker for this long.
+  envKillCreditWindowSec: 2.0,
+  // Two or more credited frags inside this window produce presentation-only chain juice.
+  chainWindowSec: 5.0,
+  // A free draft arrives on either personal-frag cadence or match-clock cadence.
+  draftEveryFrags: 3,
+  draftEverySec: 45,
+  draftChoices: 3,
+  // The curated pool contains mechanics with a working PvP identity. Flat commons and every
+  // sustain, low-HP, economy, dash-cooldown, and flat-EHP blessing stay out.
+  blessingBlacklist: pvpBlessingBlacklist,
+  blessingPool: [
+    "glass_cannon",
+    "split_shot",
+    "scattergun",
+    "full_metal",
+    "big_iron",
+    "deadeye",
+    "incendiary_rounds",
+    "cryo_coating",
+    "static_charge",
+    "elementalist",
+    "marksman",
+    "heavy_rounds",
+    "skirmisher",
+    "executioner",
+    "overload",
+    "featherweight",
+    "frostbite",
+    "core_damage",
+    "core_fire",
+    "core_move",
+    "core_dash",
+  ] as readonly string[],
+  // Base offers favor uncommon mechanics. A bottom-third player receives one rarity-weight
+  // bump on their own offer only; no live combat stat is changed.
+  draftRarityWeight: { common: 0, uncommon: 6, rare: 3 } as const,
+  comebackDraftTierBump: 1,
+  // Match-point or the final clock window fires one presentation-only crescendo.
+  suddenDeathFrags: 1,
+  suddenDeathFinalSec: 30,
   // (Re)spawn invulnerability in seconds. Ends at this OR the first OUTGOING attack, whichever
   // comes first (can't shoot from invuln). Reuses the shared post-hit iframe channel (invuln),
   // which pvp otherwise leaves off so it never dominates TTK.
@@ -72,6 +132,51 @@ export const PVP = {
 export function pvpRespawnDelayTicks(): number { return Math.round(PVP.respawnDelaySec * TICKS_PER_SECOND); }
 export function pvpCountdownTicks(): number { return Math.round(PVP.countdownSec * TICKS_PER_SECOND); }
 export function pvpMatchTimeTicks(): number { return Math.round(PVP.matchTimeSec * TICKS_PER_SECOND); }
+export function pvpEnvKillCreditWindowTicks(): number { return Math.round(PVP.envKillCreditWindowSec * TICKS_PER_SECOND); }
+export function pvpChainWindowTicks(): number { return Math.round(PVP.chainWindowSec * TICKS_PER_SECOND); }
+export function pvpDraftEveryTicks(): number { return Math.round(PVP.draftEverySec * TICKS_PER_SECOND); }
+export function pvpSuddenDeathFinalTicks(): number { return Math.round(PVP.suddenDeathFinalSec * TICKS_PER_SECOND); }
+
+function pvpPlayerIdHash(id: PlayerId): number {
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < id.length; i++) {
+    hash ^= id.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return hash | 0;
+}
+
+function pvpMix32(value: number): number {
+  let mixed = value | 0;
+  mixed ^= mixed >>> 16;
+  mixed = Math.imul(mixed, 0x7feb352d);
+  mixed ^= mixed >>> 15;
+  mixed = Math.imul(mixed, 0x846ca68b);
+  mixed ^= mixed >>> 16;
+  return mixed | 0;
+}
+
+export function pvpDraftSeed(seed: number, pid: PlayerId, triggerTick: number, ordinal: number): number {
+  let mixed = pvpMix32(seed ^ 0x50565044);
+  mixed = pvpMix32(mixed ^ pvpPlayerIdHash(pid));
+  mixed = pvpMix32(mixed ^ triggerTick);
+  return pvpMix32(mixed ^ Math.imul(ordinal, 0x9e3779b1));
+}
+
+export function pvpComebackTierBump(
+  scores: ReadonlyMap<PlayerId, number>,
+  playerIds: readonly PlayerId[],
+  pid: PlayerId,
+): number {
+  if (playerIds.length < 2) return 0;
+  const ranked = playerIds
+    .slice()
+    .sort((a, b) => (scores.get(a) ?? 0) - (scores.get(b) ?? 0) || (a < b ? -1 : a > b ? 1 : 0));
+  const leaderScore = Math.max(...ranked.map((id) => scores.get(id) ?? 0));
+  if ((scores.get(pid) ?? 0) >= leaderScore) return 0;
+  const trailingCount = Math.ceil(ranked.length / 3);
+  return ranked.slice(0, trailingCount).includes(pid) ? PVP.comebackDraftTierBump : 0;
+}
 
 // Frags to win, SCALED by the match-start player count: clamp(round(6 + playerCount), 8, 16) —
 // 2p:8, 4p:10, 6p:12. Resolved once at the live whistle so a mid-match join never moves the goal.
@@ -122,6 +227,11 @@ export interface MatchState {
   // Per-victim pvp damage applied THIS tick — the accumulator behind the per-hit cap. Cleared
   // at the top of every world step; never serialized (transient scratch).
   dmgThisTick: Map<PlayerId, number>;
+  // Per-killer chain timing. Presentation reads the emitted event only; these maps never grant
+  // combat stats and never leave the authoritative sim.
+  lastFragTick: Map<PlayerId, number>;
+  fragChain: Map<PlayerId, number>;
+  isSuddenDeath: boolean;
 }
 
 export function createMatchState(spawns: Vec2[]): MatchState {
@@ -133,6 +243,9 @@ export function createMatchState(spawns: Vec2[]): MatchState {
     winner: null,
     spawns,
     dmgThisTick: new Map(),
+    lastFragTick: new Map(),
+    fragChain: new Map(),
+    isSuddenDeath: false,
   };
 }
 
@@ -212,12 +325,18 @@ const SPAWN_TILES: ReadonlyArray<[number, number]> = [
   [12, 6], [6, 12], [6, 6], [12, 12], // diagonals (opposite pairs consecutive)
 ];
 
-// Breakable cover (16 props): center knot (center 9,9 stays OPEN), four mid pairs, four corner
-// blockers. Tile coords; every piece small + breakable + flankable, lanes >= 3 tiles.
+// Breakable cover (12 props): center knot (center 9,9 stays OPEN), four outer mids, four corner
+// blockers. The former inner axial cover cells are lethal pits; side lanes remain >= 3 tiles.
 const COVER_TILES: ReadonlyArray<[number, number]> = [
   [8, 8], [10, 8], [8, 10], [10, 10],                 // center knot
-  [9, 6], [9, 7], [6, 9], [7, 9], [9, 12], [9, 11], [12, 9], [11, 9], // mid pairs
+  [9, 6], [6, 9], [9, 12], [12, 9],                   // outer mids
   [3, 3], [15, 3], [3, 15], [15, 15],                 // corner blockers
+];
+
+// Four single-cell ring-out pits on the contested inner axes. Each is >=3 tiles from every
+// spawn, sits behind outer approach cover, and leaves the broad flanking lanes untouched.
+const PIT_TILES: ReadonlyArray<[number, number]> = [
+  [9, 7], [11, 9], [9, 11], [7, 9],
 ];
 
 function tileCenter(tx: number, ty: number): Vec2 {
@@ -227,7 +346,7 @@ function tileCenter(tx: number, ty: number): Vec2 {
 // The FIXED symmetric FFA arena. Reuses the same Dungeon/Room shape the renderer + pathfinder
 // consume (the SAME seam the dev sandbox's buildArena() uses to suppress population); the caller
 // places `cover` as breakable props. `spawns` are the candidate points; `cover` the prop coords.
-export function buildPvpArena(): { dungeon: Dungeon; spawns: Vec2[]; cover: Vec2[] } {
+export function buildPvpArena(): { dungeon: Dungeon; spawns: Vec2[]; cover: Vec2[]; pits: Vec2[] } {
   const n = ARENA_N;
   const tiles: TileKind[] = new Array(n * n);
   for (let y = 0; y < n; y++) {
@@ -237,12 +356,14 @@ export function buildPvpArena(): { dungeon: Dungeon; spawns: Vec2[]; cover: Vec2
     }
   }
   for (const [x, y] of CLIP_WALLS) tiles[y * n + x] = 1;
+  for (const [x, y] of PIT_TILES) tiles[y * n + x] = 2;
   const spawns: Vec2[] = SPAWN_TILES.map(([tx, ty]) => tileCenter(tx, ty));
   const cover: Vec2[] = COVER_TILES.map(([tx, ty]) => tileCenter(tx, ty));
+  const pits: Vec2[] = PIT_TILES.map(([tx, ty]) => tileCenter(tx, ty));
   const c = (n - 1) >> 1; // center tile (9)
-  const room: Room = { x: 1, y: 1, w: n - 2, h: n - 2, cx: c, cy: c, kind: "normal", shape: "rect" };
+  const room: Room = { x: 1, y: 1, w: n - 2, h: n - 2, cx: c, cy: c, kind: "normal", shape: "arena" };
   const dungeon: Dungeon = { w: n, h: n, tiles, rooms: [room], spawn: { x: c, y: c }, exit: { x: c, y: c } };
-  return { dungeon, spawns, cover };
+  return { dungeon, spawns, cover, pits };
 }
 
 // The 90° rotation the arena is symmetric under — in tile space rot90(tx,ty)=(ty,N-1-tx), which

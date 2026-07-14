@@ -8,6 +8,7 @@ import { Menu } from "./ui/menu.js";
 import { bindMenuGamepad } from "./ui/menuGamepad.js";
 import { bindUiScale } from "./ui/settings.js";
 import { exitNoteFor, INVITE_INVALID_NOTE, INVITE_OFFLINE_NOTE } from "./ui/onlineCopy.js";
+import { normalizeOnlineError } from "./net/onlineError.js";
 import { parseInviteCode, hasInviteIntent, stripInviteFromLocation } from "./net/inviteLink.js";
 import type { OnlineLobby } from "./net/onlineLobby.js";
 import { getSelectedKit } from "./net/kitSelection.js";
@@ -118,6 +119,7 @@ async function bootNormal() {
           // Convex client. This is what keeps the leaderboard's floor honest when a run ends by a
           // teammate continuing / a disconnect / a quit instead of a clean full-party wipe.
           (floor) => session.recordFloorProgress(floor),
+          () => void requeueArena(),
         );
         // Dev-server-only QA hook (dropped from production builds): lets headless tooling —
         // screenshot capture, manual floor QA — drive the real game without menu automation.
@@ -149,36 +151,53 @@ async function bootNormal() {
     });
   }
 
+  function launchOnlineRun(lobby: OnlineLobby, profile: ProfileDoc | null, isPartyStart: boolean): void {
+    if (activeOnline && activeOnline !== lobby) activeOnline.leave();
+    activeOnline = lobby;
+    launchRun((game) => game.start({
+      mode: "online",
+      online: {
+        url: defaultGsUrl(),
+        getTicket: () => lobby.mintTicket(),
+        roomCode: lobby.code,
+        expectedWorldId: lobby.expectedWorldId(),
+        selfPlayerId: lobby.selfId || null,
+        party: isPartyStart ? () => lobby.players() : null,
+        onWorldPresence: (worldId) => lobby.reportWorld(worldId),
+      },
+      profile,
+      selfColorIndex: session.colorIndex,
+      selfCosmetics: session.cosmetics,
+      selfPet: session.equippedPet,
+    }));
+  }
+
+  async function requeueArena(): Promise<void> {
+    isInRun = false;
+    const previous = activeOnline;
+    if (!client || previous === null || previous.mode !== "pvp") {
+      onExit("quit");
+      return;
+    }
+    previous.leave();
+    activeOnline = null;
+    try {
+      const profile = await session.login();
+      const lobby = new OnlineLobby(client, session);
+      await lobby.quickPlay("pvp");
+      launchOnlineRun(lobby, profile, false);
+    } catch (err) {
+      await menu.showOnlineHome(normalizeOnlineError(err, "could not re-queue the arena").message);
+    }
+  }
+
   const menu = new Menu(overlay, session, client, auth, {
     startSolo(profile: ProfileDoc | null) {
       leaveOnlineIfAny();
       launchRun((game) => game.start({ mode: "solo", coop: null, profile, kit: getSelectedKit(), selfColorIndex: session.colorIndex, selfCosmetics: session.cosmetics, selfPet: session.equippedPet }));
     },
     startOnline(lobby: OnlineLobby, profile: ProfileDoc | null, isPartyStart: boolean) {
-      if (activeOnline && activeOnline !== lobby) activeOnline.leave();
-      activeOnline = lobby;
-      launchRun((game) => game.start({
-        mode: "online",
-        online: {
-          url: defaultGsUrl(),
-          // The lobby mints a Convex ticket bound to THIS room's world id (verified against
-          // room membership server-side) — that binding is what puts the party in one world.
-          getTicket: () => lobby.mintTicket(),
-          roomCode: lobby.code,
-          // ...and the client ASSERTS the server honored it: every snapshot's world id must
-          // equal the room's world or the run refuses to play (close + explicit lobby error).
-          expectedWorldId: lobby.expectedWorldId(),
-          selfPlayerId: lobby.selfId || null,
-          // A lobby START gates gameplay behind the readiness veil until every current room
-          // member is connected to the world; drop-ins/rejoins/quick play join a live run.
-          party: isPartyStart ? () => lobby.players() : null,
-          onWorldPresence: (worldId) => lobby.reportWorld(worldId),
-        },
-        profile,
-        selfColorIndex: session.colorIndex,
-        selfCosmetics: session.cosmetics,
-        selfPet: session.equippedPet,
-      }));
+      launchOnlineRun(lobby, profile, isPartyStart);
     },
   });
 

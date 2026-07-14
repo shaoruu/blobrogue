@@ -269,7 +269,7 @@ function serverRoundTripTests(): void {
 // who is actually there (the Sev-0 readout).
 function worldBindingWireTests(): void {
   section("v4: authoritative world id + roster are required, strict, and round-trip");
-  check("protocol version covers the PVP MVP (v28: PlayerWire.tm + SelfWire.rsp + top-level match block + pvpKill/pvpMatchOver events)", PROTOCOL_VERSION === 28, `v=${PROTOCOL_VERSION}`);
+  check("protocol version covers PVP Wave 1 (v29: ring-out, chain-frag, and sudden-death events)", PROTOCOL_VERSION === 29, `v=${PROTOCOL_VERSION}`);
   check("room code maps to its world id", worldIdForRoomCode(" abcd ") === "room:ABCD");
   check("room world ids pass the shared charset gate", isValidWorldId(worldIdForRoomCode("ZZZZ")) && isValidWorldId("arena-1"));
   check("junk world ids fail the shared charset gate", !isValidWorldId("room:../../etc") && !isValidWorldId(""));
@@ -535,6 +535,9 @@ function eventScopeTests(): void {
     [{ t: "ultSanctuary", pid: "p7", x: 1, y: 2, radius: 120, lifetimeTicks: 80 }, "pos"],
     [{ t: "ultAegis", pid: "p7", x: 1, y: 2, radius: 110, hpBudget: 12, lifetimeTicks: 80 }, "pos"],
     [{ t: "ultPhase", pid: "p7", x: 1, y: 2, radius: 90, invulnTicks: 20, speedTicks: 60 }, "pos"],
+    [{ t: "pvpRingOut", by: "", victim: "p8", x: 10, y: 20 }, "pos"],
+    [{ t: "pvpChainFrag", by: "p7", chain: 2, x: 10, y: 20 }, "pos"],
+    [{ t: "pvpSuddenDeath", leader: "p7" }, "global"],
   ];
   for (const [e, kind] of cases) {
     check(`${e.t} -> ${kind}`, eventScope(e).kind === kind, `got=${eventScope(e).kind}`);

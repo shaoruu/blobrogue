@@ -772,7 +772,7 @@ export interface RemotePlayer {
 }
 
 export const TILE = 48;
-export type TileKind = 0 | 1; // 0 = floor, 1 = wall
+export type TileKind = 0 | 1 | 2; // 0 = floor, 1 = wall, 2 = walkable lethal void
 
 // Sprite-atlas keys. These are cosmetic (the client's asset loader maps them to images), but
 // the enemy archetype table in the pure sim references its own sprite by name, so the union

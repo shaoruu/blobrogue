@@ -11,13 +11,14 @@
 
 import { createWorld, stepPlayerPhase, stepWorldPhase, spawnPlayerInWorld, removePlayerFromWorld, setPlayerAbsence, setPlayerKit, switchWeaponInWorld, reorderWeaponsInWorld, dropWeaponInWorld, swapWeaponInWorld, buyFromShopInWorld, chooseBlessingInWorld, dismissBlessingOfferInWorld, consumeBlessingReroll, resetRunInWorld, devSpawnEnemy, isPvp } from "../../src/sim/world.js";
 import type { KitId } from "../../src/sim/kits.js";
+import { PVP, pvpDraftSeed } from "../../src/sim/pvp.js";
 import type { WorldMode } from "../../src/sim/pvp.js";
 import type { WorldState } from "../../src/sim/world.js";
 import type { SimEvent } from "../../src/sim/events.js";
 import type { InputCmd, PlayerId } from "../../src/sim/input.js";
 import { TILE, type WeaponId } from "../../src/sim/types.js";
 import { Rng, randomSeed } from "../../src/sim/rng.js";
-import { rollItemChoicesWith, itemById } from "../../src/sim/items.js";
+import { rollItemChoicesWith, rollPvpDraftChoicesWith, itemById, isPvpBlessingId } from "../../src/sim/items.js";
 import { LAGCOMP_MAX_TICKS } from "../../src/sim/constants.js";
 import { FIXED_DT, TICK_HZ, INTERP_BASE_DELAY_MS, type WireEvent } from "../../src/net/protocol.js";
 import { resumeTokensEqual } from "./auth.js";
@@ -243,6 +244,17 @@ export class GameWorld implements RoomRuntime {
 
   rollBlessingChoices(pid: PlayerId, rare: boolean): string[] {
     const owned = this.state.players.get(pid)?.ownedItemIds ?? [];
+    if (isPvp(this.state)) {
+      const p = this.state.players.get(pid);
+      if (p === undefined) return [];
+      const rng = new Rng(pvpDraftSeed(this.state.seed, pid, p.pvpDraftTick, p.pvpDraftOrdinal));
+      return rollPvpDraftChoicesWith(
+        PVP.draftChoices,
+        () => rng.next(),
+        owned,
+        { tierBump: p.pvpDraftTierBump },
+      ).map((item) => item.id);
+    }
     // A reroll-everything purchase armed one offer reroll for this player: burn a full
     // choice-set draw first (the solo client performs the identical burn locally).
     if (consumeBlessingReroll(this.state, pid)) {
@@ -258,6 +270,7 @@ export class GameWorld implements RoomRuntime {
     if (!this.state.pendingBlessings.has(pid)) return false;
     const def = itemById(itemId);
     if (!def) return false;
+    if (isPvp(this.state) && !isPvpBlessingId(itemId)) return false;
     // Resolves the sim's pending offer too: the pick ends the player's pause/damage shield
     // and releases the party's descend gate.
     const evs = chooseBlessingInWorld(this.state, pid, def);
@@ -307,7 +320,14 @@ export class GameWorld implements RoomRuntime {
     const ev: SimEvent[] = [];
     if (this.injectedEvents.length > 0) { for (const e of this.injectedEvents) ev.push(e); this.injectedEvents.length = 0; }
 
-    for (const conn of this.conns.values()) {
+    const connections = isPvp(this.state)
+      ? [...this.conns.values()].sort((a, b) => {
+          const aId = a.playerId ?? "";
+          const bId = b.playerId ?? "";
+          return aId < bId ? -1 : aId > bId ? 1 : a.id - b.id;
+        })
+      : this.conns.values();
+    for (const conn of connections) {
       const pid = conn.playerId;
       if (pid === null) continue;
       const p = this.state.players.get(pid);

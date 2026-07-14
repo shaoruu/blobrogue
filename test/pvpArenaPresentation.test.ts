@@ -15,6 +15,7 @@ interface CanvasLog {
   texts: string[];
   arcCalls: number;
   drawImageCalls: number;
+  dangerStrokeCalls: number;
 }
 
 interface ArenaGameAccess {
@@ -23,6 +24,7 @@ interface ArenaGameAccess {
   tick(dt: number): void;
   updateHud(): void;
   renderExit(): void;
+  renderTiles(): void;
   renderMinimap(): void;
   checkFloorCleared(): void;
   exitWaitLabel(): string | null;
@@ -50,6 +52,7 @@ function section(name: string): void {
 }
 
 function recordingCanvas(log: CanvasLog): HTMLCanvasElement {
+  let strokeStyle = "";
   const context = new Proxy({}, {
     get: (_target, property) => {
       if (property === "createLinearGradient" || property === "createRadialGradient" || property === "createPattern") {
@@ -68,9 +71,15 @@ function recordingCanvas(log: CanvasLog): HTMLCanvasElement {
       if (property === "drawImage") {
         return () => { log.drawImageCalls++; };
       }
+      if (property === "strokeRect") {
+        return () => { if (strokeStyle === "#ff5a4f") log.dangerStrokeCalls++; };
+      }
       return noop;
     },
-    set: () => true,
+    set: (_target, property, value) => {
+      if (property === "strokeStyle" && typeof value === "string") strokeStyle = value;
+      return true;
+    },
   }) as object as CanvasRenderingContext2D;
   const canvas = {
     width: 1280,
@@ -149,7 +158,7 @@ function currentMinimapView(): MinimapView {
 
 async function main(): Promise<void> {
   section("real Game + WSTransport consumes the latest authoritative arena snapshot");
-  const canvasLog: CanvasLog = { texts: [], arcCalls: 0, drawImageCalls: 0 };
+  const canvasLog: CanvasLog = { texts: [], arcCalls: 0, drawImageCalls: 0, dangerStrokeCalls: 0 };
   const gameInstance = new Game(
     recordingCanvas(canvasLog),
     domMinimap as object as HTMLCanvasElement,
@@ -241,11 +250,18 @@ async function main(): Promise<void> {
   check("central stairs and GO DOWN exit render nothing",
     canvasLog.texts.length === 0 && canvasLog.arcCalls === 0 && canvasLog.drawImageCalls === 0);
 
+  canvasLog.dangerStrokeCalls = 0;
+  game.renderTiles();
+  check("every lethal pit renders a readable red danger edge", canvasLog.dangerStrokeCalls >= 4,
+    `dangerEdges=${canvasLog.dangerStrokeCalls}`);
+
   game.renderMinimap();
   const minimapView = currentMinimapView();
   check("arena minimap keeps geometry but has no exit marker",
     minimapView.dungeon.w === 19 && minimapView.dungeon.h === 19
     && minimapView.exit === null && !minimapView.isCleared);
+  check("arena minimap geometry carries all four lethal pit tiles",
+    minimapView.dungeon.tiles.filter((tile) => tile === 2).length === 4);
 
   section("presentation work leaves the production kill switch off");
   check("PVP remains disabled", PVP_PUBLIC_ENABLED === false);

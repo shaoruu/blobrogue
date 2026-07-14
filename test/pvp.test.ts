@@ -13,22 +13,28 @@
 // Run: npm run test:pvp
 
 import {
-  createWorld, stepWorld, spawnPlayerInWorld, setPlayerAbsence, isPvp,
+  createWorld, stepWorld, spawnPlayerInWorld, setPlayerAbsence, isPvp, applyItemToWorld,
 } from "../src/sim/world.js";
 import type { WorldState, PlayerSim } from "../src/sim/world.js";
 import {
   PVP, buildPvpArena, pvpArenaRot90, pvpHitDamage, pvpPerHitCap, pvpFragLimit, farthestSpawnIndex, arePvpFoes,
-  pvpRespawnDelayTicks, pvpCountdownTicks,
+  pvpRespawnDelayTicks, pvpCountdownTicks, pvpEnvKillCreditWindowTicks, pvpChainWindowTicks,
+  pvpDraftEveryTicks, pvpDraftSeed, pvpBlessingBlacklist, pvpComebackTierBump,
 } from "../src/sim/pvp.js";
 import type { Vec2 } from "../src/sim/types.js";
 import { WEAPONS } from "../src/sim/weapons.js";
 import { ULT } from "../src/sim/kits.js";
 import { TILE } from "../src/sim/types.js";
+import { WEAPON_KB } from "../src/sim/constants.js";
 import type { InputCmd } from "../src/sim/input.js";
 import type { SimEvent } from "../src/sim/events.js";
 import { buildSnapshot, jsonCodec, validateSnap, PROTOCOL_VERSION } from "../src/net/protocol.js";
 import type { ServerMsg } from "../src/net/protocol.js";
 import { diffSnapshot, applySnapshotDelta, snapshotToWire } from "../src/net/snapshotDelta.js";
+import { Rng } from "../src/sim/rng.js";
+import {
+  createMods, isPvpBlessingId, itemById, recomputeMods, rollPvpDraftChoicesWith,
+} from "../src/sim/items.js";
 
 let passed = 0, failed = 0;
 const failures: string[] = [];
@@ -105,6 +111,12 @@ section("damage model (balancer numbers)");
   check("per-hit cap = 35% of maxHp = 35", pvpPerHitCap() === 35);
   check("ults disabled flag", PVP.ultsEnabled === false);
   check("spawn iframe = 2.0s", PVP.spawnIframeSec === 2.0);
+  check("player knockback constants are exact", PVP.kbScalar === 1.0 && PVP.kbMaxPerHit === 180 && PVP.kbSelfDuringIframe === 0);
+  check("environmental credit window = 2.0s", PVP.envKillCreditWindowSec === 2.0);
+  check("chain window = 5.0s", PVP.chainWindowSec === 5.0);
+  check("draft cadence = 3 personal frags or 45s", PVP.draftEveryFrags === 3 && PVP.draftEverySec === 45);
+  check("comeback tier bump = +1", PVP.comebackDraftTierBump === 1);
+  check("sudden-death distance = 1 frag", PVP.suddenDeathFrags === 1);
   // pistol: 2 base * 1.78 (no outlier entry).
   check("pistol hit = base*dmgMult", Math.abs(pvpHitDamage("pistol", WEAPONS.pistol.damage) - WEAPONS.pistol.damage * PVP.dmgMult) < 1e-9);
   // outliers stack ON TOP of the global scalar.
@@ -181,12 +193,152 @@ section("ult meter does not charge in pvp");
 }
 
 // ---------------------------------------------------------------------------------------------
-section("SPAWNS: symmetric 19x19 arena + spread + break-on-fire protection");
+section("CHAIN FRAGS: deterministic juice with zero stat reward");
 {
-  const { dungeon, spawns, cover } = buildPvpArena();
+  const w = pvpWorld(65, ["p1", "p2"]);
+  advanceToLive(w);
+  const killer = w.players.get("p1")!;
+  const victim = w.players.get("p2")!;
+  killer.weapon = "railgun";
+  killer.ownedWeapons = ["railgun"];
+  const statsBefore = JSON.stringify({
+    hp: killer.hp,
+    maxHp: killer.maxHp,
+    mods: killer.mods,
+    weapon: killer.weapon,
+    weapons: killer.ownedWeapons,
+    ult: killer.ultCharge,
+    combo: killer.combo,
+  });
+  const fragOnce = (): SimEvent[] => {
+    w.bullets = [];
+    killer.fireCd = 0;
+    victim.hp = 1;
+    victim.respawnT = 0;
+    victim.invuln = 0;
+    const aim = faceOff(killer, victim, 36);
+    const events: SimEvent[] = [];
+    let guard = 0;
+    while (victim.respawnT === 0 && guard++ < 20) {
+      events.push(...stepCollect(w, 1, new Map([["p1", inp({ firing: true, aim })]])));
+    }
+    return events;
+  };
+  const first = fragOnce();
+  const second = fragOnce();
+  check("first frag is not a chain", !first.some((event) => event.t === "pvpChainFrag"));
+  const chain = second.find((event) => event.t === "pvpChainFrag");
+  check("second frag inside 5.0s emits a chain callout event",
+    chain?.t === "pvpChainFrag" && chain.by === "p1" && chain.chain === 2);
+  const statsAfter = JSON.stringify({
+    hp: killer.hp,
+    maxHp: killer.maxHp,
+    mods: killer.mods,
+    weapon: killer.weapon,
+    weapons: killer.ownedWeapons,
+    ult: killer.ultCharge,
+    combo: killer.combo,
+  });
+  check("chain frag grants zero stat or power reward", statsAfter === statsBefore);
+  check("chain timing uses the exact 5.0s tick window", pvpChainWindowTicks() === 100);
+}
+
+// ---------------------------------------------------------------------------------------------
+section("MID-MATCH DRAFT: safe pool, cadence, deterministic offers, comeback bump");
+{
+  check("every named PvP-blacklisted blessing is rejected",
+    pvpBlessingBlacklist.every((id) => !isPvpBlessingId(id)));
+  const rolledIds = new Set<string>();
+  for (let seed = 0; seed < 512; seed++) {
+    const rng = new Rng(seed);
+    for (const item of rollPvpDraftChoicesWith(PVP.draftChoices, () => rng.next())) rolledIds.add(item.id);
+  }
+  check("the deterministic PvP offer pool never rolls a blacklisted id",
+    pvpBlessingBlacklist.every((id) => !rolledIds.has(id)));
+  check("the four shipped cores are legal PvP identity picks",
+    ["core_damage", "core_fire", "core_move", "core_dash"].every((id) => rolledIds.has(id)));
+
+  let isPoolSafe = true;
+  for (const id of PVP.blessingPool) {
+    const mods = createMods();
+    recomputeMods(mods, [id]);
+    if (mods.lifestealChance > 0 || mods.adrenaline > 0 || mods.berserk > 0
+      || mods.maxHpBonus > 0 || mods.coinMult > 1 || mods.coinMagnet > 0) {
+      isPoolSafe = false;
+    }
+  }
+  check("PvP draft pool has no self-heal, low-HP, economy, or flat-EHP gain", isPoolSafe);
+
+  const offerIds = (seed: number, pid: string, tick: number, ordinal: number, tierBump: number): string[] => {
+    const rng = new Rng(pvpDraftSeed(seed, pid, tick, ordinal));
+    return rollPvpDraftChoicesWith(
+      PVP.draftChoices,
+      () => rng.next(),
+      [],
+      { tierBump },
+    ).map((item) => item.id);
+  };
+  const deterministicA = offerIds(12345, "p2", 900, 1, 1);
+  const deterministicB = offerIds(12345, "p2", 900, 1, 1);
+  check("draft offers are deterministic from seed + player + trigger tick + ordinal",
+    deterministicA.join(",") === deterministicB.join(","));
+
+  const scores = new Map([["p1", 6], ["p2", 3], ["p3", 1]]);
+  check("only the bottom third receives the +1 comeback draft tier bump",
+    pvpComebackTierBump(scores, ["p1", "p2", "p3"], "p3") === 1
+    && pvpComebackTierBump(scores, ["p1", "p2", "p3"], "p1") === 0
+    && pvpComebackTierBump(scores, ["p1", "p2", "p3"], "p2") === 0);
+  let normalRare = 0;
+  let comebackRare = 0;
+  for (let seed = 0; seed < 512; seed++) {
+    const normalRng = new Rng(seed);
+    const comebackRng = new Rng(seed);
+    normalRare += rollPvpDraftChoicesWith(3, () => normalRng.next(), [], { tierBump: 0 })
+      .filter((item) => item.rarity === "rare").length;
+    comebackRare += rollPvpDraftChoicesWith(3, () => comebackRng.next(), [], { tierBump: 1 })
+      .filter((item) => item.rarity === "rare").length;
+  }
+  check("the comeback bump makes offers hotter without changing combat stats",
+    comebackRare > normalRare,
+    `rare ${normalRare}->${comebackRare}`);
+
+  const timeWorld = pvpWorld(66, ["p1", "p2"]);
+  advanceToLive(timeWorld);
+  const timedEvents = stepCollect(timeWorld, pvpDraftEveryTicks() + 1, new Map());
+  const timedOffers = timedEvents.filter((event) => event.t === "offerBlessing");
+  check("45 authoritative seconds raises one personal offer per player",
+    timedOffers.length === 2
+    && timedOffers.some((event) => event.t === "offerBlessing" && event.pid === "p1")
+    && timedOffers.some((event) => event.t === "offerBlessing" && event.pid === "p2"));
+
+  const fragWorld = pvpWorld(67, ["p1", "p2"]);
+  advanceToLive(fragWorld);
+  const fragKiller = fragWorld.players.get("p1")!;
+  const fragVictim = fragWorld.players.get("p2")!;
+  fragKiller.weapon = "railgun";
+  fragKiller.ownedWeapons = ["railgun"];
+  fragKiller.pvpDraftFrags = PVP.draftEveryFrags - 1;
+  fragVictim.hp = 1;
+  fragVictim.invuln = 0;
+  const fragAim = faceOff(fragKiller, fragVictim, 36);
+  let fragEvents: SimEvent[] = [];
+  let guard = 0;
+  while (!fragEvents.some((event) => event.t === "offerBlessing") && guard++ < 20) {
+    fragEvents = fragEvents.concat(stepCollect(fragWorld, 1, new Map([["p1", inp({ firing: true, aim: fragAim })]])));
+  }
+  check("third personal frag raises that player's draft before the clock",
+    fragEvents.some((event) => event.t === "offerBlessing" && event.pid === "p1")
+    && !fragEvents.some((event) => event.t === "offerBlessing" && event.pid === "p2"));
+}
+
+// ---------------------------------------------------------------------------------------------
+section("SPAWNS: symmetric 19x19 arena + pits + spread + break-on-fire protection");
+{
+  const { dungeon, spawns, cover, pits } = buildPvpArena();
   check("arena is the authoritative 19x19 square", dungeon.w === 19 && dungeon.h === 19);
   check("arena has 8 spawn candidates (full FFA)", spawns.length === 8, `${spawns.length}`);
-  check("arena has 16 breakable cover pieces", cover.length === 16, `${cover.length}`);
+  check("arena has 12 breakable cover pieces after four inner cells become pits", cover.length === 12, `${cover.length}`);
+  check("arena has four sparse lethal pits", pits.length === 4, `${pits.length}`);
   check("spawns are all distinct (maximally spread)", new Set(spawns.map((s) => `${s.x},${s.y}`)).size === spawns.length);
 
   // 4-fold rotational symmetry (provably fair): the wall grid, the spawn set, and the cover set
@@ -194,10 +346,18 @@ section("SPAWNS: symmetric 19x19 arena + spread + break-on-fire protection");
   const key = (p: Vec2) => `${Math.round(p.x)},${Math.round(p.y)}`;
   const spawnSet = new Set(spawns.map(key));
   const coverSet = new Set(cover.map(key));
+  const pitSet = new Set(pits.map(key));
   const spawnsSymmetric = spawns.every((s) => spawnSet.has(key(pvpArenaRot90(s))));
   const coverSymmetric = cover.every((c) => coverSet.has(key(pvpArenaRot90(c))));
+  const pitsSymmetric = pits.every((pit) => pitSet.has(key(pvpArenaRot90(pit))));
   check("spawns are invariant under 90 rotation", spawnsSymmetric);
   check("cover is invariant under 90 rotation", coverSymmetric);
+  check("pits are invariant under 90 rotation", pitsSymmetric);
+  check("pits are disjoint from every spawn", pits.every((pit) => !spawnSet.has(key(pit))));
+  const minPitSpawnTiles = Math.min(...pits.flatMap((pit) =>
+    spawns.map((spawn) => Math.hypot(pit.x - spawn.x, pit.y - spawn.y) / TILE)
+  ));
+  check("every pit stays at least three tiles from every spawn", minPitSpawnTiles >= 3, `min=${minPitSpawnTiles.toFixed(2)}`);
   let wallsSymmetric = true;
   for (let ty = 0; ty < dungeon.h; ty++) {
     for (let tx = 0; tx < dungeon.w; tx++) {
@@ -285,6 +445,107 @@ section("SPAWNS: symmetric 19x19 arena + spread + break-on-fire protection");
 }
 
 // ---------------------------------------------------------------------------------------------
+section("PLAYER KNOCKBACK: weapon impulse, hard clamp, and iframe immunity");
+{
+  const w = pvpWorld(60, ["p1", "p2"]);
+  advanceToLive(w);
+  const shooter = w.players.get("p1")!;
+  const victim = w.players.get("p2")!;
+  const aim = faceOff(shooter, victim, 60);
+  shooter.weapon = "pistol";
+  shooter.ownedWeapons = ["pistol"];
+  const startX = victim.x;
+  let guard = 0;
+  while (victim.hp === PVP.maxHp && guard++ < 20) {
+    stepN(w, 1, new Map([["p1", inp({ firing: true, aim })]]));
+  }
+  const displacement = Math.hypot(victim.x - startX, victim.y - 216);
+  check("a PvP hit applies the shipped per-weapon player impulse",
+    Math.abs(displacement - WEAPON_KB.pistol * PVP.kbScalar) < 1e-9,
+    `kb=${displacement.toFixed(2)}`);
+  check("no PvP hit displaces a player past the 180px hard clamp",
+    displacement <= PVP.kbMaxPerHit,
+    `kb=${displacement.toFixed(2)}`);
+
+  const protectedWorld = pvpWorld(61, ["p1", "p2"]);
+  advanceToLive(protectedWorld);
+  const protectedShooter = protectedWorld.players.get("p1")!;
+  const protectedVictim = protectedWorld.players.get("p2")!;
+  const protectedAim = faceOff(protectedShooter, protectedVictim, 60);
+  protectedShooter.weapon = "railgun";
+  protectedShooter.ownedWeapons = ["railgun"];
+  protectedVictim.invuln = PVP.spawnIframeSec;
+  const protectedX = protectedVictim.x;
+  const protectedY = protectedVictim.y;
+  stepN(protectedWorld, 12, new Map([["p1", inp({ firing: true, aim: protectedAim })]]));
+  check("spawn-iframe player takes zero knockback",
+    protectedVictim.x === protectedX && protectedVictim.y === protectedY);
+}
+
+// ---------------------------------------------------------------------------------------------
+section("LETHAL PITS: ring-out, bounded credit, and iframe safety");
+{
+  const pit = buildPvpArena().pits[0];
+
+  const credited = pvpWorld(62, ["p1", "p2"]);
+  advanceToLive(credited);
+  const attacker = credited.players.get("p1")!;
+  const victim = credited.players.get("p2")!;
+  const aim = faceOff(attacker, victim, 60);
+  attacker.weapon = "pistol";
+  attacker.ownedWeapons = ["pistol"];
+  let guard = 0;
+  while (victim.lastPvpHitBy === null && guard++ < 20) {
+    stepN(credited, 1, new Map([["p1", inp({ firing: true, aim })]]));
+  }
+  credited.bullets = [];
+  victim.x = pit.x;
+  victim.y = pit.y;
+  const creditedEvents = stepCollect(credited, 1, new Map());
+  const creditedRingOut = creditedEvents.find((event) => event.t === "pvpRingOut");
+  check("pit within the 2.0s damage window credits the last attacker",
+    creditedRingOut?.t === "pvpRingOut"
+    && creditedRingOut.by === "p1"
+    && (credited.match!.scores.get("p1") ?? 0) === 1);
+
+  const expired = pvpWorld(63, ["p1", "p2"]);
+  advanceToLive(expired);
+  const oldAttacker = expired.players.get("p1")!;
+  const oldVictim = expired.players.get("p2")!;
+  const oldAim = faceOff(oldAttacker, oldVictim, 60);
+  oldAttacker.weapon = "pistol";
+  oldAttacker.ownedWeapons = ["pistol"];
+  guard = 0;
+  while (oldVictim.lastPvpHitBy === null && guard++ < 20) {
+    stepN(expired, 1, new Map([["p1", inp({ firing: true, aim: oldAim })]]));
+  }
+  expired.bullets = [];
+  stepN(expired, pvpEnvKillCreditWindowTicks() + 1, new Map());
+  oldVictim.x = pit.x;
+  oldVictim.y = pit.y;
+  const expiredEvents = stepCollect(expired, 1, new Map());
+  const neutralRingOut = expiredEvents.find((event) => event.t === "pvpRingOut");
+  check("no environmental kill is credited outside 2.0s",
+    neutralRingOut?.t === "pvpRingOut"
+    && neutralRingOut.by === ""
+    && (expired.match!.scores.get("p1") ?? 0) === 0);
+
+  const protectedWorld = pvpWorld(64, ["p1", "p2"]);
+  advanceToLive(protectedWorld);
+  const protectedPlayer = protectedWorld.players.get("p2")!;
+  protectedPlayer.x = pit.x;
+  protectedPlayer.y = pit.y;
+  protectedPlayer.invuln = PVP.spawnIframeSec;
+  stepN(protectedWorld, 1, new Map());
+  check("an iframe player standing over a pit is not spawn-locked",
+    protectedPlayer.hp === PVP.maxHp && protectedPlayer.respawnT === 0);
+  protectedPlayer.invuln = 0;
+  const ringEvents = stepCollect(protectedWorld, 1, new Map());
+  check("the same pit kills immediately once protection ends",
+    protectedPlayer.respawnT > 0 && ringEvents.some((event) => event.t === "pvpRingOut"));
+}
+
+// ---------------------------------------------------------------------------------------------
 section("MATCH STATE MACHINE (frag-limit respawn, tick-based)");
 {
   // lobby -> countdown at minPlayers; fun at 2 (never gated to >=3).
@@ -318,6 +579,42 @@ section("MATCH STATE MACHINE (frag-limit respawn, tick-based)");
   stepN(tw, 1, new Map());
   check("time cap ends the match", tw.match!.phase === "over");
   check("time-cap winner is the highest frag count", tw.match!.winner === "p2");
+}
+
+// ---------------------------------------------------------------------------------------------
+section("COMEBACK: leader stats stay flat; sudden death is juice only");
+{
+  const w = pvpWorld(68, ["p1", "p2", "p3"]);
+  advanceToLive(w);
+  w.match!.scores.set("p1", w.match!.fragLimit - PVP.suddenDeathFrags);
+  w.match!.scores.set("p2", 2);
+  w.match!.scores.set("p3", 0);
+  const leader = w.players.get("p1")!;
+  const trailer = w.players.get("p3")!;
+  const before = JSON.stringify({
+    leader: { hp: leader.hp, maxHp: leader.maxHp, mods: leader.mods },
+    trailer: { hp: trailer.hp, maxHp: trailer.maxHp, mods: trailer.mods },
+  });
+  const first = stepCollect(w, 1, new Map());
+  const second = stepCollect(w, 1, new Map());
+  check("match point emits one sudden-death crescendo event",
+    first.filter((event) => event.t === "pvpSuddenDeath").length === 1
+    && !second.some((event) => event.t === "pvpSuddenDeath"));
+  const after = JSON.stringify({
+    leader: { hp: leader.hp, maxHp: leader.maxHp, mods: leader.mods },
+    trailer: { hp: trailer.hp, maxHp: trailer.maxHp, mods: trailer.mods },
+  });
+  check("leader and trailer combat stats remain identical",
+    JSON.stringify(leader.mods) === JSON.stringify(trailer.mods)
+    && leader.maxHp === trailer.maxHp);
+  check("sudden death changes no player stat", before === after);
+
+  const clockWorld = pvpWorld(69, ["p1", "p2"]);
+  advanceToLive(clockWorld);
+  clockWorld.match!.phaseEndTick = clockWorld.tick + Math.round(PVP.suddenDeathFinalSec / DT);
+  const clockEvents = stepCollect(clockWorld, 1, new Map());
+  check("the final 30s also emits the juice-only crescendo",
+    clockEvents.some((event) => event.t === "pvpSuddenDeath"));
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -389,6 +686,61 @@ section("PER-WEAPON TTK band (1v1 median 3-5s across the arsenal)");
 }
 
 // ---------------------------------------------------------------------------------------------
+section("FULL-DRAFT TTK: glass-cannon / deadeye / pierce stack stays in band");
+{
+  const draftedIds = ["glass_cannon", "deadeye", "full_metal", "core_damage"];
+  const draftedTtks: number[] = [];
+  for (let seed = 70; seed < 91; seed++) {
+    const w = pvpWorld(seed, ["p1", "p2"]);
+    advanceToLive(w);
+    const shooter = w.players.get("p1")!;
+    const victim = w.players.get("p2")!;
+    for (const id of draftedIds) {
+      const item = itemById(id);
+      if (item !== undefined) applyItemToWorld(w, shooter.id, item);
+    }
+    shooter.weapon = "pistol";
+    shooter.ownedWeapons = ["pistol"];
+    const aim = faceOff(shooter, victim, 60);
+    let ticks = 0;
+    while (victim.respawnT === 0 && ticks++ < 400) {
+      stepN(w, 1, new Map([["p1", inp({ firing: true, aim })]]));
+    }
+    draftedTtks.push(ticks * DT);
+    check(`drafted build keeps fixed HP in replay seed ${seed}`, shooter.maxHp === PVP.maxHp);
+  }
+  draftedTtks.sort((a, b) => a - b);
+  const median = draftedTtks[(draftedTtks.length - 1) >> 1];
+  check("four-draft median TTK cannot fall below 3.5s",
+    median >= PVP.ttkMinSec,
+    `median=${median.toFixed(2)}s`);
+  check("four-draft median TTK remains inside the 5.5s upper band",
+    median <= PVP.ttkMaxSec,
+    `median=${median.toFixed(2)}s`);
+
+  const capWorld = pvpWorld(92, ["p1", "p2"]);
+  advanceToLive(capWorld);
+  const capShooter = capWorld.players.get("p1")!;
+  const capVictim = capWorld.players.get("p2")!;
+  for (const id of draftedIds) {
+    const item = itemById(id);
+    if (item !== undefined) applyItemToWorld(capWorld, capShooter.id, item);
+  }
+  const capAim = faceOff(capShooter, capVictim, 24);
+  capShooter.weapon = "sawnoff";
+  capShooter.ownedWeapons = ["sawnoff"];
+  let worstDrop = 0;
+  for (let tick = 0; tick < 60; tick++) {
+    const before = capVictim.hp;
+    stepN(capWorld, 1, new Map([["p1", inp({ firing: true, aim: capAim })]]));
+    if (capVictim.hp > 0) worstDrop = Math.max(worstDrop, before - capVictim.hp);
+  }
+  check("35% non-environment damage cap still holds under a full draft",
+    worstDrop <= pvpPerHitCap() + 1e-9,
+    `worst=${worstDrop.toFixed(2)}`);
+}
+
+// ---------------------------------------------------------------------------------------------
 section("DETERMINISM: identical inputs -> byte-identical, and reconnect-stable scoreboard");
 {
   // A scripted 3p match: each player fires at a fixed aim; positions overridden identically.
@@ -418,6 +770,47 @@ section("DETERMINISM: identical inputs -> byte-identical, and reconnect-stable s
   const a = runScripted(20);
   const b = runScripted(20);
   check("a scripted match replayed twice is byte-identical", a === b);
+
+  const runWaveOneReplay = (addOrder: string[]): string => {
+    const w = pvpWorld(93, addOrder);
+    advanceToLive(w);
+    const attacker = w.players.get("p1")!;
+    const victim = w.players.get("p2")!;
+    attacker.weapon = "pistol";
+    attacker.ownedWeapons = ["pistol"];
+    attacker.pvpDraftFrags = PVP.draftEveryFrags - 1;
+    const aim = faceOff(attacker, victim, 60);
+    const replayEvents: SimEvent[] = [];
+    let guard = 0;
+    while (victim.lastPvpHitBy === null && guard++ < 20) {
+      replayEvents.push(...stepCollect(w, 1, new Map([["p1", inp({ firing: true, aim })]])));
+    }
+    const knockbackX = victim.x;
+    w.bullets = [];
+    const pit = buildPvpArena().pits[0];
+    victim.x = pit.x;
+    victim.y = pit.y;
+    replayEvents.push(...stepCollect(w, 1, new Map()));
+    const draftRng = new Rng(pvpDraftSeed(w.seed, attacker.id, attacker.pvpDraftTick, attacker.pvpDraftOrdinal));
+    const choices = rollPvpDraftChoicesWith(
+      PVP.draftChoices,
+      () => draftRng.next(),
+      attacker.ownedItemIds,
+      { tierBump: attacker.pvpDraftTierBump },
+    ).map((item) => item.id);
+    return JSON.stringify({
+      tick: w.tick,
+      knockbackX,
+      victimRespawn: victim.respawnT,
+      score: w.match!.scores.get("p1") ?? 0,
+      events: replayEvents.map((event) => event.t),
+      choices,
+    });
+  };
+  const waveForward = runWaveOneReplay(["p1", "p2"]);
+  const waveReversed = runWaveOneReplay(["p2", "p1"]);
+  check("draft offers, environmental attribution, and knockback replay identically",
+    waveForward === waveReversed);
 
   // Reconnect-stable: a player going absent and returning keeps their PlayerId-keyed frags, and
   // the deathmatch never wipes the run (no all-down cut) while they are gone.
@@ -554,9 +947,9 @@ section("DETERMINISM EDGE-CASES: self-immune, same-tick order-stable, no shoot-f
 }
 
 // ---------------------------------------------------------------------------------------------
-section("P2 WIRE: protocol v28, match block + team + respawn round-trip, reliable events");
+section("P2 WIRE: protocol v29, match block + team + respawn round-trip, reliable events");
 {
-  check("PROTOCOL_VERSION bumped to 28", PROTOCOL_VERSION === 28);
+  check("PROTOCOL_VERSION bumped to 29", PROTOCOL_VERSION === 29);
 
   // A pvp snapshot round-trips the match block, per-player team, and the local respawn field.
   const w = pvpWorld(30, ["p1", "p2"]);
@@ -611,6 +1004,20 @@ section("P2 WIRE: protocol v28, match block + team + respawn round-trip, reliabl
   mw.match!.scores.set("p1", mw.match!.fragLimit);
   const over = stepCollect(mw, 1, new Map()).filter((e) => e.t === "pvpMatchOver");
   check("pvpMatchOver event fires with the winner", over.length === 1 && over[0].t === "pvpMatchOver" && over[0].winner === "p1");
+
+  const eventSnap = {
+    ...snapOf(w, "p1"),
+    events: [
+      { id: 1, e: { t: "pvpRingOut", by: "", victim: "p2", x: 456, y: 360 } as const },
+      { id: 2, e: { t: "pvpChainFrag", by: "p1", chain: 2, x: 456, y: 360 } as const },
+      { id: 3, e: { t: "pvpSuddenDeath", leader: "p1" } as const },
+    ],
+  };
+  const eventRoundTrip = jsonCodec.decodeServer(jsonCodec.encodeServer(eventSnap));
+  check("Wave 1 ring-out, chain, and crescendo events round-trip reliably",
+    eventRoundTrip.t === "snap"
+    && eventRoundTrip.events.map((entry) => entry.e.t).join(",")
+      === "pvpRingOut,pvpChainFrag,pvpSuddenDeath");
 }
 
 // ---------------------------------------------------------------------------------------------

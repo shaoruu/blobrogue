@@ -8,6 +8,7 @@ export interface ArenaScoreRow {
   frags: number;
   isAlive: boolean;
   isSelf: boolean;
+  isLeader: boolean;
 }
 
 export interface ArenaMatchHudState {
@@ -43,6 +44,9 @@ export function ticksLeftSeconds(args: { endTick: number; tick: number }): numbe
 }
 
 export function buildArenaMatchHud(source: ArenaMatchHudSource): ArenaMatchHudState {
+  const leaderId = source.match.sc
+    .slice()
+    .sort((a, b) => b.f - a.f || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))[0]?.id ?? null;
   const scores = source.match.sc
     .map((score): ArenaScoreRow => {
       const isSelf = source.selfId !== null && score.id === source.selfId;
@@ -52,6 +56,7 @@ export function buildArenaMatchHud(source: ArenaMatchHudSource): ArenaMatchHudSt
         frags: score.f,
         isAlive: score.a,
         isSelf,
+        isLeader: score.id === leaderId,
       };
     })
     .sort((a, b) => a.id < b.id ? -1 : a.id > b.id ? 1 : 0);

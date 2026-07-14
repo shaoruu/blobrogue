@@ -7,6 +7,7 @@
 import { CAPS } from "./balance.js";
 import { applyKitStatLean } from "./kits.js";
 import type { KitId } from "./kits.js";
+import { PVP } from "./pvp.js";
 
 // The neutral run-stat modifiers. Every field starts at its identity value (1 for a
 // multiplier, 0 for an additive) so an un-blessed run behaves exactly as before.
@@ -440,6 +441,56 @@ export function rollItemChoicesWith(
     if (idx >= remaining.length) idx = remaining.length - 1;
     chosen.push(remaining[idx]);
     remaining.splice(idx, 1);
+  }
+  return chosen;
+}
+
+export interface PvpDraftRollOpts {
+  tierBump?: number;
+}
+
+const PVP_BLESSING_IDS = new Set(PVP.blessingPool);
+const PVP_BLACKLIST_IDS = new Set<string>(PVP.blessingBlacklist);
+
+export function isPvpBlessingId(id: string): boolean {
+  return PVP_BLESSING_IDS.has(id) && !PVP_BLACKLIST_IDS.has(id);
+}
+
+export function rollPvpDraftChoicesWith(
+  count: number,
+  rand: () => number,
+  ownedItemIds: readonly string[] = [],
+  opts: PvpDraftRollOpts = {},
+): ItemDef[] {
+  const levels = itemLevelsOf(ownedItemIds);
+  const eligible = ITEMS.filter((item) =>
+    isPvpBlessingId(item.id)
+    && (levels.get(item.id) ?? 0) < itemMaxLevel(item)
+  );
+  const tierBump = Math.max(0, Math.floor(opts.tierBump ?? 0));
+  const tierOf = (rarity: ItemRarity): number =>
+    rarity === "rare" ? 2 : rarity === "uncommon" ? 1 : 0;
+  const weightOf = (item: ItemDef): number => {
+    const base = PVP.draftRarityWeight[item.rarity];
+    const rarityBoost = 1 + tierBump * tierOf(item.rarity);
+    return base * rarityBoost * (levels.has(item.id) ? 1 : NEW_ITEM_WEIGHT);
+  };
+
+  const remaining = eligible.slice();
+  const chosen: ItemDef[] = [];
+  for (let draw = 0; draw < count && remaining.length > 0; draw++) {
+    let total = 0;
+    for (const item of remaining) total += weightOf(item);
+    if (total <= 0) break;
+    let roll = rand() * total;
+    let index = 0;
+    for (; index < remaining.length; index++) {
+      roll -= weightOf(remaining[index]);
+      if (roll <= 0) break;
+    }
+    if (index >= remaining.length) index = remaining.length - 1;
+    chosen.push(remaining[index]);
+    remaining.splice(index, 1);
   }
   return chosen;
 }
