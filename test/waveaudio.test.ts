@@ -161,7 +161,8 @@ section("registry contract");
   check("legacy cue names never collide with wave ids", !isWaveEventId("dash") && !isWaveEventId("enemyHit") && !isWaveEventId("bossSpawn"));
   check("the expedition entry sting is a named manifest hook",
     EXPEDITION_BAND_ENTRY_EVENT === "expedition.bandEntry" &&
-    WAVE_SOUNDS[EXPEDITION_BAND_ENTRY_EVENT].stem === "ui/expedition_band_entry");
+    WAVE_SOUNDS[EXPEDITION_BAND_ENTRY_EVENT].stem === "ui/expedition_band_entry" &&
+    WAVE_SOUNDS[EXPEDITION_BAND_ENTRY_EVENT].fallback?.sample === "floorClear");
   check("every boss kind maps phase + death", ["marrow", "choir", "weaver", "gilded"].every(
     (k) => WAVE_BOSS_PHASE[k] !== undefined && WAVE_BOSS_DEATH[k] !== undefined));
 }
@@ -889,6 +890,20 @@ section("buses and boss-lock ducking");
   const voiceTellBus = asFakeGain(engine.busNode("voiceTell"));
   const voiceGain = ctx.nodesOf<FakeGainNode>("gain").find((g) => g.targets.includes(voiceTellBus));
   check("lock voice routed through the voiceTell bus", voiceGain !== undefined);
+}
+
+section("expedition entry first-trigger fallback");
+{
+  resetFetchPlan();
+  allowFetch(/audio\/sfx\/floorClear/);
+  const { engine, ctx } = await makeEngine();
+  const dir = new WaveAudioDirector(engine);
+  ctx.advance(1);
+  engine.preloadSamples(["floorClear"]);
+  await flushLoads();
+  dir.frame(frameInput([]));
+  check("the entry sting plays its decoded authored fallback while its dedicated stem is pending",
+    dir.play(EXPEDITION_BAND_ENTRY_EVENT) && engine.isWavePlaying(EXPEDITION_BAND_ENTRY_EVENT));
 }
 
 // ---- 9. priority / voice stealing / budget ----

@@ -1122,6 +1122,7 @@ export const WAVE_SOUNDS = {
     stem: "ui/expedition_band_entry", variants: 1, gain: 0.72, bus: "ui", priority: WAVE_PRIORITY.ui,
     jitter: 0,
     duck: [dM(0.65, 0.25, 0.7), dA(0.55, 0.4, 0.5)],
+    fallback: { sample: "floorClear", rate: 0.9 },
   },
   "difficulty.change": {
     stem: null, variants: 1, gain: 0.32, bus: "ui", priority: WAVE_PRIORITY.ui,

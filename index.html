@@ -457,7 +457,6 @@
       @media (max-width:700px){
         .objlane{ width:min(420px,58vw); gap:4px; }
         .objective{ font-size:var(--fs-xs); letter-spacing:2px; }
-        .expedition-objective{ font-size:var(--fs-2xs); letter-spacing:1px; }
         .waitline{ font-size:var(--fs-2xs); letter-spacing:1px; max-width:92vw; }
         .bossbar-track{ height:12px; }
         .combo.show{ transform:translateY(0) scale(.85); }
@@ -488,6 +487,9 @@
         color:var(--amber); text-shadow:0 2px 0 var(--dun-0),0 0 10px rgba(255,180,59,.25);
         opacity:0; transition:opacity .3s ease; }
       .expedition-objective.show{ opacity:1; }
+      @media (max-width:700px){
+        .expedition-objective{ font-size:var(--fs-2xs); letter-spacing:1px; }
+      }
       .waitline{ min-height:12px; font-family:var(--f-ui); font-size:var(--fs-xs); letter-spacing:2px; text-transform:uppercase;
         color:var(--cream); text-shadow:0 2px 0 var(--dun-0),0 0 10px rgba(0,0,0,.6); text-align:center;
         opacity:0; transition:opacity .3s ease; }
