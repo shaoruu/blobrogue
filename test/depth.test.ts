@@ -17,7 +17,11 @@ import { HAZARD_DIFFICULTY } from "../src/sim/balance.js";
 import type { Difficulty } from "../src/sim/balance.js";
 import type { FloorHazard, FloorHazardKind } from "../src/sim/types.js";
 import { TILE } from "../src/sim/types.js";
-import { BIOMES, biomeIndexForFloor, biomeDepthForFloor, biomeForFloor, floorBannerText, REGIONS, regionForFloor, regionIndexForFloor } from "../src/sim/biomes.js";
+import {
+  BIOMES, EXPEDITION_BANDS, biomeIndexForFloor, biomeDepthForFloor, biomeForFloor,
+  expeditionBandEntryForFloor, expeditionBandForFloor, expeditionObjectiveForFloor,
+  floorBannerText, REGIONS, regionForFloor, regionIndexForFloor,
+} from "../src/sim/biomes.js";
 import { BIOME_PRESSURE, PLAYER } from "../src/sim/balance.js";
 import { spawnFloorEnemies, isBossFloor, isGauntletFloor, isBossKind, createEnemy, SWARM_ROOM_MIN_AREA } from "../src/sim/enemies.js";
 import { createWorld, stepWorld, isFloorCleared, devSpawnEnemy, devSpawnProp } from "../src/sim/world.js";
@@ -290,6 +294,47 @@ function biomeLadderTests(): void {
   check("canonical AD palettes are wired into the post-F30 bands",
     BIOMES[6].floorA === "#16131a" && BIOMES[6].wallCap === "#3a2f2a" &&
     BIOMES[7].accent === "#ffb43b" && BIOMES[8].floorA === "#1c1e26" && BIOMES[9].wallCap === "#241a40");
+
+  section("F45+ expedition framing: deterministic objectives and entry beats");
+  check("the Unmaking proper starts after F45 and uses three presentation bands",
+    expeditionBandForFloor(45) === null && EXPEDITION_BANDS.length === 3 &&
+    expeditionBandForFloor(46)?.id === "sump-proper" &&
+    expeditionBandForFloor(60)?.id === "sump-proper" &&
+    expeditionBandForFloor(61)?.id === "veinworks-expedition" &&
+    expeditionBandForFloor(80)?.id === "veinworks-expedition" &&
+    expeditionBandForFloor(81)?.id === "pale-null-expedition" &&
+    expeditionBandForFloor(100)?.id === "pale-null-expedition");
+  check("the expedition objective is absent through F45",
+    expeditionObjectiveForFloor(1) === null && expeditionObjectiveForFloor(45) === null);
+  check("the Sump objective points at F50, then advances to the next named capstone",
+    expeditionObjectiveForFloor(46) === "THE SUMP \u2014 toward the Sump-Mother (F50)" &&
+    expeditionObjectiveForFloor(50) === "THE SUMP \u2014 toward the Sump-Mother (F50)" &&
+    expeditionObjectiveForFloor(51) === "THE SUMP \u2014 toward the Pale Throne (F75)" &&
+    expeditionObjectiveForFloor(60) === "THE SUMP \u2014 toward the Pale Throne (F75)");
+  check("the Veinworks objective advances from its F75 capstone to the finale",
+    expeditionObjectiveForFloor(61) === "THE VEINWORKS \u2014 toward the Pale Throne (F75)" &&
+    expeditionObjectiveForFloor(75) === "THE VEINWORKS \u2014 toward the Pale Throne (F75)" &&
+    expeditionObjectiveForFloor(76) === "THE VEINWORKS \u2014 toward the Unmaker (F100)" &&
+    expeditionObjectiveForFloor(80) === "THE VEINWORKS \u2014 toward the Unmaker (F100)");
+  check("the Pale-to-Null objective points at F100 and degrades gracefully beyond it",
+    expeditionObjectiveForFloor(81) === "THE PALE \u2192 NULL CORE \u2014 toward the Unmaker (F100)" &&
+    expeditionObjectiveForFloor(100) === "THE PALE \u2192 NULL CORE \u2014 toward the Unmaker (F100)" &&
+    expeditionObjectiveForFloor(101) === "NULL CORE \u2014 descend toward the core");
+  const entryFloors = Array.from({ length: 120 }, (_, i) => i + 1)
+    .filter((floor) => expeditionBandEntryForFloor(floor) !== null);
+  check("authored band-entry beats fire exactly at F46, F61, and F81",
+    entryFloors.join(",") === "46,61,81", entryFloors.join(","));
+  check("entry beats carry a title and one-line creative placeholder",
+    EXPEDITION_BANDS.every((band) =>
+      expeditionBandEntryForFloor(band.fromFloor)?.entryTitle === band.entryTitle &&
+      band.entryFlavor.length > 0));
+  check("expedition framing leaves canonical region and biome boundaries unchanged",
+    regionForFloor(46).id === "sump" && regionForFloor(51).id === "veinworks" &&
+    regionForFloor(61).id === "veinworks" && regionForFloor(71).id === "pale" &&
+    regionForFloor(81).id === "pale" && regionForFloor(91).id === "nullcore" &&
+    biomeIndexForFloor(45) === biomeIndexForFloor(46) &&
+    biomeIndexForFloor(60) === biomeIndexForFloor(61) &&
+    biomeIndexForFloor(80) === biomeIndexForFloor(81));
 }
 
 function hazardPlacementTests(): void {

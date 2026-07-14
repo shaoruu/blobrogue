@@ -457,6 +457,7 @@
       @media (max-width:700px){
         .objlane{ width:min(420px,58vw); gap:4px; }
         .objective{ font-size:var(--fs-xs); letter-spacing:2px; }
+        .expedition-objective{ font-size:var(--fs-2xs); letter-spacing:1px; }
         .waitline{ font-size:var(--fs-2xs); letter-spacing:1px; max-width:92vw; }
         .bossbar-track{ height:12px; }
         .combo.show{ transform:translateY(0) scale(.85); }
@@ -482,6 +483,11 @@
       .objective .obj-sep{ color:var(--ink-faint); }
       .objective .obj-what{ color:var(--ink-mute); }
       .objective.clear .obj-floor, .objective.clear .obj-what{ color:var(--grn); }
+      .expedition-objective{ min-height:12px; max-width:100%; overflow:hidden; white-space:nowrap; text-overflow:ellipsis;
+        font-family:var(--f-ui); font-size:var(--fs-xs); letter-spacing:2px; text-transform:uppercase;
+        color:var(--amber); text-shadow:0 2px 0 var(--dun-0),0 0 10px rgba(255,180,59,.25);
+        opacity:0; transition:opacity .3s ease; }
+      .expedition-objective.show{ opacity:1; }
       .waitline{ min-height:12px; font-family:var(--f-ui); font-size:var(--fs-xs); letter-spacing:2px; text-transform:uppercase;
         color:var(--cream); text-shadow:0 2px 0 var(--dun-0),0 0 10px rgba(0,0,0,.6); text-align:center;
         opacity:0; transition:opacity .3s ease; }
@@ -522,6 +528,9 @@
       .combo-burst{ position:absolute; left:50%; top:50%; width:128px; height:128px; transform:translate(-50%,-50%) scale(.5); opacity:0;
         -webkit-mask:url("/sprites/hud/combo_burst.png") center/contain no-repeat; mask:url("/sprites/hud/combo_burst.png") center/contain no-repeat;
         background:var(--combo-c,var(--amber)); pointer-events:none; }
+      .floor-banner-title{ line-height:1.2; }
+      .floor-banner-flavor{ margin-top:9px; color:var(--cream); font:var(--fs-sm) var(--f-ui),monospace;
+        letter-spacing:3px; text-shadow:0 3px 0 var(--dun-0),0 0 14px rgba(255,255,255,.2); }
       .combo-burst.fire{ animation:comboBurst .32s ease-out 1; }
       @keyframes comboBurst{ 0%{opacity:.9; transform:translate(-50%,-50%) scale(.5);} 100%{opacity:0; transform:translate(-50%,-50%) scale(1.4);} }
       .combo-row{ display:flex; align-items:baseline; gap:5px; }

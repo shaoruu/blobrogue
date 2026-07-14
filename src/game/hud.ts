@@ -10,6 +10,7 @@ import { arenaCenterCopy, arenaHpView, arenaLaneCopy } from "./arenaHud.js";
 import type { ArenaMatchHudState } from "./arenaHud.js";
 import { MAX_ITEM_LEVEL } from "../sim/items.js";
 import { ULT, ticksToSec } from "../sim/kits.js";
+import { expeditionObjectiveForFloor } from "../sim/biomes.js";
 import { settings } from "./settings.js";
 
 // The ult cast lockout in whole seconds (read from the sim so the countdown never drifts from
@@ -463,6 +464,7 @@ const HUD_MARKUP = `
       <div class="bossbar-track"><i data-bossfill></i></div>
     </div>
     <div class="objective" data-objective></div>
+    <div class="expedition-objective" data-expedition-objective></div>
     <div class="waitline" data-waitline></div>
     <div class="combo" data-combo>
       <div class="combo-badge">
@@ -635,8 +637,10 @@ export class Hud {
   private banner: HTMLElement;
   private objLaneEl!: HTMLElement;
   private objectiveEl!: HTMLElement;
+  private expeditionObjectiveEl!: HTMLElement;
   private waitLine!: HTMLElement;
   private prevObjective = "";
+  private prevExpeditionObjective: string | null = null;
   private prevWaitLabel: string | null = null;
   private bannerTimer = 0;
   private controlsHint: HTMLElement;
@@ -731,6 +735,7 @@ export class Hud {
     this.bossNameEl = hud.querySelector("[data-bossname]")!;
     this.objLaneEl = hud.querySelector("[data-objlane]")!;
     this.objectiveEl = hud.querySelector("[data-objective]")!;
+    this.expeditionObjectiveEl = hud.querySelector("[data-expedition-objective]")!;
     this.waitLine = hud.querySelector("[data-waitline]")!;
 
     // Reconcile the standalone minimap canvas into the .tr frame (see index.html note).
@@ -1627,6 +1632,15 @@ export class Hud {
       }
     }
 
+    const expeditionObjective = s.isArena || s.isObjectiveHidden
+      ? null
+      : expeditionObjectiveForFloor(s.floor);
+    if (expeditionObjective !== this.prevExpeditionObjective) {
+      this.prevExpeditionObjective = expeditionObjective;
+      this.expeditionObjectiveEl.textContent = expeditionObjective ?? "";
+      this.expeditionObjectiveEl.classList.toggle("show", expeditionObjective !== null);
+    }
+
     this.coopEl.textContent = s.coopLabel ?? "";
     this.coopEl.style.display = s.coopLabel ? "block" : "none";
 
@@ -1886,8 +1900,15 @@ export class Hud {
     this.statsPanel.style.display = "none";
   }
 
-  showBanner(text: string) {
-    this.banner.textContent = text;
+  showBanner(text: string, detail?: string) {
+    const title = el("div", "", text);
+    title.className = "floor-banner-title";
+    this.banner.replaceChildren(title);
+    if (detail !== undefined) {
+      const flavor = el("div", "", detail);
+      flavor.className = "floor-banner-flavor";
+      this.banner.appendChild(flavor);
+    }
     this.banner.style.opacity = "1";
     this.bannerTimer = 1.4;
   }
@@ -1921,6 +1942,9 @@ export class Hud {
     this.prevWaitLabel = null;
     this.objectiveEl.classList.remove("show", "clear");
     this.prevObjective = "";
+    this.expeditionObjectiveEl.textContent = "";
+    this.expeditionObjectiveEl.classList.remove("show");
+    this.prevExpeditionObjective = null;
     this.arenaHpEl.classList.add("hidden");
     this.arenaBoardEl.classList.add("hidden");
     this.arenaBoardEl.replaceChildren();

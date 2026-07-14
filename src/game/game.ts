@@ -67,8 +67,8 @@ import { audio, sfx } from "./audio.js";
 import type { SfxName, SfxOptions } from "./audio.js";
 import { waveAudio } from "./waveAudio.js";
 import type { WaveFramePlayer } from "./waveAudio.js";
-import { WAVE_HAZARDS, WEAPON_AUDIO, STATUS_AUDIO } from "./waveSpec.js";
-import { pvpKillCue, pvpMatchOverCue, pvpFragStreakRate, pvpCountTickRate } from "./waveSpec.js";
+import { EXPEDITION_BAND_ENTRY_EVENT, WAVE_HAZARDS, WEAPON_AUDIO, STATUS_AUDIO } from "./waveSpec.js";
+import { pvpKillCue, pvpMatchOverCue, pvpFragStreakStep, pvpFragStreakRate, pvpCountTickRate } from "./waveSpec.js";
 import type { WaveEventId } from "./waveSpec.js";
 import { PVP, pvpDraftSeed } from "../sim/pvp.js";
 import type { MatchPhase } from "../sim/pvp.js";
@@ -80,7 +80,9 @@ import { InputController } from "./input.js";
 import type { GameAction, InputContext } from "./input.js";
 import { PauseOverlay } from "../ui/pause.js";
 import { BlessingOverlay } from "../ui/blessing.js";
-import { BIOMES, biomeForFloor, biomeIndexForFloor, floorBannerText } from "../sim/biomes.js";
+import {
+  BIOMES, biomeForFloor, biomeIndexForFloor, expeditionBandEntryForFloor, floorBannerText,
+} from "../sim/biomes.js";
 import type { Biome } from "../sim/biomes.js";
 import { mutatorLabels, floorVisionMult } from "../sim/floorRolls.js";
 import type { MutatorId, RollAffixId, BossAffixId } from "../sim/floorRolls.js";
@@ -956,6 +958,7 @@ export class Game {
   private wallSideGrads: [TileRenderGradient, TileRenderGradient][] = [];
   private currentBiome: Biome = biomeForFloor(1);
   private biomeIdx = 0;
+  private presentedFloor: number | null = null;
   // Cached screen-space vignette (rebuilt on resize / biome change): the depth mood that
   // closes in band over band. One cached gradient fill per frame — flat cost.
   private vignetteCache: { canvas: HTMLCanvasElement; w: number; h: number } | null = null;
@@ -1244,6 +1247,7 @@ export class Game {
     this.connectDeadline = performance.now() + CONNECT_HANDSHAKE_TIMEOUT_MS;
     this.isOutageSeen = false;
     this.pendingDescend = 0;
+    this.presentedFloor = null;
     this.pause.hide();
     this.blessing.hide();
     this.shopPanel.close();
@@ -1263,7 +1267,7 @@ export class Game {
     } else {
       this.loadFloorClient();
       this.snapCameraTo(this.px - this.canvas.width / 2, this.py - this.canvas.height / 2);
-      this.hud.showBanner(floorBannerText(this.floor, { isBoss: isBossFloor(this.floor), isGauntlet: isGauntletFloor(this.floor) }));
+      this.showFloorEntryBanner(this.floor, { isBoss: isBossFloor(this.floor), isGauntlet: isGauntletFloor(this.floor) });
     }
     if (this.isArena) this.updateHud();
     this.hud.setVisible(true);
@@ -1298,14 +1302,13 @@ export class Game {
   // presentation side.
   private loadFloorClient() {
     const prevBiomeIdx = this.biomeIdx;
+    const isNewFloor = this.presentedFloor !== this.floor;
+    this.presentedFloor = this.floor;
     this.biomeIdx = biomeIndexForFloor(this.floor);
     this.currentBiome = biomeForFloor(this.floor);
-    // Crossing into a NEW band is a reveal beat: a soft wash in the biome's light color
-    // sells "you are somewhere else now" the moment the floor fades in.
-    if (this.biomeIdx !== prevBiomeIdx && this.floor > 1) {
-      const glow = hexToRgb(this.currentBiome.glow);
-      this.screenFlash.flash(glow[0], glow[1], glow[2], 0.16, 1.6);
-    }
+    const expeditionEntry = isNewFloor ? expeditionBandEntryForFloor(this.floor) : null;
+    const isBandReveal = isNewFloor && this.floor > 1
+      && (this.biomeIdx !== prevBiomeIdx || expeditionEntry !== null);
     this.vignetteCache = null;
     this.hazardPhases.clear();
     this.hazardVisClock = this.world.floorHazardClock;
@@ -1340,6 +1343,10 @@ export class Game {
     this.sentryFx.clear();
     this.shockwaves.clear();
     this.screenFlash.clear();
+    if (isBandReveal) {
+      const glow = hexToRgb(this.currentBiome.glow);
+      this.screenFlash.flash(glow[0], glow[1], glow[2], 0.16, 1.6);
+    }
     this.motes.reseed(this.biomeIdx, this.px - this.canvas.width / 2, this.py - this.canvas.height / 2, this.canvas.width, this.canvas.height);
     this.hurtDir = null;
     this.footstepCd = 0;
@@ -1369,7 +1376,25 @@ export class Game {
     const floorKinds = new Set<string>();
     for (const e of this.world.enemies) floorKinds.add(e.kind);
     for (const e of this.world.pendingSpawns) floorKinds.add(e.kind);
-    waveAudio.preloadForFloor(this.biomeIdx, bossUnit ? bossUnit.kind : null, floorKinds);
+    waveAudio.preloadForFloor(
+      this.biomeIdx,
+      bossUnit ? bossUnit.kind : null,
+      floorKinds,
+      expeditionEntry ? [EXPEDITION_BAND_ENTRY_EVENT] : undefined,
+    );
+    if (expeditionEntry) waveAudio.play(EXPEDITION_BAND_ENTRY_EVENT);
+  }
+
+  private showFloorEntryBanner(
+    floor: number,
+    opts?: { isBoss?: boolean; isGauntlet?: boolean; isDescend?: boolean },
+  ): void {
+    const expeditionEntry = expeditionBandEntryForFloor(floor);
+    if (expeditionEntry) {
+      this.hud.showBanner(expeditionEntry.entryTitle, expeditionEntry.entryFlavor);
+      return;
+    }
+    this.hud.showBanner(floorBannerText(floor, opts));
   }
 
   // Bake this floor's static light set: torches (emitting from the wall FACE into their
@@ -1646,7 +1671,7 @@ export class Game {
     if (world) this.seed = world.seed;
     this.loadFloorClient();
     this.snapCameraTo(this.px - this.canvas.width / 2, this.py - this.canvas.height / 2);
-    if (!this.isArena) this.hud.showBanner(floorBannerText(this.floor, { isBoss: isBossFloor(this.floor) }));
+    if (!this.isArena) this.showFloorEntryBanner(this.floor, { isBoss: isBossFloor(this.floor) });
     this.runStart = performance.now();
   }
 
@@ -1712,7 +1737,7 @@ export class Game {
         this.seed = rebuilt.seed;
         this.loadFloorClient();
         if (!this.isArena) {
-          this.hud.showBanner(floorBannerText(rebuilt.floor, { isBoss: isBossFloor(rebuilt.floor), isGauntlet: isGauntletFloor(rebuilt.floor) }));
+          this.showFloorEntryBanner(rebuilt.floor, { isBoss: isBossFloor(rebuilt.floor), isGauntlet: isGauntletFloor(rebuilt.floor) });
         }
         // The run properly begins at the first reveal (the connect veil isn't run time).
         if (isFirstReveal) this.runStart = performance.now();
@@ -2904,7 +2929,11 @@ export class Game {
         // (consumeWorldRebuilt in tick) — the event only carries the juice. Solo/co-op load here.
         if (this.mode !== "online") {
           this.loadFloorClient();
-          this.hud.showBanner(floorBannerText(this.floor, { isBoss: isBossFloor(this.floor), isGauntlet: isGauntletFloor(this.floor), isDescend: true }));
+          this.showFloorEntryBanner(this.floor, {
+            isBoss: isBossFloor(this.floor),
+            isGauntlet: isGauntletFloor(this.floor),
+            isDescend: true,
+          });
         }
         break;
       case "reachExit":

@@ -37,6 +37,7 @@ const {
   BURROW_EMITTER, BURROW_THUD_EVENT, DEEP_EMITTER,
   SELECTED_BURROW_TAKES, SELECTED_DEEP_TAKES, takeStemsOf,
   tellCuesFor, isBurrowUnderground, spatialGainFor, isWaveEventId,
+  EXPEDITION_BAND_ENTRY_EVENT,
   PVP_WAVE_EVENTS, pvpKillRole, pvpKillCue, pvpMatchOverCue,
   pvpFragStreakStep, pvpFragStreakRate, pvpCountTickRate,
   PVP_FRAG_STREAK_MAX_STEPS, PVP_FRAG_STREAK_WINDOW_MS,
@@ -158,6 +159,9 @@ section("registry contract");
   check("shielder.block derives parry with 120ms limit", block.cooldownMs === 120
     && block.fallback?.sample === "parry" && block.fallback.lowpassHz === 5000);
   check("legacy cue names never collide with wave ids", !isWaveEventId("dash") && !isWaveEventId("enemyHit") && !isWaveEventId("bossSpawn"));
+  check("the expedition entry sting is a named manifest hook",
+    EXPEDITION_BAND_ENTRY_EVENT === "expedition.bandEntry" &&
+    WAVE_SOUNDS[EXPEDITION_BAND_ENTRY_EVENT].stem === "ui/expedition_band_entry");
   check("every boss kind maps phase + death", ["marrow", "choir", "weaver", "gilded"].every(
     (k) => WAVE_BOSS_PHASE[k] !== undefined && WAVE_BOSS_DEATH[k] !== undefined));
 }
@@ -1101,6 +1105,14 @@ section("preload plan");
   check("authored fallback samples decoded ahead of the first trigger", samples.has("meleeHit")
     && samples.has("cannon") && samples.has("ricochet"));
   check("UI/pets stay lazy", ![...stems].some((s) => s.startsWith("ui/") || s.startsWith("pet/")));
+
+  const entryEng = new ScriptEngine();
+  const entryDir = new WaveAudioDirector(entryEng);
+  entryDir.preloadForFloor(4, null, undefined, [EXPEDITION_BAND_ENTRY_EVENT]);
+  check("a boundary floor preloads and emits its expedition sting through the manifest",
+    entryEng.preloaded.includes("ui/expedition_band_entry") &&
+    entryDir.play(EXPEDITION_BAND_ENTRY_EVENT) &&
+    entryEng.playsFor(EXPEDITION_BAND_ENTRY_EVENT).length === 1);
 
   const deepEng = new ScriptEngine();
   const deepDir = new WaveAudioDirector(deepEng);

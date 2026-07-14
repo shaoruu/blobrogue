@@ -1118,6 +1118,11 @@ export const WAVE_SOUNDS = {
     jitter: 0,
     fallback: { sample: "uiClick", rate: 0.85 },
   },
+  "expedition.bandEntry": {
+    stem: "ui/expedition_band_entry", variants: 1, gain: 0.72, bus: "ui", priority: WAVE_PRIORITY.ui,
+    jitter: 0,
+    duck: [dM(0.65, 0.25, 0.7), dA(0.55, 0.4, 0.5)],
+  },
   "difficulty.change": {
     stem: null, variants: 1, gain: 0.32, bus: "ui", priority: WAVE_PRIORITY.ui,
     jitter: 0, cooldownMs: 90,
@@ -1553,6 +1558,7 @@ export const WAVE_SOUNDS = {
 } as const satisfies Record<string, WaveSoundSpec>;
 
 export type WaveEventId = keyof typeof WAVE_SOUNDS;
+export const EXPEDITION_BAND_ENTRY_EVENT: WaveEventId = "expedition.bandEntry";
 
 export function isWaveEventId(name: string): name is WaveEventId {
   return Object.prototype.hasOwnProperty.call(WAVE_SOUNDS, name);
