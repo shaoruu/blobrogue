@@ -137,6 +137,7 @@ export interface StatsPanelData {
   coins: number;
   runTime: number; // seconds
   weaponName: string;
+  isArena: boolean;
   profile: ProfileStats | null;
   roster: RosterEntry[] | null;
   // Online connection debug details (authoritative world / revision / protocol) — the UI
@@ -630,6 +631,7 @@ export class Hud {
 
   private statsPanel: HTMLElement;
   private statsBody: HTMLElement;
+  private statsTitle: HTMLElement;
   private banner: HTMLElement;
   private objLaneEl!: HTMLElement;
   private objectiveEl!: HTMLElement;
@@ -746,7 +748,8 @@ export class Hud {
       `min-width:320px;max-width:440px;padding:22px 26px;background:var(--dun-1);` +
       `box-shadow:var(--frame-strong),inset 0 0 0 2px var(--dun-2),0 12px 0 rgba(0,0,0,0.4);` +
       `color:var(--cream);font:var(--fs-md) var(--f-num),ui-monospace,monospace;font-variant-numeric:tabular-nums;`);
-    card.appendChild(el("h2", "color:var(--amber);font:var(--fs-md) var(--f-logo),monospace;letter-spacing:2px;margin-bottom:16px;", "RUN STATS"));
+    this.statsTitle = el("h2", "color:var(--amber);font:var(--fs-md) var(--f-logo),monospace;letter-spacing:2px;margin-bottom:16px;", "RUN STATS");
+    card.appendChild(this.statsTitle);
     this.statsBody = el("div", "display:flex;flex-direction:column;gap:6px;");
     card.appendChild(this.statsBody);
     card.appendChild(el("p", "margin-top:16px;font:var(--fs-2xs) var(--f-ui),monospace;letter-spacing:1px;color:var(--dun-4);", "RELEASE TAB TO CLOSE"));
@@ -1801,14 +1804,22 @@ export class Hud {
       row.appendChild(el("span", "color:var(--cream);", value));
       return row;
     };
+    this.statsTitle.textContent = d.isArena ? "MATCH STATS" : "RUN STATS";
     this.statsBody.replaceChildren();
-    this.statsBody.append(
-      line("floor", String(d.floor)),
-      line("kills", String(d.kills)),
-      line("coins", String(d.coins)),
-      line("weapon", d.weaponName),
-      line("run time", fmtTime(d.runTime)),
-    );
+    if (d.isArena) {
+      this.statsBody.append(
+        line("weapon", d.weaponName),
+        line("session time", fmtTime(d.runTime)),
+      );
+    } else {
+      this.statsBody.append(
+        line("floor", String(d.floor)),
+        line("kills", String(d.kills)),
+        line("coins", String(d.coins)),
+        line("weapon", d.weaponName),
+        line("run time", fmtTime(d.runTime)),
+      );
+    }
     if (d.netInfo) {
       this.statsBody.appendChild(el("div", "color:var(--ink-mute);font-size:var(--fs-sm);letter-spacing:0.5px;", d.netInfo));
     }
@@ -1830,16 +1841,16 @@ export class Hud {
     }
     if (d.roster && d.roster.length) {
       this.statsBody.appendChild(el("div", "height:1px;background:rgba(255,180,59,0.2);margin:8px 0;"));
-      this.statsBody.appendChild(el("div", "color:var(--blu);font-size:var(--fs-sm);letter-spacing:1px;", "PARTY"));
+      this.statsBody.appendChild(el("div", "color:var(--blu);font-size:var(--fs-sm);letter-spacing:1px;", d.isArena ? "PLAYERS" : "PARTY"));
       for (const r of d.roster) {
         const row = el("div", "display:flex;align-items:center;gap:8px;");
         row.appendChild(el("span", `width:10px;height:10px;border-radius:50%;background:${r.color};display:inline-block;`));
         // A reconnecting member is neither dead nor departed — their body is reserved for
         // the reconnect grace (the Sev-0 coherence system); the roster says so explicitly.
         // OUT (down limit spent) outranks plain down: the party's move is the stairs.
-        const state = r.isReconnecting ? " \u2014 reconnecting\u2026" : r.isOut ? " \u2014 out (down limit)" : r.isDown ? " \u2014 down" : r.isAtExit ? " \u2014 at the stairs" : "";
+        const state = r.isReconnecting ? " \u2014 reconnecting\u2026" : r.isOut ? " \u2014 out (down limit)" : r.isDown ? " \u2014 down" : !d.isArena && r.isAtExit ? " \u2014 at the stairs" : "";
         const label = `${r.name}${r.isYou ? " (you)" : ""}${state}`;
-        row.appendChild(el("span", `color:${r.isReconnecting ? "var(--ink-mute)" : r.isDown || r.isOut ? "var(--red)" : r.isAtExit ? "var(--at-exit)" : "var(--cream)"};`, label));
+        row.appendChild(el("span", `color:${r.isReconnecting ? "var(--ink-mute)" : r.isDown || r.isOut ? "var(--red)" : !d.isArena && r.isAtExit ? "var(--at-exit)" : "var(--cream)"};`, label));
         this.statsBody.appendChild(row);
       }
     }

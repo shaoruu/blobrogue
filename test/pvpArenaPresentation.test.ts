@@ -169,6 +169,10 @@ async function main(): Promise<void> {
     },
     profile: null,
   });
+  const connectingHud = currentHudState();
+  check("pre-snapshot arena HUD cannot fall back to co-op presentation",
+    connectingHud.isArena && connectingHud.arenaMatch === null
+    && !connectingHud.isCleared && connectingHud.waitLabel === null);
   await Promise.resolve();
   await Promise.resolve();
   const socket = ScriptedSocket.latest;

@@ -569,6 +569,29 @@ function arenaHudDomTests(): void {
   hud.update(mkState({ hp: 100, maxHp: 100, isArena: true, arenaMatch: result }));
   check("result renders from match.win", center.textContent === "VICTORY");
 
+  section("arena stats panel has match identity and no floor or stairs state");
+  hud.showStats({
+    floor: 2,
+    kills: 0,
+    coins: 0,
+    runTime: 15,
+    weaponName: "Pistol",
+    isArena: true,
+    profile: null,
+    roster: [
+      { name: "you", isYou: true, color: "#fff", isDown: false, isOut: false, isAtExit: true, isReconnecting: false },
+      { name: "rival", isYou: false, color: "#f00", isDown: false, isOut: false, isAtExit: true, isReconnecting: false },
+    ],
+    netInfo: null,
+    items: [],
+  });
+  const statsCopy = root.textContent ?? "";
+  check("arena panel is MATCH STATS with a PLAYERS roster",
+    statsCopy.includes("MATCH STATS") && statsCopy.includes("PLAYERS"));
+  check("arena panel suppresses floor and at-the-stairs copy",
+    !statsCopy.includes("floor") && !statsCopy.includes("at the stairs"));
+  hud.hideStats();
+
   section("co-op control: the original heart and FLOOR/CLEAR/GO DOWN path returns unchanged");
   settings.setHpDisplay("both");
   hud.update(mkState({ hp: 5, maxHp: 6, isArena: false, arenaMatch: null, isCleared: true }));

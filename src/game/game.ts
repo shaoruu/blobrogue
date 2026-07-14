@@ -1254,6 +1254,7 @@ export class Game {
       this.snapCameraTo(this.px - this.canvas.width / 2, this.py - this.canvas.height / 2);
       this.hud.showBanner(floorBannerText(this.floor, { isBoss: isBossFloor(this.floor), isGauntlet: isGauntletFloor(this.floor) }));
     }
+    if (this.isArena) this.updateHud();
     this.hud.setVisible(true);
     // First run ever: briefly surface the core controls, then never nag again.
     if (!settings.isControlsHintSeen) {
@@ -4180,7 +4181,8 @@ export class Game {
       floor: this.floor, kills: this.kills, coins: this.coins,
       runTime: (performance.now() - this.runStart) / 1000,
       weaponName: WEAPONS[this.weapon].name,
-      profile: this.profile,
+      isArena: this.isArena,
+      profile: this.isArena ? null : this.profile,
       roster,
       // The details panel owns the connection debug surface (world / rev / protocol).
       netInfo: this.mode === "online" && this.wsTransport
