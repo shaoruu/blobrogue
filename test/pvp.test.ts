@@ -594,7 +594,7 @@ section("PLAYER KNOCKBACK: weapon impulse, hard clamp, and iframe immunity");
   guardrailVictim.x = guardrailPit.x + TILE / 2 + PVP.pitEdgeClearance;
   guardrailVictim.y = guardrailPit.y;
   guardrailVictim.invuln = 0;
-  guardrailShooter.x = guardrailVictim.x + 60;
+  guardrailShooter.x = guardrailVictim.x + 100;
   guardrailShooter.y = guardrailVictim.y;
   guardrailShooter.invuln = 0;
   guardrailShooter.weapon = "railgun";
