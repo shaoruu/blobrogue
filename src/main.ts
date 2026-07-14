@@ -10,7 +10,7 @@ import { bindUiScale } from "./ui/settings.js";
 import { exitNoteFor, INVITE_INVALID_NOTE, INVITE_OFFLINE_NOTE } from "./ui/onlineCopy.js";
 import { normalizeOnlineError } from "./net/onlineError.js";
 import { parseInviteCode, hasInviteIntent, stripInviteFromLocation } from "./net/inviteLink.js";
-import type { OnlineLobby } from "./net/onlineLobby.js";
+import { OnlineLobby } from "./net/onlineLobby.js";
 import { getSelectedKit } from "./net/kitSelection.js";
 
 declare global {
