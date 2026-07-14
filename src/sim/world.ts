@@ -66,7 +66,7 @@ import {
   WEAPON_BOSS_COEF, WIPE_HOLD_SECONDS, PU_DPS, PERSISTENT_BOSS_DPS_FRAC,
   LIVE_CAPS, activeMoverCapFor, pedestalWeaponRolls, bossWeaponChoices, KING_REWARD_TABLE,
   MYSTERY, LEGENDARY_MIN_FLOOR,
-  PREMIUM, CAPS, coinChanceTaper, coopCoinGainMult, premiumMysteryLegendaryWeight,
+  PREMIUM, CAPS, PHASE_NO_LOS_DAMAGE_MULT, coinChanceTaper, coopCoinGainMult, premiumMysteryLegendaryWeight,
 } from "./balance.js";
 import type { EnemyTier, AddPoolEntry, ResonanceFamily } from "./balance.js";
 import { isControllerKind } from "./bestiary.js";
@@ -4312,7 +4312,7 @@ function updateEnemies(w: WorldState, dt: number, ev: SimEvent[]): void {
         if (absorbOnRollSlab(e, b, ev)) continue;
         if (reflectFrontalBullet(w, e, b, ev)) continue;
         strikeEnemy(w, shooter, e, {
-          damage: b.damage, isCrit: b.isCrit, critX: b.critX ?? 1, bossCoef: b.bossCoef ?? 1, puffX: sweptHit.x, puffY: sweptHit.y, kbDirX: b.vx, kbDirY: b.vy,
+          damage: b.damage * phaseLineOfSightDamageMult(w, b, btx, bty), isCrit: b.isCrit, critX: b.critX ?? 1, bossCoef: b.bossCoef ?? 1, puffX: sweptHit.x, puffY: sweptHit.y, kbDirX: b.vx, kbDirY: b.vy,
           burn: b.burn, chill: b.chill, shock: b.shock, isMelee: false,
           isPersistent: b.isPersistent,
           ownerId: b.owner, fxWeapon: b.fx ?? null,
@@ -9497,6 +9497,14 @@ function hasLineOfSight(w: WorldState, x0: number, y0: number, x1: number, y1: n
     x += sx; y += sy;
   }
   return true;
+}
+
+function phaseLineOfSightDamageMult(w: WorldState, b: Bullet, targetX: number, targetY: number): number {
+  if (b.isPhase !== true) return 1;
+  if (b.phaseFireX === undefined || b.phaseFireY === undefined) return PHASE_NO_LOS_DAMAGE_MULT;
+  return hasLineOfSight(w, b.phaseFireX, b.phaseFireY, targetX, targetY)
+    ? 1
+    : PHASE_NO_LOS_DAMAGE_MULT;
 }
 
 function refreshNav(w: WorldState, dt: number): void {

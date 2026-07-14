@@ -2084,6 +2084,14 @@ export const PU_DPS = 12.5;
 // players standing in the fight.
 export const PERSISTENT_BOSS_DPS_FRAC = 0.25;
 
+export const HOMING_SPLIT = {
+  maxHomingPellets: 2,
+  extraTurnRateMult: 0.4,
+  extraDamageMult: 0.6,
+} as const;
+
+export const PHASE_NO_LOS_DAMAGE_MULT = 0.4;
+
 // Boss-facing combat coefficients (rooms/multitarget are never touched).
 export const BOSS_VULN_CAP = 1.35;           // the crit channel's cap vs boss-grade bodies
 export const BOSS_NATIVE_PELLET_COEF = 0.75; // native pellets beyond the first

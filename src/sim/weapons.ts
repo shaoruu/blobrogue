@@ -4,6 +4,7 @@ import type { Rng } from "./rng.js";
 import {
   BOSS_EXTRA_PELLET_COEF, BOSS_NATIVE_PELLET_COEF, WEAPON_BOSS_COEF,
   WEAPON_RARITY_WEIGHT, LEGENDARY_MIN_FLOOR, BOSS_CHEST_LEGENDARY_MULT, MYSTERY,
+  HOMING_SPLIT,
 } from "./balance.js";
 
 export interface MeleeSpec {
@@ -587,9 +588,22 @@ export function fire(spec: ShotSpec, x: number, y: number, aim: number, rng: Rng
   // order never matters (deterministic, replay-safe).
   const extra = Math.max(0, spec.pellets - spec.basePellets);
   const native = spec.pellets - extra;
+  const isHomingSplit = spec.homing !== undefined && extra > 0;
+  const allowedExtraHomers = Math.max(0, HOMING_SPLIT.maxHomingPellets - spec.basePellets);
+  const extraDamageMult = isHomingSplit ? HOMING_SPLIT.extraDamageMult : 1;
+  const volleyDamageWeight = native + extra * extraDamageMult;
   const effective = 1 + Math.max(0, native - 1) * BOSS_NATIVE_PELLET_COEF + extra * BOSS_EXTRA_PELLET_COEF;
-  const pelletBossCoef = (effective / spec.pellets) * (spec.fx !== undefined ? WEAPON_BOSS_COEF[spec.fx] ?? 1 : 1);
+  const pelletBossCoef = (effective / volleyDamageWeight) * (spec.fx !== undefined ? WEAPON_BOSS_COEF[spec.fx] ?? 1 : 1);
   for (let i = 0; i < spec.pellets; i++) {
+    const isExtra = i >= spec.basePellets;
+    const damageMult = isExtra ? extraDamageMult : 1;
+    let homing = spec.homing;
+    if (isHomingSplit && isExtra) {
+      const extraIndex = i - spec.basePellets;
+      homing = homing !== undefined && extraIndex < allowedExtraHomers
+        ? homing * HOMING_SPLIT.extraTurnRateMult
+        : undefined;
+    }
     const t = spec.pellets === 1 ? 0 : (i / (spec.pellets - 1)) - 0.5;
     const jitter = (rng.next() - 0.5) * (spec.spread * 0.3);
     const a = aim + t * spec.spread + jitter;
@@ -602,7 +616,7 @@ export function fire(spec: ShotSpec, x: number, y: number, aim: number, rng: Rng
       life: spec.life,
       friendly: true,
       owner,
-      damage: isCrit ? spec.damage * spec.critMult : spec.damage,
+      damage: (isCrit ? spec.damage * spec.critMult : spec.damage) * damageMult,
       color: isCrit ? CRIT_COLOR : spec.color,
       pierce: spec.pierce,
       hitList: null,
@@ -611,7 +625,7 @@ export function fire(spec: ShotSpec, x: number, y: number, aim: number, rng: Rng
       bossCoef: pelletBossCoef,
       fx: spec.fx,
       bounce: spec.bounce,
-      homing: spec.homing,
+      homing,
       chain: spec.chain,
       chainRange: spec.chainRange,
       blast: spec.blast,
@@ -621,6 +635,8 @@ export function fire(spec: ShotSpec, x: number, y: number, aim: number, rng: Rng
       killShards: spec.killShards,
       accel: spec.accel,
       isPhase: spec.isPhase,
+      phaseFireX: spec.isPhase === true ? x : undefined,
+      phaseFireY: spec.isPhase === true ? y : undefined,
       implode: spec.implode,
       nova: spec.nova,
       paintSpacing: spec.paintSpacing,

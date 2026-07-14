@@ -538,6 +538,8 @@ export interface Bullet {
   killShards?: number;     // reaper: seeking shards released when this round KILLS
   accel?: number;          // swarm: px/s² the round gains in flight
   isPhase?: boolean;       // phase: the round ignores walls (and destructible props) entirely
+  phaseFireX?: number;     // immutable phase-round origin for wall-line damage pricing
+  phaseFireY?: number;
   implode?: number;        // vortex: implosion radius — the payload pulls the pack inward
   // singularity (legendary): the SECOND stage. An imploding round that carries `nova`
   // spawns a short-fused friendly blast at the collapse point once the pull has clumped
