@@ -649,16 +649,19 @@ function hierarchyTests(): void {
   check("the expedition slot stays hidden through the old F30 finale",
     !expeditionObjective.classList.contains("show") && expeditionObjective.textContent === "");
   hud.update(mkState({ floor: 31 }));
-  check("F31 states the named Sump destination",
+  check("F31 states the final Sump objective",
     expeditionObjective.classList.contains("show") &&
-    expeditionObjective.textContent === "THE SUMP \u2014 toward the Sump-Mother (F50)");
+    expeditionObjective.textContent === "Descend to the bottom of the Sump.");
   hud.update(mkState({ floor: 51 }));
   check("F51 advances to the Veinworks region without changing the combat objective",
-    expeditionObjective.textContent === "THE VEINWORKS \u2014 toward the deep (F65)" &&
+    expeditionObjective.textContent === "Follow the veins to their source." &&
     objective.textContent === "FLOOR 51 \u00b7 3 ENEMIES LEFT");
   hud.update(mkState({ floor: 71, isBossActive: true, bossHpFrac: 0.8 }));
   check("the destination remains readable under the boss-owned objective state",
-    expeditionObjective.textContent === "THE PALE \u2014 toward the Pale Throne (F80)");
+    expeditionObjective.textContent === "Press on before the Pale takes the light.");
+  hud.update(mkState({ floor: 91 }));
+  check("F91 states the final Null Core objective",
+    expeditionObjective.textContent === "Reach the heart of the Unmaking.");
   hud.update(mkState({ floor: 71, isObjectiveHidden: true }));
   check("the sandbox suppresses expedition framing with its normal objective",
     !expeditionObjective.classList.contains("show") && expeditionObjective.textContent === "");
@@ -721,10 +724,10 @@ function hierarchyTests(): void {
     !objective.classList.contains("show") && !expeditionObjective.classList.contains("show") &&
     !lane.classList.contains("boss"));
 
-  hud.showBanner("THE SUMP", "THE DRAINED DEEP");
+  hud.showBanner("THE SUMP", "Everything the dark took, drains here.");
   check("the floor-transition card supports a title plus one-line band flavor",
     root.querySelector(".floor-banner-title")?.textContent === "THE SUMP" &&
-    root.querySelector(".floor-banner-flavor")?.textContent === "THE DRAINED DEEP");
+    root.querySelector(".floor-banner-flavor")?.textContent === "Everything the dark took, drains here.");
 
   section("objectiveCopy: the canonical strings");
   check("N ENEMIES LEFT", objectiveCopy(false, 7) === "7 ENEMIES LEFT");

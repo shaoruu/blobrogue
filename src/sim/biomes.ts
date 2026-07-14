@@ -386,49 +386,48 @@ export function regionForFloor(floor: number): Region {
   return REGIONS[regionIndexForFloor(floor)];
 }
 
-export interface ExpeditionDestination {
-  readonly floor: number;
-  readonly name: string | null;
-}
-
 export interface ExpeditionRegionFraming {
   readonly regionId: Extract<RegionId, "sump" | "veinworks" | "pale" | "nullcore">;
   readonly name: string;
   readonly entryTitle: string;
   readonly entryFlavor: string;
-  readonly capstone: ExpeditionDestination;
+  readonly objective: string;
 }
 
 // THE UNMAKING PROPER is the canonical post-F30 region ladder, not a second set of ranges.
-// TODO(creative-director): finalize the entryTitle/entryFlavor copy for all four regions.
+// FUTURE capstone-boss objective swaps, only after each boss ships:
+// Sump: "Descend to the Sump-Mother."
+// Veinworks: "Follow the veins to the Choirmaster."
+// Pale: "Press on to the Pale Throne."
+// Null Core: "Reach the Unmaker, and put the light back."
 export const EXPEDITION_REGIONS: readonly ExpeditionRegionFraming[] = [
   {
     regionId: "sump",
     name: "THE SUMP",
     entryTitle: "THE SUMP",
-    entryFlavor: "THE DRAINED DEEP",
-    capstone: { floor: 50, name: "the Sump-Mother" },
+    entryFlavor: "Everything the dark took, drains here.",
+    objective: "Descend to the bottom of the Sump.",
   },
   {
     regionId: "veinworks",
     name: "THE VEINWORKS",
     entryTitle: "THE VEINWORKS",
-    entryFlavor: "THE WORLD FORGETS ITS OWN VEINS",
-    capstone: { floor: 65, name: null },
+    entryFlavor: "The cold has a pulse this far down. Follow it in.",
+    objective: "Follow the veins to their source.",
   },
   {
     regionId: "pale",
     name: "THE PALE",
     entryTitle: "THE PALE",
-    entryFlavor: "ONLY THE CORE REMEMBERS",
-    capstone: { floor: 80, name: "the Pale Throne" },
+    entryFlavor: "Color goes first. Then warmth. Then the way back.",
+    objective: "Press on before the Pale takes the light.",
   },
   {
     regionId: "nullcore",
     name: "NULL CORE",
     entryTitle: "NULL CORE",
-    entryFlavor: "THE SOURCE WAITS BELOW",
-    capstone: { floor: 100, name: "the Unmaker" },
+    entryFlavor: "Nothing was here first. It wants to be here last.",
+    objective: "Reach the heart of the Unmaking.",
   },
 ];
 
@@ -438,15 +437,7 @@ export function expeditionRegionForFloor(floor: number): ExpeditionRegionFraming
 }
 
 export function expeditionObjectiveForFloor(floor: number): string | null {
-  const f = Math.max(1, Math.floor(floor));
-  const framing = expeditionRegionForFloor(f);
-  if (framing === null) return null;
-  const destination = EXPEDITION_REGIONS
-    .map((candidate) => candidate.capstone)
-    .find((candidate) => candidate.floor >= f);
-  if (destination === undefined) return `${framing.name} \u2014 descend toward the core`;
-  const target = destination.name === null ? "the deep" : destination.name;
-  return `${framing.name} \u2014 toward ${target} (F${destination.floor})`;
+  return expeditionRegionForFloor(floor)?.objective ?? null;
 }
 
 export function expeditionRegionEntryForFloor(floor: number): ExpeditionRegionFraming | null {

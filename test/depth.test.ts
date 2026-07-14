@@ -307,28 +307,31 @@ function biomeLadderTests(): void {
     expeditionRegionForFloor(91)?.regionId === "nullcore");
   check("the expedition objective is absent through the old F30 finale",
     expeditionObjectiveForFloor(1) === null && expeditionObjectiveForFloor(30) === null);
-  check("the Sump objective points at its F50 landmark",
-    expeditionObjectiveForFloor(31) === "THE SUMP \u2014 toward the Sump-Mother (F50)" &&
-    expeditionObjectiveForFloor(50) === "THE SUMP \u2014 toward the Sump-Mother (F50)");
-  check("the Veinworks uses a generic F65 landmark, then advances to the next capstone",
-    expeditionObjectiveForFloor(51) === "THE VEINWORKS \u2014 toward the deep (F65)" &&
-    expeditionObjectiveForFloor(65) === "THE VEINWORKS \u2014 toward the deep (F65)" &&
-    expeditionObjectiveForFloor(66) === "THE VEINWORKS \u2014 toward the Pale Throne (F80)" &&
-    expeditionObjectiveForFloor(70) === "THE VEINWORKS \u2014 toward the Pale Throne (F80)");
-  check("the Pale points at F80, then advances to the F100 finale",
-    expeditionObjectiveForFloor(71) === "THE PALE \u2014 toward the Pale Throne (F80)" &&
-    expeditionObjectiveForFloor(80) === "THE PALE \u2014 toward the Pale Throne (F80)" &&
-    expeditionObjectiveForFloor(81) === "THE PALE \u2014 toward the Unmaker (F100)" &&
-    expeditionObjectiveForFloor(90) === "THE PALE \u2014 toward the Unmaker (F100)");
-  check("Null Core points at F100 and degrades gracefully beyond it",
-    expeditionObjectiveForFloor(91) === "NULL CORE \u2014 toward the Unmaker (F100)" &&
-    expeditionObjectiveForFloor(100) === "NULL CORE \u2014 toward the Unmaker (F100)" &&
-    expeditionObjectiveForFloor(101) === "NULL CORE \u2014 descend toward the core");
+  check("the Sump carries its final today objective throughout the region",
+    expeditionObjectiveForFloor(31) === "Descend to the bottom of the Sump." &&
+    expeditionObjectiveForFloor(50) === "Descend to the bottom of the Sump.");
+  check("the Veinworks carries its final today objective throughout the region",
+    expeditionObjectiveForFloor(51) === "Follow the veins to their source." &&
+    expeditionObjectiveForFloor(65) === "Follow the veins to their source." &&
+    expeditionObjectiveForFloor(70) === "Follow the veins to their source.");
+  check("the Pale carries its final today objective throughout the region",
+    expeditionObjectiveForFloor(71) === "Press on before the Pale takes the light." &&
+    expeditionObjectiveForFloor(80) === "Press on before the Pale takes the light." &&
+    expeditionObjectiveForFloor(90) === "Press on before the Pale takes the light.");
+  check("Null Core carries its final today objective beyond F100",
+    expeditionObjectiveForFloor(91) === "Reach the heart of the Unmaking." &&
+    expeditionObjectiveForFloor(100) === "Reach the heart of the Unmaking." &&
+    expeditionObjectiveForFloor(101) === "Reach the heart of the Unmaking.");
   const entryFloors = Array.from({ length: 120 }, (_, i) => i + 1)
     .filter((floor) => expeditionRegionEntryForFloor(floor) !== null);
   check("authored region-entry beats fire exactly at the shipped biome boundaries",
     entryFloors.join(",") === "31,51,71,91", entryFloors.join(","));
-  check("entry beats carry a title and one-line creative placeholder",
+  check("entry beats carry the final title and one-line creative copy",
+    EXPEDITION_REGIONS.map((framing) => `${framing.entryTitle}|${framing.entryFlavor}`).join("\n") ===
+      "THE SUMP|Everything the dark took, drains here.\n" +
+      "THE VEINWORKS|The cold has a pulse this far down. Follow it in.\n" +
+      "THE PALE|Color goes first. Then warmth. Then the way back.\n" +
+      "NULL CORE|Nothing was here first. It wants to be here last." &&
     EXPEDITION_REGIONS.every((framing) => {
       const region = REGIONS.find((candidate) => candidate.id === framing.regionId);
       return region !== undefined &&
