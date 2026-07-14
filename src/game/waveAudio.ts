@@ -586,7 +586,12 @@ class WaveAudioDirector {
   // fallback sample is decoded too, so even a pending-asset row's first trigger plays a
   // ready authored buffer instead of racing its load.
 
-  preloadForFloor(zoneIndex: number, bossKind: string | null, enemyKinds?: Iterable<string>): void {
+  preloadForFloor(
+    zoneIndex: number,
+    bossKind: string | null,
+    enemyKinds?: Iterable<string>,
+    presentationEvents?: Iterable<WaveEventId>,
+  ): void {
     const stems: string[] = [];
     const samples: SfxName[] = [];
     const collect = (event: WaveEventId): void => {
@@ -601,6 +606,7 @@ class WaveAudioDirector {
     if (zoneEvent === "ambient.deep") for (const ch of DEEP_EMITTER.channels) collect(ch.event);
     for (const event of HAZARD_WAVE_EVENTS) collect(event);
     for (const event of ALWAYS_REACHABLE_EVENTS) collect(event);
+    if (presentationEvents) for (const event of presentationEvents) collect(event);
     if (bossKind) for (const event of bossWaveEvents(bossKind)) collect(event);
     // The floor's actual encounter kinds preload alongside the boss (contract): the
     // first rootward on a floor never announces itself through a fallback. Both cue

@@ -386,6 +386,67 @@ export function regionForFloor(floor: number): Region {
   return REGIONS[regionIndexForFloor(floor)];
 }
 
+export interface ExpeditionRegionFraming {
+  readonly regionId: Extract<RegionId, "sump" | "veinworks" | "pale" | "nullcore">;
+  readonly name: string;
+  readonly entryTitle: string;
+  readonly entryFlavor: string;
+  readonly objective: string;
+}
+
+// THE UNMAKING PROPER is the canonical post-F30 region ladder, not a second set of ranges.
+// FUTURE capstone-boss objective swaps, only after each boss ships:
+// Sump: "Descend to the Sump-Mother."
+// Veinworks: "Follow the veins to the Choirmaster."
+// Pale: "Press on to the Pale Throne."
+// Null Core: "Reach the Unmaker, and put the light back."
+export const EXPEDITION_REGIONS: readonly ExpeditionRegionFraming[] = [
+  {
+    regionId: "sump",
+    name: "THE SUMP",
+    entryTitle: "THE SUMP",
+    entryFlavor: "Everything the dark took, drains here.",
+    objective: "Descend to the bottom of the Sump.",
+  },
+  {
+    regionId: "veinworks",
+    name: "THE VEINWORKS",
+    entryTitle: "THE VEINWORKS",
+    entryFlavor: "The cold has a pulse this far down. Follow it in.",
+    objective: "Follow the veins to their source.",
+  },
+  {
+    regionId: "pale",
+    name: "THE PALE",
+    entryTitle: "THE PALE",
+    entryFlavor: "Color goes first. Then warmth. Then the way back.",
+    objective: "Press on before the Pale takes the light.",
+  },
+  {
+    regionId: "nullcore",
+    name: "NULL CORE",
+    entryTitle: "NULL CORE",
+    entryFlavor: "Nothing was here first. It wants to be here last.",
+    objective: "Reach the heart of the Unmaking.",
+  },
+];
+
+export function expeditionRegionForFloor(floor: number): ExpeditionRegionFraming | null {
+  const region = regionForFloor(floor);
+  return EXPEDITION_REGIONS.find((framing) => framing.regionId === region.id) ?? null;
+}
+
+export function expeditionObjectiveForFloor(floor: number): string | null {
+  return expeditionRegionForFloor(floor)?.objective ?? null;
+}
+
+export function expeditionRegionEntryForFloor(floor: number): ExpeditionRegionFraming | null {
+  const f = Math.max(1, Math.floor(floor));
+  const region = regionForFloor(f);
+  if (region.fromFloor !== f) return null;
+  return EXPEDITION_REGIONS.find((framing) => framing.regionId === region.id) ?? null;
+}
+
 export function floorBannerText(floor: number, opts?: { isBoss?: boolean; isGauntlet?: boolean; isDescend?: boolean }): string {
   if (opts?.isGauntlet) return "MINIBOSS GAUNTLET";
   if (opts?.isBoss) return "BOSS FLOOR";

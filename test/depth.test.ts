@@ -17,7 +17,11 @@ import { HAZARD_DIFFICULTY } from "../src/sim/balance.js";
 import type { Difficulty } from "../src/sim/balance.js";
 import type { FloorHazard, FloorHazardKind } from "../src/sim/types.js";
 import { TILE } from "../src/sim/types.js";
-import { BIOMES, biomeIndexForFloor, biomeDepthForFloor, biomeForFloor, floorBannerText, REGIONS, regionForFloor, regionIndexForFloor } from "../src/sim/biomes.js";
+import {
+  BIOMES, EXPEDITION_REGIONS, biomeIndexForFloor, biomeDepthForFloor, biomeForFloor,
+  expeditionRegionEntryForFloor, expeditionRegionForFloor, expeditionObjectiveForFloor,
+  floorBannerText, REGIONS, regionForFloor, regionIndexForFloor,
+} from "../src/sim/biomes.js";
 import { BIOME_PRESSURE, PLAYER } from "../src/sim/balance.js";
 import { spawnFloorEnemies, isBossFloor, isGauntletFloor, isBossKind, createEnemy, SWARM_ROOM_MIN_AREA } from "../src/sim/enemies.js";
 import { createWorld, stepWorld, isFloorCleared, devSpawnEnemy, devSpawnProp } from "../src/sim/world.js";
@@ -290,6 +294,55 @@ function biomeLadderTests(): void {
   check("canonical AD palettes are wired into the post-F30 bands",
     BIOMES[6].floorA === "#16131a" && BIOMES[6].wallCap === "#3a2f2a" &&
     BIOMES[7].accent === "#ffb43b" && BIOMES[8].floorA === "#1c1e26" && BIOMES[9].wallCap === "#241a40");
+
+  section("F31+ expedition framing: canonical region objectives and entry beats");
+  check("the Unmaking proper starts at F31 and is exactly the four shipped deep regions",
+    expeditionRegionForFloor(30) === null && EXPEDITION_REGIONS.length === 4 &&
+    expeditionRegionForFloor(31)?.regionId === "sump" &&
+    expeditionRegionForFloor(50)?.regionId === "sump" &&
+    expeditionRegionForFloor(51)?.regionId === "veinworks" &&
+    expeditionRegionForFloor(70)?.regionId === "veinworks" &&
+    expeditionRegionForFloor(71)?.regionId === "pale" &&
+    expeditionRegionForFloor(90)?.regionId === "pale" &&
+    expeditionRegionForFloor(91)?.regionId === "nullcore");
+  check("the expedition objective is absent through the old F30 finale",
+    expeditionObjectiveForFloor(1) === null && expeditionObjectiveForFloor(30) === null);
+  check("the Sump carries its final today objective throughout the region",
+    expeditionObjectiveForFloor(31) === "Descend to the bottom of the Sump." &&
+    expeditionObjectiveForFloor(50) === "Descend to the bottom of the Sump.");
+  check("the Veinworks carries its final today objective throughout the region",
+    expeditionObjectiveForFloor(51) === "Follow the veins to their source." &&
+    expeditionObjectiveForFloor(65) === "Follow the veins to their source." &&
+    expeditionObjectiveForFloor(70) === "Follow the veins to their source.");
+  check("the Pale carries its final today objective throughout the region",
+    expeditionObjectiveForFloor(71) === "Press on before the Pale takes the light." &&
+    expeditionObjectiveForFloor(80) === "Press on before the Pale takes the light." &&
+    expeditionObjectiveForFloor(90) === "Press on before the Pale takes the light.");
+  check("Null Core carries its final today objective beyond F100",
+    expeditionObjectiveForFloor(91) === "Reach the heart of the Unmaking." &&
+    expeditionObjectiveForFloor(100) === "Reach the heart of the Unmaking." &&
+    expeditionObjectiveForFloor(101) === "Reach the heart of the Unmaking.");
+  const entryFloors = Array.from({ length: 120 }, (_, i) => i + 1)
+    .filter((floor) => expeditionRegionEntryForFloor(floor) !== null);
+  check("authored region-entry beats fire exactly at the shipped biome boundaries",
+    entryFloors.join(",") === "31,51,71,91", entryFloors.join(","));
+  check("entry beats carry the final title and one-line creative copy",
+    EXPEDITION_REGIONS.map((framing) => `${framing.entryTitle}|${framing.entryFlavor}`).join("\n") ===
+      "THE SUMP|Everything the dark took, drains here.\n" +
+      "THE VEINWORKS|The cold has a pulse this far down. Follow it in.\n" +
+      "THE PALE|Color goes first. Then warmth. Then the way back.\n" +
+      "NULL CORE|Nothing was here first. It wants to be here last." &&
+    EXPEDITION_REGIONS.every((framing) => {
+      const region = REGIONS.find((candidate) => candidate.id === framing.regionId);
+      return region !== undefined &&
+        expeditionRegionEntryForFloor(region.fromFloor)?.entryTitle === framing.entryTitle &&
+        framing.entryFlavor.length > 0;
+    }));
+  check("entry beats and palette shifts share REGIONS as their exact boundary source",
+    entryFloors.every((floor) => regionForFloor(floor).fromFloor === floor) &&
+    [31, 51, 71, 91].every((floor) =>
+      biomeIndexForFloor(floor) === regionIndexForFloor(floor) &&
+      biomeIndexForFloor(floor) !== biomeIndexForFloor(floor - 1)));
 }
 
 function hazardPlacementTests(): void {

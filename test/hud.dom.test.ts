@@ -521,12 +521,15 @@ function arenaHudDomTests(): void {
 
   section("arena HUD: authoritative scoreboard/timer replaces all co-op floor and exit copy");
   const objective = root.querySelector<HTMLElement>("[data-objective]")!;
+  const expeditionObjective = root.querySelector<HTMLElement>("[data-expedition-objective]")!;
   const waitline = root.querySelector<HTMLElement>("[data-waitline]")!;
   const board = root.querySelector<HTMLElement>("[data-arena-board]")!;
   check("objective lane is the arena timer and local frag score",
     objective.textContent === "ARENA \u00b7 4:59 \u00b7 3 FRAGS", objective.textContent ?? "");
   check("arena objective cannot contain floor-clear or descend copy",
     !/FLOOR|CLEAR|GO DOWN/.test(objective.textContent ?? ""));
+  check("arena suppresses the PvE expedition objective",
+    !expeditionObjective.classList.contains("show") && expeditionObjective.textContent === "");
   check("READY TO GO DOWN is suppressed defensively",
     !waitline.classList.contains("show") && waitline.textContent === "");
   check("opponents never render as co-op party HP rows", root.querySelectorAll(".party-row").length === 0);
@@ -618,13 +621,15 @@ function hierarchyTests(): void {
   const hud = new Hud(root);
   const lane = root.querySelector<HTMLElement>("[data-objlane]")!;
   const objective = root.querySelector<HTMLElement>("[data-objective]")!;
+  const expeditionObjective = root.querySelector<HTMLElement>("[data-expedition-objective]")!;
   const waitline = root.querySelector<HTMLElement>("[data-waitline]")!;
 
-  check("the lane stacks bossbar -> objective -> waitline -> combo in ONE container",
+  check("the lane stacks bossbar -> objective -> expedition -> waitline -> combo in ONE container",
     [...lane.children].map((c) => c.getAttribute("data-bossbar") !== null ? "boss"
       : c.getAttribute("data-objective") !== null ? "obj"
+      : c.getAttribute("data-expedition-objective") !== null ? "expedition"
       : c.getAttribute("data-waitline") !== null ? "wait"
-      : c.getAttribute("data-combo") !== null ? "combo" : "?").join(",") === "boss,obj,wait,combo");
+      : c.getAttribute("data-combo") !== null ? "combo" : "?").join(",") === "boss,obj,expedition,wait,combo");
 
   hud.update(mkState({ enemiesLeft: 3 }));
   check("fighting floor leads with the floor then the enemies-left copy", objective.textContent === "FLOOR 2 \u00b7 3 ENEMIES LEFT" && objective.classList.contains("show"));
@@ -638,6 +643,28 @@ function hierarchyTests(): void {
   hud.update(mkState({ isCleared: true, enemiesLeft: 0, isParty: true }));
   check("a party's cleared floor reads MEET AT EXIT (the coordination moment)",
     objective.textContent === "FLOOR 2 \u00b7 CLEAR \u00b7 MEET AT EXIT");
+
+  section("F31+ expedition objective reuses the fixed objective lane");
+  hud.update(mkState({ floor: 30 }));
+  check("the expedition slot stays hidden through the old F30 finale",
+    !expeditionObjective.classList.contains("show") && expeditionObjective.textContent === "");
+  hud.update(mkState({ floor: 31 }));
+  check("F31 states the final Sump objective",
+    expeditionObjective.classList.contains("show") &&
+    expeditionObjective.textContent === "Descend to the bottom of the Sump.");
+  hud.update(mkState({ floor: 51 }));
+  check("F51 advances to the Veinworks region without changing the combat objective",
+    expeditionObjective.textContent === "Follow the veins to their source." &&
+    objective.textContent === "FLOOR 51 \u00b7 3 ENEMIES LEFT");
+  hud.update(mkState({ floor: 71, isBossActive: true, bossHpFrac: 0.8 }));
+  check("the destination remains readable under the boss-owned objective state",
+    expeditionObjective.textContent === "Press on before the Pale takes the light.");
+  hud.update(mkState({ floor: 91 }));
+  check("F91 states the final Null Core objective",
+    expeditionObjective.textContent === "Reach the heart of the Unmaking.");
+  hud.update(mkState({ floor: 71, isObjectiveHidden: true }));
+  check("the sandbox suppresses expedition framing with its normal objective",
+    !expeditionObjective.classList.contains("show") && expeditionObjective.textContent === "");
 
   section("floor-mutator readout: legible, and collapsed off deep floors (no layout shift)");
   const mutators = root.querySelector<HTMLElement>("[data-mutators]")!;
@@ -694,7 +721,13 @@ function hierarchyTests(): void {
 
   hud.clear();
   check("clear() resets the lane states",
-    !objective.classList.contains("show") && !lane.classList.contains("boss"));
+    !objective.classList.contains("show") && !expeditionObjective.classList.contains("show") &&
+    !lane.classList.contains("boss"));
+
+  hud.showBanner("THE SUMP", "Everything the dark took, drains here.");
+  check("the floor-transition card supports a title plus one-line band flavor",
+    root.querySelector(".floor-banner-title")?.textContent === "THE SUMP" &&
+    root.querySelector(".floor-banner-flavor")?.textContent === "Everything the dark took, drains here.");
 
   section("objectiveCopy: the canonical strings");
   check("N ENEMIES LEFT", objectiveCopy(false, 7) === "7 ENEMIES LEFT");
