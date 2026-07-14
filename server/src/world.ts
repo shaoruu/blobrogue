@@ -150,6 +150,7 @@ export class GameWorld implements RoomRuntime {
       hat: conn.hat,
       face: conn.face,
       pet: conn.pet,
+      kitId: conn.kitId,
       lastAppliedSeq: conn.lastAppliedSeq,
       lastCseq: conn.lastCseq,
       pendingOffer: conn.pendingOffer,

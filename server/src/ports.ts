@@ -34,6 +34,7 @@ export interface Seat {
   hat: string | null;
   face: string | null;
   pet: string | null;
+  kitId: KitId;
   lastAppliedSeq: number;
   lastCseq: number;
   pendingOffer: string[] | null;

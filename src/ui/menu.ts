@@ -10,21 +10,21 @@ import { playerColor, PLAYER_COLORS } from "../game/assets.js";
 import { resolveNameInput, rerollBlobName } from "../net/blobName.js";
 import { WEAPONS } from "../sim/weapons.js";
 import { itemById } from "../sim/items.js";
-import { KIT_IDS, KIT_META, kitUnlockLevel, isKitUnlocked } from "../sim/kits.js";
-import { getSelectedKit, setSelectedKit } from "../net/kitSelection.js";
+import { KIT_IDS, KIT_META, KIT_START_WEAPON, kitUnlockLevel, isKitUnlocked } from "../sim/kits.js";
+import type { PlayableKitId, RunLoadout } from "../net/kitSelection.js";
 import { COSMETIC_SLOTS, cosmeticsForSlot, cosmeticById, isCosmeticOwned, bodyPaletteIndex } from "../game/cosmetics.js";
-import { CAMP_NODES, campNodeById, isNodeOwned, prereqsMet } from "../sim/camp_nodes.js";
+import { CAMP_NODES, campNodeById, isNodeOwned, isPetOwned, prereqsMet } from "../sim/camp_nodes.js";
 import type { WaveEventId } from "../game/waveSpec.js";
 import type { CampNodeDef } from "../sim/camp_nodes.js";
 import type { CosmeticSlot, CosmeticDef, CosmeticLoadout } from "../game/cosmetics.js";
 import { hasCosmeticArt } from "../game/cosmeticArt.js";
-import { createBlobPreview, drawBlob, isBlobReady } from "./blobPreview.js";
+import { createBlobPreview, createLoadoutPreview, drawBlob, isBlobReady } from "./blobPreview.js";
 import type { BlobLook, BlobPreview } from "./blobPreview.js";
 import { FocusScope, currentFocus } from "./focus.js";
 import { createSettingsControls } from "./settings.js";
 import { shouldShowSigninNudge, recordNudgeShown, recordNudgeDismissed, SIGNIN_BENEFITS } from "./signinNudge.js";
 import {
-  READY_LABEL, NOT_READY_LABEL, START_ANYWAY_IDLE, START_ANYWAY_HOLD_MS, startAnywayHoldLabel,
+  READY_LABEL, NOT_READY_LABEL,
   COPY_INVITE_LABEL, INVITE_COPIED_LABEL, INVITE_SHARED_LABEL, INVITE_COPY_FAILED_LABEL, INVITE_SHARE_HINT,
   INVITE_OFFLINE_NOTE, INVITE_UNREACHABLE_NOTE, INVITE_TRY_AGAIN_LABEL, inviteJoiningNote, inviteFailState,
   ARENA_LABEL, ARENA_PATCHING_LABEL,
@@ -45,7 +45,7 @@ const CHANGELOG_SEEN_KEY = "blobrogue.changelogSeen";
 // co-op ran a separate simulation per client (different enemies/drops while players believed
 // they shared a room — the Sev-0), so the menu deliberately has NO way to start it.
 export interface MenuHost {
-  startSolo(profile: ProfileDoc | null): void;
+  startSolo(profile: ProfileDoc | null, loadout: RunLoadout): void;
   // isPartyStart: the run begins from a lobby START (gate gameplay on the whole party
   // joining the world) vs dropping into an already-live run (no gate).
   startOnline(lobby: OnlineLobby, profile: ProfileDoc | null, isPartyStart: boolean): void;
@@ -61,6 +61,18 @@ export interface GameOverContext {
   // The SERVER-authoritative Amber banked this run (the profile's amber delta across
   // recordRun) — shown as "Banked N Amber". Never a client-computed number.
   bankedAmber?: number;
+}
+
+type LoadoutGateDestination = "solo" | "online" | "invite" | "lobby" | "replay" | "preselect";
+
+interface LoadoutGateOptions {
+  destination: LoadoutGateDestination;
+  destinationLabel: string;
+  contextLabel: string;
+  roomCode?: string;
+  lobby?: OnlineLobby;
+  onBack: () => void;
+  onConfirm: (loadout: RunLoadout) => Promise<string | null>;
 }
 
 function el<K extends keyof HTMLElementTagNameMap>(tag: K, className = "", text?: string): HTMLElementTagNameMap[K] {
@@ -187,6 +199,8 @@ export class Menu {
   // The title's live "players online" subscription (Convex onUpdate). Torn down on every
   // screen transition and on hide so it only runs while the title is actually on screen.
   private onlineCountUnsub: (() => void) | null = null;
+  private pendingOnlineLoadout: RunLoadout | null = null;
+  private loadoutGateSequence = 0;
 
   constructor(overlay: HTMLElement, session: Session, client: ConvexClient | null, auth: AuthClient | null, host: MenuHost) {
     this.overlay = overlay;
@@ -278,6 +292,7 @@ export class Menu {
   // `statusNote` fills the reserved home-status line (e.g. the invite-on-offline-build
   // landing) — content inside fixed geometry, never a layout change.
   async showTitle(focus?: TitleFocus, statusNote = "") {
+    this.pendingOnlineLoadout = null;
     // THE canonical home markup (finalized; supersedes every earlier shell variant):
     //   .menu-home                       grid rows 150px / minmax(0,1fr)
     //     .home-hero                     the two-column hero band: .hero-mark (logo +
@@ -693,52 +708,481 @@ export class Menu {
     return btn;
   }
 
-  // Solo kit DISCOVERABILITY (never a blocking modal): a glanceable + changeable chip under the
-  // PLAY SOLO action. Solo defaults to getSelectedKit() (gunner) silently, but a brand-new player
-  // must still SEE they have a kit and can change it — the chip names the current kit (accent dot
-  // + name) and opens the existing picker. Fixed geometry, so the title never shifts.
   private kitChip(): HTMLButtonElement {
-    const kit = getSelectedKit();
-    const meta = kit === "none" ? null : KIT_META[kit];
+    const kit = this.session.lastKitId;
+    const meta = KIT_META[kit];
     const btn = el("button", "kit-chip");
     btn.type = "button";
-    if (meta) btn.setAttribute("data-kit", kit);
+    btn.setAttribute("data-kit", kit);
     btn.appendChild(el("span", "kc-dot"));
     btn.appendChild(el("span", "kc-label", "KIT"));
-    btn.appendChild(el("span", "kc-kit", (meta ? meta.name : "none").toUpperCase()));
+    btn.appendChild(el("span", "kc-kit", meta.name.toUpperCase()));
     btn.appendChild(el("span", "kc-go", "CHANGE \u25b8"));
-    btn.setAttribute("aria-label", `Kit: ${meta ? meta.name : "none"}. Change kit for solo runs.`);
+    btn.setAttribute("aria-label", `Kit: ${meta.name}. Change loadout preselection.`);
     btn.addEventListener("click", () => void this.showKitPicker());
     return btn;
   }
 
-  // The standalone kit picker reached from the title's kit chip — the SAME cards the lobby uses
-  // (getSelectedKit/setSelectedKit + account-gated unlocks), just on its own screen so the pick is
-  // discoverable/changeable for solo without a blocking modal. Back returns to the title, which
-  // re-reads the selection into the chip.
   async showKitPicker() {
-    const wrap = el("div", "menu kit-picker-screen");
-    wrap.appendChild(el("h1", "", "CHOOSE YOUR KIT"));
-    wrap.appendChild(el("p", "muted", "your pick sticks for every solo run \u2014 change it anytime"));
-    const mount = el("div", "kit-picker-mount");
-    const rebuild = () => mount.replaceChildren(this.kitSelectPanel(this.session.profile, rebuild));
-    rebuild();
-    wrap.appendChild(mount);
-    const row = el("div", "btnrow");
-    const goBack = () => void this.showTitle();
-    const back = el("button", "secondary", "back");
-    back.addEventListener("click", goBack);
-    row.appendChild(back);
-    wrap.appendChild(row);
-    this.show(wrap);
-    this.bindEscape(goBack);
+    this.showLoadoutGate({
+      destination: "preselect",
+      destinationLabel: "SAVE LOADOUT",
+      contextLabel: "PRESELECT FOR NEXT RUN",
+      onBack: () => void this.showTitle(),
+      onConfirm: async (loadout) => {
+        const error = await this.persistProfileLoadout(loadout, false);
+        if (error) return error;
+        await this.showTitle();
+        return null;
+      },
+    });
   }
 
   private doSolo() {
-    // Solo must never block on the network: kick off the (optional) identity
-    // upsert in the background and start immediately with whatever profile we have.
-    if (this.client) void this.session.login().catch(() => {});
-    this.host.startSolo(this.session.profile);
+    this.showLoadoutGate({
+      destination: "solo",
+      destinationLabel: "START SOLO",
+      contextLabel: "SOLO RUN",
+      onBack: () => void this.showTitle(),
+      onConfirm: async (loadout) => {
+        const error = await this.persistProfileLoadout(loadout, true);
+        if (error) return error;
+        this.host.startSolo(this.session.profile, loadout);
+        return null;
+      },
+    });
+  }
+
+  private async persistProfileLoadout(loadout: RunLoadout, isSolo: boolean): Promise<string | null> {
+    const timeout = new Promise<Awaited<ReturnType<Session["confirmRunLoadout"]>>>((resolve) => {
+      setTimeout(() => resolve({
+        ok: false,
+        reason: "backend_unavailable",
+        profile: this.session.profile,
+        isOffline: false,
+      }), HYDRATE_TIMEOUT_MS);
+    });
+    const result = await Promise.race([this.session.confirmRunLoadout(loadout), timeout]);
+    if (result.ok) return null;
+    const level = this.session.profile?.masteryLevel ?? 1;
+    if (isSolo && loadout.petId === null && isKitUnlocked(loadout.kitId, level)) {
+      this.session.acceptConfirmedRunLoadout(loadout);
+      return null;
+    }
+    if (result.reason === "kit_locked") return `REACH ACCOUNT LV ${kitUnlockLevel(loadout.kitId)}`;
+    if (result.reason === "pet_unowned") return "Rescue that pet before choosing it.";
+    if (result.reason === "offline_pet_unavailable") return "Pet save unavailable. Retry or Continue No Pet.";
+    return loadout.petId === null
+      ? "Could not save this loadout. Try again."
+      : "Pet save failed. Retry or Continue No Pet.";
+  }
+
+  private showLoadoutGate(opts: LoadoutGateOptions): void {
+    const gateSequence = ++this.loadoutGateSequence;
+    let profile = this.session.profile;
+    let level = profile?.masteryLevel ?? 1;
+    let unlocks = profile?.unlocks ?? [];
+    const openingLoadout = opts.lobby?.selfLoadout ?? {
+      kitId: this.session.lastKitId,
+      petId: this.session.rememberedPet.petId,
+    };
+    const firstUnlocked = KIT_IDS.find((kit) => isKitUnlocked(kit, level)) ?? "gunner";
+    let draftKitId: PlayableKitId = isKitUnlocked(openingLoadout.kitId, level)
+      ? openingLoadout.kitId
+      : firstUnlocked;
+    let draftPetId = openingLoadout.petId !== null && isPetOwned(openingLoadout.petId, unlocks)
+      ? openingLoadout.petId
+      : null;
+    let isKitChoiceMade = false;
+    let isPetChoiceMade = false;
+    let isPersisting = false;
+    let isRoomConfirmationCleared = false;
+    let isProfileLoading = this.client !== null && profile === null;
+    let isProfileError = false;
+    let step: "kit" | "pet" = "kit";
+    let errorMessage = "";
+    let announcement = "";
+
+    const companionNodes = CAMP_NODES.filter(
+      (node): node is CampNodeDef & { pet: string } => node.category === "companion" && node.pet !== undefined,
+    );
+
+    const petName = (petId: string | null): string => {
+      if (petId === null) return "NO PET";
+      return companionNodes.find((node) => node.pet === petId)?.name.toUpperCase() ?? "NO PET";
+    };
+
+    const pairLabel = (): string => `${KIT_META[draftKitId].name.toUpperCase()} + ${petName(draftPetId)}`;
+
+    const clearRoomConfirmationIfChanged = () => {
+      if (!opts.lobby || isRoomConfirmationCleared) return;
+      if (draftKitId === openingLoadout.kitId && draftPetId === openingLoadout.petId) return;
+      isRoomConfirmationCleared = true;
+      opts.lobby.clearLoadoutConfirmation();
+    };
+
+    const profileState = (): string => {
+      if (isProfileLoading) return "CHECKING UNLOCKS";
+      if (isProfileError) return "PROGRESS UNAVAILABLE";
+      if (!this.client) return "OFFLINE · KNOWN UNLOCKS";
+      return `ACCOUNT LV ${level}`;
+    };
+
+    const shell = (heading: string, subheading: string, context: string): {
+      root: HTMLElement;
+      body: HTMLElement;
+      footer: HTMLElement;
+      status: HTMLElement;
+      live: HTMLElement;
+    } => {
+      const root = el("div", "menu loadout-gate kit-gate");
+      root.setAttribute("role", "dialog");
+      root.setAttribute("aria-modal", "true");
+      root.setAttribute("aria-labelledby", "loadout-gate-title");
+      root.setAttribute("data-step", step);
+      root.setAttribute("data-gate-sequence", String(gateSequence));
+      root.setAttribute("data-profile-state", isProfileLoading ? "loading" : isProfileError ? "error" : "ready");
+      const header = el("header", "loadout-head");
+      const title = el("h1", "", heading);
+      title.id = "loadout-gate-title";
+      header.append(
+        title,
+        el("p", "loadout-sub", subheading),
+        el("p", "loadout-context", context),
+        el("span", "loadout-profile-state", profileState()),
+      );
+      const body = el("div", "loadout-body");
+      const footer = el("footer", "loadout-footer");
+      const status = el("p", "loadout-error", errorMessage);
+      status.setAttribute("role", "alert");
+      const live = el("p", "loadout-live", announcement);
+      live.setAttribute("aria-live", "polite");
+      live.setAttribute("aria-atomic", "true");
+      root.append(header, body, footer, status, live);
+      return { root, body, footer, status, live };
+    };
+
+    const showKit = () => {
+      step = "kit";
+      const context = opts.roomCode
+        ? `${opts.contextLabel} · ROOM ${opts.roomCode}`
+        : opts.contextLabel;
+      const view = shell(
+        "CHOOSE YOUR KIT",
+        "Pick your role for this run. You can choose again next run.",
+        context,
+      );
+      const grid = el("div", "loadout-kit-grid");
+      grid.setAttribute("role", "radiogroup");
+      grid.setAttribute("aria-label", "kit for this run");
+      const cards: HTMLButtonElement[] = [];
+      for (const [index, kit] of KIT_IDS.entries()) {
+        const meta = KIT_META[kit];
+        const isUnlocked = isKitUnlocked(kit, level);
+        const isSelected = isKitChoiceMade && draftKitId === kit;
+        const isLast = !isKitChoiceMade && draftKitId === kit;
+        const card = el(
+          "button",
+          `loadout-card kit-option${isSelected ? " selected" : ""}${isLast ? " last-used" : ""}${isUnlocked ? "" : " locked"}`,
+        );
+        card.type = "button";
+        card.setAttribute("role", "radio");
+        card.setAttribute("aria-checked", String(isSelected));
+        card.setAttribute("aria-label", `${meta.name}, ${meta.role}, ${WEAPONS[KIT_START_WEAPON[kit]].name}, ultimate ${meta.ult}`);
+        card.setAttribute("data-kit", kit);
+        const icon = document.createElement("img");
+        icon.src = `/sprites/ui/${kit}_24.png`;
+        icon.alt = "";
+        icon.width = 24;
+        icon.height = 24;
+        icon.className = "loadout-kit-icon";
+        const titleRow = el("div", "loadout-card-title");
+        titleRow.append(icon, el("span", "kit-name", meta.name.toUpperCase()));
+        card.append(
+          el("span", "loadout-key", String(index + 1)),
+          titleRow,
+          el("span", "kit-role", `${meta.role.toUpperCase()} · ${WEAPONS[KIT_START_WEAPON[kit]].name.toUpperCase()} · ULT ${meta.ult.toUpperCase()}`),
+          el("span", "kit-blurb", meta.blurb),
+        );
+        const state = el("span", "loadout-card-state");
+        if (!isUnlocked) {
+          const needed = kitUnlockLevel(kit);
+          state.textContent = `REACH ACCOUNT LV ${needed} · LV ${level}/${needed}`;
+          card.disabled = true;
+        } else if (isSelected) {
+          state.textContent = "SELECTED ✓";
+        } else if (isLast) {
+          state.textContent = "LAST USED";
+        } else {
+          state.textContent = "AVAILABLE";
+        }
+        card.appendChild(state);
+        card.onclick = () => {
+          if (!isUnlocked) return;
+          draftKitId = kit;
+          isKitChoiceMade = true;
+          errorMessage = "";
+          announcement = `${meta.name} selected`;
+          clearRoomConfirmationIfChanged();
+          showKit();
+        };
+        cards.push(card);
+        grid.appendChild(card);
+      }
+      view.body.appendChild(grid);
+      const back = el("button", "secondary loadout-back", "BACK");
+      back.type = "button";
+      back.onclick = opts.onBack;
+      const next = el("button", "loadout-next", "NEXT · CHOOSE PET");
+      next.type = "button";
+      next.disabled = !isKitChoiceMade;
+      next.onclick = () => {
+        if (!isKitChoiceMade) return;
+        errorMessage = "";
+        announcement = "";
+        showPet();
+      };
+      view.footer.append(back, next);
+      this.show(view.root);
+      this.bindLoadoutKeys(cards, 2, opts.onBack);
+      queueMicrotask(() => cards.find((card) => card.getAttribute("data-kit") === draftKitId)?.focus());
+    };
+
+    const confirmDraft = async () => {
+      if (!isKitChoiceMade || !isPetChoiceMade || isPersisting) return;
+      isPersisting = true;
+      errorMessage = "";
+      showPet();
+      const error = await opts.onConfirm({ kitId: draftKitId, petId: draftPetId });
+      if (!error) return;
+      isPersisting = false;
+      errorMessage = error;
+      showPet();
+    };
+
+    const showPet = () => {
+      step = "pet";
+      const kitName = KIT_META[draftKitId].name.toUpperCase();
+      const context = opts.roomCode
+        ? `KIT ${kitName} · ROOM ${opts.roomCode}`
+        : `KIT ${kitName} · ${opts.contextLabel}`;
+      const view = shell(
+        "CHOOSE YOUR PET",
+        "Pick a companion for this run — or travel alone.",
+        context,
+      );
+      const layout = el("div", "loadout-pet-layout");
+      const previewBox = el("div", "loadout-preview");
+      previewBox.setAttribute("role", "img");
+      previewBox.setAttribute("aria-label", `Player blob with ${petName(draftPetId)}`);
+      const preview = createLoadoutPreview(
+        lookOf(this.session.cosmetics, this.session.colorIndex),
+        draftPetId,
+        220,
+        300,
+      );
+      previewBox.append(
+        preview.el,
+        el("span", "loadout-preview-label", "PLAYER BLOB + PET"),
+        el("span", "loadout-preview-copy", draftPetId === null ? "Travel alone. No gameplay change." : "COSMETIC COMPANION · No combat effect"),
+      );
+      const grid = el("div", "loadout-pet-grid");
+      grid.setAttribute("role", "radiogroup");
+      grid.setAttribute("aria-label", "pet for this run");
+      const cards: HTMLButtonElement[] = [];
+      const options: Array<{ petId: string | null; node: CampNodeDef | null }> = [
+        { petId: null, node: null },
+        ...companionNodes.map((node) => ({ petId: node.pet, node })),
+      ];
+      for (const [index, option] of options.entries()) {
+        const isOwned = option.petId === null || isPetOwned(option.petId, unlocks);
+        const isSelected = isPetChoiceMade && draftPetId === option.petId;
+        const isLast = !isPetChoiceMade && draftPetId === option.petId;
+        const name = option.node?.name.toUpperCase() ?? "NO PET";
+        const card = el(
+          "button",
+          `loadout-card pet-option${isSelected ? " selected" : ""}${isLast ? " last-used" : ""}${isOwned ? "" : " locked"}`,
+        );
+        card.type = "button";
+        card.setAttribute("role", "radio");
+        card.setAttribute("aria-checked", String(isSelected));
+        card.setAttribute("aria-label", `${name}${isOwned ? "" : ", locked"}`);
+        card.setAttribute("data-pet", option.petId ?? "none");
+        card.append(
+          el("span", "loadout-key", String(index + 1)),
+          el("span", "pet-name", name),
+          el("span", "pet-kind", option.petId === null ? "TRAVEL ALONE" : "COSMETIC COMPANION"),
+          el("span", "pet-effect", option.petId === null ? "No gameplay change." : "No combat effect"),
+        );
+        const state = el("span", "loadout-card-state");
+        if (!isOwned && option.node?.rescueFloor !== undefined) {
+          const reached = Math.min(profile?.deepestFloor ?? 0, option.node.rescueFloor);
+          state.textContent = `REACH FLOOR ${option.node.rescueFloor} TO RESCUE · ${reached}/${option.node.rescueFloor}`;
+          card.disabled = true;
+        } else if (isSelected) {
+          state.textContent = "SELECTED ✓";
+        } else if (isLast) {
+          state.textContent = "LAST USED";
+        } else if (option.petId === null) {
+          state.textContent = "AVAILABLE";
+        } else {
+          state.textContent = "RESCUED";
+        }
+        card.appendChild(state);
+        card.onclick = () => {
+          if (!isOwned) return;
+          draftPetId = option.petId;
+          isPetChoiceMade = true;
+          errorMessage = "";
+          announcement = `${name} selected`;
+          clearRoomConfirmationIfChanged();
+          showPet();
+        };
+        cards.push(card);
+        grid.appendChild(card);
+      }
+      const reserved = el("div", "pet-option reserved");
+      reserved.setAttribute("aria-hidden", "true");
+      grid.appendChild(reserved);
+      layout.append(previewBox, grid);
+      view.body.appendChild(layout);
+
+      const back = el("button", "secondary loadout-back", "BACK · KIT");
+      back.type = "button";
+      back.onclick = () => {
+        errorMessage = "";
+        announcement = "";
+        showKit();
+      };
+      const confirm = el("button", "loadout-confirm");
+      confirm.type = "button";
+      confirm.disabled = !isPetChoiceMade || isPersisting;
+      const fullLabel = el(
+        "span",
+        "loadout-confirm-full",
+        isPersisting ? "CONFIRMING…" : `${opts.destinationLabel} · ${pairLabel()}`,
+      );
+      const compactLabel = el(
+        "span",
+        "loadout-confirm-compact",
+        isPersisting ? "CONFIRMING…" : `CONFIRM · ${pairLabel()}`,
+      );
+      confirm.append(fullLabel, compactLabel);
+      confirm.onclick = () => void confirmDraft();
+      view.footer.append(back, confirm);
+
+      const fallbackSlot = el("div", "loadout-fallback-slot");
+      const fallback = el("button", "secondary loadout-no-pet", "CONTINUE NO PET");
+      fallback.type = "button";
+      fallback.hidden = errorMessage.length === 0 || draftPetId === null;
+      fallback.onclick = () => {
+        draftPetId = null;
+        isPetChoiceMade = true;
+        errorMessage = "";
+        announcement = "No Pet selected";
+        clearRoomConfirmationIfChanged();
+        void confirmDraft();
+      };
+      fallbackSlot.appendChild(fallback);
+      view.status.after(fallbackSlot);
+
+      this.show(view.root);
+      this.bindLoadoutKeys(cards, 2, () => showKit());
+      queueMicrotask(() => cards.find((card) => card.getAttribute("data-pet") === (draftPetId ?? "none"))?.focus());
+    };
+
+    showKit();
+    if (isProfileLoading) {
+      const isCurrentGate = () => this.overlay.querySelector(
+        `.loadout-gate[data-gate-sequence="${gateSequence}"]`,
+      ) !== null;
+      const hydrationTimer = setTimeout(() => {
+        if (!isCurrentGate()) return;
+        isProfileLoading = false;
+        isProfileError = true;
+        if (step === "kit") showKit(); else showPet();
+      }, HYDRATE_TIMEOUT_MS);
+      void this.session.login().then((hydrated) => {
+        clearTimeout(hydrationTimer);
+        if (!isCurrentGate()) return;
+        profile = hydrated;
+        level = hydrated?.masteryLevel ?? 1;
+        unlocks = hydrated?.unlocks ?? [];
+        isProfileLoading = false;
+        if (!isKitChoiceMade && !isKitUnlocked(draftKitId, level)) {
+          draftKitId = KIT_IDS.find((kit) => isKitUnlocked(kit, level)) ?? "gunner";
+        }
+        if (!isPetChoiceMade && draftPetId !== null && !isPetOwned(draftPetId, unlocks)) {
+          draftPetId = null;
+        }
+        if (step === "kit") showKit(); else showPet();
+      }).catch(() => {
+        clearTimeout(hydrationTimer);
+        if (!isCurrentGate()) return;
+        isProfileLoading = false;
+        isProfileError = true;
+        if (step === "kit") showKit(); else showPet();
+      });
+    }
+  }
+
+  private bindLoadoutKeys(
+    cards: HTMLButtonElement[],
+    columns: number,
+    onBack: () => void,
+  ): void {
+    const handler = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        onBack();
+        return;
+      }
+      const number = Number(event.key);
+      if (Number.isInteger(number) && number >= 1 && number <= cards.length) {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        cards[number - 1]?.click();
+        return;
+      }
+      const key = event.key.toLowerCase();
+      const direction = key === "arrowleft" || key === "a" ? -1
+        : key === "arrowright" || key === "d" ? 1
+          : key === "arrowup" || key === "w" ? -columns
+            : key === "arrowdown" || key === "s" ? columns
+              : 0;
+      if (direction !== 0) {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        const current = document.activeElement instanceof HTMLButtonElement
+          ? cards.indexOf(document.activeElement)
+          : -1;
+        let index = current >= 0 ? current : 0;
+        for (let attempts = 0; attempts < cards.length; attempts++) {
+          index = (index + direction + cards.length) % cards.length;
+          if (!cards[index].disabled) {
+            cards[index].focus();
+            break;
+          }
+        }
+        return;
+      }
+      if (event.key === "Tab") {
+        const focusable = [...this.overlay.querySelectorAll<HTMLButtonElement>("button:not(:disabled)")];
+        if (focusable.length === 0) return;
+        const current = document.activeElement instanceof HTMLButtonElement
+          ? focusable.indexOf(document.activeElement)
+          : -1;
+        const next = event.shiftKey
+          ? (current <= 0 ? focusable.length - 1 : current - 1)
+          : (current < 0 || current === focusable.length - 1 ? 0 : current + 1);
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        focusable[next].focus();
+      }
+    };
+    this.menuKeys = handler;
+    window.addEventListener("keydown", handler);
   }
 
   // ---- LEADERBOARD ------------------------------------------------------------------
@@ -1929,9 +2373,32 @@ export class Menu {
   // inside the reserved status line (the retryable invite failure re-runs its join).
   // Returns the status-line element so the invite flow can drive the SAME inline state
   // the manual actions use — never a modal, never a second surface.
-  async showOnlineHome(note = "", opts: { isBusy?: boolean; retry?: () => void } = {}): Promise<HTMLElement | null> {
+  async showOnlineHome(note = "", opts: {
+    isBusy?: boolean;
+    isLoadoutConfirmed?: boolean;
+    retry?: () => void;
+  } = {}): Promise<HTMLElement | null> {
     if (!this.client) { await this.showTitle(); return null; }
-    if (this.needsNameGate()) { this.showNameGate(); return null; }
+    if (this.needsNameGate()) {
+      this.showNameGate(() => void this.showOnlineHome(note, opts));
+      return null;
+    }
+    if (this.pendingOnlineLoadout === null && opts.isLoadoutConfirmed !== true) {
+      this.showLoadoutGate({
+        destination: "online",
+        destinationLabel: "CONTINUE ONLINE",
+        contextLabel: "ONLINE RUN",
+        onBack: () => void this.showTitle({ dest: "online" }),
+        onConfirm: async (loadout) => {
+          const error = await this.persistProfileLoadout(loadout, false);
+          if (error) return error;
+          this.pendingOnlineLoadout = loadout;
+          await this.showOnlineHome(note, { ...opts, isLoadoutConfirmed: true });
+          return null;
+        },
+      });
+      return null;
+    }
     const wrap = el("div", "menu");
     wrap.appendChild(el("h1", "", "PLAY ONLINE"));
     wrap.appendChild(el("p", "", "Server-run worlds. Drop into the public pool, or make a room and share its code."));
@@ -2015,6 +2482,31 @@ export class Menu {
     return status;
   }
 
+  showOnlineReplayGate(mode: RoomMode): void {
+    if (!this.client) {
+      void this.showTitle();
+      return;
+    }
+    this.showLoadoutGate({
+      destination: "replay",
+      destinationLabel: "FIND ANOTHER",
+      contextLabel: "NEW ONLINE RUN",
+      onBack: () => void this.showOnlineHome(),
+      onConfirm: async (loadout) => {
+        try {
+          const profile = await this.session.login();
+          if (!this.client) return "Online play is unavailable";
+          const lobby = new OnlineLobby(this.client, this.session);
+          await lobby.quickPlay(mode, loadout);
+          this.launchOnline(lobby, profile, false);
+          return null;
+        } catch (error) {
+          return normalizeOnlineError(error, "could not find another match").message;
+        }
+      },
+    });
+  }
+
   // An invite link's landing (cold boot in main.ts, warm popstate arrivals — same door).
   // The canonical shell renders FIRST (never blank), then the join auto-attempts through
   // doJoinOnline — the SAME path manual JOIN CODE takes (capacity, kind, ended: nothing
@@ -2031,46 +2523,69 @@ export class Menu {
       await this.showTitle(undefined, INVITE_OFFLINE_NOTE);
       return;
     }
-    if (this.needsNameGate()) { this.showNameGate(() => void this.joinInvite(code)); return; }
-    await this.joinInvite(code);
+    if (this.needsNameGate()) {
+      this.showNameGate(() => this.showInviteLoadoutGate(code));
+      return;
+    }
+    this.showInviteLoadoutGate(code);
   }
 
-  private async joinInvite(code: string): Promise<void> {
-    const status = await this.showOnlineHome(inviteJoiningNote(code), { isBusy: true });
-    if (!status) return;
-    // An unreachable backend never REJECTS (the Convex client retries forever) — it just
-    // never resolves. Settle honestly at the hydrate window with the retryable failure;
-    // a join landing after that must not teleport the player, so it is dropped as stale
-    // (doJoinOnline leaves the room it silently won).
+  private showInviteLoadoutGate(code: string): void {
+    const roomCode = code.trim().toUpperCase();
+    this.showLoadoutGate({
+      destination: "invite",
+      destinationLabel: `JOIN ${roomCode}`,
+      contextLabel: `INVITE · ROOM ${roomCode}`,
+      roomCode,
+      onBack: () => {
+        stripInviteFromLocation();
+        void this.showTitle({ dest: "online" });
+      },
+      onConfirm: (loadout) => this.joinInviteWithLoadout(roomCode, loadout),
+    });
+  }
+
+  private async joinInviteWithLoadout(code: string, loadout: RunLoadout): Promise<string | null> {
+    const status = el("p");
+    let failure: string | null = null;
     let isTimedOut = false;
-    const timer = setTimeout(() => {
-      isTimedOut = true;
-      stripInviteFromLocation();
-      void this.showOnlineHome(INVITE_UNREACHABLE_NOTE, { retry: () => void this.joinInvite(code) });
-    }, HYDRATE_TIMEOUT_MS);
-    await this.doJoinOnline(code, status, {
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const attempt = this.doJoinOnline(code, status, {
+      confirmedLoadout: loadout,
       joiningNote: inviteJoiningNote(code),
       isStale: () => isTimedOut,
       onSettled: () => {
-        clearTimeout(timer);
+        if (timer !== null) clearTimeout(timer);
         if (!isTimedOut) stripInviteFromLocation();
       },
       onFail: (e) => {
-        // A pvp_disabled rejection (the kill switch) is a definitive, non-retryable refusal with
-        // its own clean copy; every other failure maps through the invite spec copy.
         const fail = e.code === PVP_DISABLED_CODE ? { note: e.message, isRetryable: false } : inviteFailState(e.message);
-        void this.showOnlineHome(fail.note, fail.isRetryable ? { retry: () => void this.joinInvite(code) } : {});
+        failure = fail.note;
       },
     });
+    const timeout = new Promise<string>((resolve) => {
+      timer = setTimeout(() => {
+        isTimedOut = true;
+        stripInviteFromLocation();
+        resolve(INVITE_UNREACHABLE_NOTE);
+      }, HYDRATE_TIMEOUT_MS);
+    });
+    const result = await Promise.race([attempt.then(() => failure), timeout]);
+    return result;
   }
 
   private async doQuickPlayOnline(setBusy: (b: boolean, t: string) => void) {
     if (!this.client) return;
+    const loadout = this.pendingOnlineLoadout;
+    if (!loadout) {
+      await this.showOnlineHome();
+      return;
+    }
     setBusy(true, "finding a room\u2026");
     try {
       const profile = await this.session.login();
       const lobby = new OnlineLobby(this.client, this.session);
-      await lobby.quickPlay(this.onlineMode);
+      await lobby.quickPlay(this.onlineMode, loadout);
       // The public pool has no start gate: the room is live, drop straight in.
       this.launchOnline(lobby, profile, false);
     } catch (err) {
@@ -2080,11 +2595,17 @@ export class Menu {
 
   private async doCreateOnline(setBusy: (b: boolean, t: string) => void) {
     if (!this.client) return;
+    const loadout = this.pendingOnlineLoadout;
+    if (!loadout) {
+      await this.showOnlineHome();
+      return;
+    }
     setBusy(true, "creating room\u2026");
     try {
       const profile = await this.session.login();
       const lobby = new OnlineLobby(this.client, this.session);
-      await lobby.create(this.onlineMode);
+      await lobby.create(this.onlineMode, loadout);
+      this.pendingOnlineLoadout = null;
       this.showOnlineLobby(lobby, profile);
     } catch (err) {
       setBusy(false, normalizeOnlineError(err, "could not create room").message);
@@ -2097,19 +2618,26 @@ export class Menu {
   // settled after its caller already moved on (the unreachable-timeout landing).
   private async doJoinOnline(code: string, status: HTMLElement, opts: {
     joiningNote?: string;
+    confirmedLoadout?: RunLoadout;
     onFail?: (err: NormalizedOnlineError) => void;
     isStale?: () => boolean;
     onSettled?: () => void;
   } = {}) {
     const fail = opts.onFail ?? ((e: NormalizedOnlineError) => { status.textContent = e.message; });
     if (!this.client || code.trim().length < 4) { fail({ code: null, message: "enter a valid code" }); return; }
+    const loadout = opts.confirmedLoadout ?? this.pendingOnlineLoadout;
+    if (!loadout) {
+      fail({ code: null, message: "confirm KIT + PET before joining" });
+      return;
+    }
     status.textContent = opts.joiningNote ?? "joining\u2026";
     try {
       const profile = await this.session.login();
       const lobby = new OnlineLobby(this.client, this.session);
-      await lobby.join(code);
+      await lobby.join(code, loadout);
       opts.onSettled?.();
       if (opts.isStale?.()) { lobby.leave(); return; }
+      this.pendingOnlineLoadout = null;
       // A live room means the run is on — drop straight in; otherwise wait in the lobby.
       if (lobby.status === "playing") this.launchOnline(lobby, profile, false);
       else this.showOnlineLobby(lobby, profile);
@@ -2121,6 +2649,7 @@ export class Menu {
   }
 
   private launchOnline(lobby: OnlineLobby, profile: ProfileDoc | null, isPartyStart: boolean) {
+    this.pendingOnlineLoadout = null;
     this.teardownLobby();
     this.host.startOnline(lobby, profile, isPartyStart);
   }
@@ -2130,6 +2659,7 @@ export class Menu {
   // authoritative server, not assumed), and the start/waiting/rejoin control. Re-renders on
   // every roster/status change.
   showOnlineLobby(lobby: OnlineLobby, profile: ProfileDoc | null, note = "") {
+    let lobbyNote = note;
     let prevStatus = lobby.status;
     const render = () => {
       if (lobby.status === "ended") { lobby.leave(); void this.showTitle(); return; }
@@ -2164,24 +2694,29 @@ export class Menu {
       wrap.appendChild(inviteUrlLine);
 
       const players = lobby.players();
-      const list = el("div", "playerlist");
+      const list = el("div", "playerlist loadout-roster");
       for (const p of players) {
         const rowEl = el("div", "playerrow");
-        const dot = el("span", "dot");
-        dot.style.background = playerColor(p.colorIndex);
+        const blob = createBlobPreview(
+          { colorIndex: p.colorIndex > 0 ? p.colorIndex : null, hat: null, face: null },
+          32,
+        );
+        blob.el.classList.add("roster-blob");
         const you = p.playerId === lobby.selfId ? " (you)" : "";
-        rowEl.append(dot, el("span", "", `${p.name}${you}${p.isHost ? " \u2014 host" : ""}`));
+        const loadout = p.isLoadoutConfirmed && p.kitId
+          ? `${KIT_META[p.kitId as PlayableKitId]?.name.toUpperCase() ?? p.kitId.toUpperCase()} + ${this.petDisplayName(p.petId)}`
+          : "LOADOUT MISSING";
+        const identity = el(
+          "span",
+          "roster-identity",
+          `${p.name}${you}${p.isHost ? " · HOST" : ""} · ${loadout} · ${p.isLoadoutConfirmed ? "LOADOUT ✓" : "LOADOUT MISSING"}`,
+        );
+        rowEl.append(blob.el, identity);
         rowEl.appendChild(this.memberStatusChip(lobby, p));
         list.appendChild(rowEl);
       }
       wrap.appendChild(list);
       wrap.appendChild(el("p", "muted", `${players.length} player${players.length === 1 ? "" : "s"} in the room`));
-
-      // KIT select (spec §5): each player picks their OWN kit pre-run — no forced roles,
-      // 4× the same kit is legal. Locked kits show greyed with their unlock threshold (the
-      // same visible-but-locked aspiration pattern as the premium shop). Server-validated at
-      // join against account Mastery, so the pick is intent, never authority.
-      wrap.appendChild(this.kitSelectPanel(profile, render));
 
       const row = el("div", "btnrow");
       if (lobby.status === "playing") {
@@ -2189,17 +2724,29 @@ export class Menu {
         const rejoin = el("button", "", "\u25be  REJOIN RUN");
         rejoin.addEventListener("click", () => this.launchOnline(lobby, profile, false));
         row.appendChild(rejoin);
-      } else if (lobby.isHost) {
-        row.appendChild(this.hostStartButton(lobby));
       } else {
-        row.appendChild(this.readyToggleButton(lobby));
-        wrap.appendChild(el("p", "muted", "waiting for the host to start\u2026"));
+        const change = el("button", "secondary change-loadout", lobby.isSelfLoadoutConfirmed ? "CHANGE LOADOUT" : "CONFIRM LOADOUT");
+        change.type = "button";
+        change.onclick = () => this.showLobbyLoadoutGate(lobby, profile);
+        row.appendChild(change);
+        row.appendChild(this.readyToggleButton(lobby, (message) => {
+          lobbyNote = message;
+          render();
+        }));
+        if (lobby.isHost) {
+          row.appendChild(this.hostStartButton(lobby, (message) => {
+            lobbyNote = message;
+            render();
+          }));
+        } else {
+          wrap.appendChild(el("p", "muted", "waiting for the host to start\u2026"));
+        }
       }
       const leave = el("button", "secondary", "leave");
       leave.addEventListener("click", () => { lobby.leave(); void this.showTitle(); });
       row.appendChild(leave);
       wrap.appendChild(row);
-      if (note) wrap.appendChild(el("p", "muted", note));
+      wrap.appendChild(el("p", "muted lobby-blocker", lobbyNote));
       wrap.appendChild(el("p", "hint", CONTROLS));
 
       this.overlay.classList.remove("hidden");
@@ -2211,35 +2758,27 @@ export class Menu {
     render();
   }
 
-  // The pre-run KIT picker (spec §5): the four kit cards, the account-unlocked ones selectable
-  // (the pick persists locally + rides the join ticket), the locked ones greyed with their
-  // "REACH ACCOUNT LV N" threshold. Per-player, no forced comp. `rerender` re-runs the lobby
-  // render so the selection highlight updates (kit choice is local, not a lobby event).
-  private kitSelectPanel(profile: ProfileDoc | null, rerender: () => void): HTMLElement {
-    const level = profile?.masteryLevel ?? 1;
-    const selected = getSelectedKit();
-    const panel = el("div", "kit-select");
-    panel.appendChild(el("div", "kit-select-title", `CHOOSE YOUR KIT \u00b7 ACCOUNT LV ${level}`));
-    const grid = el("div", "kit-grid");
-    for (const kit of KIT_IDS) {
-      const meta = KIT_META[kit];
-      const unlocked = isKitUnlocked(kit, level);
-      const isSel = unlocked && kit === selected;
-      const card = el("button", `kit-card${unlocked ? "" : " locked"}${isSel ? " sel" : ""}`);
-      (card as HTMLButtonElement).type = "button";
-      card.appendChild(el("div", "kit-name", meta.name));
-      card.appendChild(el("div", "kit-role", `${meta.role} \u00b7 ${meta.ult}`));
-      card.appendChild(el("div", "kit-blurb", meta.blurb));
-      card.appendChild(el("div", "kit-lock", unlocked ? "" : `REACH ACCOUNT LV ${kitUnlockLevel(kit)}`));
-      if (unlocked) {
-        card.addEventListener("click", () => { setSelectedKit(kit); rerender(); });
-      } else {
-        (card as HTMLButtonElement).disabled = true;
-      }
-      grid.appendChild(card);
-    }
-    panel.appendChild(grid);
-    return panel;
+  private petDisplayName(petId: string | null): string {
+    if (petId === null) return "NO PET";
+    return CAMP_NODES.find((node) => node.pet === petId)?.name.toUpperCase() ?? "NO PET";
+  }
+
+  private showLobbyLoadoutGate(lobby: OnlineLobby, profile: ProfileDoc | null): void {
+    const generation = lobby.loadoutGeneration;
+    this.showLoadoutGate({
+      destination: "lobby",
+      destinationLabel: "CONFIRM",
+      contextLabel: `PRIVATE LOBBY · GENERATION ${generation}`,
+      roomCode: lobby.code,
+      lobby,
+      onBack: () => this.showOnlineLobby(lobby, profile),
+      onConfirm: async (loadout) => {
+        const error = await lobby.confirmLoadout(loadout, generation);
+        if (error) return error;
+        this.showOnlineLobby(lobby, this.session.profile ?? profile);
+        return null;
+      },
+    });
   }
 
   // One tap shares the FULL invite URL (/r/<CODE>), not just the code: the native share
@@ -2274,9 +2813,6 @@ export class Menu {
       const isConnected = p.gsWorldId === lobby.expectedWorldId();
       label = isConnected ? "CONNECTED TO WORLD" : "CONNECTING\u2026";
       color = isConnected ? "var(--ok)" : "var(--amber)";
-    } else if (p.isHost) {
-      label = "HOST";
-      color = "var(--ink-mute)";
     } else {
       label = p.isReady ? READY_LABEL : NOT_READY_LABEL;
       color = p.isReady ? "var(--ok)" : "var(--amber)";
@@ -2290,47 +2826,37 @@ export class Menu {
   }
 
   // A non-host member's readiness consent toggle.
-  private readyToggleButton(lobby: OnlineLobby): HTMLButtonElement {
+  private readyToggleButton(
+    lobby: OnlineLobby,
+    onBlocked: (message: string) => void,
+  ): HTMLButtonElement {
     const isReady = lobby.isSelfReady;
-    const btn = el("button", isReady ? "secondary" : "", isReady ? "\u2713 READY \u2014 tap to unready" : "\u25be  READY UP");
-    btn.addEventListener("click", () => lobby.setReady(!lobby.isSelfReady));
+    const isConfirmed = lobby.isSelfLoadoutConfirmed;
+    const btn = el(
+      "button",
+      isReady ? "secondary" : "",
+      !isConfirmed ? "CONFIRM LOADOUT FIRST" : isReady ? "\u2713 READY \u2014 tap to unready" : "\u25be  READY UP",
+    );
+    btn.disabled = !isConfirmed;
+    btn.addEventListener("click", () => {
+      void lobby.setReady(!lobby.isSelfReady).then((message) => {
+        if (message) onBlocked(message);
+      });
+    });
     return btn;
   }
 
-  // The host's start control. All members ready -> plain START RUN. Someone not ready ->
-  // START ANYWAY, armed only by a full 3s HOLD (releasing cancels) so a party can never be
-  // yanked into a run by a slipped click.
-  private hostStartButton(lobby: OnlineLobby): HTMLButtonElement {
-    if (lobby.isPartyReady) {
-      const start = el("button", "", "\u25be  START RUN");
-      start.addEventListener("click", () => void lobby.start().catch(() => {}));
-      return start;
-    }
-    const btn = el("button", "secondary", START_ANYWAY_IDLE);
-    let holdTimer: ReturnType<typeof setInterval> | null = null;
-    let holdStartedAt = 0;
-    const cancelHold = () => {
-      if (holdTimer !== null) clearInterval(holdTimer);
-      holdTimer = null;
-      btn.textContent = START_ANYWAY_IDLE;
-    };
-    btn.addEventListener("pointerdown", () => {
-      holdStartedAt = Date.now();
-      cancelHold();
-      holdTimer = setInterval(() => {
-        const heldMs = Date.now() - holdStartedAt;
-        if (heldMs >= START_ANYWAY_HOLD_MS) {
-          cancelHold();
-          void lobby.start().catch(() => {});
-          return;
-        }
-        btn.textContent = startAnywayHoldLabel(heldMs);
-      }, 100);
+  private hostStartButton(
+    lobby: OnlineLobby,
+    onBlocked: (message: string) => void,
+  ): HTMLButtonElement {
+    const start = el("button", lobby.isPartyReady ? "" : "secondary", "\u25be  START RUN");
+    start.addEventListener("click", () => {
+      void lobby.start().then((message) => {
+        if (message) onBlocked(message);
+      });
     });
-    btn.addEventListener("pointerup", cancelHold);
-    btn.addEventListener("pointerleave", cancelHold);
-    btn.addEventListener("pointercancel", cancelHold);
-    return btn;
+    return start;
   }
 
   // The join-by-code screen for online rooms.
@@ -2421,8 +2947,9 @@ export class Menu {
     let hint: string;
     const online = ctx.online;
     if (online && online.isActive && !online.isQuickPlay) {
-      // Private room: the party regroups in the same lobby, same code, ready to go again.
-      primary = () => { void online.reopen(); this.showOnlineLobby(online, profile); };
+      primary = () => {
+        void online.reopen().then(() => this.showLobbyLoadoutGate(online, profile));
+      };
       const backBtn = el("button", "", "back to lobby \u21b5");
       backBtn.addEventListener("click", () => primary());
       const leaveBtn = el("button", "secondary", "leave room");
@@ -2430,8 +2957,10 @@ export class Menu {
       row.append(backBtn, leaveBtn);
       hint = "press ENTER for the lobby";
     } else if (online) {
-      // Quick play (or a room that ended underneath us): matchmake again.
-      primary = () => void this.retryQuickPlayOnline(online);
+      primary = () => this.retryQuickPlayOnline(
+        online,
+        () => this.showGameOver(result, profile, ctx),
+      );
       const again = el("button", "", "play again \u21b5");
       again.addEventListener("click", () => primary());
       const back = el("button", "secondary", "back to menu \u25b8");
@@ -2511,19 +3040,30 @@ export class Menu {
     return box;
   }
 
-  // Leave the finished quick-play room and matchmake a fresh one in one motion.
-  private async retryQuickPlayOnline(old: OnlineLobby) {
-    if (!this.client) { await this.showTitle(); return; }
-    old.leave();
-    await this.showOnlineHome("finding a room\u2026");
-    try {
-      const profile = await this.session.login();
-      const lobby = new OnlineLobby(this.client, this.session);
-      await lobby.quickPlay(old.mode);
-      this.launchOnline(lobby, profile, false);
-    } catch (err) {
-      await this.showOnlineHome(normalizeOnlineError(err, "could not find a room").message);
+  private retryQuickPlayOnline(old: OnlineLobby, onBack: () => void): void {
+    if (!this.client) {
+      void this.showTitle();
+      return;
     }
+    this.showLoadoutGate({
+      destination: "replay",
+      destinationLabel: "PLAY AGAIN",
+      contextLabel: "NEW ONLINE RUN",
+      onBack,
+      onConfirm: async (loadout) => {
+        try {
+          old.leave();
+          const profile = await this.session.login();
+          if (!this.client) return "Online play is unavailable";
+          const lobby = new OnlineLobby(this.client, this.session);
+          await lobby.quickPlay(old.mode, loadout);
+          this.launchOnline(lobby, profile, false);
+          return null;
+        } catch (error) {
+          return normalizeOnlineError(error, "could not find a room").message;
+        }
+      },
+    });
   }
 
   private runCountups(items: Array<{ node: HTMLElement; to: number; fmt: (v: number) => string }>, durationMs = 700) {

@@ -8,10 +8,8 @@ import { Menu } from "./ui/menu.js";
 import { bindMenuGamepad } from "./ui/menuGamepad.js";
 import { bindUiScale } from "./ui/settings.js";
 import { exitNoteFor, INVITE_INVALID_NOTE, INVITE_OFFLINE_NOTE } from "./ui/onlineCopy.js";
-import { normalizeOnlineError } from "./net/onlineError.js";
 import { parseInviteCode, hasInviteIntent, stripInviteFromLocation } from "./net/inviteLink.js";
 import { OnlineLobby } from "./net/onlineLobby.js";
-import { getSelectedKit } from "./net/kitSelection.js";
 
 declare global {
   interface Window {
@@ -152,6 +150,11 @@ async function bootNormal() {
   }
 
   function launchOnlineRun(lobby: OnlineLobby, profile: ProfileDoc | null, isPartyStart: boolean): void {
+    const loadout = lobby.selfLoadout;
+    if (!loadout) {
+      menu.showOnlineLobby(lobby, profile, "Confirm KIT + PET before joining the run");
+      return;
+    }
     if (activeOnline && activeOnline !== lobby) activeOnline.leave();
     activeOnline = lobby;
     launchRun((game) => game.start({
@@ -168,11 +171,11 @@ async function bootNormal() {
       profile,
       selfColorIndex: session.colorIndex,
       selfCosmetics: session.cosmetics,
-      selfPet: session.equippedPet,
+      selfPet: loadout.petId,
     }));
   }
 
-  async function requeueArena(): Promise<void> {
+  function requeueArena(): void {
     isInRun = false;
     const previous = activeOnline;
     if (!client || previous === null || previous.mode !== "pvp") {
@@ -181,20 +184,21 @@ async function bootNormal() {
     }
     previous.leave();
     activeOnline = null;
-    try {
-      const profile = await session.login();
-      const lobby = new OnlineLobby(client, session);
-      await lobby.quickPlay("pvp");
-      launchOnlineRun(lobby, profile, false);
-    } catch (err) {
-      await menu.showOnlineHome(normalizeOnlineError(err, "could not re-queue the arena").message);
-    }
+    menu.showOnlineReplayGate("pvp");
   }
 
   const menu = new Menu(overlay, session, client, auth, {
-    startSolo(profile: ProfileDoc | null) {
+    startSolo(profile: ProfileDoc | null, loadout) {
       leaveOnlineIfAny();
-      launchRun((game) => game.start({ mode: "solo", coop: null, profile, kit: getSelectedKit(), selfColorIndex: session.colorIndex, selfCosmetics: session.cosmetics, selfPet: session.equippedPet }));
+      launchRun((game) => game.start({
+        mode: "solo",
+        coop: null,
+        profile,
+        kit: loadout.kitId,
+        selfColorIndex: session.colorIndex,
+        selfCosmetics: session.cosmetics,
+        selfPet: loadout.petId,
+      }));
     },
     startOnline(lobby: OnlineLobby, profile: ProfileDoc | null, isPartyStart: boolean) {
       launchOnlineRun(lobby, profile, isPartyStart);

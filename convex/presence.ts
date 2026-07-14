@@ -70,6 +70,12 @@ export const list = query({
         gsJoinedAt: r.gsJoinedAt ?? null,
         isReady: r.isReady ?? false,
         pingMs: r.pingMs ?? null,
+        loadoutKitId: r.loadoutKitId ?? null,
+        loadoutPetId: r.loadoutPetId ?? null,
+        isKitChoiceMade: r.isKitChoiceMade ?? false,
+        isPetChoiceMade: r.isPetChoiceMade ?? false,
+        isLoadoutConfirmed: r.isLoadoutConfirmed ?? false,
+        loadoutGeneration: r.loadoutGeneration ?? null,
       }));
   },
 });
@@ -106,8 +112,26 @@ export const setReady = mutation({
       .query("presence")
       .withIndex("by_room_player", (q) => q.eq("roomId", roomId).eq("playerId", playerId))
       .unique();
-    if (!row) return;
+    if (!row) return { ok: false as const, reason: "not_in_room" as const };
+    if (isReady) {
+      const room = await ctx.db.get(roomId);
+      const generation = room?.loadoutGeneration ?? 1;
+      const isConfirmed = room?.status === "lobby"
+        && row.isKitChoiceMade === true
+        && row.isPetChoiceMade === true
+        && row.isLoadoutConfirmed === true
+        && row.loadoutGeneration === generation
+        && row.loadoutKitId !== undefined;
+      if (!isConfirmed) {
+        return {
+          ok: false as const,
+          reason: "loadout_missing" as const,
+          message: "Confirm KIT + PET before readying up",
+        };
+      }
+    }
     await ctx.db.patch(row._id, { isReady: isReady ? true : undefined, updatedAt: Date.now() });
+    return { ok: true as const };
   },
 });
 

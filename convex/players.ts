@@ -10,6 +10,7 @@ import type { RunBuild } from "./leaderboard";
 import { masteryXpForReachedFloor, masteryLevelForXp } from "./masteryCore";
 import { bankedRunAmber, firstBossAmber, isBossKindId } from "../src/sim/balance.js";
 import { canBuyNode, isPetOwned, CAMP_SHELL_ID, rescueNodesForRun } from "../src/sim/camp_nodes.js";
+import { validateCombinedLoadout } from "./loadoutCore";
 
 export interface Profile {
   playerId: string;
@@ -28,6 +29,8 @@ export interface Profile {
   unlocks: string[];
   // The equipped cosmetic companion pet id (WAVE 1), or null for none. Visual-only.
   equippedPet: string | null;
+  // Convenience only: the last combined-gate kit, used to preselect the next gate.
+  lastKitId: string | null;
   // Account MASTERY (KIT/XP spec §4): the persistent ACCESS track. masteryXp is the lifetime
   // total; masteryLevel is the derived level the lobby reads to gate kit selection. Never a
   // currency, never spendable.
@@ -57,6 +60,7 @@ function toProfile(doc: Doc<"players">, user?: Doc<"users"> | null): Profile {
     amber: doc.amber ?? 0,
     unlocks: doc.unlocks,
     equippedPet: doc.equippedPet ?? null,
+    lastKitId: doc.lastKitId ?? null,
     masteryXp: doc.masteryXp ?? 0,
     masteryLevel: masteryLevelForXp(doc.masteryXp ?? 0),
     image: user?.image,
@@ -165,6 +169,7 @@ async function absorbGuestRow(
     ...(account.colorIndex === undefined && guest.colorIndex !== undefined ? { colorIndex: guest.colorIndex } : {}),
     ...(account.cosmeticLoadout === undefined && guest.cosmeticLoadout !== undefined ? { cosmeticLoadout: guest.cosmeticLoadout } : {}),
     ...(account.equippedPet === undefined && guest.equippedPet !== undefined ? { equippedPet: guest.equippedPet } : {}),
+    ...(account.lastKitId === undefined && guest.lastKitId !== undefined ? { lastKitId: guest.lastKitId } : {}),
     // The account row adopts this browser's clientId (when free) so guest play after a
     // sign-out keeps accruing onto the same identity — the first-sign-in semantics.
     ...(account.clientId === undefined ? { clientId: guest.clientId } : {}),
@@ -511,6 +516,37 @@ async function resolveWriteRow(ctx: MutationCtx, clientId: string): Promise<Doc<
   if (userId) return (await ensureAccountRow(ctx, userId, clientId, "blob")).row;
   return await findByClientId(ctx, clientId);
 }
+
+export const confirmRunLoadout = mutation({
+  args: {
+    clientId: v.string(),
+    kitId: v.string(),
+    petId: v.union(v.string(), v.null()),
+    isKitChoiceMade: v.boolean(),
+    isPetChoiceMade: v.boolean(),
+  },
+  handler: async (ctx, { clientId, kitId, petId, isKitChoiceMade, isPetChoiceMade }) => {
+    const row = await resolveWriteRow(ctx, clientId);
+    if (!row) return null;
+    const validation = validateCombinedLoadout(row, {
+      kitId, petId, isKitChoiceMade, isPetChoiceMade,
+    });
+    if (!validation.ok) {
+      return {
+        ok: false as const,
+        reason: validation.reason,
+        profile: await ensureProfileView(ctx, row),
+      };
+    }
+    await ctx.db.patch(row._id, {
+      lastKitId: validation.kitId,
+      equippedPet: validation.petId ?? undefined,
+      lastSeen: Date.now(),
+    });
+    const updated = (await ctx.db.get(row._id))!;
+    return { ok: true as const, profile: await ensureProfileView(ctx, updated) };
+  },
+});
 
 // Buy an Amber Camp node. The purchase is validated ENTIRELY server-side against the row's
 // real Amber + owned nodes (canBuyNode): enough Amber, prereqs met, not already owned. On

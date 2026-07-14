@@ -258,6 +258,12 @@ export class MessageRouter {
   // still answerable.
   private adoptSeat(conn: Conn, seat: Seat): void {
     conn.playerId = seat.pid;
+    conn.displayName = seat.displayName;
+    conn.colorIndex = seat.colorIndex;
+    conn.hat = seat.hat;
+    conn.face = seat.face;
+    conn.pet = seat.pet;
+    conn.kitId = seat.kitId;
     conn.lastAppliedSeq = seat.lastAppliedSeq;
     conn.lastCseq = seat.lastCseq;
     conn.pendingOffer = seat.pendingOffer;
@@ -268,6 +274,12 @@ export class MessageRouter {
 
   private adoptLiveConn(conn: Conn, other: Conn): void {
     conn.playerId = other.playerId;
+    conn.displayName = other.displayName;
+    conn.colorIndex = other.colorIndex;
+    conn.hat = other.hat;
+    conn.face = other.face;
+    conn.pet = other.pet;
+    conn.kitId = other.kitId;
     conn.lastAppliedSeq = other.lastAppliedSeq;
     conn.lastCseq = other.lastCseq;
     conn.pendingOffer = other.pendingOffer;

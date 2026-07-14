@@ -75,6 +75,10 @@ export default defineSchema({
     // pure visual-only companion — it rides the wire like a hat/face label and never enters
     // the sim. Only a pet the player OWNS (via an owned companion node) is ever written.
     equippedPet: v.optional(v.string()),
+    // Convenience only: the last kit confirmed on the combined pre-run gate. A room's
+    // generation-bound presence row is authoritative for online play; this field only
+    // preselects the next gate and can never authorize a run.
+    lastKitId: v.optional(v.string()),
     createdAt: v.number(),
     lastSeen: v.number(),
   })
@@ -126,6 +130,10 @@ export default defineSchema({
     floor: v.number(),
     status: v.union(v.literal("lobby"), v.literal("playing"), v.literal("ended")),
     isPublic: v.optional(v.boolean()),
+    // Monotonic run generation. Reopen increments it before clearing every member's
+    // confirmation, so a confirmation from the previous run cannot ready or mint a ticket
+    // for the next one.
+    loadoutGeneration: v.optional(v.number()),
     createdAt: v.number(),
     lastActivity: v.number(),
   })
@@ -163,6 +171,15 @@ export default defineSchema({
     // (reported by their own heartbeat) — the roster's READY/NOT READY + ping readout.
     isReady: v.optional(v.boolean()),
     pingMs: v.optional(v.number()),
+    // Combined per-generation run loadout. pet id absence is a valid NO PET value only
+    // when isPetChoiceMade is true; this preserves the required distinction between an
+    // explicit null and a choice that was never made.
+    loadoutKitId: v.optional(v.string()),
+    loadoutPetId: v.optional(v.string()),
+    isKitChoiceMade: v.optional(v.boolean()),
+    isPetChoiceMade: v.optional(v.boolean()),
+    isLoadoutConfirmed: v.optional(v.boolean()),
+    loadoutGeneration: v.optional(v.number()),
   })
     .index("by_room", ["roomId"])
     .index("by_room_player", ["roomId", "playerId"]),

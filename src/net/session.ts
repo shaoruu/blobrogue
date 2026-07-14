@@ -5,12 +5,19 @@ import type { RunResult } from "../game/game.js";
 import { bodyItemForPaletteIndex } from "../game/cosmetics.js";
 import type { CosmeticSlot, CosmeticLoadout } from "../game/cosmetics.js";
 import { generatedBlobName, sanitizeBlobName } from "./blobName.js";
+import { getRememberedPet, getSelectedKit, rememberRunLoadout } from "./kitSelection.js";
+import type { PlayableKitId, RememberedPet, RunLoadout } from "./kitSelection.js";
+import { isKitId, isKitUnlocked } from "../sim/kits.js";
 
 const CLIENT_ID_KEY = "blobrogue.clientId";
 const NAME_KEY = "blobrogue.name";
 const NAME_CONFIRMED_KEY = "blobrogue.nameConfirmed";
 const COLOR_KEY = "blobrogue.color";
 const COSMETICS_KEY = "blobrogue.cosmetics";
+
+export type SessionLoadoutResult =
+  | { ok: true; profile: ProfileDoc | null; isOffline: boolean }
+  | { ok: false; reason: string; profile: ProfileDoc | null; isOffline: boolean };
 
 function readOrMintClientId(): string {
   try {
@@ -304,6 +311,64 @@ export class Session {
     return this.profile?.equippedPet ?? null;
   }
 
+  get lastKitId(): PlayableKitId {
+    const saved = this.profile?.lastKitId;
+    return saved && isKitId(saved) && saved !== "none" ? saved : getSelectedKit();
+  }
+
+  get rememberedPet(): RememberedPet {
+    const local = getRememberedPet();
+    if (local.isRemembered) return local;
+    return { isRemembered: true, petId: this.profile?.equippedPet ?? null };
+  }
+
+  acceptConfirmedRunLoadout(loadout: RunLoadout, profile: ProfileDoc | null = this.profile): void {
+    rememberRunLoadout(loadout);
+    this.profile = profile
+      ? { ...profile, lastKitId: loadout.kitId, equippedPet: loadout.petId }
+      : null;
+  }
+
+  async confirmRunLoadout(loadout: RunLoadout): Promise<SessionLoadoutResult> {
+    if (!this.client) {
+      const level = this.profile?.masteryLevel ?? 1;
+      if (!isKitUnlocked(loadout.kitId, level)) {
+        return { ok: false, reason: "kit_locked", profile: this.profile, isOffline: true };
+      }
+      if (loadout.petId !== null) {
+        return { ok: false, reason: "offline_pet_unavailable", profile: this.profile, isOffline: true };
+      }
+      this.acceptConfirmedRunLoadout(loadout);
+      return { ok: true, profile: this.profile, isOffline: true };
+    }
+    try {
+      await this.flushIdentity();
+      const result = await this.client.mutation(api.players.confirmRunLoadout, {
+        clientId: this.clientId,
+        kitId: loadout.kitId,
+        petId: loadout.petId,
+        isKitChoiceMade: true,
+        isPetChoiceMade: true,
+      });
+      if (!result) {
+        return { ok: false, reason: "profile_unavailable", profile: this.profile, isOffline: false };
+      }
+      this.profile = result.profile;
+      if (!result.ok) {
+        return {
+          ok: false,
+          reason: result.reason ?? "loadout_rejected",
+          profile: result.profile,
+          isOffline: false,
+        };
+      }
+      this.acceptConfirmedRunLoadout(loadout, result.profile);
+      return { ok: true, profile: this.profile, isOffline: false };
+    } catch {
+      return { ok: false, reason: "backend_unavailable", profile: this.profile, isOffline: false };
+    }
+  }
+
   // WAVE 1 Amber Camp SPEND (server-authoritative). Buy a camp node: the server validates
   // cost/prereqs/ownership and deducts Amber, then this caches the returned profile so the UI
   // reflects the new balance + unlock. Returns the result (ok + reason) or null on failure.
@@ -324,7 +389,10 @@ export class Session {
     if (!this.client) return null;
     try {
       const res = await this.client.mutation(api.players.equipPet, { clientId: this.clientId, petId });
-      if (res) this.profile = res.profile;
+      if (res) {
+        this.profile = res.profile;
+        if (res.ok) rememberRunLoadout({ kitId: this.lastKitId, petId });
+      }
       return res;
     } catch {
       return null;

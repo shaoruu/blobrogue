@@ -22,14 +22,14 @@ import { action } from "./_generated/server";
 import { api } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { mintGsTicket, worldIdForRoomCode, pvpWorldIdForRoomCode, type GsTicketClaims } from "./gsTicketCore";
-import { isKitUnlocked, masteryLevelForXp, type KitId } from "./masteryCore";
+import { isKitId, isKitUnlocked, masteryLevelForXp } from "./masteryCore";
 import { assertPvpModeAllowed } from "./pvpFlag";
 
 const TICKET_TTL_SECS = 120;
 
 export const mint = action({
   args: { clientId: v.string(), roomCode: v.optional(v.string()), kit: v.optional(v.string()) },
-  handler: async (ctx, { clientId, roomCode, kit }): Promise<{ ticket: string; playerId: string }> => {
+  handler: async (ctx, { clientId, roomCode }): Promise<{ ticket: string; playerId: string }> => {
     const secret = process.env.GS_AUTH_SECRET;
     if (!secret) throw new Error("GS_AUTH_SECRET is not configured on this deployment");
     const trimmed = clientId.trim().slice(0, 48);
@@ -52,24 +52,24 @@ export const mint = action({
       // from the party color at launch and titles stay off the wire, so neither claims.
       if (profile.cosmetics.hat !== null) claims.hat = profile.cosmetics.hat;
       if (profile.cosmetics.face !== null) claims.face = profile.cosmetics.face;
-      // The equipped companion pet rides the same visual-only channel (META spec §3), so
-      // teammates render each other's pets in-world. Ownership was validated at equip time.
-      if (profile.equippedPet !== null) claims.pet = profile.equippedPet;
     }
-    // KIT selection (KIT/XP spec §9.5): the account authority validates the requested kit
-    // against the account's Mastery-unlocked set and signs BOTH the validated kit and the
-    // account's mastery level into the ticket. The game server re-gates kt against ml and
-    // downgrades a mismatch — so a client can never join with a kit it has not unlocked.
     const masteryLevel = masteryLevelForXp(profile?.masteryXp ?? 0);
-    const requested = (kit ?? "gunner") as KitId;
-    claims.kit = isKitUnlocked(requested, masteryLevel) ? requested : "gunner";
     claims.masteryLevel = masteryLevel;
     if (roomCode !== undefined) {
       if (!profile) throw new Error("join the room before requesting a room ticket");
       // Profile serializes the players-row id as a string; narrow it back for the query arg.
       const memberId = profile.playerId as Id<"players">;
-      const { isMember, mode } = await ctx.runQuery(api.rooms.membership, { code: roomCode, playerId: memberId });
+      const membership = await ctx.runQuery(api.rooms.membership, { code: roomCode, playerId: memberId });
+      const { isMember, mode } = membership;
       if (!isMember) throw new Error("you are not in that room");
+      if (!membership.isLoadoutConfirmed || membership.kitId === null) {
+        throw new Error("confirm KIT + PET before requesting a room ticket");
+      }
+      if (!isKitId(membership.kitId) || membership.kitId === "none" || !isKitUnlocked(membership.kitId, masteryLevel)) {
+        throw new Error("the confirmed room kit is no longer unlocked");
+      }
+      claims.kit = membership.kitId;
+      if (membership.petId !== null) claims.pet = membership.petId;
       // TEMP kill switch: never mint a pvp-prefixed world id while PVP is disabled. Even if a
       // pvp room doc survives, the ticket that would authorize its world is refused here. Co-op
       // tickets are byte-unchanged.
@@ -78,6 +78,14 @@ export const mint = action({
       // world so the game server's factory spins it up in deathmatch mode. Every member of the
       // same room resolves the same id, so friends land together.
       claims.worldId = mode === "pvp" ? pvpWorldIdForRoomCode(roomCode) : worldIdForRoomCode(roomCode);
+    } else {
+      const rememberedKit = profile?.lastKitId ?? "gunner";
+      claims.kit = isKitId(rememberedKit) && rememberedKit !== "none" && isKitUnlocked(rememberedKit, masteryLevel)
+        ? rememberedKit
+        : "gunner";
+      if (profile?.equippedPet !== null && profile?.equippedPet !== undefined) {
+        claims.pet = profile.equippedPet;
+      }
     }
 
     const ticket = await mintGsTicket(secret, playerId, TICKET_TTL_SECS, Date.now(), claims);
