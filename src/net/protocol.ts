@@ -1595,7 +1595,10 @@ export function toMatchWire(m: MatchState, w: WorldState): MatchWire {
   const sc: MatchScoreWire[] = [];
   for (const id of [...w.players.keys()].sort()) {
     const p = w.players.get(id);
-    sc.push({ id, f: m.scores.get(id) ?? 0, a: p !== undefined && p.hp > 0 && p.respawnT === 0 });
+    // "alive" requires a PRESENT, un-downed body: a network-absent seat (reserved inside its
+    // reconnect grace) reads NOT alive, so a scoreboard never shows a disconnected player still
+    // standing. Mirrors the sim's canDamagePlayer/present-roster contract.
+    sc.push({ id, f: m.scores.get(id) ?? 0, a: p !== undefined && !p.isAbsent && p.hp > 0 && p.respawnT === 0 });
   }
   return { ph: m.phase, end: m.phaseEndTick, sc, win: m.winner };
 }

@@ -13,7 +13,8 @@
 // Run: npm run test:pvp
 
 import {
-  createWorld, stepWorld, spawnPlayerInWorld, setPlayerAbsence, isPvp, applyItemToWorld,
+  createWorld, stepWorld, spawnPlayerInWorld, removePlayerFromWorld, setPlayerAbsence, isPvp,
+  isFloorCleared, playersAtExit, applyItemToWorld,
 } from "../src/sim/world.js";
 import type { WorldState, PlayerSim } from "../src/sim/world.js";
 import {
@@ -1292,12 +1293,207 @@ section("P2 WIRE: protocol v29, match block + team + respawn round-trip, reliabl
 }
 
 // ---------------------------------------------------------------------------------------------
+section("B1: an absent body is non-collidable — a round passes THROUGH it to a live foe");
+{
+  // shooter -> absent body (directly in front) -> live foe (behind), all colinear on a clear lane.
+  const w = pvpWorld(61, ["p1", "p2", "p3"]);
+  advanceToLive(w);
+  const shooter = w.players.get("p1")!; const absent = w.players.get("p2")!; const live = w.players.get("p3")!;
+  shooter.x = 250; shooter.y = 216; shooter.invuln = 0; shooter.weapon = "railgun"; shooter.ownedWeapons = ["railgun"];
+  absent.x = 340; absent.y = 216; absent.invuln = 0; // squarely between shooter and the live foe
+  live.x = 440; live.y = 216; live.invuln = 0;
+  setPlayerAbsence(w, "p2", true); // p2 becomes a reserved (non-collidable, non-damageable) body
+  const liveBefore = live.hp;
+  stepN(w, 20, new Map([["p1", inp({ firing: true, aim: 0 })]]));
+  check("B1: the absent body in the line of fire takes NO damage (passes through)", absent.hp === PVP.maxHp, `absent=${absent.hp}`);
+  check("B1: the round reaches and damages the live foe standing behind it", live.hp < liveBefore, `live=${live.hp}`);
+}
+
+// ---------------------------------------------------------------------------------------------
+section("B2: a departed owner's round fizzles — no ghost damage/kill/frag");
+{
+  // 3 players so removing the owner keeps the match live (>= min present) — isolates the
+  // shooter-validity check from the no-contest reset.
+  const w = pvpWorld(62, ["p1", "p2", "p3"]);
+  advanceToLive(w);
+  const p1 = w.players.get("p1")!; const p2 = w.players.get("p2")!; const p3 = w.players.get("p3")!;
+  p1.x = 300; p1.y = 216; p1.invuln = 0; p1.weapon = "pistol"; p1.ownedWeapons = ["pistol"];
+  p2.x = 380; p2.y = 216; p2.invuln = 0;
+  p3.x = 130; p3.y = 130; // parked out of the way
+  stepN(w, 1, new Map([["p1", inp({ firing: true, aim: 0 })]])); // a REAL p1-owned round is now in flight
+  const bullet = w.bullets.find((b) => b.owner === "p1" && b.friendly && b.life > 0);
+  check("p1 launched a real owned round", bullet !== undefined);
+  removePlayerFromWorld(w, "p1"); // the owner leaves the arena for good
+  check("the owner is gone but the match stays live (2 present)", !w.players.has("p1") && w.match!.phase === "live");
+  // Park the orphaned round squarely on p2 — it WOULD hit if a departed owner still counted.
+  if (bullet) { bullet.x = p2.x; bullet.y = p2.y; bullet.prevX = p2.x; bullet.prevY = p2.y; }
+  const hpBefore = p2.hp;
+  const evs = stepCollect(w, 3, new Map());
+  check("B2: the departed owner's round deals NO damage", p2.hp === hpBefore, `hp=${p2.hp}`);
+  check("B2: no kill event is credited to the departed owner", !evs.some((e) => e.t === "pvpKill"));
+  check("B2: no ghost frag is scored for the departed owner", (w.match!.scores.get("p1") ?? 0) === 0);
+}
+
+// ---------------------------------------------------------------------------------------------
+section("B3: present-count gates start / countdown / live / final-removal");
+{
+  // Absent during lobby: 1 present < min never opens the match.
+  const wl = pvpWorld(63, ["p1", "p2"]);
+  setPlayerAbsence(wl, "p2", true);
+  stepN(wl, 10, new Map());
+  check("B3: an absent seat never opens the lobby (present < min)", wl.match!.phase === "lobby");
+  setPlayerAbsence(wl, "p2", false);
+  stepN(wl, 1, new Map());
+  check("B3: the countdown opens once both are present", wl.match!.phase === "countdown");
+
+  // Countdown abort: a seat dropping mid-countdown reverts to lobby.
+  const wc = pvpWorld(64, ["p1", "p2"]);
+  stepN(wc, 1, new Map());
+  check("countdown opened", wc.match!.phase === "countdown");
+  setPlayerAbsence(wc, "p2", true);
+  stepN(wc, 1, new Map());
+  check("B3: the countdown aborts to lobby when present < min", wc.match!.phase === "lobby");
+
+  // Live grace pause: the clock FREEZES while a seat is absent, then resumes.
+  const wp = pvpWorld(65, ["p1", "p2"]);
+  advanceToLive(wp);
+  const remainBefore = wp.match!.phaseEndTick - wp.tick;
+  setPlayerAbsence(wp, "p2", true);
+  stepN(wp, 25, new Map());
+  check("B3: a live match with an absent seat stays live but PAUSES (phase unchanged)", wp.match!.phase === "live");
+  check("B3: the match clock is frozen while paused (no wall-clock lost)", (wp.match!.phaseEndTick - wp.tick) === remainBefore, `remain=${wp.match!.phaseEndTick - wp.tick} want=${remainBefore}`);
+  setPlayerAbsence(wp, "p2", false);
+  stepN(wp, 1, new Map());
+  check("B3: the match resumes when the seat returns", wp.match!.phase === "live");
+
+  // Final removal below min: NO-CONTEST reset to lobby (no free win/frags).
+  const wf = pvpWorld(66, ["p1", "p2"]);
+  advanceToLive(wf);
+  wf.match!.scores.set("p1", 3);
+  removePlayerFromWorld(wf, "p2");
+  check("B3: a final removal below min resets the match to lobby (no-contest)", wf.match!.phase === "lobby");
+  check("B3: no-contest awards no winner and leaves no lingering frags", wf.match!.winner === null && (wf.match!.scores.get("p1") ?? 0) === 0);
+}
+
+// ---------------------------------------------------------------------------------------------
+section("B4: nothing can be pre-deployed before (or lobbed after) the live phase");
+{
+  // Freeze: during the countdown freeze-in no input applies — no movement, round, deploy, or charge.
+  const w = pvpWorld(67, ["p1", "p2"]);
+  stepN(w, 1, new Map());
+  check("in countdown", w.match!.phase === "countdown");
+  const s = w.players.get("p1")!;
+  s.weapon = "sentry"; s.ownedWeapons = ["sentry"];
+  const startX = s.x; const startY = s.y;
+  stepN(w, 4, new Map([["p1", inp({ firing: true, aim: 0, moveX: 1, moveY: 0, dash: true })]]));
+  check("B4: no round spawns during the countdown freeze", w.bullets.length === 0);
+  check("B4: no sentry/effect deploys during the countdown freeze", w.effects.length === 0);
+  check("B4: the player cannot move during the countdown freeze", s.x === startX && s.y === startY);
+  check("B4: no charge builds during the countdown freeze", s.chargeT === 0);
+
+  // Whistle-clear: even if owned entities somehow exist, the countdown->live whistle wipes them.
+  const w2 = pvpWorld(68, ["p1", "p2"]);
+  advanceToLive(w2);
+  const s2 = w2.players.get("p1")!;
+  s2.x = 300; s2.y = 216; s2.invuln = 0; s2.weapon = "sentry"; s2.ownedWeapons = ["sentry"];
+  stepN(w2, 1, new Map([["p1", inp({ firing: true, aim: 0 })]])); // deploy a sentry + launch a round
+  s2.chargeT = 0.5; // a held charge lingering into the next whistle
+  check("live combat created owned entities", w2.bullets.length + w2.effects.length > 0);
+  // Model a fresh whistle with those entities still present (a re-countdown / rematch).
+  w2.match!.phase = "countdown";
+  w2.match!.phaseEndTick = w2.tick + pvpCountdownTicks();
+  stepN(w2, pvpCountdownTicks() + 1, new Map());
+  check("re-reached live", w2.match!.phase === "live");
+  check("B4: bullets/effects/charges do NOT persist across the whistle", w2.bullets.length === 0 && w2.effects.length === 0 && s2.chargeT === 0, `b=${w2.bullets.length} e=${w2.effects.length} c=${s2.chargeT}`);
+}
+
+// ---------------------------------------------------------------------------------------------
+section("B5: a player killed mid-dash respawns stationary (dash never crosses a life)");
+{
+  const w = pvpWorld(69, ["p1", "p2"]);
+  advanceToLive(w);
+  const shooter = w.players.get("p1")!; const victim = w.players.get("p2")!;
+  const aim = faceOff(shooter, victim, 40);
+  shooter.weapon = "railgun"; shooter.ownedWeapons = ["railgun"];
+  const inputs = new Map([["p1", inp({ firing: true, aim })]]);
+  // Arm a live dash on the victim right before the lethal hit lands.
+  let guard = 0;
+  while (victim.respawnT === 0 && victim.hp > 0 && guard++ < 400) {
+    victim.dashTime = 0.4; victim.dashDx = 1; victim.dashDy = 0; // re-armed each tick until death
+    stepN(w, 1, inputs);
+  }
+  check("victim was killed while dashing", victim.respawnT > 0);
+  check("B5: death clears the active dash (dashTime + velocity zeroed)", victim.dashTime === 0 && victim.dashDx === 0 && victim.dashDy === 0);
+  stepN(w, victim.respawnT + 2, new Map()); // let the respawn resolve (shooter idle)
+  check("victim respawned at full HP", victim.hp === PVP.maxHp && victim.respawnT === 0);
+  check("B5: the respawn is stationary (dashTime 0)", victim.dashTime === 0);
+  const rx = victim.x; const ry = victim.y;
+  stepN(w, 3, new Map()); // idle — a leftover dash would slide the body
+  check("B5: the respawned body does not slide", victim.x === rx && victim.y === ry, `dx=${(victim.x - rx).toFixed(3)}`);
+}
+
+// ---------------------------------------------------------------------------------------------
+section("B6: a pvp snapshot forces cleared=false + no exit-ready; co-op is unchanged");
+{
+  const w = pvpWorld(70, ["p1", "p2"]);
+  advanceToLive(w);
+  check("the pvp arena has zero enemies (co-op would call this 'cleared')", w.enemies.length === 0 && w.pendingSpawns.length === 0);
+  check("B6: isFloorCleared is false in pvp", !isFloorCleared(w));
+  check("B6: playersAtExit is empty in pvp", playersAtExit(w).length === 0);
+  const snap = snapOf(w, "p1");
+  check("B6: the snapshot projects cleared=false in pvp", snap.cleared === false);
+  check("B6: the snapshot projects exr=[] in pvp (no exit-ready leak)", snap.exr.length === 0);
+  // A player parked exactly on the arena exit tile is STILL never exit-ready in pvp.
+  const p1 = w.players.get("p1")!;
+  p1.x = w.dungeon.exit.x * TILE + TILE / 2; p1.y = w.dungeon.exit.y * TILE + TILE / 2;
+  check("B6: a player on the exit tile is still not exit-ready in pvp", playersAtExit(w).length === 0 && snapOf(w, "p1").exr.length === 0);
+
+  // Co-op is untouched: a zero-enemy floor still reads cleared and lists players at the exit.
+  const coop = createWorld(70, 1, { isShared: true, skipLocalPlayer: true });
+  spawnPlayerInWorld(coop, "c1");
+  coop.enemies.length = 0; coop.pendingSpawns.length = 0;
+  check("B6: a co-op zero-enemy floor still reads cleared (unchanged)", isFloorCleared(coop));
+  const c1 = coop.players.get("c1")!;
+  c1.x = coop.dungeon.exit.x * TILE + TILE / 2; c1.y = coop.dungeon.exit.y * TILE + TILE / 2;
+  check("B6: co-op still lists a player standing at the exit (unchanged)", playersAtExit(coop).length === 1);
+}
+
+// ---------------------------------------------------------------------------------------------
+section("H1: an absent seat reads NOT alive on the wire scoreboard");
+{
+  const w = pvpWorld(71, ["p1", "p2", "p3"]);
+  advanceToLive(w);
+  setPlayerAbsence(w, "p2", true); // present stays 2 -> match live, isolates the projection
+  const dec = jsonCodec.decodeServer(jsonCodec.encodeServer(snapOf(w, "p1")));
+  if (dec.t !== "snap" || dec.match === null) { check("snapshot carries a match block", false); }
+  else {
+    check("H1: an absent seat is marked NOT alive", dec.match.sc.find((s) => s.id === "p2")?.a === false);
+    check("H1: a present live seat is still marked alive", dec.match.sc.find((s) => s.id === "p3")?.a === true);
+  }
+}
+
+// ---------------------------------------------------------------------------------------------
+section("H2: a removed player leaves no stale scoreboard/history; a rejoin is fresh");
+{
+  const w = pvpWorld(72, ["p1", "p2", "p3"]);
+  advanceToLive(w);
+  w.match!.scores.set("p2", 5);
+  check("p2 has frags + lag-comp history before leaving", (w.match!.scores.get("p2") ?? 0) === 5 && w.playerHist.has("p2"));
+  removePlayerFromWorld(w, "p2"); // present stays 2 (p1,p3) -> match continues, isolating the cleanup
+  check("H2: the match stays live (3p -> 2p, above min)", w.match!.phase === "live");
+  check("H2: the removed player's frags are dropped from the scoreboard", !w.match!.scores.has("p2"));
+  check("H2: the removed player's lag-comp history is dropped", !w.playerHist.has("p2"));
+  spawnPlayerInWorld(w, "p2");
+  check("H2: a rejoining player starts at zero frags (no stale restore)", (w.match!.scores.get("p2") ?? 0) === 0);
+}
+
+// ---------------------------------------------------------------------------------------------
 section("FFA foe predicate");
 {
-  check("distinct FFA players (team 0) are foes", arePvpFoes(0, "a", 0, "b"));
-  check("a player is never their own foe", !arePvpFoes(0, "a", 0, "a"));
-  check("same non-zero team are NOT foes (future team modes)", !arePvpFoes(1, "a", 1, "b"));
-  check("different non-zero teams are foes", arePvpFoes(1, "a", 2, "b"));
+  check("distinct FFA players (team 0) are foes", arePvpFoes({ team: 0, id: "a" }, { team: 0, id: "b" }));
+  check("a player is never their own foe", !arePvpFoes({ team: 0, id: "a" }, { team: 0, id: "a" }));
+  check("same non-zero team are NOT foes (future team modes)", !arePvpFoes({ team: 1, id: "a" }, { team: 1, id: "b" }));
+  check("different non-zero teams are foes", arePvpFoes({ team: 1, id: "a" }, { team: 2, id: "b" }));
 }
 
 // ---------------------------------------------------------------------------------------------

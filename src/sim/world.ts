@@ -1083,7 +1083,24 @@ export function removePlayerFromWorld(w: WorldState, id: PlayerId): boolean {
   for (const downed of w.players.values()) {
     if (downed.reviveBy === id) { downed.reviveBy = null; downed.reviveProgress = 0; }
   }
-  return w.players.delete(id);
+  // Drop every per-player server-side map keyed by this id so a departure leaves no stale frag
+  // credit, no lag-comp history, and no scoreboard ghost (and none of these maps grows unbounded
+  // across join/leave churn). playerHist stays empty in co-op, so this is inert there.
+  w.playerHist.delete(id);
+  const m = w.match;
+  if (m !== null) {
+    m.scores.delete(id);
+    m.dmgThisTick.delete(id);
+  }
+  const removed = w.players.delete(id);
+  // pvp FINAL removal (grace expired / hard leave): if the roster falls below the minimum PRESENT
+  // participants mid-match, the match is a NO-CONTEST — reset to lobby rather than hand the lone
+  // survivor a free win/frags. A fresh whistle runs once players return. (Absence alone pauses the
+  // live match in stepPvpMatch; this handles the terminal case where a seat is truly gone.)
+  if (removed && m !== null && isPvp(w) && m.phase !== "lobby" && pvpPresentPlayers(w).length < PVP.minPlayers) {
+    pvpResetToLobby(w, m);
+  }
+  return removed;
 }
 
 // Flip a player's network-absence (authoritative server: socket dropped -> reserved seat;
@@ -1252,6 +1269,11 @@ export function loadFloorIntoWorld(w: WorldState, floor: number, playerCountAtLo
 // Floor cleared = every active enemy dead AND no reinforcements still queued. The exit,
 // the snapshot `cleared` flag, and the client HUD/minimap all read this one predicate.
 export function isFloorCleared(w: WorldState): boolean {
+  // pvp is a deathmatch arena, not a dungeon floor: there is no PvE clear objective, so it is
+  // NEVER "cleared". This one guard keeps the whole exit stack inert in pvp — the snapshot
+  // `cleared` flag reads false and playersAtExit() (hence the snapshot `exr`) reads empty — so a
+  // zero-enemy arena can never leak co-op floor-exit/stairs readiness to a client HUD.
+  if (isPvp(w)) return false;
   if (w.gauntlet !== null && (w.gauntlet.stage < GAUNTLET.rounds.length || !w.gauntlet.isRewarded)) return false;
   return w.enemies.length === 0 && w.pendingSpawns.length === 0;
 }
@@ -10675,9 +10697,11 @@ function eliminatePvpPlayer(
   const creditedBy = by !== null && by !== p.id ? by : null;
   const chainEvent = creditedBy === null ? null : awardPvpFrag(w, creditedBy, p.x, p.y);
   p.hp = 0;
-  p.chargeT = 0;
-  p.meleeSwing = null;
   p.respawnT = pvpRespawnDelayTicks();
+  // Patch 0 B5: the dead body carries NOTHING into respawn — dash (time+velocity), fire/charge,
+  // held swing, buffs. resetPvpLifeTransient zeroes the whole transient set (superset of the
+  // prior chargeT/meleeSwing clear), so a death mid-dash can't slide the corpse.
+  resetPvpLifeTransient(p);
   p.lastPvpHitBy = null;
   p.lastPvpHitTick = -1;
   p.lastPvpKnockbackBy = null;
@@ -10745,9 +10769,17 @@ function canDamagePlayer(w: WorldState, owner: PlayerId | null, target: PlayerSi
   if (owner === null || !isPvp(w)) return false;
   const m = w.match;
   if (m === null || m.phase !== "live") return false;
-  if (target.id === owner || target.hp <= 0 || target.respawnT > 0 || isProtected(target)) return false;
+  // The ATTACKER must still be a present participant. A departed (removed) or network-absent
+  // owner's round/swing deals NOTHING — no damage, no kill, no frag — so a body that left the
+  // arena can never score a ghost frag (the old team-0 fallback silently let it). Its rounds
+  // keep flying but fizzle at every foe (they are not a valid source).
   const shooter = w.players.get(owner);
-  return arePvpFoes(shooter ? shooter.team : 0, owner, target.team, target.id);
+  if (shooter === undefined || shooter.isAbsent) return false;
+  // The TARGET must be a live, collidable foe. An absent body is RESERVED, not playing —
+  // non-collidable and non-damageable — so a shot passes THROUGH it (never consuming the round's
+  // life/pierce) and can still reach a live foe standing behind it.
+  if (target.id === owner || target.isAbsent || target.hp <= 0 || target.respawnT > 0 || isProtected(target)) return false;
+  return arePvpFoes({ team: shooter.team, id: owner }, { team: target.team, id: target.id });
 }
 
 // Apply an owned AoE/point hit to every FOE PLAYER within `radius` of (x,y) — the player twin of
@@ -10816,8 +10848,9 @@ function resolvePvpHits(w: WorldState, ev: SimEvent[]): void {
   // attacker's own creation order (preserved by a STABLE sort) — NOT w.bullets/Map iteration
   // order. A reconnect reorders the players map (and thus bullet-creation order), so without this
   // the SAME-TICK damage order — which decides the 35% cap application and which source lands the
-  // killing blow (`by`) — could differ between two servers on identical inputs. A departed owner's
-  // round keeps flying but can't be a pvp hit (unknown team), so it fizzles — no free frags.
+  // killing blow (`by`) — could differ between two servers on identical inputs. A departed or
+  // absent owner's round keeps flying but is not a valid source (canDamagePlayer rejects it), so
+  // it fizzles at every foe — no free frags after a departure.
   const ownedBullets = w.bullets.filter((b) => b.friendly && b.life > 0 && !b.isLob && b.owner !== null);
   ownedBullets.sort((x, y) => (x.owner! < y.owner! ? -1 : x.owner! > y.owner! ? 1 : 0));
   for (const b of ownedBullets) {
@@ -10918,26 +10951,50 @@ function pvpEndMatch(w: WorldState, winner: PlayerId | null, ev: SimEvent[]): vo
   ev.push({ t: "pvpMatchOver", winner: winner ?? "" });
 }
 
-// Place every present player on a maximally-spread arena spawn in ID-SORTED order (deterministic:
-// greedy farthest-from-already-placed, ties to the lowest spawn index), full HP, spawn protection
-// armed. Used at the countdown/live whistle so the opening spread never depends on join order.
+// Clear every per-LIFE movement/weapon/buff transient that must not survive a pvp death or carry
+// across a (re)spawn — the ONE place the deathmatch wipes a body clean, called on death, at the
+// match-start spawn, and on every respawn. It zeroes the active dash (so a player killed mid-dash
+// never respawns sliding), all cooldowns/held charge/mid-swing, every protection channel (the
+// caller re-arms spawn i-frames after), and every in-match buff/combo/no-snowball accumulator so
+// nothing carries across a life. It touches ONLY transients — never hp, position, respawnT, team,
+// or score, which the caller owns.
+function resetPvpLifeTransient(p: PlayerSim): void {
+  p.dashTime = 0; p.dashDx = 0; p.dashDy = 0; p.dashCd = 0; p.dashInvuln = 0;
+  p.fireCd = 0; p.chargeT = 0; p.meleeSwing = null;
+  p.invuln = 0;
+  p.combo = 0; p.comboTimer = 0; p.fangCd = 0;
+  p.overdriveT = 0; p.overheatT = 0; p.phaseSpeed = 0; p.ultInvuln = 0;
+  p.passiveState = 0; p.overshield = 0; p.overshieldRegenT = 0;
+}
+
+// Wipe every PLAYER-OWNED transient object from the arena — in-flight bullets and every deployed
+// weapon effect (sentries / wires / orbits / tethers / zones). Called at a match reset and at the
+// countdown->live whistle so nothing deployed or lobbed during the pre-live freeze can survive
+// into the match (the belt to B4's suspenders: inputs are frozen off-live, this guarantees a
+// pristine arena regardless). Held charges/mid-swings are per-player and cleared by
+// resetPvpLifeTransient at the same transitions. In the pvp arena these lists hold ONLY owned
+// objects (no PvE population), so clearing them whole is exactly the owned set.
+function pvpClearOwnedEntities(w: WorldState): void {
+  w.bullets = [];
+  w.effects = [];
+}
+
+// Place every PRESENT player on a maximally-spread arena spawn in ID-SORTED order (deterministic:
+// greedy farthest-from-already-placed, ties to the lowest spawn index), full HP, life transients
+// wiped, spawn protection armed. Used at the countdown/live whistle so the opening spread never
+// depends on join order and never seats an absent (reserved) body.
 function pvpAssignSpreadSpawns(w: WorldState): void {
   const m = w.match;
   if (m === null || m.spawns.length === 0) return;
   const placed: Array<{ x: number; y: number }> = [];
-  for (const id of [...w.players.keys()].sort()) {
-    const p = w.players.get(id);
-    if (p === undefined) continue;
+  for (const p of pvpPresentPlayers(w)) {
     const idx = farthestSpawnIndex(m.spawns, placed, m.pits);
     p.x = m.spawns[idx].x;
     p.y = m.spawns[idx].y;
     pvpFaceInward(w, p);
     p.hp = p.maxHp;
     p.respawnT = 0;
-    p.dashInvuln = 0;
-    p.meleeSwing = null;
-    p.chargeT = 0;
-    p.fireCd = 0;
+    resetPvpLifeTransient(p);
     p.invuln = PVP.spawnIframeSec; // spawn protection: ends here or on first outgoing attack
     placed.push({ x: p.x, y: p.y });
   }
@@ -10948,10 +11005,35 @@ function pvpAssignSpreadSpawns(w: WorldState): void {
 function pvpRespawn(w: WorldState, p: PlayerSim): void {
   p.hp = p.maxHp;
   p.respawnT = 0;
-  p.meleeSwing = null;
-  p.chargeT = 0;
-  p.fireCd = 0;
-  pvpPlaceOnSpawn(w, p);
+  resetPvpLifeTransient(p);
+  pvpPlaceOnSpawn(w, p); // sets position + re-arms spawn protection (after the transient wipe)
+}
+
+// The ONE id-sorted PRESENT-player roster. Every pvp match decision (start, countdown/live
+// progression, fragLimit, spawn spread, no-contest) reads participant count from HERE, never
+// w.players.size. A network-absent body is a reserved seat inside its reconnect grace, not a
+// participant — so a lobby never starts, counts down, or stays live on an absent seat.
+function pvpPresentPlayers(w: WorldState): PlayerSim[] {
+  const out: PlayerSim[] = [];
+  for (const id of [...w.players.keys()].sort()) {
+    const p = w.players.get(id);
+    if (p !== undefined && !p.isAbsent) out.push(p);
+  }
+  return out;
+}
+
+// Abandon the current match back to a clean lobby (NO-CONTEST): the roster fell below the minimum
+// PRESENT participants mid-match (a final removal / grace expiry), so nobody is awarded the frags
+// or the win of a match that can no longer be played. Scores/timers reset and the arena is wiped;
+// a fresh whistle runs once enough players are present again.
+function pvpResetToLobby(w: WorldState, m: MatchState): void {
+  m.phase = "lobby";
+  m.phaseEndTick = 0;
+  m.fragLimit = 0;
+  m.winner = null;
+  m.scores.clear();
+  m.dmgThisTick.clear();
+  pvpClearOwnedEntities(w);
 }
 
 function resetPvpDrafts(w: WorldState): void {
@@ -11000,12 +11082,16 @@ function firePvpSuddenDeath(w: WorldState, leader: PlayerId | null, ev: SimEvent
 // The frag-limit RESPAWN deathmatch state machine (lobby -> countdown -> live -> over). Pure sim,
 // counted in TICKS off w.tick — no rounds, no last-standing, no wipe. A death respawns after a
 // delay; the match ends when a player reaches the frag limit OR the time cap expires (highest
-// frags wins, id-sorted tiebreak). This REPLACES the co-op wipe/descend loop in pvp.
+// frags wins, id-sorted tiebreak). This REPLACES the co-op wipe/descend loop in pvp. Every roster
+// decision reads the PRESENT count, so an absent seat never starts, advances, or wins a match.
 function stepPvpMatch(w: WorldState, ev: SimEvent[]): void {
   const m = w.match;
   if (m === null) return;
-  // Respawn timers tick only during live play.
-  if (m.phase === "live") {
+  const present = pvpPresentPlayers(w).length;
+  const isEnough = present >= PVP.minPlayers;
+  // Respawn timers advance only during LIVE play that is NOT grace-paused (a paused match freezes
+  // the whole clock, respawns included).
+  if (m.phase === "live" && isEnough) {
     for (const p of w.players.values()) {
       if (p.respawnT > 0) {
         p.respawnT -= 1;
@@ -11015,19 +11101,25 @@ function stepPvpMatch(w: WorldState, ev: SimEvent[]): void {
   }
   switch (m.phase) {
     case "lobby":
-      // Fun at 2 — the loop opens the instant minPlayers are present (never gated to >= 3).
-      if (w.players.size >= PVP.minPlayers) {
+      // Fun at 2 — the loop opens the instant minPlayers are PRESENT (never gated to >= 3, never
+      // opened by an absent seat). Wipe the arena before the freeze-in spread.
+      if (isEnough) {
         m.phase = "countdown";
         m.phaseEndTick = w.tick + pvpCountdownTicks();
+        pvpClearOwnedEntities(w);
         pvpAssignSpreadSpawns(w);
       }
       break;
     case "countdown":
+      // A seat dropping during the freeze-in aborts the whistle: revert to lobby (re-opens when
+      // enough are present again). Never count down — let alone start — a solo match.
+      if (!isEnough) { m.phase = "lobby"; m.phaseEndTick = 0; break; }
       if (w.tick >= m.phaseEndTick) {
         m.phase = "live";
         m.phaseEndTick = w.tick + pvpMatchTimeTicks();
-        m.fragLimit = pvpFragLimit(w.players.size); // scaled by the match-start player count
-        pvpAssignSpreadSpawns(w); // fresh id-sorted spread + protection at the whistle
+        m.fragLimit = pvpFragLimit(present); // Patch 0 B3: scaled by the PRESENT match-start count
+        pvpClearOwnedEntities(w);   // Patch 0 B4: nothing pre-positioned during the countdown survives the whistle
+        pvpAssignSpreadSpawns(w);   // fresh id-sorted spread + protection at the whistle
         m.lastFragTick.clear();
         m.fragChain.clear();
         m.isSuddenDeath = false;
@@ -11035,6 +11127,12 @@ function stepPvpMatch(w: WorldState, ev: SimEvent[]): void {
       }
       break;
     case "live": {
+      // Grace pause: while a seat is absent inside its reconnect window the match FREEZES — the
+      // time cap holds (phaseEndTick tracks the tick, so no wall-clock is lost) and no frag/time
+      // end resolves. Combat is already inert (canDamagePlayer rejects an absent owner+target),
+      // so this is the clock half of the pause. FINAL removal below the minimum is a separate
+      // no-contest reset (removePlayerFromWorld) — never a free win handed out here.
+      if (!isEnough) { m.phaseEndTick += 1; break; }
       const leader = pvpTopScorer(w);
       if (leader !== null && (m.scores.get(leader) ?? 0) >= m.fragLimit) { pvpEndMatch(w, leader, ev); break; }
       if (w.tick >= m.phaseEndTick) { pvpEndMatch(w, leader, ev); break; }
@@ -11285,7 +11383,15 @@ export function stepPlayerPhase(w: WorldState, p: PlayerSim, input: InputCmd, dt
   if (p.ultInvuln > 0) p.ultInvuln = p.ultInvuln > dt ? p.ultInvuln - dt : 0;
   // respawnT > 0 is a pvp dead body awaiting respawn — no movement/shooting until it respawns
   // (respawnT is always 0 in co-op, so this is byte-identical there). isDown stays the co-op gate.
-  if (!p.isDown && p.respawnT === 0) {
+  // pvp: OUTSIDE the live phase (lobby / countdown freeze-in / match over) a player is FROZEN — no
+  // movement, dash, fire, melee, charge, or deploy — so nothing can be pre-positioned before the
+  // whistle or lobbed in after the match ends. Aim still tracks (cosmetic facing only). A live
+  // grace pause keeps phase === "live", so the lone present player stays free to move while waiting.
+  // AUTHORITATIVE-ONLY (isShared): the client's local prediction never runs the match machine, so
+  // its predState.match sits in "lobby" — gating on isShared keeps client prediction byte-identical
+  // (the server owns the freeze; the client mirrors it via reconciliation to the authoritative pose).
+  const isPvpFrozen = isPvp(w) && w.isShared && (w.match === null || w.match.phase !== "live");
+  if (!p.isDown && p.respawnT === 0 && !isPvpFrozen) {
     updatePlayer(w, p, input, dt, ev);
     updateShooting(w, p, input, dt, ev);
   }
