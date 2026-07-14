@@ -66,7 +66,7 @@ import {
   WEAPON_BOSS_COEF, WIPE_HOLD_SECONDS, PU_DPS, PERSISTENT_BOSS_DPS_FRAC,
   LIVE_CAPS, activeMoverCapFor, pedestalWeaponRolls, bossWeaponChoices, KING_REWARD_TABLE,
   MYSTERY, LEGENDARY_MIN_FLOOR,
-  PREMIUM, CAPS, coinChanceTaper, coopCoinGainMult, premiumMysteryLegendaryWeight,
+  PREMIUM, CAPS, PHASE_NO_LOS_DAMAGE_MULT, coinChanceTaper, coopCoinGainMult, premiumMysteryLegendaryWeight,
 } from "./balance.js";
 import type { EnemyTier, AddPoolEntry, ResonanceFamily } from "./balance.js";
 import { isControllerKind } from "./bestiary.js";
@@ -4311,8 +4311,12 @@ function updateEnemies(w: WorldState, dt: number, ev: SimEvent[]): void {
         // facet bounces it back as a hostile bolt (and cracks). Both frontal, non-piercing only.
         if (absorbOnRollSlab(e, b, ev)) continue;
         if (reflectFrontalBullet(w, e, b, ev)) continue;
+        const phaseDamageMult = b.isPhase === true && shooter !== null
+          && !hasLineOfSight(w, shooter.x, shooter.y, e.x, e.y)
+          ? PHASE_NO_LOS_DAMAGE_MULT
+          : 1;
         strikeEnemy(w, shooter, e, {
-          damage: b.damage, isCrit: b.isCrit, critX: b.critX ?? 1, bossCoef: b.bossCoef ?? 1, puffX: sweptHit.x, puffY: sweptHit.y, kbDirX: b.vx, kbDirY: b.vy,
+          damage: b.damage * phaseDamageMult, isCrit: b.isCrit, critX: b.critX ?? 1, bossCoef: b.bossCoef ?? 1, puffX: sweptHit.x, puffY: sweptHit.y, kbDirX: b.vx, kbDirY: b.vy,
           burn: b.burn, chill: b.chill, shock: b.shock, isMelee: false,
           isPersistent: b.isPersistent,
           ownerId: b.owner, fxWeapon: b.fx ?? null,
