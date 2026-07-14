@@ -8,6 +8,7 @@
 import type { Biome } from "../sim/biomes.js";
 import type { Dungeon } from "../sim/dungeon.js";
 import { TILE } from "../sim/types.js";
+import { isPvpPitWarningTile } from "../sim/pvp.js";
 import type { TileName } from "./assets.js";
 
 export interface TileRenderGradient {
@@ -335,7 +336,42 @@ export function renderDungeonTiles<Img>(ctx: TileRenderContext<Img>, scene: Tile
     ctx.fillRect(wx, wy, ww, wh);
   }
   ctx.restore();
+  renderPitWarningBands(ctx, scene, x0, y0, x1, y1);
   renderLethalVoidTiles(ctx, scene, x0, y0, x1, y1);
+}
+
+function renderPitWarningBands<Img>(
+  ctx: TileRenderContext<Img>,
+  scene: TileRenderScene<Img>,
+  x0: number,
+  y0: number,
+  x1: number,
+  y1: number,
+): void {
+  const d = scene.dungeon;
+  for (let ty = y0; ty < y1; ty++) {
+    for (let tx = x0; tx < x1; tx++) {
+      if (!isPvpPitWarningTile(d, tx, ty)) continue;
+      const sx = tx * TILE - scene.camX;
+      const sy = ty * TILE - scene.camY;
+      ctx.save();
+      ctx.globalCompositeOperation = "source-over";
+      ctx.globalAlpha = 0.38;
+      ctx.fillStyle = "#6f3b16";
+      ctx.fillRect(sx, sy, TILE, TILE);
+      ctx.globalAlpha = 0.8;
+      ctx.strokeStyle = "#ffd166";
+      ctx.lineWidth = 2;
+      ctx.strokeRect(sx + 3, sy + 3, TILE - 6, TILE - 6);
+      ctx.beginPath();
+      for (let offset = -TILE; offset < TILE; offset += 12) {
+        ctx.moveTo(sx + offset, sy + TILE);
+        ctx.lineTo(sx + offset + TILE, sy);
+      }
+      ctx.stroke();
+      ctx.restore();
+    }
+  }
 }
 
 function renderLethalVoidTiles<Img>(

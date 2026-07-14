@@ -20,12 +20,15 @@ import {
   PVP, buildPvpArena, pvpArenaRot90, pvpHitDamage, pvpPerHitCap, pvpFragLimit, farthestSpawnIndex, arePvpFoes,
   pvpRespawnDelayTicks, pvpCountdownTicks, pvpEnvKillCreditWindowTicks, pvpChainWindowTicks,
   pvpDraftEveryTicks, pvpDraftSeed, pvpBlessingBlacklist, pvpComebackTierBump,
+  pvpPitEdgeDistance, pvpNearestPitEdgeDistance, pvpSingleDashDistance, pvpRespawnIndex,
+  isPvpPitWarningTile,
 } from "../src/sim/pvp.js";
 import type { Vec2 } from "../src/sim/types.js";
 import { WEAPONS } from "../src/sim/weapons.js";
 import { ULT } from "../src/sim/kits.js";
 import { TILE } from "../src/sim/types.js";
 import { WEAPON_KB } from "../src/sim/constants.js";
+import { CAPS, PLAYER } from "../src/sim/balance.js";
 import type { InputCmd } from "../src/sim/input.js";
 import type { SimEvent } from "../src/sim/events.js";
 import { buildSnapshot, jsonCodec, validateSnap, PROTOCOL_VERSION } from "../src/net/protocol.js";
@@ -112,6 +115,7 @@ section("damage model (balancer numbers)");
   check("ults disabled flag", PVP.ultsEnabled === false);
   check("spawn iframe = 2.0s", PVP.spawnIframeSec === 2.0);
   check("player knockback constants are exact", PVP.kbScalar === 1.0 && PVP.kbMaxPerHit === 180 && PVP.kbSelfDuringIframe === 0);
+  check("pit guardrail constants are exact", PVP.pitEdgeClearance === 200 && PVP.pitWarningBandTiles === 1);
   check("environmental credit window = 2.0s", PVP.envKillCreditWindowSec === 2.0);
   check("chain window = 5.0s", PVP.chainWindowSec === 5.0);
   check("mid-match draft defaults off for physics-only playtests", PVP.draftEnabled === false);
@@ -349,11 +353,16 @@ section("MID-MATCH DRAFT: safe pool, cadence, deterministic offers, comeback bum
 // ---------------------------------------------------------------------------------------------
 section("SPAWNS: symmetric 19x19 arena + pits + spread + break-on-fire protection");
 {
-  const { dungeon, spawns, cover, pits } = buildPvpArena();
+  const { dungeon, spawns, cover, pits, pitWarnings, centerPickup, forcedChokepoints } = buildPvpArena();
   check("arena is the authoritative 19x19 square", dungeon.w === 19 && dungeon.h === 19);
   check("arena has 8 spawn candidates (full FFA)", spawns.length === 8, `${spawns.length}`);
-  check("arena has 12 breakable cover pieces after four inner cells become pits", cover.length === 12, `${cover.length}`);
+  check("arena has 8 breakable cover pieces outside every warning band", cover.length === 8, `${cover.length}`);
   check("arena has four sparse lethal pits", pits.length === 4, `${pits.length}`);
+  check("each pit has a full one-tile warning ring", pitWarnings.length === 32, `${pitWarnings.length}`);
+  check("warning-band geometry is derived from the authoritative lethal tiles",
+    pitWarnings.every((warning) =>
+      isPvpPitWarningTile(dungeon, Math.floor(warning.x / TILE), Math.floor(warning.y / TILE))
+    ));
   check("spawns are all distinct (maximally spread)", new Set(spawns.map((s) => `${s.x},${s.y}`)).size === spawns.length);
 
   // 4-fold rotational symmetry (provably fair): the wall grid, the spawn set, and the cover set
@@ -362,17 +371,33 @@ section("SPAWNS: symmetric 19x19 arena + pits + spread + break-on-fire protectio
   const spawnSet = new Set(spawns.map(key));
   const coverSet = new Set(cover.map(key));
   const pitSet = new Set(pits.map(key));
+  const warningSet = new Set(pitWarnings.map(key));
   const spawnsSymmetric = spawns.every((s) => spawnSet.has(key(pvpArenaRot90(s))));
   const coverSymmetric = cover.every((c) => coverSet.has(key(pvpArenaRot90(c))));
   const pitsSymmetric = pits.every((pit) => pitSet.has(key(pvpArenaRot90(pit))));
+  const warningsSymmetric = pitWarnings.every((warning) => warningSet.has(key(pvpArenaRot90(warning))));
   check("spawns are invariant under 90 rotation", spawnsSymmetric);
   check("cover is invariant under 90 rotation", coverSymmetric);
   check("pits are invariant under 90 rotation", pitsSymmetric);
+  check("pit warning bands are invariant under 90 rotation", warningsSymmetric);
   check("pits are disjoint from every spawn", pits.every((pit) => !spawnSet.has(key(pit))));
-  const minPitSpawnTiles = Math.min(...pits.flatMap((pit) =>
-    spawns.map((spawn) => Math.hypot(pit.x - spawn.x, pit.y - spawn.y) / TILE)
+  check("warning bands are disjoint from spawns and cover",
+    pitWarnings.every((warning) => !spawnSet.has(key(warning)) && !coverSet.has(key(warning))));
+  check("every warning tile is exactly one tile from a lethal tile",
+    pitWarnings.every((warning) =>
+      pits.some((pit) => Math.max(Math.abs(warning.x - pit.x), Math.abs(warning.y - pit.y)) === TILE)
+    ));
+  const protectedPoints = [...spawns, centerPickup, ...forcedChokepoints];
+  const minPitClearance = Math.min(...pits.flatMap((pit) =>
+    protectedPoints.map((point) => pvpPitEdgeDistance(point, pit))
   ));
-  check("every pit stays at least three tiles from every spawn", minPitSpawnTiles >= 3, `min=${minPitSpawnTiles.toFixed(2)}`);
+  check("every pit edge clears spawns, center pickup, and forced chokepoints by 200px",
+    minPitClearance >= PVP.pitEdgeClearance,
+    `min=${minPitClearance.toFixed(2)}px`);
+  const minSpawnPitDistance = Math.min(...spawns.map((spawn) => pvpNearestPitEdgeDistance(spawn, pits)));
+  check("no spawn candidate lies within one dash of a pit edge",
+    minSpawnPitDistance > pvpSingleDashDistance(),
+    `pit=${minSpawnPitDistance.toFixed(2)}px dash=${pvpSingleDashDistance().toFixed(2)}px`);
   let wallsSymmetric = true;
   for (let ty = 0; ty < dungeon.h; ty++) {
     for (let tx = 0; tx < dungeon.w; tx++) {
@@ -429,8 +454,14 @@ section("SPAWNS: symmetric 19x19 arena + pits + spread + break-on-fire protectio
 
   // farthestSpawnIndex is deterministic and avoids an occupied spawn.
   const occupied = [spawns[0]];
-  const idx = farthestSpawnIndex(spawns, occupied);
+  const idx = farthestSpawnIndex(spawns, occupied, pits);
   check("respawn picks a spawn away from occupants", idx !== 0);
+  const safestPitDistance = Math.max(...spawns.map((spawn) => pvpNearestPitEdgeDistance(spawn, pits)));
+  const pitWeightedStart = farthestSpawnIndex(spawns, [], pits);
+  const pitWeightedRespawn = pvpRespawnIndex(spawns, [], pits);
+  check("opening and respawn selection weight equally open choices away from pits",
+    pvpNearestPitEdgeDistance(spawns[pitWeightedStart], pits) === safestPitDistance
+    && pvpNearestPitEdgeDistance(spawns[pitWeightedRespawn], pits) === safestPitDistance);
 
   // Authoritative N-most-spread selection at match start (greedy, id-sorted). The tile a player
   // sits on is a spawn center: tile = round(worldX/TILE - 0.5). EDGE_MIDS are the 4 @2/3-R spawns;
@@ -506,6 +537,45 @@ section("PLAYER KNOCKBACK: weapon impulse, hard clamp, and iframe immunity");
     Math.abs(clampedDisplacement - PVP.kbMaxPerHit) < 1e-9,
     `kb=${clampedDisplacement.toFixed(2)}`);
 
+  const guardrailWorld = pvpWorld(602, ["p1", "p2"]);
+  advanceToLive(guardrailWorld);
+  const guardrailShooter = guardrailWorld.players.get("p1")!;
+  const guardrailVictim = guardrailWorld.players.get("p2")!;
+  const guardrailPit = buildPvpArena().pits[0];
+  guardrailVictim.x = guardrailPit.x + TILE / 2 + PVP.pitEdgeClearance;
+  guardrailVictim.y = guardrailPit.y;
+  guardrailVictim.invuln = 0;
+  guardrailShooter.x = guardrailVictim.x + 60;
+  guardrailShooter.y = guardrailVictim.y;
+  guardrailShooter.invuln = 0;
+  guardrailShooter.weapon = "railgun";
+  guardrailShooter.ownedWeapons = ["railgun"];
+  const guardrailStart = { x: guardrailVictim.x, y: guardrailVictim.y };
+  const guardrailEvents: SimEvent[] = [];
+  PVP.kbScalar = 100;
+  try {
+    let guardrailTicks = 0;
+    while (guardrailVictim.hp === PVP.maxHp && guardrailTicks++ < 20) {
+      guardrailEvents.push(...stepCollect(
+        guardrailWorld,
+        1,
+        new Map([["p1", inp({ firing: true, aim: Math.PI })]]),
+      ));
+    }
+  } finally {
+    PVP.kbScalar = originalKbScalar;
+  }
+  const guardedKnockback = Math.hypot(
+    guardrailVictim.x - guardrailStart.x,
+    guardrailVictim.y - guardrailStart.y,
+  );
+  check("a max-clamped hit cannot ring out a player standing 200px from the pit edge",
+    pvpPitEdgeDistance(guardrailStart, guardrailPit) >= PVP.pitEdgeClearance
+    && guardedKnockback <= PVP.kbMaxPerHit
+    && guardrailVictim.respawnT === 0
+    && !guardrailEvents.some((event) => event.t === "pvpRingOut"),
+    `clearance=${pvpPitEdgeDistance(guardrailStart, guardrailPit).toFixed(2)} kb=${guardedKnockback.toFixed(2)}`);
+
   const protectedWorld = pvpWorld(61, ["p1", "p2"]);
   advanceToLive(protectedWorld);
   const protectedShooter = protectedWorld.players.get("p1")!;
@@ -519,6 +589,45 @@ section("PLAYER KNOCKBACK: weapon impulse, hard clamp, and iframe immunity");
   stepN(protectedWorld, 12, new Map([["p1", inp({ firing: true, aim: protectedAim })]]));
   check("spawn-iframe player takes zero knockback",
     protectedVictim.x === protectedX && protectedVictim.y === protectedY);
+}
+
+// ---------------------------------------------------------------------------------------------
+section("PIT WARNING BAND: fastest drafted movement can dash clear");
+{
+  const arena = buildPvpArena();
+  const warningWorld = pvpWorld(603, ["p1", "p2"]);
+  advanceToLive(warningWorld);
+  const dasher = warningWorld.players.get("p1")!;
+  const pit = arena.pits[0];
+  dasher.x = pit.x + TILE;
+  dasher.y = pit.y;
+  dasher.invuln = 0;
+  recomputeMods(dasher.mods, [
+    "swift_boots", "swift_boots", "swift_boots",
+    "core_move", "core_move", "core_move",
+    "featherweight", "featherweight", "featherweight",
+    "core_dash",
+  ]);
+  const start = { x: dasher.x, y: dasher.y };
+  let ticks = 0;
+  do {
+    stepN(warningWorld, 1, new Map([["p1", inp({ moveX: 1, dash: ticks === 0 })]]));
+    ticks++;
+  } while (dasher.dashTime > 0 && ticks < 10);
+  const dashDistance = Math.hypot(dasher.x - start.x, dasher.y - start.y);
+  const warningWidth = PVP.pitWarningBandTiles * TILE;
+  check("dash-clear test runs at the maximum drafted move-speed cap",
+    dasher.mods.moveSpeedMult === CAPS.moveSpeedMult,
+    `move=${dasher.mods.moveSpeedMult.toFixed(2)}`);
+  check("one warning tile is no wider than the authored single-dash distance",
+    warningWidth <= pvpSingleDashDistance()
+    && pvpSingleDashDistance() === PLAYER.dashSpeed * PLAYER.dashActive,
+    `warning=${warningWidth}px dash=${pvpSingleDashDistance().toFixed(2)}px`);
+  check("a player on the warning band can dash away without ringing out",
+    dashDistance >= warningWidth
+    && pvpNearestPitEdgeDistance(dasher, arena.pits) > warningWidth
+    && dasher.respawnT === 0,
+    `moved=${dashDistance.toFixed(2)}px edge=${pvpNearestPitEdgeDistance(dasher, arena.pits).toFixed(2)}px`);
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -567,7 +676,7 @@ section("LETHAL PITS: ring-out, bounded credit, and iframe safety");
   check("no environmental kill is credited outside 2.0s",
     neutralRingOut?.t === "pvpRingOut"
     && neutralRingOut.by === ""
-    && (expired.match!.scores.get("p1") ?? 0) === 0);
+    && [...expired.players.keys()].every((id) => (expired.match!.scores.get(id) ?? 0) === 0));
 
   const protectedWorld = pvpWorld(64, ["p1", "p2"]);
   advanceToLive(protectedWorld);
@@ -580,8 +689,13 @@ section("LETHAL PITS: ring-out, bounded credit, and iframe safety");
     protectedPlayer.hp === PVP.maxHp && protectedPlayer.respawnT === 0);
   protectedPlayer.invuln = 0;
   const ringEvents = stepCollect(protectedWorld, 1, new Map());
+  const walkedIn = ringEvents.find((event) => event.t === "pvpRingOut");
   check("the same pit kills immediately once protection ends",
-    protectedPlayer.respawnT > 0 && ringEvents.some((event) => event.t === "pvpRingOut"));
+    protectedPlayer.respawnT > 0 && walkedIn?.t === "pvpRingOut");
+  check("a walked-in pit death with no recent PvP hit credits no frag",
+    walkedIn?.t === "pvpRingOut"
+    && walkedIn.by === ""
+    && [...protectedWorld.players.keys()].every((id) => (protectedWorld.match!.scores.get(id) ?? 0) === 0));
 }
 
 // ---------------------------------------------------------------------------------------------

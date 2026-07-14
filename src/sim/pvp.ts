@@ -13,6 +13,7 @@ import type { PlayerId } from "./input.js";
 import type { Dungeon, Room } from "./dungeon.js";
 import { TICKS_PER_SECOND } from "./kits.js";
 import type { KitId } from "./kits.js";
+import { PLAYER } from "./balance.js";
 
 // The world-content discriminant. "coop" is the DEFAULT everywhere (solo, legacy co-op, the
 // authoritative shared dungeon) so every existing code path and golden master is zero-diff;
@@ -64,6 +65,10 @@ export const PVP = {
   kbScalar: 1.0,
   kbMaxPerHit: 180,
   kbSelfDuringIframe: 0,
+  // Lethal geometry must leave more setup room than one maximum knockback hit.
+  pitEdgeClearance: 200,
+  // Walkable floor tiles telegraph every lethal edge by this many full tiles.
+  pitWarningBandTiles: 1,
   // Ring-out attribution remains attached to the most recent PvP attacker for this long.
   envKillCreditWindowSec: 2.0,
   // Two or more credited frags inside this window produce presentation-only chain juice.
@@ -235,9 +240,11 @@ export interface MatchState {
   lastFragTick: Map<PlayerId, number>;
   fragChain: Map<PlayerId, number>;
   isSuddenDeath: boolean;
+  // Authored lethal-pit centers used by deterministic, pit-aware spawn selection.
+  pits: Vec2[];
 }
 
-export function createMatchState(spawns: Vec2[]): MatchState {
+export function createMatchState(spawns: Vec2[], pits: Vec2[] = []): MatchState {
   return {
     phase: "lobby",
     phaseEndTick: 0,
@@ -249,25 +256,50 @@ export function createMatchState(spawns: Vec2[]): MatchState {
     lastFragTick: new Map(),
     fragChain: new Map(),
     isSuddenDeath: false,
+    pits,
   };
+}
+
+export function pvpPitEdgeDistance(point: Vec2, pit: Vec2): number {
+  const dx = Math.max(0, Math.abs(point.x - pit.x) - TILE / 2);
+  const dy = Math.max(0, Math.abs(point.y - pit.y) - TILE / 2);
+  return Math.hypot(dx, dy);
+}
+
+export function pvpNearestPitEdgeDistance(point: Vec2, pits: readonly Vec2[]): number {
+  let nearest = Infinity;
+  for (const pit of pits) nearest = Math.min(nearest, pvpPitEdgeDistance(point, pit));
+  return nearest;
+}
+
+export function pvpSingleDashDistance(): number {
+  return PLAYER.dashSpeed * PLAYER.dashActive;
+}
+
+function pitDistanceWeight(point: Vec2, pits: readonly Vec2[]): number {
+  const distance = pvpNearestPitEdgeDistance(point, pits);
+  return Number.isFinite(distance) ? distance : 0;
 }
 
 // The spawn index farthest from every listed occupied position (deterministic: ties break to
 // the LOWEST index). Used for greedy spread-placement at match start (occupied = already-placed
-// players). With no occupants, returns index 0.
-export function farthestSpawnIndex(spawns: Vec2[], occupied: Vec2[]): number {
+// players). Pit distance shares the score so equally spread choices favor safer ground.
+export function farthestSpawnIndex(spawns: Vec2[], occupied: Vec2[], pits: readonly Vec2[] = []): number {
   let best = 0;
-  let bestDist = -1;
+  let bestScore = -Infinity;
   for (let i = 0; i < spawns.length; i++) {
     let minD = Infinity;
     for (const o of occupied) {
       const dx = spawns[i].x - o.x;
       const dy = spawns[i].y - o.y;
-      const d = dx * dx + dy * dy;
+      const d = Math.hypot(dx, dy);
       if (d < minD) minD = d;
     }
     if (occupied.length === 0) minD = 0;
-    if (minD > bestDist) { bestDist = minD; best = i; }
+    const pitDistance = pitDistanceWeight(spawns[i], pits);
+    if (pits.length > 0 && pitDistance <= pvpSingleDashDistance()) continue;
+    const score = minD + pitDistance;
+    if (score > bestScore) { bestScore = score; best = i; }
   }
   return best;
 }
@@ -277,9 +309,13 @@ export function farthestSpawnIndex(spawns: Vec2[], occupied: Vec2[]): number {
 const CROSSHAIR_CONE = 0.44; // ~25 degrees
 
 // The RESPAWN spawn index (anti-camp core): maximize distance to the nearest living opponent AND
-// avoid any opponent's crosshair (heavily penalized, chosen only if every candidate is covered).
-// Deterministic: ties break to the LOWEST index. With no opponents, returns index 0.
-export function pvpRespawnIndex(spawns: Vec2[], opponents: Array<{ x: number; y: number; aim: number }>): number {
+// avoid any opponent's crosshair. Pit distance shares the score, and candidates inside one dash
+// of a lethal edge are ineligible. Deterministic ties break to the lowest index.
+export function pvpRespawnIndex(
+  spawns: Vec2[],
+  opponents: Array<{ x: number; y: number; aim: number }>,
+  pits: readonly Vec2[] = [],
+): number {
   let best = 0;
   let bestScore = -Infinity;
   for (let i = 0; i < spawns.length; i++) {
@@ -295,7 +331,9 @@ export function pvpRespawnIndex(spawns: Vec2[], opponents: Array<{ x: number; y:
       if (delta < CROSSHAIR_CONE) inCrosshair = true;
     }
     if (opponents.length === 0) minD = 0;
-    const score = minD - (inCrosshair ? 1e6 : 0); // never respawn in a crosshair unless forced
+    const pitDistance = pitDistanceWeight(spawns[i], pits);
+    if (pits.length > 0 && pitDistance <= pvpSingleDashDistance()) continue;
+    const score = minD + pitDistance - (inCrosshair ? 1e6 : 0);
     if (score > bestScore) { bestScore = score; best = i; }
   }
   return best;
@@ -304,7 +342,7 @@ export function pvpRespawnIndex(spawns: Vec2[], opponents: Array<{ x: number; y:
 // ---- symmetric arena ----------------------------------------------------------------------
 
 // The AUTHORITATIVE arena grid (game designer, independently re-verified 4-fold symmetric): a
-// 19x19 square (0..18, center 9,9), clipped corners, 8 spawn candidates, and 16 BREAKABLE-PROP
+// 19x19 square (0..18, center 9,9), clipped corners, 8 spawn candidates, and breakable-prop
 // cover pieces. All groups are invariant under the 90° rotation rot90(x,y)=(y,18-x) — the pvp
 // tests assert this. Cover is destructible props (not walls), so the arena degrades over a match
 // (thinning cover → late-game raw aim), and props block movement + bullets via the shared sim.
@@ -328,28 +366,58 @@ const SPAWN_TILES: ReadonlyArray<[number, number]> = [
   [12, 6], [6, 12], [6, 6], [12, 12], // diagonals (opposite pairs consecutive)
 ];
 
-// Breakable cover (12 props): center knot (center 9,9 stays OPEN), four outer mids, four corner
-// blockers. The former inner axial cover cells are lethal pits; side lanes remain >= 3 tiles.
+// Breakable cover (8 props): center knot (center 9,9 stays OPEN) + four outer mids. The corner
+// blockers are removed so the pit warning rings remain fully readable and unobstructed.
 const COVER_TILES: ReadonlyArray<[number, number]> = [
   [8, 8], [10, 8], [8, 10], [10, 10],                 // center knot
   [9, 6], [6, 9], [9, 12], [12, 9],                   // outer mids
-  [3, 3], [15, 3], [3, 15], [15, 15],                 // corner blockers
 ];
 
-// Four single-cell ring-out pits on the contested inner axes. Each is >=3 tiles from every
-// spawn, sits behind outer approach cover, and leaves the broad flanking lanes untouched.
+// The innermost 4-fold orbit that clears every protected point by >=200px. This moves the pits
+// from the contested center axes into corner-flank pockets; the PR calls out that design trade.
 const PIT_TILES: ReadonlyArray<[number, number]> = [
-  [9, 7], [11, 9], [9, 11], [7, 9],
+  [2, 3], [3, 16], [16, 15], [15, 2],
+];
+
+const CENTER_PICKUP_TILE: readonly [number, number] = [9, 9];
+const FORCED_CHOKE_TILES: ReadonlyArray<[number, number]> = [
+  [9, 8], [10, 9], [9, 10], [8, 9],
 ];
 
 function tileCenter(tx: number, ty: number): Vec2 {
   return { x: tx * TILE + TILE / 2, y: ty * TILE + TILE / 2 };
 }
 
+export function isPvpPitWarningTile(dungeon: Dungeon, tx: number, ty: number): boolean {
+  if (tx < 0 || ty < 0 || tx >= dungeon.w || ty >= dungeon.h) return false;
+  if (dungeon.tiles[ty * dungeon.w + tx] !== 0) return false;
+  const band = Math.max(0, Math.floor(PVP.pitWarningBandTiles));
+  for (let dy = -band; dy <= band; dy++) {
+    for (let dx = -band; dx <= band; dx++) {
+      if (dx === 0 && dy === 0) continue;
+      const px = tx + dx;
+      const py = ty + dy;
+      if (px < 0 || py < 0 || px >= dungeon.w || py >= dungeon.h) continue;
+      if (dungeon.tiles[py * dungeon.w + px] === 2) return true;
+    }
+  }
+  return false;
+}
+
+export interface PvpArena {
+  dungeon: Dungeon;
+  spawns: Vec2[];
+  cover: Vec2[];
+  pits: Vec2[];
+  pitWarnings: Vec2[];
+  centerPickup: Vec2;
+  forcedChokepoints: Vec2[];
+}
+
 // The FIXED symmetric FFA arena. Reuses the same Dungeon/Room shape the renderer + pathfinder
 // consume (the SAME seam the dev sandbox's buildArena() uses to suppress population); the caller
 // places `cover` as breakable props. `spawns` are the candidate points; `cover` the prop coords.
-export function buildPvpArena(): { dungeon: Dungeon; spawns: Vec2[]; cover: Vec2[]; pits: Vec2[] } {
+export function buildPvpArena(): PvpArena {
   const n = ARENA_N;
   const tiles: TileKind[] = new Array(n * n);
   for (let y = 0; y < n; y++) {
@@ -366,7 +434,40 @@ export function buildPvpArena(): { dungeon: Dungeon; spawns: Vec2[]; cover: Vec2
   const c = (n - 1) >> 1; // center tile (9)
   const room: Room = { x: 1, y: 1, w: n - 2, h: n - 2, cx: c, cy: c, kind: "normal", shape: "arena" };
   const dungeon: Dungeon = { w: n, h: n, tiles, rooms: [room], spawn: { x: c, y: c }, exit: { x: c, y: c } };
-  return { dungeon, spawns, cover, pits };
+  const pitWarnings: Vec2[] = [];
+  for (let ty = 0; ty < n; ty++) {
+    for (let tx = 0; tx < n; tx++) {
+      if (isPvpPitWarningTile(dungeon, tx, ty)) pitWarnings.push(tileCenter(tx, ty));
+    }
+  }
+  const warningDiameter = PVP.pitWarningBandTiles * 2 + 1;
+  const expectedWarningTiles = pits.length * (warningDiameter * warningDiameter - 1);
+  if (pitWarnings.length !== expectedWarningTiles) {
+    throw new Error("PVP pit warning band is obstructed");
+  }
+  if (PVP.pitWarningBandTiles * TILE > pvpSingleDashDistance()) {
+    throw new Error("PVP pit warning band exceeds one dash");
+  }
+  const centerPickup = tileCenter(...CENTER_PICKUP_TILE);
+  const forcedChokepoints = FORCED_CHOKE_TILES.map(([tx, ty]) => tileCenter(tx, ty));
+  const protectedPoints = [...spawns, centerPickup, ...forcedChokepoints];
+  for (const pit of pits) {
+    for (const point of protectedPoints) {
+      if (pvpPitEdgeDistance(point, pit) < PVP.pitEdgeClearance) {
+        throw new Error("PVP pit violates edge clearance");
+      }
+    }
+  }
+  for (const spawn of spawns) {
+    if (pvpNearestPitEdgeDistance(spawn, pits) <= pvpSingleDashDistance()) {
+      throw new Error("PVP spawn violates pit dash clearance");
+    }
+  }
+  const warningKeys = new Set(pitWarnings.map((point) => `${point.x},${point.y}`));
+  if (cover.some((point) => warningKeys.has(`${point.x},${point.y}`))) {
+    throw new Error("PVP cover obstructs pit warning band");
+  }
+  return { dungeon, spawns, cover, pits, pitWarnings, centerPickup, forcedChokepoints };
 }
 
 // The 90° rotation the arena is symmetric under — in tile space rot90(tx,ty)=(ty,N-1-tx), which

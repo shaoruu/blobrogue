@@ -664,6 +664,7 @@ function initPvpPlayer(w: WorldState, p: PlayerSim): void {
 // placement and mid-match respawns.
 function pvpPlaceOnSpawn(w: WorldState, p: PlayerSim): void {
   const spawns = w.match?.spawns ?? [];
+  const pits = w.match?.pits ?? [];
   if (spawns.length > 0) {
     // Anti-camp: farthest from any living opponent AND out of their crosshairs (never respawn in
     // someone's line of fire). Deterministic (position + authoritative aim, id-sorted tiebreak).
@@ -672,7 +673,7 @@ function pvpPlaceOnSpawn(w: WorldState, p: PlayerSim): void {
       if (o.id === p.id || o.hp <= 0 || o.respawnT > 0) continue;
       opponents.push({ x: o.x, y: o.y, aim: o.aimAngle });
     }
-    const idx = pvpRespawnIndex(spawns, opponents);
+    const idx = pvpRespawnIndex(spawns, opponents, pits);
     p.x = spawns[idx].x;
     p.y = spawns[idx].y;
   }
@@ -1148,7 +1149,7 @@ export function loadFloorIntoWorld(w: WorldState, floor: number, playerCountAtLo
     // where a clean slate is exactly right.
     const arena = buildPvpArena();
     w.dungeon = arena.dungeon;
-    w.match = createMatchState(arena.spawns);
+    w.match = createMatchState(arena.spawns, arena.pits);
     pvpCover = arena.cover;
   } else {
     w.dungeon = w.isSandbox ? buildArena() : generateDungeon(w.seed, floor);
@@ -10895,7 +10896,7 @@ function pvpAssignSpreadSpawns(w: WorldState): void {
   for (const id of [...w.players.keys()].sort()) {
     const p = w.players.get(id);
     if (p === undefined) continue;
-    const idx = farthestSpawnIndex(m.spawns, placed);
+    const idx = farthestSpawnIndex(m.spawns, placed, m.pits);
     p.x = m.spawns[idx].x;
     p.y = m.spawns[idx].y;
     p.hp = p.maxHp;
