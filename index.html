@@ -86,6 +86,11 @@
       /* KIT/XP §6: HP numeric readout beside the heart row (mode toggle in settings). */
       .hprow{ display:flex; align-items:center; gap:8px; }
       .hp-num{ font-family:var(--f-num); font-variant-numeric:tabular-nums; font-size:var(--fs-num); line-height:1; color:var(--cream); }
+      .arena-hp{ position:relative; width:120px; height:12px; flex:0 0 120px; overflow:hidden;
+        background:var(--dun-0); box-shadow:inset 0 0 0 2px var(--dun-3); }
+      .arena-hp i{ position:absolute; inset:2px; transform:scaleX(1); transform-origin:left center;
+        background:linear-gradient(180deg,#ff7a7a,var(--red)); box-shadow:0 0 6px rgba(255,90,90,.5);
+        transition:transform .12s linear; }
       /* Teammate HP party panel (the Mender dependency): compact nameplate rows. */
       .party{ display:none; flex-direction:column; gap:3px; }
       .party.has-party{ display:flex; }
@@ -532,6 +537,35 @@
         background:var(--combo-c,var(--amber)); box-shadow:0 0 6px var(--combo-c,var(--amber)); transition:transform .08s linear; }
       .combo.low .combo-bar i{ animation:comboLow .38s steps(2,jump-none) infinite; }
       @keyframes comboLow{ 0%{opacity:1;} 100%{opacity:.3;} }
+
+      .arena-board{ box-sizing:border-box; width:156px; height:104px; padding:7px 9px;
+        display:flex; flex-direction:column; gap:3px; overflow:hidden;
+        background:rgba(5,3,11,.72); box-shadow:inset 0 0 0 2px var(--dun-3),0 3px 0 rgba(0,0,0,.4); }
+      .arena-board-title{ font-family:var(--f-ui); font-size:var(--fs-2xs); letter-spacing:2px;
+        color:var(--amber); text-transform:uppercase; }
+      .arena-board-empty{ margin-top:18px; font-family:var(--f-ui); font-size:var(--fs-2xs);
+        letter-spacing:1px; color:var(--ink-mute); text-align:center; }
+      .arena-score{ display:flex; align-items:baseline; justify-content:space-between; gap:10px;
+        min-height:14px; font-family:var(--f-ui); font-size:var(--fs-2xs); letter-spacing:1px; }
+      .arena-score-name{ max-width:112px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+        color:var(--cream); text-transform:uppercase; }
+      .arena-score-frags{ min-width:18px; text-align:right; font-family:var(--f-num);
+        font-size:var(--fs-num); line-height:1; color:var(--cream); font-variant-numeric:tabular-nums; }
+      .arena-score.self .arena-score-name,.arena-score.self .arena-score-frags{ color:var(--amber-hi); }
+      .arena-score.dead{ opacity:.45; }
+      .arena-center{ position:absolute; top:38%; left:50%; width:min(520px,88vw); height:112px;
+        transform:translate(-50%,-50%); display:flex; flex-direction:column; align-items:center;
+        justify-content:center; gap:10px; pointer-events:none; text-align:center; text-transform:uppercase; }
+      .arena-center-title{ font-family:var(--f-logo),monospace; font-size:var(--fs-title);
+        letter-spacing:4px; color:var(--cream); text-shadow:0 4px 0 var(--dun-0),0 0 22px rgba(0,0,0,.55); }
+      .arena-center-detail{ font-family:var(--f-ui); font-size:var(--fs-sm); letter-spacing:3px;
+        color:var(--cream); text-shadow:0 2px 0 var(--dun-0),0 0 12px rgba(0,0,0,.7); }
+      .arena-center.tone-countdown .arena-center-title{ color:var(--amber); font-size:56px; }
+      .arena-center.tone-victory .arena-center-title{ color:var(--ok);
+        text-shadow:0 4px 0 var(--dun-0),0 0 26px rgba(124,252,152,.5); }
+      .arena-center.tone-defeat .arena-center-title,.arena-center.tone-respawn .arena-center-title{ color:var(--red);
+        text-shadow:0 4px 0 var(--dun-0),0 0 26px rgba(255,90,90,.5); }
+      .arena-center.tone-respawn .arena-center-title{ font-size:var(--fs-lg); }
 
       #overlay, .pause-overlay, .blessing-overlay { position: fixed; inset: 0; z-index: 10; display: flex; align-items: center; justify-content: center; color: var(--cream); text-align: center;
         background: radial-gradient(ellipse at center, rgba(20,16,36,0.82) 0%, rgba(8,6,16,0.94) 100%); zoom:var(--ui-scale,1); }

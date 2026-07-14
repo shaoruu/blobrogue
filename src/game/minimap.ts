@@ -7,7 +7,7 @@ export interface MinimapView {
   dungeon: Dungeon;
   playerX: number;
   playerY: number;
-  exit: { x: number; y: number };
+  exit: { x: number; y: number } | null;
   isCleared: boolean;
   dots: MinimapDot[]; // enemies + teammates, in world coords
 }
@@ -73,13 +73,14 @@ export class Minimap {
     const toX = (wx: number) => (wx / TILE) * s;
     const toY = (wy: number) => (wy / TILE) * s;
 
-    // exit
-    ctx.fillStyle = view.isCleared ? "#8affc0" : "#4f7a63";
-    const exX = (view.exit.x + 0.5) * s;
-    const exY = (view.exit.y + 0.5) * s;
-    ctx.beginPath();
-    ctx.arc(exX, exY, 3, 0, Math.PI * 2);
-    ctx.fill();
+    if (view.exit !== null) {
+      ctx.fillStyle = view.isCleared ? "#8affc0" : "#4f7a63";
+      const exX = (view.exit.x + 0.5) * s;
+      const exY = (view.exit.y + 0.5) * s;
+      ctx.beginPath();
+      ctx.arc(exX, exY, 3, 0, Math.PI * 2);
+      ctx.fill();
+    }
 
     for (const dot of view.dots) {
       ctx.fillStyle = dot.color;

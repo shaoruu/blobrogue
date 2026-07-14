@@ -45,6 +45,7 @@ export interface OnlineHudState {
   worldId: string | null;
   connected: number;       // "on" seats on the server roster
   away: number;            // reserved/reconnecting seats
+  isArena?: boolean;
   // OTHER players still deciding a blessing offer (the held-descend explanation).
   waitingPicks?: number;
 }
@@ -54,14 +55,20 @@ export interface OnlineHudState {
 // explicitly. Debug details (world id / rev / protocol) live in the hold-Tab details panel,
 // not here.
 export function onlineHudLabel(s: OnlineHudState): string {
-  const verb = s.phase === "connected" ? "CONNECTED"
+  const phase = s.phase === "connected" ? "CONNECTED"
     : s.phase === "reconnecting" ? "RECONNECTING"
       : s.phase === "waiting" ? "WAITING FOR PARTY" : "CONNECTING";
+  const verb = s.isArena ? "ARENA" : phase;
+  const arenaPhase = !s.isArena || s.phase === "connected"
+    ? ""
+    : ` \u00b7 ${s.phase === "waiting" ? "WAITING FOR PLAYERS" : phase}`;
   const where = s.roomCode ?? s.worldId;
   const players = s.connected > 0 ? ` \u00b7 ${s.connected} PLAYER${s.connected === 1 ? "" : "S"}` : "";
   const away = s.away > 0 ? ` \u00b7 ${s.away} RECONNECTING` : "";
-  const waiting = (s.waitingPicks ?? 0) > 0 ? ` \u00b7 WAITING ON ${s.waitingPicks} PICK${s.waitingPicks === 1 ? "" : "S"}` : "";
-  return `${verb}${where ? ` \u00b7 ${where}` : ""}${players}${away}${waiting}`;
+  const waiting = !s.isArena && (s.waitingPicks ?? 0) > 0
+    ? ` \u00b7 WAITING ON ${s.waitingPicks} PICK${s.waitingPicks === 1 ? "" : "S"}`
+    : "";
+  return `${verb}${arenaPhase}${where ? ` \u00b7 ${where}` : ""}${players}${away}${waiting}`;
 }
 
 // The hold-Tab details panel line: authoritative world / revision / protocol version.

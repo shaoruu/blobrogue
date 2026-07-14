@@ -35,7 +35,7 @@ import { PartyGate } from "../net/partyGate.js";
 import type { ExpectedMember, PartyGateView } from "../net/partyGate.js";
 import { onlineHudLabel, netDetailsLine, reconnectOverlayCopy, BACK_ONLINE_TOAST, CONNECT_CANCEL_HINT, OFFER_EXPIRED_TOAST } from "../ui/onlineCopy.js";
 import type { OnlineExitReason, OnlinePhase } from "../ui/onlineCopy.js";
-import { applyItemToWorld, chooseBlessingInWorld, dismissBlessingOfferInWorld, applyMaxHpBonus, loadFloorIntoWorld, descend, devSpawnEnemy, devSpawnProp, devSpawnChest, acquireWeaponInWorld, isFloorCleared, navDebugField, workerBuildSites, nearestShopSlot, isPlayerInCombat, consumeBlessingReroll, setPlayerKit } from "../sim/world.js";
+import { applyItemToWorld, chooseBlessingInWorld, dismissBlessingOfferInWorld, applyMaxHpBonus, loadFloorIntoWorld, descend, devSpawnEnemy, devSpawnProp, devSpawnChest, acquireWeaponInWorld, isFloorCleared, isPvp, navDebugField, workerBuildSites, nearestShopSlot, isPlayerInCombat, consumeBlessingReroll, setPlayerKit } from "../sim/world.js";
 import type { WorldState, PlayerSim, MeleeSwing, RemoteTarget } from "../sim/world.js";
 import { ULT, isRealKit, canCastUlt, KIT_META, MOMENTUM, OVERSHIELD, HEAL_PULSE, LIFEBLOOM } from "../sim/kits.js";
 import type { KitId } from "../sim/kits.js";
@@ -53,6 +53,7 @@ import { Minimap } from "./minimap.js";
 import type { MinimapDot } from "./minimap.js";
 import { Hud } from "./hud.js";
 import type { ProfileStats, HudState } from "./hud.js";
+import { buildArenaMatchHud } from "./arenaHud.js";
 import type { CoopBridge, LocalPlayerState } from "./coop.js";
 import {
   createAnim, resetAnim, stepAnim, triggerRecoil, triggerFlash, triggerBounce,
@@ -903,6 +904,7 @@ export class Game {
   private get aimAngle(): number { return this.p.aimAngle; }
   private get shotSeq(): number { return this.p.shotSeq; }
   private get isDown(): boolean { return this.p.isDown; }
+  private get isArena(): boolean { return isPvp(this.world); }
   private get kills(): number { return this.p.kills; }
   private get coins(): number { return this.p.coins; }
   private get combo(): number { return this.p.combo; }
@@ -1620,7 +1622,7 @@ export class Game {
     if (world) this.seed = world.seed;
     this.loadFloorClient();
     this.snapCameraTo(this.px - this.canvas.width / 2, this.py - this.canvas.height / 2);
-    this.hud.showBanner(floorBannerText(this.floor, { isBoss: isBossFloor(this.floor) }));
+    if (!this.isArena) this.hud.showBanner(floorBannerText(this.floor, { isBoss: isBossFloor(this.floor) }));
     this.runStart = performance.now();
   }
 
@@ -1685,7 +1687,9 @@ export class Game {
         this.isWorldRevealed = true;
         this.seed = rebuilt.seed;
         this.loadFloorClient();
-        this.hud.showBanner(floorBannerText(rebuilt.floor, { isBoss: isBossFloor(rebuilt.floor), isGauntlet: isGauntletFloor(rebuilt.floor) }));
+        if (!this.isArena) {
+          this.hud.showBanner(floorBannerText(rebuilt.floor, { isBoss: isBossFloor(rebuilt.floor), isGauntlet: isGauntletFloor(rebuilt.floor) }));
+        }
         // The run properly begins at the first reveal (the connect veil isn't run time).
         if (isFirstReveal) this.runStart = performance.now();
       }
@@ -1917,6 +1921,32 @@ export class Game {
     this.pvpLastFragMs = -Infinity;
   }
 
+  private arenaMatchHud(): HudState["arenaMatch"] {
+    if (!this.isArena || this.mode !== "online" || !this.wsTransport) return null;
+    const snap = this.wsTransport.getLatestSnapshot();
+    if (snap === null || snap.match === null) return null;
+    return buildArenaMatchHud({
+      match: snap.match,
+      tick: snap.tick,
+      selfId: snap.selfId,
+      respawnTicks: snap.self?.rsp ?? 0,
+      nameOf: (id, isSelf) => this.arenaNameOf(id, isSelf),
+    });
+  }
+
+  private arenaNameOf(id: PlayerId, isSelf: boolean): string {
+    if (isSelf) return "YOU";
+    const seat = this.wsTransport?.getWorldRoster().find((entry) => entry.pid === id);
+    if (seat?.nm) return seat.nm;
+    return this.remotes().find((player) => player.playerId === id)?.name ?? id;
+  }
+
+  private isArenaRespawning(): boolean {
+    if (!this.isArena || this.mode !== "online" || !this.wsTransport) return false;
+    const self = this.wsTransport.getLatestSnapshot()?.self;
+    return self !== null && self !== undefined && (self.hp <= 0 || self.rsp > 0);
+  }
+
   // Per-tick semantic weapon audio: equip edges, the Breach charge lifecycle (prime /
   // ONE keyed hold loop / threshold / full lock / vent-on-cancel), the halo's single
   // owner loop + blade-pass ticks, the chain's pull loop, and the risk band open/close.
@@ -2000,7 +2030,7 @@ export class Game {
   }
 
   private tickCosmetics(dt: number, cmd: InputCmd) {
-    if (!this.isDown) {
+    if (!this.isDown && !this.isArenaRespawning()) {
       let ix = cmd.moveX, iy = cmd.moveY;
       const len = Math.hypot(ix, iy) || 1; ix /= len; iy /= len;
       this.isPlayerMoving = cmd.moveX !== 0 || cmd.moveY !== 0;
@@ -2211,6 +2241,7 @@ export class Game {
   }
 
   private isCurrentFloorCleared(): boolean {
+    if (this.isArena) return false;
     if (this.mode === "online" && this.wsTransport) return this.wsTransport.isFloorCleared();
     return isFloorCleared(this.world);
   }
@@ -3787,9 +3818,12 @@ export class Game {
         worldId: this.wsTransport.getWorldId(),
         connected,
         away: roster.length - connected,
+        isArena: this.isArena,
         // Teammates still deciding a pick — the visible reason a cleared floor isn't
         // descending yet (own overlay covers the self case).
-        waitingPicks: this.wsTransport.getPartyWait().filter((w) => w.pid !== selfId).length,
+        waitingPicks: this.isArena
+          ? 0
+          : this.wsTransport.getPartyWait().filter((w) => w.pid !== selfId).length,
       });
     }
     const comboTier = this.comboTier();
@@ -3809,11 +3843,11 @@ export class Game {
       swap: this.swapTarget ? { id: this.swapTarget.weapon, name: WEAPONS[this.swapTarget.weapon].name } : null,
       // Online floors use the authoritative global cleared flag (enemies may be interest-filtered
       // out of this client's snapshot, so a local count can't decide "cleared").
-      isCleared: this.mode === "online" && this.wsTransport ? this.wsTransport.isFloorCleared() : isFloorCleared(this.world),
+      isCleared: this.isCurrentFloorCleared(),
       enemiesLeft: this.enemies.length,
-      isObjectiveHidden: this.isSandbox,
-      isParty: this.mode !== "solo" && this.remotes().length > 0,
-      isBossActive,
+      isObjectiveHidden: !this.isArena && this.isSandbox,
+      isParty: !this.isArena && this.mode !== "solo" && this.remotes().length > 0,
+      isBossActive: !this.isArena && isBossActive,
       bossHpFrac,
       bossName: boss ? bossDisplayName(boss.kind) : "",
       coopLabel,
@@ -3825,10 +3859,12 @@ export class Game {
       items: this.collapsedItems(),
       // One coordination slot: an open blessing gate outranks exit staging (picks always
       // resolve before the descend, so the messages can never both apply).
-      waitLabel: this.blessingWaitLabel() ?? this.exitWaitLabel(),
+      waitLabel: this.isArena ? null : this.blessingWaitLabel() ?? this.exitWaitLabel(),
       party: this.partyHud(),
       ult: this.ultHud(),
       sig: this.sigHud(),
+      isArena: this.isArena,
+      arenaMatch: this.arenaMatchHud(),
     });
   }
 
@@ -3855,7 +3891,7 @@ export class Game {
 
   // Teammate HP for the party HUD (spec §6, the Mender dependency): the live nameplate rows.
   private partyHud(): HudState["party"] {
-    if (this.mode === "solo") return [];
+    if (this.mode === "solo" || this.isArena) return [];
     return this.remotes().map((r) => ({
       id: r.playerId, name: r.name, hp: r.hp, maxHp: r.maxHp,
       colorIndex: r.colorIndex, isDown: r.isDown, isAbsent: r.isAbsent,
@@ -4031,6 +4067,7 @@ export class Game {
   // connection dropped reads RECONNECTING (their offer survives the reconnect grace — the
   // coherence system, PR #39 — so "picking" would be a lie while they can't see the cards).
   private blessingWaitLabel(): string | null {
+    if (this.isArena) return null;
     if (this.mode !== "online" || !this.wsTransport) return null;
     const pending = this.wsTransport.pendingPickWait();
     if (pending.length === 0) return null;
@@ -4071,6 +4108,7 @@ export class Game {
   // neither are RECONNECTING members — the coherence system (PR #39) reserves their body
   // and excludes it from the gate on both sides, so the party never waits on a ghost.
   private exitWaitLabel(): string | null {
+    if (this.isArena) return null;
     if (this.mode !== "online" || !this.wsTransport || !this.wsTransport.isFloorCleared()) return null;
     const remotes = this.wsTransport.remotePlayers();
     const presentLiving = remotes.filter((r) => !r.isDown && !isReconnectingTeammate(r));
@@ -4127,7 +4165,7 @@ export class Game {
         ...this.coop.remotePlayers().map((r) => ({ name: r.name, isYou: false, color: playerColorOr(r.colorIndex), isDown: r.isDown, isOut: false, isAtExit: false, isReconnecting: false })),
       ];
     } else if (this.mode === "online" && this.wsTransport) {
-      const exr = this.wsTransport.exitReadyParty();
+      const exr = this.isArena ? [] : this.wsTransport.exitReadyParty();
       const selfId = this.wsTransport.getSelfServerId();
       const isSelfOut = this.wsTransport.getLatestSnapshot()?.self?.out === true;
       roster = [
@@ -4472,9 +4510,11 @@ export class Game {
     // (they are never dimmed), so a tighter glow costs readability of the room, never of a tell.
     const visionMult = floorVisionMult(this.world.floorDescriptor.mutators);
     if (this.isRunning && this.isWorldRevealed) {
-      if (!this.isDown) this.lighting.pushDynamic(this.px, this.py, HERO_GLOW_RADIUS * visionMult, HERO_GLOW_CUT, HERO_GLOW_COLOR, HERO_GLOW_STAIN, true);
+      if (!this.isDown && !this.isArenaRespawning()) {
+        this.lighting.pushDynamic(this.px, this.py, HERO_GLOW_RADIUS * visionMult, HERO_GLOW_CUT, HERO_GLOW_COLOR, HERO_GLOW_STAIN, true);
+      }
       for (const r of this.remotes()) {
-        if (!r.isDown && !r.isAbsent && this.isNearCamera(r.x, r.y, REMOTE_GLOW_RADIUS)) {
+        if (!r.isDown && !r.isAbsent && (!this.isArena || r.hp > 0) && this.isNearCamera(r.x, r.y, REMOTE_GLOW_RADIUS)) {
           this.lighting.pushDynamic(r.x, r.y, REMOTE_GLOW_RADIUS * visionMult, REMOTE_GLOW_CUT, HERO_GLOW_COLOR, REMOTE_GLOW_STAIN, true);
         }
       }
@@ -4613,7 +4653,7 @@ export class Game {
       ctx.globalAlpha = pulse;
       ctx.fillStyle = "#ffb43b";
       ctx.font = '700 14px "Silkscreen", monospace';
-      ctx.fillText("ENTERING THE DUNGEON\u2026", cx, cy);
+      ctx.fillText(this.isArena ? "ENTERING THE ARENA\u2026" : "ENTERING THE DUNGEON\u2026", cx, cy);
       ctx.globalAlpha = 1;
       ctx.fillStyle = "#8f87a8";
       ctx.font = '16px "VT323", monospace';
@@ -4627,7 +4667,7 @@ export class Game {
     ctx.globalAlpha = pulse;
     ctx.fillStyle = "#ffb43b";
     ctx.font = '700 14px "Silkscreen", monospace';
-    ctx.fillText("WAITING FOR PARTY\u2026", cx, top - 44);
+    ctx.fillText(this.isArena ? "WAITING FOR PLAYERS\u2026" : "WAITING FOR PARTY\u2026", cx, top - 44);
     ctx.globalAlpha = 1;
     ctx.font = '700 11px "Silkscreen", monospace';
     for (let i = 0; i < rows.length; i++) {
@@ -5003,6 +5043,7 @@ export class Game {
   }
 
   private renderExit() {
+    if (this.isArena) return;
     const { ctx, renderCam: cam } = this;
     const d = this.dungeon;
     const ex = d.exit.x * TILE + TILE / 2 - cam.x, ey = d.exit.y * TILE + TILE / 2 - cam.y;
@@ -8212,11 +8253,13 @@ export class Game {
     const { ctx, renderCam: cam } = this;
     for (const r of remotes) {
       const sx = r.x - cam.x, sy = r.y - cam.y;
+      const isArenaRespawning = this.isArena && r.hp <= 0;
       // Identity still unresolved (no verified color claim yet): an explicit NEUTRAL
       // placeholder at the exact body/label geometry the real render uses, so the resolve
       // happens in place. Never a guessed color that pops to the real one later.
       if (r.colorIndex === null) {
-        this.renderUnresolvedRemote(sx, sy);
+        const status = r.isDown ? "DOWN" : isArenaRespawning ? "RESPAWNING" : null;
+        this.renderUnresolvedRemote(sx, sy, status);
         continue;
       }
       const color = playerColor(r.colorIndex);
@@ -8229,7 +8272,7 @@ export class Game {
       // A network-absent teammate renders as an explicit ghost (their body is reserved for
       // the reconnect grace) — never mistakable for a live player or a corpse. A live one
       // blinks through its authoritative i-frames exactly like the local blob does.
-      const alpha = r.isAbsent ? 0.35 : r.isDown ? 0.4 : isInvulnBlinkFrame(r.invuln, r.dashInvuln) ? 0.4 : 1;
+      const alpha = r.isAbsent ? 0.35 : r.isDown || isArenaRespawning ? 0.4 : isInvulnBlinkFrame(r.invuln, r.dashInvuln) ? 0.4 : 1;
       ctx.globalAlpha = alpha;
       ctx.translate(sx + xf.ox, sy + xf.oy);
       ctx.rotate(xf.rot);
@@ -8245,7 +8288,7 @@ export class Game {
       // which never uses frame sheets — the procedural xf carries the full deform).
       this.drawCosmetics(r.hat, r.face, sx, sy, 52, r.facing, xf, alpha, false);
 
-      if (!r.isDown && !r.isAbsent) {
+      if (!r.isDown && !r.isAbsent && !isArenaRespawning) {
         if (WEAPONS[r.weapon].melee) this.renderHeldMelee(sx, sy, r.aimAngle, r.weapon, 1, null);
         else this.renderHeldWeapon(sx, sy, r.aimAngle, r.weapon, 1);
       }
@@ -8254,7 +8297,17 @@ export class Game {
       ctx.font = '700 11px "Silkscreen", monospace';
       ctx.textAlign = "center";
       ctx.globalAlpha = r.isAbsent ? 0.8 : 1;
-      ctx.fillText(r.isAbsent ? `${r.name} (reconnecting\u2026)` : r.isDown ? `${r.name} (down)` : r.name, sx, sy - 32);
+      ctx.fillText(
+        r.isAbsent
+          ? `${r.name} (reconnecting\u2026)`
+          : r.isDown
+            ? `${r.name} (down)`
+            : isArenaRespawning
+              ? `${r.name} (respawning)`
+              : r.name,
+        sx,
+        sy - 32,
+      );
       ctx.globalAlpha = 1;
       ctx.textAlign = "left";
     }
@@ -8374,25 +8427,26 @@ export class Game {
   // The neutral stand-in for a teammate whose identity color has not resolved: a grey ring
   // at the body position and a grey "…" at the name-label baseline — the same geometry the
   // real render uses, so the resolve swaps in place with zero shift.
-  private renderUnresolvedRemote(sx: number, sy: number) {
+  private renderUnresolvedRemote(sx: number, sy: number, status: string | null) {
     const { ctx } = this;
     ctx.save();
     ctx.strokeStyle = NEUTRAL_PLAYER_COLOR;
     ctx.lineWidth = 2;
-    ctx.globalAlpha = 0.8;
+    ctx.globalAlpha = status === null ? 0.8 : 0.35;
     ctx.beginPath();
     ctx.arc(sx, sy, this.pr, 0, 6.28);
     ctx.stroke();
     ctx.fillStyle = NEUTRAL_PLAYER_COLOR;
     ctx.font = '700 11px "Silkscreen", monospace';
     ctx.textAlign = "center";
-    ctx.fillText("\u2026", sx, sy - 32);
+    ctx.fillText(status ?? "\u2026", sx, sy - 32);
     ctx.restore();
     ctx.textAlign = "left";
   }
 
   private renderPlayer() {
     const { ctx, renderCam: cam } = this;
+    const isArenaRespawning = this.isArenaRespawning();
     // Interpolate the render position between the last two sim steps for smooth motion.
     const a = this.hasRenderPrev ? this.renderAlpha : 1;
     const ipx = this.renderPrevX + (this.px - this.renderPrevX) * a;
@@ -8412,7 +8466,8 @@ export class Game {
       }
     }
     let alpha = 1;
-    if (this.isDown) alpha = 0.4;
+    if (isArenaRespawning) alpha = 0.25;
+    else if (this.isDown) alpha = 0.4;
     else if (isInvulnBlinkFrame(this.invuln, this.p.dashInvuln)) alpha = 0.4;
     const clip: SheetClip = this.playerAnim.move > 0.5 ? "walk" : "idle";
     const xf = characterXform(this.playerAnim, CHARACTER_STYLE);
@@ -8435,7 +8490,7 @@ export class Game {
       }
       this.drawCosmetics(this.selfCosmetics.hat, this.selfCosmetics.face, psx, psy, 52, this.facing, xf, alpha, !!sheet, cosmeticFrame);
     }
-    if (!this.isDown) {
+    if (!this.isDown && !isArenaRespawning) {
       // Anchor the held weapon to the blob's VISUAL body offset (lean/bob/hop + recoil nudge)
       // so the gun stays glued to the body while moving. The bullet/muzzle ORIGIN stays at the
       // true sim center (psx/psy) — the weapon art is cosmetic and just follows the body.
@@ -8529,6 +8584,7 @@ export class Game {
   // teammates stand staged there, and — once staged yourself — chevrons toward each living
   // teammate the gate still needs. Pure reads of the authoritative exr; nothing sim-side.
   private renderExitCoordination() {
+    if (this.isArena) return;
     if (this.mode !== "online" || !this.wsTransport || this.isDown || !this.isRunning) return;
     if (!this.wsTransport.isFloorCleared()) return;
     const remotes = this.remotes();
@@ -8902,6 +8958,7 @@ export class Game {
   // A proper crosshair (ring + four tick marks + center dot) rather than a bare circle,
   // so the aim point reads clearly against a busy floor. Screen-space, drawn last.
   private renderReticle() {
+    if (this.isArenaRespawning()) return;
     const { ctx } = this;
     const cx = this.input.mouseX, cy = this.input.mouseY;
     const r = 8, tick = 4, gap = 3;
@@ -8935,8 +8992,8 @@ export class Game {
     this.minimap.render({
       dungeon: this.dungeon,
       playerX: this.px, playerY: this.py,
-      exit: this.dungeon.exit,
-      isCleared: isFloorCleared(this.world),
+      exit: this.isArena ? null : this.dungeon.exit,
+      isCleared: this.isCurrentFloorCleared(),
       dots,
     });
   }
