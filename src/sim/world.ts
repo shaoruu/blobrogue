@@ -984,6 +984,7 @@ function resolveUlt(w: WorldState, p: PlayerSim, ev: SimEvent[]): void {
   if (!isRealKit(p.kitId)) return;
   if (!canCastUlt(p.ultCharge, w.tick, p.ultReadyAtTick)) return;
   p.ultCharge = 0;
+  p.ultSources = freshUltSources();
   p.ultReadyAtTick = w.tick + ULT.lockoutTicks;
   switch (p.kitId) {
     case "gunner": {
