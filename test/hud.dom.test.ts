@@ -27,6 +27,7 @@ Object.assign(globalThis, {
 });
 
 const { Hud, buildSlot, buildEmptySlot, buildBuffChip, buildMoreChip, MAX_BUFF_SLOTS, objectiveCopy, weaponTipRows, weaponTipNotes, renderTipInto, fmtStat } = await import("../src/game/hud.js");
+const { buildArenaMatchHud } = await import("../src/game/arenaHud.js");
 const { MAX_OWNED_WEAPONS } = await import("../src/sim/constants.js");
 const { BlessingOverlay } = await import("../src/ui/blessing.js");
 const { ShopPanel } = await import("../src/ui/shopPanel.js");
@@ -86,6 +87,9 @@ function mkState(over: Partial<HudState> = {}): HudState {
     items: [],
     party: [],
     ult: null,
+    sig: null,
+    isArena: false,
+    arenaMatch: null,
     ...over,
   };
 }
@@ -463,6 +467,118 @@ function hudIntegrationTests(): void {
   check("LEAVE IT routes the dismiss action", dismissed === 1);
   hud.update(mkState({ weapons: fullWeapons, swap: null }));
   check("walking away (or declining) hides the prompt", !swapEl.classList.contains("show"));
+}
+
+function arenaHudDomTests(): void {
+  section("arena HUD: one continuous numeric HP bar, never a heart-sprite row");
+  const root = document.createElement("div");
+  document.body.appendChild(root);
+  const hud = new Hud(root);
+  hud.showBanner("FLOOR 9 \u00b7 CLEAR \u00b7 GO DOWN");
+  hud.clear();
+  const floorBanner = root.querySelector<HTMLElement>(".floor-banner")!;
+  check("an arena run cannot inherit a prior co-op floor banner",
+    floorBanner.textContent === "" && floorBanner.style.opacity === "0");
+  const match = buildArenaMatchHud({
+    match: {
+      ph: "live",
+      end: 6080,
+      sc: [
+        { id: "p2", f: 1, a: false },
+        { id: "p1", f: 3, a: true },
+      ],
+      win: null,
+    },
+    tick: 100,
+    selfId: "p1",
+    respawnTicks: 0,
+    nameOf: (id, isSelf) => isSelf ? "YOU" : id === "p2" ? "RIVAL" : id,
+  });
+  settings.setHpDisplay("hearts");
+  hud.update(mkState({
+    hp: 75,
+    maxHp: 100,
+    isArena: true,
+    arenaMatch: match,
+    isCleared: true,
+    waitLabel: "1/2 READY TO GO DOWN",
+    party: [
+      { id: "p2", name: "Rival", hp: 50, maxHp: 100, colorIndex: 2, isDown: false, isAbsent: false },
+    ],
+  }));
+  const hearts = root.querySelector<HTMLElement>("[data-hearts]")!;
+  const hpBar = root.querySelector<HTMLElement>("[data-arena-hp]")!;
+  const hpFill = root.querySelector<HTMLElement>("[data-arena-hp-fill]")!;
+  const hpNum = root.querySelector<HTMLElement>("[data-hpnum]")!;
+  check("100-HP arena renders zero heart canvases", hearts.childElementCount === 0);
+  check("heart row is hidden and the single bar is visible",
+    hearts.classList.contains("hidden") && !hpBar.classList.contains("hidden") && hpBar.querySelectorAll("i").length === 1);
+  check("bar fill tracks current/max continuously", hpFill.style.transform === "scaleX(0.75)", hpFill.style.transform);
+  check("numeric HP remains visible even under the hearts-only preference",
+    hpNum.textContent === "75/100" && !hpNum.classList.contains("hidden"));
+
+  section("arena HUD: authoritative scoreboard/timer replaces all co-op floor and exit copy");
+  const objective = root.querySelector<HTMLElement>("[data-objective]")!;
+  const waitline = root.querySelector<HTMLElement>("[data-waitline]")!;
+  const board = root.querySelector<HTMLElement>("[data-arena-board]")!;
+  check("objective lane is the arena timer and local frag score",
+    objective.textContent === "ARENA \u00b7 4:59 \u00b7 3 FRAGS", objective.textContent ?? "");
+  check("arena objective cannot contain floor-clear or descend copy",
+    !/FLOOR|CLEAR|GO DOWN/.test(objective.textContent ?? ""));
+  check("READY TO GO DOWN is suppressed defensively",
+    !waitline.classList.contains("show") && waitline.textContent === "");
+  check("opponents never render as co-op party HP rows", root.querySelectorAll(".party-row").length === 0);
+  check("PvE kill and coin chips are hidden in arena", root.querySelector("[data-statrow]")?.classList.contains("hidden") === true);
+  check("scoreboard title and rows render",
+    board.querySelector(".arena-board-title")?.textContent === "FRAGS"
+    && board.querySelectorAll(".arena-score").length === 2);
+  check("self row and dead opponent state are distinct",
+    board.querySelector(".arena-score.self .arena-score-name")?.textContent === "YOU"
+    && board.querySelector(".arena-score.dead .arena-score-name")?.textContent === "RIVAL");
+
+  section("arena HUD: countdown, respawn, and result share the fixed center slot");
+  const center = root.querySelector<HTMLElement>("[data-arena-center]")!;
+  const countdown = buildArenaMatchHud({
+    match: { ph: "countdown", end: 160, sc: [{ id: "p1", f: 0, a: true }], win: null },
+    tick: 100,
+    selfId: "p1",
+    respawnTicks: 0,
+    nameOf: () => "YOU",
+  });
+  hud.update(mkState({ hp: 100, maxHp: 100, isArena: true, arenaMatch: countdown }));
+  check("countdown renders from match.end and snapshot.tick",
+    center.querySelector(".arena-center-title")?.textContent === "3"
+    && center.querySelector(".arena-center-detail")?.textContent === "GET READY");
+  const respawning = buildArenaMatchHud({
+    match: { ph: "live", end: 6080, sc: [{ id: "p1", f: 3, a: false }], win: null },
+    tick: 100,
+    selfId: "p1",
+    respawnTicks: 41,
+    nameOf: () => "YOU",
+  });
+  hud.update(mkState({ hp: 0, maxHp: 100, isArena: true, arenaMatch: respawning }));
+  check("respawn state renders the authoritative self.rsp countdown",
+    center.textContent === "YOU WERE FRAGGEDRESPAWNING IN 3");
+  const result = buildArenaMatchHud({
+    match: { ph: "over", end: 0, sc: [{ id: "p1", f: 8, a: true }], win: "p1" },
+    tick: 100,
+    selfId: "p1",
+    respawnTicks: 0,
+    nameOf: () => "YOU",
+  });
+  hud.update(mkState({ hp: 100, maxHp: 100, isArena: true, arenaMatch: result }));
+  check("result renders from match.win", center.textContent === "VICTORY");
+
+  section("co-op control: the original heart and FLOOR/CLEAR/GO DOWN path returns unchanged");
+  settings.setHpDisplay("both");
+  hud.update(mkState({ hp: 5, maxHp: 6, isArena: false, arenaMatch: null, isCleared: true }));
+  check("co-op restores its six-heart row", hearts.childElementCount === 6 && !hearts.classList.contains("hidden"));
+  check("co-op hides the arena bar and scoreboard",
+    hpBar.classList.contains("hidden") && board.classList.contains("hidden"));
+  check("co-op restores its kill and coin chips", root.querySelector("[data-statrow]")?.classList.contains("hidden") === false);
+  check("co-op keeps its original cleared-floor objective",
+    objective.textContent === "FLOOR 2 \u00b7 CLEAR \u00b7 GO DOWN");
+  root.remove();
 }
 
 function hierarchyTests(): void {
@@ -907,6 +1023,7 @@ function main(): void {
   blessingCardTests();
   drawerTests();
   hudIntegrationTests();
+  arenaHudDomTests();
   hierarchyTests();
   shopCopyTests();
   shopPanelTests();
