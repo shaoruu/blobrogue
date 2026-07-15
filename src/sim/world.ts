@@ -3421,7 +3421,7 @@ function isPvpSpawnAttackSuppressed(w: WorldState, p: PlayerSim): boolean {
   return isPvp(w) && p.spawnGraceT > 0;
 }
 
-function breakPvpSpawnShield(w: WorldState, p: PlayerSim, ev: SimEvent[]): void {
+function breakPvpSpawnShield(p: PlayerSim, ev: SimEvent[]): void {
   if (p.spawnGraceT > 0 || p.spawnShieldT <= 0) return;
   p.spawnShieldT = 0;
   if (p.pvpRespawnTelemetry !== null) {
@@ -3437,7 +3437,7 @@ function breakPvpSpawnShield(w: WorldState, p: PlayerSim, ev: SimEvent[]): void 
 function commitPvpOutgoingAttack(w: WorldState, p: PlayerSim, ev: SimEvent[]): boolean {
   if (!isPvp(w)) return true;
   if (p.spawnGraceT > 0) return false;
-  breakPvpSpawnShield(w, p, ev);
+  breakPvpSpawnShield(p, ev);
   return true;
 }
 
@@ -11214,7 +11214,7 @@ function damagePlayerPvp(
   m.dmgThisTick.set(p.id, already + amount);
   if (by !== null) {
     const attacker = w.players.get(by);
-    if (attacker !== undefined) breakPvpSpawnShield(w, attacker, ev);
+    if (attacker !== undefined) breakPvpSpawnShield(attacker, ev);
   }
   if (by !== null && by !== p.id) {
     p.lastPvpHitBy = by;

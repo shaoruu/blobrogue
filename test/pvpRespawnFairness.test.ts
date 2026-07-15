@@ -402,6 +402,7 @@ section("swept projectile ETA and shipped ranged/trap threats");
   distantOwner.x = 300;
   distantOwner.y = 600;
   distantOwner.aimAngle = Math.PI;
+  distantVictim.pvpRecentSpawnIndices = [];
   distantHomingWorld.bullets.push({
     x: 400,
     y: 700,
