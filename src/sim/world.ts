@@ -312,6 +312,11 @@ export interface PlayerSim {
   // outgoing combat commitment; the shield is full immunity and breaks on the first legal attack.
   spawnGraceT: number;
   spawnShieldT: number;
+  spawnProtectionStartedTick: number;
+  spawnHardGraceEndsAtTick: number;
+  spawnShieldEndsAtTick: number;
+  isSpawnOffenseLatched: boolean;
+  spawnBlockedFeedbackCdT: number;
   // Last two selected spawn indices. Server-owned plain state survives a reserved-seat reconnect.
   pvpRecentSpawnIndices: number[];
   pvpRespawnTelemetry: PvpRespawnTelemetry | null;
@@ -549,6 +554,11 @@ export function createPlayer(id: PlayerId, x: number, y: number): PlayerSim {
     respawnWaitSafeT: 0,
     spawnGraceT: 0,
     spawnShieldT: 0,
+    spawnProtectionStartedTick: 0,
+    spawnHardGraceEndsAtTick: 0,
+    spawnShieldEndsAtTick: 0,
+    isSpawnOffenseLatched: false,
+    spawnBlockedFeedbackCdT: 0,
     pvpRecentSpawnIndices: [],
     pvpRespawnTelemetry: null,
     lastPvpHitBy: null,
@@ -1029,10 +1039,15 @@ function assessPvpRespawn(w: WorldState, player: PlayerSim): PvpRespawnAssessmen
   };
 }
 
-function armPvpSpawnProtection(p: PlayerSim): void {
+function armPvpSpawnProtection(w: WorldState, p: PlayerSim): void {
   p.invuln = 0;
   p.spawnGraceT = pvpSpawnHardGraceTicks();
   p.spawnShieldT = pvpSpawnShieldTicks();
+  p.spawnProtectionStartedTick = w.tick;
+  p.spawnHardGraceEndsAtTick = w.tick + pvpSpawnHardGraceTicks();
+  p.spawnShieldEndsAtTick = w.tick + pvpSpawnShieldTicks();
+  p.isSpawnOffenseLatched = false;
+  p.spawnBlockedFeedbackCdT = 0;
 }
 
 function rememberPvpSpawn(p: PlayerSim, index: number): void {
@@ -1085,7 +1100,7 @@ function pvpPlaceOnSpawn(
     if (isRemembered) rememberPvpSpawn(p, idx);
   }
   pvpFaceInward(w, p);
-  armPvpSpawnProtection(p);
+  armPvpSpawnProtection(w, p);
   p.lastPvpHitBy = null;
   p.lastPvpHitTick = -1;
   p.lastPvpKnockbackBy = null;
@@ -3418,12 +3433,36 @@ function updatePlayer(w: WorldState, p: PlayerSim, input: InputCmd, dt: number, 
 }
 
 function isPvpSpawnAttackSuppressed(w: WorldState, p: PlayerSim): boolean {
-  return isPvp(w) && p.spawnGraceT > 0;
+  return isPvp(w) && (p.spawnGraceT > 0 || p.isSpawnOffenseLatched);
 }
 
-function breakPvpSpawnShield(p: PlayerSim, ev: SimEvent[]): void {
+function updatePvpSpawnOffenseLatch(
+  w: WorldState,
+  p: PlayerSim,
+  input: InputCmd,
+  ev: SimEvent[],
+): void {
+  if (!isPvp(w)) return;
+  const isOffenseHeld = input.firing || input.ult === true || input.pulse === true;
+  if (p.spawnGraceT > 0) {
+    if (isOffenseHeld) {
+      if (!p.isSpawnOffenseLatched && p.spawnBlockedFeedbackCdT === 0) {
+        ev.push({ t: "pvpSpawnAttackBlocked", pid: p.id, x: p.x, y: p.y });
+        p.spawnBlockedFeedbackCdT = 6;
+      }
+      p.isSpawnOffenseLatched = true;
+    } else {
+      p.isSpawnOffenseLatched = false;
+    }
+    return;
+  }
+  if (p.isSpawnOffenseLatched && !isOffenseHeld) p.isSpawnOffenseLatched = false;
+}
+
+function breakPvpSpawnShield(w: WorldState, p: PlayerSim, ev: SimEvent[]): void {
   if (p.spawnGraceT > 0 || p.spawnShieldT <= 0) return;
   p.spawnShieldT = 0;
+  p.spawnShieldEndsAtTick = w.tick;
   if (p.pvpRespawnTelemetry !== null) {
     p.pvpRespawnTelemetry.shieldBreakMs = Math.max(
       0,
@@ -3437,7 +3476,7 @@ function breakPvpSpawnShield(p: PlayerSim, ev: SimEvent[]): void {
 function commitPvpOutgoingAttack(w: WorldState, p: PlayerSim, ev: SimEvent[]): boolean {
   if (!isPvp(w)) return true;
   if (p.spawnGraceT > 0) return false;
-  breakPvpSpawnShield(p, ev);
+  breakPvpSpawnShield(w, p, ev);
   return true;
 }
 
@@ -11214,7 +11253,7 @@ function damagePlayerPvp(
   m.dmgThisTick.set(p.id, already + amount);
   if (by !== null) {
     const attacker = w.players.get(by);
-    if (attacker !== undefined) breakPvpSpawnShield(attacker, ev);
+    if (attacker !== undefined) breakPvpSpawnShield(w, attacker, ev);
   }
   if (by !== null && by !== p.id) {
     p.lastPvpHitBy = by;
@@ -11449,6 +11488,11 @@ function resetPvpLifeTransient(p: PlayerSim): void {
   p.dashTime = 0; p.dashDx = 0; p.dashDy = 0; p.dashCd = 0; p.dashInvuln = 0;
   p.fireCd = 0; p.chargeT = 0; p.meleeSwing = null;
   p.invuln = 0; p.spawnGraceT = 0; p.spawnShieldT = 0;
+  p.spawnProtectionStartedTick = 0;
+  p.spawnHardGraceEndsAtTick = 0;
+  p.spawnShieldEndsAtTick = 0;
+  p.isSpawnOffenseLatched = false;
+  p.spawnBlockedFeedbackCdT = 0;
   p.combo = 0; p.comboTimer = 0; p.fangCd = 0;
   p.overdriveT = 0; p.overheatT = 0; p.phaseSpeed = 0; p.ultInvuln = 0;
   p.passiveState = 0; p.overshield = 0; p.overshieldRegenT = 0;
@@ -11490,7 +11534,7 @@ function pvpAssignSpreadSpawns(w: WorldState, isRemembered: boolean): void {
     p.respawnT = 0;
     p.respawnWaitSafeT = 0;
     resetPvpLifeTransient(p);
-    armPvpSpawnProtection(p);
+    armPvpSpawnProtection(w, p);
     assignments.push({ player: p, index: idx });
     placed.push({ x: p.x, y: p.y });
   }
@@ -11530,22 +11574,36 @@ function pvpPresentPlayers(w: WorldState): PlayerSim[] {
   return out;
 }
 
-function tickPvpSpawnProtection(w: WorldState): void {
-  if (w.match?.phase !== "live" || pvpPresentPlayers(w).length < PVP.minPlayers) return;
+function syncPvpSpawnProtection(w: WorldState): void {
+  const isAdvancing = w.match?.phase === "live"
+    && pvpPresentPlayers(w).length >= PVP.minPlayers;
   for (const p of w.players.values()) {
-    if (p.isAbsent) continue;
+    const previousTick = w.tick - 1;
+    if (p.spawnShieldEndsAtTick <= 0 && p.spawnShieldT > 0) {
+      p.spawnProtectionStartedTick = previousTick;
+      p.spawnHardGraceEndsAtTick = previousTick + p.spawnGraceT;
+      p.spawnShieldEndsAtTick = previousTick + p.spawnShieldT;
+    }
+    if (!isAdvancing || p.isAbsent) {
+      if (p.spawnProtectionStartedTick > 0) p.spawnProtectionStartedTick++;
+      if (p.spawnHardGraceEndsAtTick > 0) p.spawnHardGraceEndsAtTick++;
+      if (p.spawnShieldEndsAtTick > 0) p.spawnShieldEndsAtTick++;
+      continue;
+    }
     if (p.hp > 0 && p.respawnT === 0 && p.pvpRespawnTelemetry !== null) {
       p.pvpRespawnTelemetry.activeTicks++;
     }
-    if (p.spawnGraceT > 0) p.spawnGraceT--;
-    if (p.spawnShieldT > 0) {
-      p.spawnShieldT--;
-      if (p.spawnShieldT === 0 && p.pvpRespawnTelemetry?.shieldBreakMs === null) {
-        p.pvpRespawnTelemetry.shieldBreakMs = Math.max(
-          0,
+    const previousShieldT = p.spawnShieldT;
+    p.spawnGraceT = Math.max(0, p.spawnHardGraceEndsAtTick - w.tick);
+    p.spawnShieldT = Math.max(0, p.spawnShieldEndsAtTick - w.tick);
+    if (p.spawnBlockedFeedbackCdT > 0) p.spawnBlockedFeedbackCdT--;
+    if (previousShieldT > 0
+      && p.spawnShieldT === 0
+      && p.pvpRespawnTelemetry?.shieldBreakMs === null) {
+      p.pvpRespawnTelemetry.shieldBreakMs = Math.max(
+        0,
         Math.round(p.pvpRespawnTelemetry.activeTicks * 1000 / TICKS_PER_SECOND),
-        );
-      }
+      );
     }
   }
 }
@@ -11953,6 +12011,7 @@ export function stepPlayerPhase(w: WorldState, p: PlayerSim, input: InputCmd, dt
       );
     }
   }
+  updatePvpSpawnOffenseLatch(w, p, input, ev);
   p.aimAngle = input.aim;
   const isSpawnAttackSuppressed = isPvpSpawnAttackSuppressed(w, p);
   // The revive-channel intent, held only by a living player (a downed body can't revive).
@@ -11996,9 +12055,6 @@ export function stepWorldPhase(w: WorldState, dt: number, ev: SimEvent[]): void 
   const pvp = isPvp(w);
   // Reset the per-victim per-tick pvp damage-cap accumulator BEFORE any damage this tick.
   if (pvp && w.match !== null) w.match.dmgThisTick.clear();
-  // Expiry is atomic at the tick boundary: a shield reaching zero is gone before pits,
-  // projectiles, effects, and hit resolution inspect protection this same tick.
-  if (pvp) tickPvpSpawnProtection(w);
   // Movement/self-knockback ring-outs resolve before projectiles, so a body that has already
   // crossed the edge cannot be converted into an ordinary shot kill while falling.
   if (pvp) resolvePvpPits(w, ev);
@@ -12052,9 +12108,14 @@ export function stepWorldPhase(w: WorldState, dt: number, ev: SimEvent[]): void 
   }
 }
 
+export function beginWorldTick(w: WorldState): void {
+  w.tick++;
+  if (isPvp(w)) syncPvpSpawnProtection(w);
+}
+
 export function stepWorld(w: WorldState, inputs: Map<PlayerId, InputCmd>, dt: number): SimEvent[] {
   const ev: SimEvent[] = [];
-  w.tick++;
+  beginWorldTick(w);
 
   if (isPvp(w)) {
     for (const id of [...w.players.keys()].sort()) {

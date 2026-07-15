@@ -494,8 +494,9 @@ function arenaHudDomTests(): void {
     tick: 100,
     selfId: "p1",
     respawnTicks: 0,
-    spawnGraceTicks: 0,
-    spawnShieldTicks: 0,
+    spawnProtectionStartedTick: 0,
+    spawnHardGraceEndsAtTick: 0,
+    spawnShieldEndsAtTick: 0,
     nameOf: (id, isSelf) => isSelf ? "YOU" : id === "p2" ? "RIVAL" : id,
   });
   settings.setHpDisplay("hearts");
@@ -552,8 +553,9 @@ function arenaHudDomTests(): void {
     tick: 100,
     selfId: "p1",
     respawnTicks: 0,
-    spawnGraceTicks: 0,
-    spawnShieldTicks: 0,
+    spawnProtectionStartedTick: 0,
+    spawnHardGraceEndsAtTick: 0,
+    spawnShieldEndsAtTick: 0,
     nameOf: () => "YOU",
   });
   hud.update(mkState({ hp: 100, maxHp: 100, isArena: true, arenaMatch: countdown }));
@@ -565,8 +567,9 @@ function arenaHudDomTests(): void {
     tick: 100,
     selfId: "p1",
     respawnTicks: 41,
-    spawnGraceTicks: 0,
-    spawnShieldTicks: 0,
+    spawnProtectionStartedTick: 0,
+    spawnHardGraceEndsAtTick: 0,
+    spawnShieldEndsAtTick: 0,
     nameOf: () => "YOU",
   });
   hud.update(mkState({ hp: 0, maxHp: 100, isArena: true, arenaMatch: respawning }));
@@ -577,13 +580,15 @@ function arenaHudDomTests(): void {
     tick: 100,
     selfId: "p1",
     respawnTicks: 0,
-    spawnGraceTicks: 8,
-    spawnShieldTicks: 35,
+    spawnProtectionStartedTick: 83,
+    spawnHardGraceEndsAtTick: 108,
+    spawnShieldEndsAtTick: 143,
     nameOf: () => "YOU",
   });
   hud.update(mkState({ hp: 100, maxHp: 100, isArena: true, arenaMatch: grace }));
   check("hard grace renders in the same fixed center slot with movement instructions",
-    center.classList.contains("tone-spawn-safe") && center.textContent === "SPAWN SAFEMOVE / AIM / DASH");
+    center.classList.contains("tone-spawn-safe")
+    && center.textContent === "SPAWN SAFEMOVE \u00b7 AIM \u00b7 DASH  |  WEAPON ARMING");
   check("hard grace shows a fixed-slot SPAWN SAFE pip with final-window pulse",
     spawnProtection.classList.contains("show")
     && spawnProtection.classList.contains("grace")
@@ -594,13 +599,15 @@ function arenaHudDomTests(): void {
     tick: 100,
     selfId: "p1",
     respawnTicks: 0,
-    spawnGraceTicks: 0,
-    spawnShieldTicks: 20,
+    spawnProtectionStartedTick: 60,
+    spawnHardGraceEndsAtTick: 85,
+    spawnShieldEndsAtTick: 120,
     nameOf: () => "YOU",
   });
   hud.update(mkState({ hp: 100, maxHp: 100, isArena: true, arenaMatch: shield }));
   check("remaining shield renders a distinct concise cue",
-    center.classList.contains("tone-spawn-shield") && center.textContent === "SPAWN SHIELD");
+    center.classList.contains("tone-spawn-shield")
+    && center.textContent === "SPAWN SHIELD \u00b7 FIRE TO ENGAGE");
   check("remaining shield switches the fixed pip without moving HUD layout",
     spawnProtection.classList.contains("show")
     && spawnProtection.classList.contains("shield")
@@ -611,8 +618,9 @@ function arenaHudDomTests(): void {
     tick: 100,
     selfId: "p1",
     respawnTicks: 0,
-    spawnGraceTicks: 0,
-    spawnShieldTicks: 0,
+    spawnProtectionStartedTick: 0,
+    spawnHardGraceEndsAtTick: 0,
+    spawnShieldEndsAtTick: 0,
     nameOf: () => "YOU",
   });
   hud.update(mkState({ hp: 100, maxHp: 100, isArena: true, arenaMatch: result }));

@@ -69,6 +69,9 @@ export interface RespawnPolicyAggregate {
   shieldFireAttempts: number;
   playtestReactionMinMs: number | null;
   playtestReactionMaxMs: number | null;
+  intentionalFireWithin500msRate: number;
+  armingFeedbackCoverageRate: number;
+  heldFireAutoFireCount: number;
 }
 
 export interface RespawnPolicyReport {
@@ -101,6 +104,10 @@ function clearProtection(player: PlayerSim): void {
   player.invuln = 0;
   player.spawnGraceT = 0;
   player.spawnShieldT = 0;
+  player.spawnProtectionStartedTick = 0;
+  player.spawnHardGraceEndsAtTick = 0;
+  player.spawnShieldEndsAtTick = 0;
+  player.isSpawnOffenseLatched = false;
 }
 
 function advanceToLive(world: WorldState): void {
@@ -127,7 +134,7 @@ function conformanceBotInput(world: WorldState, bot: PlayerSim, victim: PlayerSi
   const strafeWeight = distance < 260 ? 0.55 : 0.2;
   const moveX = towardX - towardY * strafeSign * strafeWeight;
   const moveY = towardY + towardX * strafeSign * strafeWeight;
-  return {
+  const command: InputCmd = {
     seq: 0,
     moveX,
     moveY,
@@ -135,6 +142,9 @@ function conformanceBotInput(world: WorldState, bot: PlayerSim, victim: PlayerSi
     firing: victim.hp > 0 && victim.respawnT === 0,
     dash: bot.dashCd === 0 && distance > 260,
   };
+  return bot.spawnGraceT === 0 && bot.isSpawnOffenseLatched
+    ? { ...command, firing: false }
+    : command;
 }
 
 function createPlaytestBotState(bot: PlayerSim): PlaytestBotState {
@@ -158,6 +168,7 @@ function playtestBotInput(
   state: PlaytestBotState,
 ): InputCmd {
   if (bot.hp <= 0 || bot.respawnT > 0) return idle(state.aim);
+  if (bot.spawnGraceT > 0 || bot.isSpawnOffenseLatched) return idle(state.aim);
   const spawnTick = victim.pvpRespawnTelemetry?.spawnTick ?? -1;
   if (spawnTick !== state.observedSpawnTick) {
     state.observedSpawnTick = spawnTick;
@@ -414,6 +425,60 @@ function percentile(values: readonly number[], percentileValue: number): number 
   return sorted[index];
 }
 
+function runArmingUxProbe(seedCount: number): {
+  intentionalFireWithin500msRate: number;
+  armingFeedbackCoverageRate: number;
+  heldFireAutoFireCount: number;
+} {
+  let within500 = 0;
+  let feedback = 0;
+  let heldFireAutoFireCount = 0;
+  for (let seed = 0; seed < seedCount; seed++) {
+    const world = createWorld(0x61726d00 + seed, 1, {
+      mode: "pvp",
+      isShared: true,
+      skipLocalPlayer: true,
+    });
+    spawnPlayerInWorld(world, "actor");
+    spawnPlayerInWorld(world, "observer");
+    advanceToLive(world);
+    const actor = world.players.get("actor")!;
+    const graceEndsAtTick = actor.spawnHardGraceEndsAtTick;
+    const repressAtTick = graceEndsAtTick + 1 + seed % 8;
+    let isReleaseSent = false;
+    let isShotObserved = false;
+    for (let guard = 0; guard < 50 && !isShotObserved; guard++) {
+      let isFiring = true;
+      if (actor.spawnGraceT === 0) {
+        if (!isReleaseSent) {
+          isFiring = false;
+          isReleaseSent = true;
+        } else {
+          isFiring = world.tick + 1 >= repressAtTick;
+        }
+      }
+      const events = stepWorld(world, new Map([
+        [actor.id, {
+          ...idle(actor.aimAngle),
+          firing: isFiring,
+        }],
+      ]), DT);
+      feedback += events.filter((event) => event.t === "pvpSpawnAttackBlocked").length;
+      const isShot = events.some((event) => event.t === "shot" && event.pid === actor.id);
+      if (isShot && (!isReleaseSent || world.tick < repressAtTick)) heldFireAutoFireCount++;
+      if (isShot) {
+        isShotObserved = true;
+        if ((world.tick - graceEndsAtTick) * 1000 * DT <= 500) within500++;
+      }
+    }
+  }
+  return {
+    intentionalFireWithin500msRate: seedCount > 0 ? within500 / seedCount : 0,
+    armingFeedbackCoverageRate: seedCount > 0 ? Math.min(seedCount, feedback) / seedCount : 0,
+    heldFireAutoFireCount,
+  };
+}
+
 export function runRespawnPolicyReport(
   seedCount = 20,
   profile: RespawnBotProfile = "conformanceBot",
@@ -433,6 +498,7 @@ export function runRespawnPolicyReport(
     seed.timeToEightSec === null ? [] : [seed.timeToEightSec]
   );
   const reactionMs = seeds.flatMap((seed) => seed.reactionMs);
+  const armingUx = runArmingUxProbe(seedCount);
   const established = episodes.filter((episode) =>
     episode.isDashedBeforeDamage
     && episode.aimTurnDegBeforeDamage >= 90
@@ -464,6 +530,7 @@ export function runRespawnPolicyReport(
       shieldFireAttempts: seeds.reduce((total, seed) => total + seed.shieldFireAttempts, 0),
       playtestReactionMinMs: reactionMs.length > 0 ? Math.min(...reactionMs) : null,
       playtestReactionMaxMs: reactionMs.length > 0 ? Math.max(...reactionMs) : null,
+      ...armingUx,
     },
   };
 }

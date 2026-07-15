@@ -45,6 +45,10 @@ function clearProtection(player: PlayerSim): void {
   player.invuln = 0;
   player.spawnGraceT = 0;
   player.spawnShieldT = 0;
+  player.spawnProtectionStartedTick = 0;
+  player.spawnHardGraceEndsAtTick = 0;
+  player.spawnShieldEndsAtTick = 0;
+  player.isSpawnOffenseLatched = false;
 }
 
 function liveWorld(seed: number, count: number): WorldState {

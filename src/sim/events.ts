@@ -154,6 +154,8 @@ export type SimEvent =
   | { t: "pvpChainFrag"; by: PlayerId; chain: number; x: number; y: number }
   // A protected player committed their first legal offense. Emitted before its attack event.
   | { t: "pvpShieldBreak"; pid: PlayerId; x: number; y: number }
+  // A hard-grace offense input was suppressed. Rate-limited per press for arming feedback.
+  | { t: "pvpSpawnAttackBlocked"; pid: PlayerId; x: number; y: number }
   // PVP presentation-only match-point/final-clock crescendo.
   | { t: "pvpSuddenDeath"; leader: PlayerId }
   // PVP: the match resolved — `winner` is the frag leader (id-sorted tiebreak; "" = no winner).

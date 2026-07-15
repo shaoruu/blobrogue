@@ -29,8 +29,9 @@ export interface ArenaMatchHudSource {
   tick: number;
   selfId: PlayerId | null;
   respawnTicks: number;
-  spawnGraceTicks: number;
-  spawnShieldTicks: number;
+  spawnProtectionStartedTick: number;
+  spawnHardGraceEndsAtTick: number;
+  spawnShieldEndsAtTick: number;
   nameOf: (id: PlayerId, isSelf: boolean) => string;
 }
 
@@ -71,17 +72,19 @@ export function buildArenaMatchHud(source: ArenaMatchHudSource): ArenaMatchHudSt
   const isResultKnown = source.match.ph === "over"
     && source.selfId !== null
     && source.match.win !== null;
+  const spawnGraceTicks = Math.max(0, source.spawnHardGraceEndsAtTick - source.tick);
+  const spawnShieldTicks = Math.max(0, source.spawnShieldEndsAtTick - source.tick);
   const spawnProtection = source.match.ph !== "live"
     ? null
-    : source.spawnGraceTicks > 0
+    : spawnGraceTicks > 0
       ? "grace"
-      : source.spawnShieldTicks > 0
+      : spawnShieldTicks > 0
         ? "shield"
         : null;
   const protectionTicks = spawnProtection === "grace"
-    ? source.spawnGraceTicks
+    ? spawnGraceTicks
     : spawnProtection === "shield"
-      ? source.spawnShieldTicks
+      ? spawnShieldTicks
       : 0;
 
   return {
@@ -143,13 +146,13 @@ export function arenaCenterCopy(match: ArenaMatchHudState | null): ArenaCenterCo
   if (match.spawnProtection === "grace") {
     return {
       title: "SPAWN SAFE",
-      detail: "MOVE / AIM / DASH",
+      detail: "MOVE \u00b7 AIM \u00b7 DASH  |  WEAPON ARMING",
       tone: "spawn-safe",
     };
   }
   if (match.spawnProtection === "shield") {
     return {
-      title: "SPAWN SHIELD",
+      title: "SPAWN SHIELD \u00b7 FIRE TO ENGAGE",
       detail: null,
       tone: "spawn-shield",
     };

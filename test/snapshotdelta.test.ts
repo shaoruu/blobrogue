@@ -229,7 +229,7 @@ function safetyTests(): void {
   const d = diffSnapshot(snapshotToWire(base), snapshotToWire(next), next.sseq, fullWorld(next));
   check("a delta advertises its baseline sseq so a client can refuse a gap", d.b === base.sseq && d.q === 7);
 
-  check("protocol version is current (v31: authoritative PvP shield break)", PROTOCOL_VERSION === 31);
+  check("protocol version is current (v32: authoritative PvP protection endpoints)", PROTOCOL_VERSION === 32);
 }
 
 function main(): void {

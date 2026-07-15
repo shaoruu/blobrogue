@@ -37,13 +37,17 @@ function build(
     spawnShieldTicks?: number;
   } = {},
 ) {
+  const tick = args.tick ?? 100;
+  const spawnGraceTicks = args.spawnGraceTicks ?? 0;
+  const spawnShieldTicks = args.spawnShieldTicks ?? 0;
   return buildArenaMatchHud({
     match,
-    tick: args.tick ?? 100,
+    tick,
     selfId: args.selfId === undefined ? "p2" : args.selfId,
     respawnTicks: args.respawnTicks ?? 0,
-    spawnGraceTicks: args.spawnGraceTicks ?? 0,
-    spawnShieldTicks: args.spawnShieldTicks ?? 0,
+    spawnProtectionStartedTick: spawnShieldTicks > 0 ? tick : 0,
+    spawnHardGraceEndsAtTick: tick + spawnGraceTicks,
+    spawnShieldEndsAtTick: tick + spawnShieldTicks,
     nameOf: (id, isSelf) => isSelf ? "YOU" : `Player ${id}`,
   });
 }
@@ -96,7 +100,7 @@ section("countdown, result, and respawn states");
 
   const grace = build(
     { ph: "live", end: 6080, sc: SCORES, win: null },
-    { spawnGraceTicks: 8, spawnShieldTicks: 33 },
+    { spawnGraceTicks: 8, spawnShieldTicks: 43 },
   );
   const shield = build(
     { ph: "live", end: 6080, sc: SCORES, win: null },
@@ -104,12 +108,12 @@ section("countdown, result, and respawn states");
   );
   check("hard grace cue names available controls without implying a broken weapon",
     arenaCenterCopy(grace)?.title === "SPAWN SAFE"
-    && arenaCenterCopy(grace)?.detail === "MOVE / AIM / DASH");
+    && arenaCenterCopy(grace)?.detail === "MOVE \u00b7 AIM \u00b7 DASH  |  WEAPON ARMING");
   check("hard grace drives the fixed pip fill and final-half-second pulse",
     Math.abs(grace.spawnProtectionFill - 8 / 25) < 1e-9
     && grace.isSpawnProtectionFinalPulse);
   check("remaining protection has a distinct concise shield cue",
-    arenaCenterCopy(shield)?.title === "SPAWN SHIELD"
+    arenaCenterCopy(shield)?.title === "SPAWN SHIELD \u00b7 FIRE TO ENGAGE"
     && Math.abs(shield.spawnProtectionFill - 20 / 60) < 1e-9
     && !shield.isSpawnProtectionFinalPulse);
   const pulseAtTen = build(
@@ -127,6 +131,24 @@ section("countdown, result, and respawn states");
     { spawnGraceTicks: 0, spawnShieldTicks: 0 },
   );
   check("spawn cue disappears on authoritative break or expiry", arenaCenterCopy(broken) === null);
+  const originTick = 100;
+  const graceEndsAtTick = 125;
+  const shieldEndsAtTick = 160;
+  const nested = buildArenaMatchHud({
+    match: { ph: "live", end: 6080, sc: SCORES, win: null },
+    tick: originTick,
+    selfId: "p2",
+    respawnTicks: 0,
+    spawnProtectionStartedTick: originTick,
+    spawnHardGraceEndsAtTick: graceEndsAtTick,
+    spawnShieldEndsAtTick: shieldEndsAtTick,
+    nameOf: (id, isSelf) => isSelf ? "YOU" : id,
+  });
+  check("hard grace and shield share one origin and total shield remains 3.0s",
+    nested.spawnProtection === "grace"
+    && nested.spawnProtectionFill === 1
+    && graceEndsAtTick - originTick === 25
+    && shieldEndsAtTick - originTick === 60);
 }
 
 section("arena copy cannot fall back to dungeon exit chrome");

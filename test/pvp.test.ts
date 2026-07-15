@@ -87,6 +87,10 @@ function clearPvpProtection(player: PlayerSim): void {
   player.invuln = 0;
   player.spawnGraceT = 0;
   player.spawnShieldT = 0;
+  player.spawnProtectionStartedTick = 0;
+  player.spawnHardGraceEndsAtTick = 0;
+  player.spawnShieldEndsAtTick = 0;
+  player.isSpawnOffenseLatched = false;
 }
 
 // Drop two players next to each other on a CLEAR horizontal lane of the 19x19 arena (row 4 has
@@ -496,7 +500,18 @@ section("SPAWNS: symmetric 19x19 arena + pits + spread + break-on-fire protectio
       event.t === "shot" || event.t === "wirePlanted" || event.t === "haloFlare"
       || event.t === "sentryPlaced" || event.t === "tetherLatch"
     ));
+  check("suppressed held offense emits one rate-limited arming pulse without dry-fire",
+    graceEvents.filter((event) => event.t === "pvpSpawnAttackBlocked").length === 1);
   check("hard grace lasts exactly 25 authoritative ticks", p1.spawnGraceT === 0 && p1.spawnShieldT === 35);
+  check("hard grace is nested inside one 3.0s shield from the same spawn origin",
+    p1.spawnHardGraceEndsAtTick - p1.spawnProtectionStartedTick === 25
+    && p1.spawnShieldEndsAtTick - p1.spawnProtectionStartedTick === 60);
+  const heldAfterGrace = stepCollect(w, 1, new Map([["p1", inp({ firing: true, aim: 0 })]]));
+  check("held fire does not auto-fire when hard grace ends",
+    p1.shotSeq === protectedShotSeq
+    && p1.spawnShieldT > 0
+    && !heldAfterGrace.some((event) => event.t === "shot"));
+  stepN(w, 1, new Map([["p1", inp({ firing: false, aim: 0 })]]));
   const legalAttack = stepCollect(w, 1, new Map([["p1", inp({ firing: true, aim: 0 })]]));
   const shieldBreakIndex = legalAttack.findIndex((event) => event.t === "pvpShieldBreak");
   const shotIndex = legalAttack.findIndex((event) => event.t === "shot");
@@ -1004,6 +1019,8 @@ section("frag-limit RESPAWN (death schedules a respawn, never elimination)");
   check("the player respawns at full HP after the delay", victim.hp === PVP.maxHp && victim.respawnT === 0);
   check("respawn arms fresh two-stage spawn protection",
     victim.spawnGraceT > 0 && victim.spawnShieldT > victim.spawnGraceT);
+  check("materialization exposes full HP, ready dash, and ready weapon cadence",
+    victim.hp === victim.maxHp && victim.dashCd === 0 && victim.fireCd === 0);
   check("respawn delay matches the named constant exactly", respawnCd === pvpRespawnDelayTicks());
 }
 
@@ -1118,7 +1135,7 @@ section("DETERMINISM: identical inputs -> byte-identical, and reconnect-stable s
     const ids = [...w.players.keys()].sort();
     const parts = ids.map((id) => {
       const p = w.players.get(id)!;
-      return `${id}:${p.x.toFixed(3)},${p.y.toFixed(3)},${p.hp.toFixed(3)},${p.respawnT},${p.respawnWaitSafeT},${p.spawnGraceT},${p.spawnShieldT},${p.pvpRecentSpawnIndices.join(".")}#${w.match!.scores.get(id) ?? 0}`;
+      return `${id}:${p.x.toFixed(3)},${p.y.toFixed(3)},${p.hp.toFixed(3)},${p.respawnT},${p.respawnWaitSafeT},${p.spawnProtectionStartedTick},${p.spawnHardGraceEndsAtTick},${p.spawnShieldEndsAtTick},${p.spawnGraceT},${p.spawnShieldT},${p.isSpawnOffenseLatched ? 1 : 0},${p.pvpRecentSpawnIndices.join(".")}#${w.match!.scores.get(id) ?? 0}`;
     });
     return `t${w.tick}|${w.match!.phase}|${w.match!.winner}|${parts.join("|")}`;
   }
@@ -1381,9 +1398,9 @@ section("DETERMINISM EDGE-CASES: self-immune, same-tick order-stable, no shoot-f
 }
 
 // ---------------------------------------------------------------------------------------------
-section("P2 WIRE: protocol v31, match block + spawn protection + reliable events");
+section("P2 WIRE: protocol v32, match block + spawn protection + reliable events");
 {
-  check("PROTOCOL_VERSION bumped to 31", PROTOCOL_VERSION === 31);
+  check("PROTOCOL_VERSION bumped to 32", PROTOCOL_VERSION === 32);
 
   // A pvp snapshot round-trips the match block, per-player team, and the local respawn field.
   const w = pvpWorld(30, ["p1", "p2"]);
@@ -1394,6 +1411,11 @@ section("P2 WIRE: protocol v31, match block + spawn protection + reliable events
   w.players.get("p1")!.spawnShieldT = 42;
   w.players.get("p2")!.spawnGraceT = 7;
   w.players.get("p2")!.spawnShieldT = 31;
+  for (const player of w.players.values()) {
+    player.spawnProtectionStartedTick = w.tick;
+    player.spawnHardGraceEndsAtTick = w.tick + 25;
+    player.spawnShieldEndsAtTick = w.tick + 60;
+  }
   const raw = jsonCodec.encodeServer(snapOf(w, "p1"));
   const dec = jsonCodec.decodeServer(raw);
   if (dec.t !== "snap") { check("snapshot decodes as a snap", false); }
@@ -1408,9 +1430,17 @@ section("P2 WIRE: protocol v31, match block + spawn protection + reliable events
     check("local respawn countdown rides SelfWire.rsp", dec.self !== null && dec.self.rsp === 0);
     check("local authoritative grace/shield ticks ride SelfWire",
       dec.self?.sgr === 12 && dec.self.ssh === 42);
+    check("local spawn origin and nested endpoints ride SelfWire",
+      dec.self !== null
+      && dec.self.sge - dec.self.spo === 25
+      && dec.self.sse - dec.self.spo === 60);
     const remote = dec.players.find((p) => p.id === "p2");
     check("remote authoritative grace/shield ticks ride PlayerWire",
       remote?.sgr === 7 && remote.ssh === 31);
+    check("remote observes the same authoritative nested endpoints",
+      remote !== undefined
+      && remote.sge - remote.spo === 25
+      && remote.sse - remote.spo === 60);
   }
   const waiting = w.players.get("p1")!;
   waiting.hp = 0;
@@ -1465,14 +1495,15 @@ section("P2 WIRE: protocol v31, match block + spawn protection + reliable events
       { id: 1, e: { t: "pvpRingOut", by: "", victim: "p2", x: 456, y: 360 } as const },
       { id: 2, e: { t: "pvpChainFrag", by: "p1", chain: 2, x: 456, y: 360 } as const },
       { id: 3, e: { t: "pvpShieldBreak", pid: "p1", x: 456, y: 360 } as const },
-      { id: 4, e: { t: "pvpSuddenDeath", leader: "p1" } as const },
+      { id: 4, e: { t: "pvpSpawnAttackBlocked", pid: "p1", x: 456, y: 360 } as const },
+      { id: 5, e: { t: "pvpSuddenDeath", leader: "p1" } as const },
     ],
   };
   const eventRoundTrip = jsonCodec.decodeServer(jsonCodec.encodeServer(eventSnap));
-  check("ring-out, chain, shield-break, and crescendo events round-trip reliably",
+  check("ring-out, chain, arming, shield-break, and crescendo events round-trip reliably",
     eventRoundTrip.t === "snap"
     && eventRoundTrip.events.map((entry) => entry.e.t).join(",")
-      === "pvpRingOut,pvpChainFrag,pvpShieldBreak,pvpSuddenDeath");
+      === "pvpRingOut,pvpChainFrag,pvpShieldBreak,pvpSpawnAttackBlocked,pvpSuddenDeath");
 }
 
 // ---------------------------------------------------------------------------------------------

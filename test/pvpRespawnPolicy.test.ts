@@ -57,6 +57,12 @@ check("fastest time-to-eight is at least 90s",
 check("at least 95% establish dash, 90-degree aim, and two-tile movement before first damage",
   metrics.controlEstablishedRate >= 0.95,
   `rate=${(metrics.controlEstablishedRate * 100).toFixed(1)}%`);
+check("arming UX probe lets at least 90% intentionally fire within 0.5s of grace end",
+  metrics.intentionalFireWithin500msRate >= 0.9,
+  `rate=${(metrics.intentionalFireWithin500msRate * 100).toFixed(1)}%`);
+check("arming UX probe gives clear blocked-input feedback and never auto-fires held input",
+  metrics.armingFeedbackCoverageRate === 1 && metrics.heldFireAutoFireCount === 0,
+  `feedback=${(metrics.armingFeedbackCoverageRate * 100).toFixed(0)}% auto=${metrics.heldFireAutoFireCount}`);
 
 const playtestReport = runRespawnPolicyReport(8, "playtestBot");
 const playtestMetrics = playtestReport.aggregate;

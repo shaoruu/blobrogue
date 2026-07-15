@@ -20,6 +20,7 @@ interface CanvasLog {
   spawnSafeStrokeCalls: number;
   spawnShieldStrokeCalls: number;
   spawnShellFillCalls: number;
+  drawAlphas: number[];
 }
 
 interface ArenaGameAccess {
@@ -60,6 +61,8 @@ function section(name: string): void {
 function recordingCanvas(log: CanvasLog): HTMLCanvasElement {
   let strokeStyle = "";
   let fillStyle = "";
+  let lineWidth = 1;
+  let globalAlpha = 1;
   const context = new Proxy({}, {
     get: (_target, property) => {
       if (property === "createLinearGradient" || property === "createRadialGradient" || property === "createPattern") {
@@ -76,15 +79,15 @@ function recordingCanvas(log: CanvasLog): HTMLCanvasElement {
         return () => { log.arcCalls++; };
       }
       if (property === "drawImage") {
-        return () => { log.drawImageCalls++; };
+        return () => { log.drawImageCalls++; log.drawAlphas.push(globalAlpha); };
       }
       if (property === "strokeRect") {
         return () => { if (strokeStyle === "#ff5a4f") log.dangerStrokeCalls++; };
       }
       if (property === "stroke") {
         return () => {
-          if (strokeStyle === "#f5e6c8") log.spawnSafeStrokeCalls++;
-          if (strokeStyle === "#ffd27a") log.spawnShieldStrokeCalls++;
+          if (strokeStyle === "#ffd27a" && lineWidth === 4) log.spawnSafeStrokeCalls++;
+          else if (strokeStyle === "#ffd27a") log.spawnShieldStrokeCalls++;
         };
       }
       if (property === "fill") {
@@ -100,6 +103,8 @@ function recordingCanvas(log: CanvasLog): HTMLCanvasElement {
     set: (_target, property, value) => {
       if (property === "strokeStyle" && typeof value === "string") strokeStyle = value;
       if (property === "fillStyle" && typeof value === "string") fillStyle = value;
+      if (property === "lineWidth" && typeof value === "number") lineWidth = value;
+      if (property === "globalAlpha" && typeof value === "number") globalAlpha = value;
       return true;
     },
   }) as object as CanvasRenderingContext2D;
@@ -189,6 +194,7 @@ async function main(): Promise<void> {
     spawnSafeStrokeCalls: 0,
     spawnShieldStrokeCalls: 0,
     spawnShellFillCalls: 0,
+    drawAlphas: [],
   };
   const gameInstance = new Game(
     recordingCanvas(canvasLog),
@@ -232,6 +238,13 @@ async function main(): Promise<void> {
   world.match.phaseEndTick = 6080;
   world.match.scores.set("p1", 3);
   world.match.scores.set("p2", 1);
+  for (const player of [self, rival]) {
+    player.spawnProtectionStartedTick = world.tick;
+    player.spawnHardGraceEndsAtTick = world.tick + 25;
+    player.spawnShieldEndsAtTick = world.tick + 60;
+    player.spawnGraceT = 25;
+    player.spawnShieldT = 60;
+  }
   const exitX = world.dungeon.exit.x * 48 + 24;
   const exitY = world.dungeon.exit.y * 48 + 24;
   self.x = exitX;
@@ -266,11 +279,14 @@ async function main(): Promise<void> {
   check("arena reveal emitted no floor banner",
     banners.every((banner) => !/FLOOR|CLEAR|GO DOWN/.test(banner)), banners.join("|"));
   check("authoritative hard grace draws visible local and remote world shields",
-    canvasLog.spawnSafeStrokeCalls >= 2,
+    canvasLog.spawnSafeStrokeCalls === 4 && canvasLog.spawnShieldStrokeCalls >= 4,
     `safeStrokes=${canvasLog.spawnSafeStrokeCalls}`);
   check("local protection is a full-body shell while the opponent cue stays simplified",
     canvasLog.spawnShellFillCalls === 1,
     `shellFills=${canvasLog.spawnShellFillCalls}`);
+  check("bodies begin materializing inside an already-visible shell without an opaque flash",
+    canvasLog.drawAlphas.some((alpha) => alpha === 0)
+    && canvasLog.spawnSafeStrokeCalls > 0);
 
   canvasLog.spawnSafeStrokeCalls = 0;
   canvasLog.spawnShieldStrokeCalls = 0;
@@ -280,6 +296,11 @@ async function main(): Promise<void> {
   rival.spawnGraceT = 0;
   rival.spawnShieldT = 20;
   world.tick++;
+  for (const player of [self, rival]) {
+    player.spawnProtectionStartedTick = world.tick - 40;
+    player.spawnHardGraceEndsAtTick = world.tick - 15;
+    player.spawnShieldEndsAtTick = world.tick + 20;
+  }
   socket.deliver(buildSnapshot(world, "p1", 0, [], 0, true, {
     worldId: "pvp:room:ABCD",
     roster,
@@ -298,6 +319,11 @@ async function main(): Promise<void> {
   self.spawnShieldT = 8;
   rival.spawnShieldT = 8;
   world.tick++;
+  for (const player of [self, rival]) {
+    player.spawnProtectionStartedTick = world.tick - 52;
+    player.spawnHardGraceEndsAtTick = world.tick - 27;
+    player.spawnShieldEndsAtTick = world.tick + 8;
+  }
   socket.deliver(buildSnapshot(world, "p1", 0, [], 0, true, {
     worldId: "pvp:room:ABCD",
     roster,
@@ -313,6 +339,10 @@ async function main(): Promise<void> {
   self.spawnShieldT = 0;
   rival.spawnShieldT = 0;
   world.tick++;
+  for (const player of [self, rival]) {
+    player.spawnHardGraceEndsAtTick = world.tick;
+    player.spawnShieldEndsAtTick = world.tick;
+  }
   socket.deliver(buildSnapshot(world, "p1", 0, [], 0, true, {
     worldId: "pvp:room:ABCD",
     roster,

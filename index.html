@@ -102,7 +102,9 @@
         background:var(--dun-0); box-shadow:inset 0 0 0 1px var(--dun-3); }
       .arena-spawn-protection b{ position:absolute; inset:1px; transform:scaleX(var(--spawn-protection,0));
         transform-origin:left center; background:var(--amber); }
-      .arena-spawn-protection.grace b{ background:var(--cream); }
+      .arena-spawn-protection.grace b{ background:repeating-linear-gradient(90deg,
+        var(--amber) 0 9px,transparent 9px 11px); }
+      .arena-spawn-protection.shield b{ opacity:.58; }
       @keyframes spawn-protection-pulse{ 50%{ opacity:.58; } }
       /* Teammate HP party panel (the Mender dependency): compact nameplate rows. */
       .party{ display:none; flex-direction:column; gap:3px; }

@@ -94,12 +94,13 @@ async function main(): Promise<void> {
     const s = await startTestServer({ pvpPublicEnabled: true });
     try {
       const world = "pvp:room:SAFE";
+      let isHoldingFire = true;
       const movingFire = () => ({
         seq: 0,
         moveX: 1,
         moveY: 0,
         aim: Math.PI / 2,
-        firing: true,
+        firing: isHoldingFire,
         dash: true,
       });
       const actor = new Bot({
@@ -134,6 +135,10 @@ async function main(): Promise<void> {
       player.fireCd = 0;
       player.spawnGraceT = pvpSpawnHardGraceTicks();
       player.spawnShieldT = pvpSpawnShieldTicks();
+      player.spawnProtectionStartedTick = gw.state.tick;
+      player.spawnHardGraceEndsAtTick = gw.state.tick + pvpSpawnHardGraceTicks();
+      player.spawnShieldEndsAtTick = gw.state.tick + pvpSpawnShieldTicks();
+      player.isSpawnOffenseLatched = false;
       other.x = 700;
       other.y = 700;
       gw.state.bullets = gw.state.bullets.filter((bullet) => bullet.owner !== actorId);
@@ -150,10 +155,13 @@ async function main(): Promise<void> {
         && gw.state.bullets.every((bullet) => bullet.owner !== actorId)
         && gw.state.effects.every((effect) => effect.owner !== actorId));
 
-      const isFirstLegalAttack = await waitUntil(
-        () => player.spawnGraceT === 0 && player.shotSeq > startShotSeq,
-        2000,
-      );
+      await waitUntil(() => player.spawnGraceT === 0, 2000);
+      check("held attack remains latched after grace instead of auto-firing",
+        player.shotSeq === startShotSeq && player.isSpawnOffenseLatched);
+      isHoldingFire = false;
+      await sleep(100);
+      isHoldingFire = true;
+      const isFirstLegalAttack = await waitUntil(() => player.shotSeq > startShotSeq, 1000);
       check("the first legal post-grace attack fires and breaks shield", isFirstLegalAttack && player.spawnShieldT === 0);
       const isWireUpdated = await waitUntil(
         () => actor.transport.getLatestSnapshot()?.self?.sgr === 0
@@ -196,8 +204,10 @@ async function main(): Promise<void> {
       // this proves the server plumbs them end-to-end). Positions/weapons are server-owned.
       const sh = gw.state.players.get(shPid)!; const vic = gw.state.players.get(vicPid)!;
       sh.x = 300; sh.y = 216; sh.invuln = 0; sh.spawnGraceT = 0; sh.spawnShieldT = 0;
+      sh.spawnHardGraceEndsAtTick = 0; sh.spawnShieldEndsAtTick = 0; sh.isSpawnOffenseLatched = false;
       sh.weapon = "railgun"; sh.ownedWeapons = ["railgun"];
       vic.x = 360; vic.y = 216; vic.invuln = 0; vic.spawnGraceT = 0; vic.spawnShieldT = 0;
+      vic.spawnHardGraceEndsAtTick = 0; vic.spawnShieldEndsAtTick = 0; vic.isSpawnOffenseLatched = false;
 
       // 1) authoritative damage: the victim's HP falls on the SERVER and the same value rides the wire.
       const isHurt = await waitUntil(() => (gw.state.players.get(vicPid)?.hp ?? PVP.maxHp) < PVP.maxHp, 4000);

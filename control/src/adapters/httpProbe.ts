@@ -75,7 +75,8 @@ import type {
 // v29: PVP Wave 1 reliable presentation events (ring-out, chain-frag, sudden-death).
 // v30: distinct authoritative PvP hard-grace and spawn-shield ticks.
 // v31: authoritative PvP shield-break event before its offense.
-export const SYNTHETIC_JOIN_PROTOCOL = 31;
+// v32: shared spawn protection end ticks and held-offense arming feedback.
+export const SYNTHETIC_JOIN_PROTOCOL = 32;
 
 export interface HttpProbeConfig {
   baseUrl: string;

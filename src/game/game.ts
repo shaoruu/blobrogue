@@ -1976,8 +1976,9 @@ export class Game {
       tick: snap.tick,
       selfId: snap.selfId,
       respawnTicks: snap.self?.rsp ?? 0,
-      spawnGraceTicks: snap.self?.sgr ?? 0,
-      spawnShieldTicks: snap.self?.ssh ?? 0,
+      spawnProtectionStartedTick: snap.self?.spo ?? 0,
+      spawnHardGraceEndsAtTick: snap.self?.sge ?? 0,
+      spawnShieldEndsAtTick: snap.self?.sse ?? 0,
       nameOf: (id, isSelf) => this.arenaNameOf(id, isSelf),
     });
   }
@@ -2964,6 +2965,14 @@ export class Game {
         if (isSelf) this.addTrauma(0.08);
         break;
       }
+      case "pvpSpawnAttackBlocked":
+        if (this.isSelfPid(e.pid)) {
+          const mx = e.x + Math.cos(this.aimAngle) * 22;
+          const my = e.y + Math.sin(this.aimAngle) * 22;
+          this.shockwaves.spawn(mx, my, 5, 13, 0.14, "#ffd27a", 2);
+          sfx("uiClick", { gain: 0.08, rate: 0.75 });
+        }
+        break;
       case "pvpKill":
         // Fires to EVERY client — branch on the LOCAL player id (never "play frag on every
         // kill"): your kill = FRAG, your death = DEATH (both non-spatial), any other = a quiet
@@ -8357,8 +8366,22 @@ export class Game {
     for (const r of remotes) {
       const sx = r.x - cam.x, sy = r.y - cam.y;
       const isArenaRespawning = this.isArena && r.hp <= 0;
+      const spawnGraceTicks = Math.max(0, r.spawnHardGraceEndsAtTick - r.authoritativeTick);
+      const spawnShieldTicks = Math.max(0, r.spawnShieldEndsAtTick - r.authoritativeTick);
+      const materialize = this.pvpMaterializeFraction(
+        r.spawnProtectionStartedTick,
+        r.authoritativeTick,
+        r.spawnShieldEndsAtTick,
+      );
       if (!r.isAbsent && !isArenaRespawning) {
-        this.renderPvpSpawnProtection(sx, sy, r.spawnGraceT, r.spawnShieldT, true);
+        this.renderPvpSpawnProtection(
+          sx,
+          sy,
+          r.spawnHardGraceEndsAtTick,
+          r.spawnShieldEndsAtTick,
+          r.authoritativeTick,
+          true,
+        );
       }
       // Identity still unresolved (no verified color claim yet): an explicit NEUTRAL
       // placeholder at the exact body/label geometry the real render uses, so the resolve
@@ -8378,17 +8401,18 @@ export class Game {
       // A network-absent teammate renders as an explicit ghost (their body is reserved for
       // the reconnect grace) — never mistakable for a live player or a corpse. A live one
       // blinks through its authoritative i-frames exactly like the local blob does.
-      const alpha = r.isAbsent
+      const alphaBase = r.isAbsent
         ? 0.35
         : r.isDown || isArenaRespawning
           ? 0.4
-          : r.spawnGraceT > 0
+          : spawnGraceTicks > 0
             ? 0.62
-            : r.spawnShieldT > 0
+            : spawnShieldTicks > 0
               ? 0.82
               : isInvulnBlinkFrame(r.invuln, r.dashInvuln)
                 ? 0.4
                 : 1;
+      const alpha = alphaBase * materialize;
       ctx.globalAlpha = alpha;
       ctx.translate(sx + xf.ox, sy + xf.oy);
       ctx.rotate(xf.rot);
@@ -8560,13 +8584,46 @@ export class Game {
     ctx.textAlign = "left";
   }
 
+  private localPvpProtectionState(): {
+    tick: number;
+    startedTick: number;
+    graceEndsAtTick: number;
+    shieldEndsAtTick: number;
+  } {
+    if (this.mode === "online" && this.wsTransport) {
+      const snap = this.wsTransport.getLatestSnapshot();
+      if (snap?.self) {
+        return {
+          tick: snap.tick,
+          startedTick: snap.self.spo,
+          graceEndsAtTick: snap.self.sge,
+          shieldEndsAtTick: snap.self.sse,
+        };
+      }
+    }
+    return {
+      tick: this.world.tick,
+      startedTick: this.p.spawnProtectionStartedTick,
+      graceEndsAtTick: this.p.spawnHardGraceEndsAtTick,
+      shieldEndsAtTick: this.p.spawnShieldEndsAtTick,
+    };
+  }
+
+  private pvpMaterializeFraction(startedTick: number, tick: number, shieldEndsAtTick: number): number {
+    if (startedTick <= 0 || shieldEndsAtTick <= tick) return 1;
+    return Math.max(0, Math.min(1, (tick - startedTick) / 5));
+  }
+
   private renderPvpSpawnProtection(
     sx: number,
     sy: number,
-    graceTicks: number,
-    shieldTicks: number,
+    graceEndsAtTick: number,
+    shieldEndsAtTick: number,
+    tick: number,
     isRemote: boolean,
   ): void {
+    const graceTicks = Math.max(0, graceEndsAtTick - tick);
+    const shieldTicks = Math.max(0, shieldEndsAtTick - tick);
     if (!this.isArena || shieldTicks <= 0) return;
     const isGrace = graceTicks > 0;
     const remainingTicks = isGrace ? graceTicks : shieldTicks;
@@ -8574,13 +8631,13 @@ export class Game {
     const pulseRate = isFinalPulse ? 16 : isGrace ? 8 : 5;
     const pulseDepth = isFinalPulse ? 0.24 : 0.10;
     const pulse = 0.76 + pulseDepth * Math.sin(this.animClock * pulseRate);
-    const color = isGrace ? "#f5e6c8" : "#ffd27a";
+    const color = "#ffd27a";
     const radius = this.pr + (isRemote ? 6 : isGrace ? 10 : 8);
     const { ctx } = this;
     ctx.save();
     if (!isRemote) {
       ctx.globalAlpha = (isGrace ? 0.20 : 0.14) * pulse;
-      ctx.fillStyle = color;
+      ctx.fillStyle = "#f5e6c8";
       ctx.beginPath();
       ctx.arc(sx, sy, this.pr + 5, 0, Math.PI * 2);
       ctx.fill();
@@ -8588,10 +8645,24 @@ export class Game {
     ctx.globalAlpha = (isRemote ? 0.55 : 0.88) * pulse;
     ctx.strokeStyle = color;
     ctx.lineWidth = isRemote ? 2 : isGrace ? 4 : 3;
-    ctx.setLineDash(isRemote ? [5, 4] : []);
-    ctx.beginPath();
-    ctx.arc(sx, sy, radius, 0, Math.PI * 2);
-    ctx.stroke();
+    ctx.setLineDash([]);
+    if (isGrace) {
+      const remaining = Math.max(0, Math.min(1, graceTicks / 25)) * 4;
+      for (let segment = 0; segment < 4; segment++) {
+        const fill = Math.max(0, Math.min(1, remaining - segment));
+        if (fill <= 0) continue;
+        const start = -Math.PI / 2 + segment * Math.PI / 2 + 0.08;
+        const end = start + (Math.PI / 2 - 0.16) * fill;
+        ctx.beginPath();
+        ctx.arc(sx, sy, radius, start, end);
+        ctx.stroke();
+      }
+    } else {
+      ctx.globalAlpha = (isRemote ? 0.32 : 0.48) * pulse;
+      ctx.beginPath();
+      ctx.arc(sx, sy, radius, 0, Math.PI * 2);
+      ctx.stroke();
+    }
     if (!isRemote && isFinalPulse) {
       ctx.globalAlpha = 0.42 * pulse;
       ctx.lineWidth = 2;
@@ -8599,6 +8670,29 @@ export class Game {
       ctx.arc(sx, sy, radius + 5, 0, Math.PI * 2);
       ctx.stroke();
     }
+    ctx.restore();
+  }
+
+  private renderPvpWeaponArming(
+    sx: number,
+    sy: number,
+    aim: number,
+    graceEndsAtTick: number,
+    tick: number,
+  ): void {
+    const graceTicks = Math.max(0, graceEndsAtTick - tick);
+    if (!this.isArena || graceTicks <= 0) return;
+    const progress = 1 - Math.max(0, Math.min(1, graceTicks / 25));
+    const mx = sx + Math.cos(aim) * 22;
+    const my = sy + Math.sin(aim) * 22;
+    const { ctx } = this;
+    ctx.save();
+    ctx.strokeStyle = "#ffd27a";
+    ctx.lineWidth = 2;
+    ctx.globalAlpha = 0.65;
+    ctx.beginPath();
+    ctx.arc(mx, my, 7, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * progress);
+    ctx.stroke();
     ctx.restore();
   }
 
@@ -8610,8 +8704,23 @@ export class Game {
     const ipx = this.renderPrevX + (this.px - this.renderPrevX) * a;
     const ipy = this.renderPrevY + (this.py - this.renderPrevY) * a;
     const psx = ipx - cam.x, psy = ipy - cam.y;
+    const protection = this.localPvpProtectionState();
+    const spawnGraceTicks = Math.max(0, protection.graceEndsAtTick - protection.tick);
+    const spawnShieldTicks = Math.max(0, protection.shieldEndsAtTick - protection.tick);
+    const materialize = this.pvpMaterializeFraction(
+      protection.startedTick,
+      protection.tick,
+      protection.shieldEndsAtTick,
+    );
     if (!isArenaRespawning && !this.isDown) {
-      this.renderPvpSpawnProtection(psx, psy, this.p.spawnGraceT, this.p.spawnShieldT, false);
+      this.renderPvpSpawnProtection(
+        psx,
+        psy,
+        protection.graceEndsAtTick,
+        protection.shieldEndsAtTick,
+        protection.tick,
+        false,
+      );
     }
     // GUNNER OVERHEAT (Wave 2): a building heat glow on the body as Momentum ramps, FLARING on the
     // boil-over burst — the visible "charge" the HUD pip row mirrors. Local read off authoritative
@@ -8629,9 +8738,10 @@ export class Game {
     let alpha = 1;
     if (isArenaRespawning) alpha = 0.25;
     else if (this.isDown) alpha = 0.4;
-    else if (this.p.spawnGraceT > 0) alpha = 0.62;
-    else if (this.p.spawnShieldT > 0) alpha = 0.82;
+    else if (spawnGraceTicks > 0) alpha = 0.72;
+    else if (spawnShieldTicks > 0) alpha = 0.88;
     else if (isInvulnBlinkFrame(this.invuln, this.p.dashInvuln)) alpha = 0.4;
+    alpha *= materialize;
     const clip: SheetClip = this.playerAnim.move > 0.5 ? "walk" : "idle";
     const xf = characterXform(this.playerAnim, CHARACTER_STYLE);
     // Directional recoil: nudge the blob back against its aim as it fires.
@@ -8660,6 +8770,13 @@ export class Game {
       const bx = psx + xf.ox, by = psy + xf.oy;
       if (WEAPONS[this.weapon].melee) this.renderHeldMelee(bx, by, this.aimAngle, this.weapon, alpha, this.meleeSwing);
       else this.renderHeldWeapon(bx, by, this.aimAngle, this.weapon, alpha, this.playerAnim.recoil);
+      this.renderPvpWeaponArming(
+        bx,
+        by,
+        this.aimAngle,
+        protection.graceEndsAtTick,
+        protection.tick,
+      );
     }
     if (this.isDown) {
       // The revive ring (renderReviveRings) owns the "being revived" read; the spectate
@@ -9125,7 +9242,23 @@ export class Game {
     const { ctx } = this;
     const cx = this.input.mouseX, cy = this.input.mouseY;
     const r = 8, tick = 4, gap = 3;
+    const protection = this.localPvpProtectionState();
+    const isArming = protection.graceEndsAtTick > protection.tick;
     ctx.save();
+    if (isArming) {
+      ctx.strokeStyle = "#ffd27a";
+      ctx.fillStyle = "rgba(245,230,200,0.18)";
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(cx, cy, r, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.arc(cx, cy, 2, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.restore();
+      return;
+    }
     ctx.strokeStyle = "rgba(255,210,122,0.85)";
     ctx.lineWidth = 1.5;
     ctx.beginPath();

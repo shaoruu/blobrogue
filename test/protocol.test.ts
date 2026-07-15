@@ -49,6 +49,10 @@ function distinctivePlayer(): PlayerSim {
   p.hp = 7; p.maxHp = 11;
   p.invuln = 0.375; p.dashInvuln = 0.125;
   p.spawnGraceT = 17; p.spawnShieldT = 41;
+  p.spawnProtectionStartedTick = 100;
+  p.spawnHardGraceEndsAtTick = 125;
+  p.spawnShieldEndsAtTick = 160;
+  p.isSpawnOffenseLatched = true;
   p.dashCd = 0.5; p.dashTime = 0.0625; p.dashDx = -0.6; p.dashDy = 0.8;
   p.fireCd = 0.11; p.chargeT = 0.42; p.fangCd = 0.85;
   p.facing = -1;
@@ -270,7 +274,7 @@ function serverRoundTripTests(): void {
 // who is actually there (the Sev-0 readout).
 function worldBindingWireTests(): void {
   section("v4: authoritative world id + roster are required, strict, and round-trip");
-  check("protocol version covers authoritative PvP shield break (v31)", PROTOCOL_VERSION === 31, `v=${PROTOCOL_VERSION}`);
+  check("protocol version covers authoritative PvP protection endpoints (v32)", PROTOCOL_VERSION === 32, `v=${PROTOCOL_VERSION}`);
   check("room code maps to its world id", worldIdForRoomCode(" abcd ") === "room:ABCD");
   check("room world ids pass the shared charset gate", isValidWorldId(worldIdForRoomCode("ZZZZ")) && isValidWorldId("arena-1"));
   check("junk world ids fail the shared charset gate", !isValidWorldId("room:../../etc") && !isValidWorldId(""));
@@ -478,15 +482,19 @@ function remoteDashWireTests(): void {
   dasher.dashTime = 0.12; dasher.dashDx = -0.6; dasher.dashDy = 0.8;
   dasher.dashInvuln = 0.14; dasher.invuln = 0.25;
   dasher.spawnGraceT = 9; dasher.spawnShieldT = 39;
+  dasher.spawnProtectionStartedTick = 200;
+  dasher.spawnHardGraceEndsAtTick = 225;
+  dasher.spawnShieldEndsAtTick = 260;
   const snap = buildSnapshot(w, "pMe", 0, [], 0, false, { worldId: "w-test" });
   if (snap.t !== "snap") { check("snapshot built", false); return; }
   const seen = snap.players.find((p) => p.id === "pDash");
   check("the dash block rides the observer's wire straight from PlayerSim truth",
     seen !== undefined && seen.dti === 0.12 && seen.ddx === -0.6 && seen.ddy === 0.8
-    && seen.dnv === 0.14 && seen.inv === 0.25 && seen.sgr === 9 && seen.ssh === 39,
+    && seen.dnv === 0.14 && seen.inv === 0.25 && seen.sgr === 9 && seen.ssh === 39
+    && seen.spo === 200 && seen.sge === 225 && seen.sse === 260,
     JSON.stringify(seen && {
       dti: seen.dti, ddx: seen.ddx, ddy: seen.ddy, dnv: seen.dnv, inv: seen.inv,
-      sgr: seen.sgr, ssh: seen.ssh,
+      sgr: seen.sgr, ssh: seen.ssh, spo: seen.spo, sge: seen.sge, sse: seen.sse,
     }));
   check("dash fields round-trip losslessly", deepEqual(jsonCodec.decodeServer(jsonCodec.encodeServer(snap)), snap));
 
@@ -526,6 +534,7 @@ function eventScopeTests(): void {
     [{ t: "pickup", pid: "p7", kind: "coin", x: 1, y: 2 }, "pos"],
     [{ t: "friendlyNudge", shooterId: "p7", targetId: "p8", x: 1, y: 2, dirX: 1, dirY: 0 }, "pos"],
     [{ t: "pvpShieldBreak", pid: "p7", x: 1, y: 2 }, "pos"],
+    [{ t: "pvpSpawnAttackBlocked", pid: "p7", x: 1, y: 2 }, "pid"],
     // Deliberately pid: remote dash FX ride PlayerWire dash STATE (v9), so broadcasting
     // these would double-play the dasher's juice.
     [{ t: "dashStart", pid: "p7", x: 1, y: 2 }, "pid"],
