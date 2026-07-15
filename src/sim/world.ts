@@ -737,15 +737,15 @@ export function spawnPlayerInWorld(
 }
 
 function recordCurrentSharedWeaponOffers(w: WorldState, p: PlayerSim): void {
-  const current = new Set<WeaponId>();
+  const current: WeaponId[] = [];
   for (const chest of w.chests) {
-    if (!chest.opened && chest.weapon !== undefined) current.add(chest.weapon);
+    if (!chest.opened && chest.weapon !== undefined) current.push(chest.weapon);
   }
   for (const pickup of w.pickups) {
-    if (pickup.kind === "weapon" && pickup.weapon !== null) current.add(pickup.weapon);
+    if (pickup.kind === "weapon" && pickup.weapon !== null) current.push(pickup.weapon);
   }
   for (const slot of w.shop?.slots ?? []) {
-    if (slot.isShared && slot.weapon !== null) current.add(slot.weapon);
+    if (slot.isShared && slot.weapon !== null) current.push(slot.weapon);
   }
   for (const id of current) recordWeaponOffer(p.weaponOfferHistory, id);
 }

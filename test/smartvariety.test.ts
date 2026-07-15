@@ -240,6 +240,23 @@ section("upgrade cap and max-level exclusion");
   check("the final unseen card exhausts pity and the offer still fills all three cards",
     fullOffer.length === 3 && fullOffer.some((item) => item.id === lastUnseen.id));
 
+  const fallbackPool = normal.slice(0, 5);
+  const fallbackHistory = createBlessingOfferHistory();
+  const previousIds = fallbackPool.slice(0, 2).map((item) => item.id);
+  const fallbackUpgrades = fallbackPool.slice(2, 4).map((item) => item.id);
+  for (const item of fallbackPool.slice(0, 4)) fallbackHistory.blessingSeenCounts[item.id] = 1;
+  fallbackHistory.recentBlessingOffers.push(previousIds);
+  const fallbackOffer = rollItemChoicesWith(
+    3,
+    () => 0.5,
+    fallbackUpgrades,
+    { history: fallbackHistory, eligibleItems: fallbackPool },
+  );
+  check("previous-offer cards provide the saturated fallback without adding a second upgrade",
+    fallbackOffer.length === 3
+    && fallbackOffer.filter((item) => fallbackUpgrades.includes(item.id)).length === 1
+    && fallbackOffer.some((item) => previousIds.includes(item.id)));
+
   const maxed = ITEMS.find((item) => item.isPremiumOnly !== true)!;
   const owned = Array(MAX_ITEM_LEVEL).fill(maxed.id) as string[];
   const withoutMaxed = rollItemChoicesWith(30, () => 0.5, owned, {

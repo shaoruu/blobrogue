@@ -542,6 +542,25 @@ function flowAndWireTests(): void {
     const localHeart = localShop.slots.find((slot) => slot.kind === "heart")!;
     check("online wire reconstruction re-keys the viewer's personal purchase to LOCAL_ID",
       shopSlotStatusFor(localShop, localHeart, shopViewerOf({ ...b, id: LOCAL_ID })) === "sold");
+    for (const weapon of w.shop!.slots.filter((slot) => slot.kind === "weapon")) {
+      weapon.soldTo = a.id;
+    }
+    const blessing = slotOf(w, "blessing");
+    blessing.buyers = [a.id];
+    const rerollId = slotOf(w, "reroll").id;
+    const shopForA = shopFromWire(toShopWire(w.shop!, a.id), a.id);
+    const shopForB = shopFromWire(toShopWire(w.shop!, b.id), b.id);
+    check("flattened online stock derives reroll availability from the local viewer's purchase",
+      shopSlotStatusFor(
+        shopForA,
+        shopForA.slots.find((slot) => slot.id === rerollId)!,
+        shopViewerOf({ ...a, id: LOCAL_ID, coins: 99 }),
+      ) === "exhausted"
+      && shopSlotStatusFor(
+        shopForB,
+        shopForB.slots.find((slot) => slot.id === rerollId)!,
+        shopViewerOf({ ...b, id: LOCAL_ID, coins: 99 }),
+      ) === "buy");
     check("non-shop floors carry shop: null on the wire",
       (buildSnapshot(createWorld(0xB1E, 4), LOCAL_ID, 0, [], 0, true, { worldId: "room:TEST" }) as Extract<ServerMsg, { t: "snap" }>).shop === null);
   }

@@ -685,8 +685,14 @@ function isPremiumRestockable(shop: ShopState, slot: ShopSlot): boolean {
   return slot.kind === "legendary" || slot.kind === "rare_blessing" || slot.kind === "core_infusion";
 }
 
-export function hasRestockableSlots(shop: ShopState): boolean {
-  return shop.slots.some((slot) => isRestockable(shop, slot));
+export function hasRestockableSlots(shop: ShopState, viewerId?: PlayerId): boolean {
+  return shop.slots.some((slot) => {
+    if (slot.kind === "weapon") return slot.soldTo === null;
+    if (slot.kind !== "blessing") return false;
+    return viewerId === undefined
+      ? isPersonalStockRestockable(shop, slot)
+      : !slot.buyers.includes(viewerId);
+  });
 }
 
 // Reroll the unbought item pedestals in place (rerollsUsed must already be incremented by
@@ -853,7 +859,7 @@ export function shopSlotStatusFor(shop: ShopState, slot: ShopSlot, viewer: ShopV
       break;
     }
     case "reroll": {
-      if (shop.rerollsUsed >= SHOP.rerollLimit || !hasRestockableSlots(shop)) return "exhausted";
+      if (shop.rerollsUsed >= SHOP.rerollLimit || !hasRestockableSlots(shop, viewer.pid)) return "exhausted";
       break;
     }
     case "mystery": {

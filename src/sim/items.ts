@@ -453,6 +453,9 @@ export function rollItemChoicesWith(
     if (outsidePrevious.length > 0) candidates = outsidePrevious;
     if (history && isUnseenAvailable && upgradeCount >= 1) {
       candidates = candidates.filter((item) => !levels.has(item.id));
+      if (candidates.length === 0) {
+        candidates = remaining.filter((item) => !levels.has(item.id));
+      }
     }
     if (candidates.length === 0) break;
 
