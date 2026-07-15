@@ -671,7 +671,7 @@ function initPvpPlayer(w: WorldState, p: PlayerSim): void {
   p.hp = PVP.maxHp;
   p.respawnT = 0;
   p.pvpNextDraftTick = w.tick + pvpDraftEveryTicks();
-  pvpPlaceOnSpawn(w, p, false);
+  pvpPlaceOnSpawn(w, p, w.match?.phase === "live");
 }
 
 function pvpFaceInward(w: WorldState, p: PlayerSim): void {
@@ -11372,6 +11372,7 @@ function pvpPresentPlayers(w: WorldState): PlayerSim[] {
 function tickPvpSpawnProtection(w: WorldState): void {
   if (w.match?.phase !== "live" || pvpPresentPlayers(w).length < PVP.minPlayers) return;
   for (const p of w.players.values()) {
+    if (p.isAbsent) continue;
     if (p.spawnGraceT > 0) p.spawnGraceT--;
     if (p.spawnShieldT > 0) p.spawnShieldT--;
   }
@@ -11448,7 +11449,9 @@ function stepPvpMatch(w: WorldState, ev: SimEvent[]): void {
   // Respawn timers advance only during LIVE play that is NOT grace-paused (a paused match freezes
   // the whole clock, respawns included).
   if (m.phase === "live" && isEnough) {
-    for (const p of w.players.values()) {
+    for (const id of [...w.players.keys()].sort()) {
+      const p = w.players.get(id);
+      if (p === undefined || p.isAbsent) continue;
       if (p.respawnT > 0) {
         p.respawnT -= 1;
         if (p.respawnT <= 0) { p.respawnT = 0; pvpRespawn(w, p); }

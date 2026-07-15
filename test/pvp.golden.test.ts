@@ -129,7 +129,12 @@ function main(): void {
   check("live phase appears in the trace", joined.includes("|live|"));
   check("a kill event fires (fire -> kill)", joined.includes("pvpKill"));
   check("a hurt event fires (damage lands)", joined.includes("playerHurt"));
-  check("a respawn resolves (a body returns to full HP after a scheduled respawnT)", forward.some((l) => /p2:[^|]*,100\.00,0,/.test(l)) || joined.includes("respawnT"));
+  const deathIndex = forward.findIndex((line) => /p2:[^|]*,0\.00,[1-9][0-9]*,0,0,/.test(line));
+  const respawnIndex = forward.findIndex((line, index) =>
+    index > deathIndex && /p2:[^|]*,100\.00,0,25,60,/.test(line)
+  );
+  check("a respawn resolves after a scheduled death with full two-stage protection",
+    deathIndex >= 0 && respawnIndex > deathIndex);
   check("the match reaches over with a winner", joined.includes("|over|win=p1|"));
 
   section("invariance: add-order perturbation + replay are byte-identical");

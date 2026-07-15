@@ -17,6 +17,8 @@ interface CanvasLog {
   drawImageCalls: number;
   dangerStrokeCalls: number;
   warningFillCalls: number;
+  spawnSafeStrokeCalls: number;
+  spawnShieldStrokeCalls: number;
 }
 
 interface ArenaGameAccess {
@@ -75,6 +77,12 @@ function recordingCanvas(log: CanvasLog): HTMLCanvasElement {
       }
       if (property === "strokeRect") {
         return () => { if (strokeStyle === "#ff5a4f") log.dangerStrokeCalls++; };
+      }
+      if (property === "stroke") {
+        return () => {
+          if (strokeStyle === "#7fe9ff") log.spawnSafeStrokeCalls++;
+          if (strokeStyle === "#ffd27a") log.spawnShieldStrokeCalls++;
+        };
       }
       if (property === "fillRect") {
         return () => { if (fillStyle === "#6f3b16") log.warningFillCalls++; };
@@ -170,6 +178,8 @@ async function main(): Promise<void> {
     drawImageCalls: 0,
     dangerStrokeCalls: 0,
     warningFillCalls: 0,
+    spawnSafeStrokeCalls: 0,
+    spawnShieldStrokeCalls: 0,
   };
   const gameInstance = new Game(
     recordingCanvas(canvasLog),
@@ -244,6 +254,37 @@ async function main(): Promise<void> {
     !hudState.isCleared && hudState.waitLabel === null && hudState.party.length === 0);
   check("arena reveal emitted no floor banner",
     banners.every((banner) => !/FLOOR|CLEAR|GO DOWN/.test(banner)), banners.join("|"));
+  check("authoritative hard grace draws visible local and remote world shields",
+    canvasLog.spawnSafeStrokeCalls >= 2,
+    `safeStrokes=${canvasLog.spawnSafeStrokeCalls}`);
+
+  canvasLog.spawnSafeStrokeCalls = 0;
+  canvasLog.spawnShieldStrokeCalls = 0;
+  self.spawnGraceT = 0;
+  self.spawnShieldT = 20;
+  rival.spawnGraceT = 0;
+  rival.spawnShieldT = 20;
+  world.tick++;
+  socket.deliver(buildSnapshot(world, "p1", 0, [], 0, true, {
+    worldId: "pvp:room:ABCD",
+    roster,
+  }));
+  game.tick(FIXED_DT);
+  check("remaining shield draws a distinct local and remote world cue",
+    canvasLog.spawnSafeStrokeCalls === 0 && canvasLog.spawnShieldStrokeCalls >= 2,
+    `safe=${canvasLog.spawnSafeStrokeCalls} shield=${canvasLog.spawnShieldStrokeCalls}`);
+
+  canvasLog.spawnShieldStrokeCalls = 0;
+  self.spawnShieldT = 0;
+  rival.spawnShieldT = 0;
+  world.tick++;
+  socket.deliver(buildSnapshot(world, "p1", 0, [], 0, true, {
+    worldId: "pvp:room:ABCD",
+    roster,
+  }));
+  game.tick(FIXED_DT);
+  check("world protection cues disappear on authoritative break or expiry",
+    canvasLog.spawnShieldStrokeCalls === 0);
 
   section("all floor and exit presentation paths are inert in arena mode");
   check("exit coordination returns no READY TO GO DOWN copy", game.exitWaitLabel() === null);

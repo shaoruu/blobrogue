@@ -55,7 +55,8 @@ async function main(): Promise<void> {
       check("authoritative two-stage protection rides the local wire",
         sa.self?.sgr === pvpSpawnHardGraceTicks() && sa.self.ssh === pvpSpawnShieldTicks());
       check("authoritative two-stage protection rides observer wires",
-        sa.players.every((p) => p.sgr === pvpSpawnHardGraceTicks() && p.ssh === pvpSpawnShieldTicks()));
+        sa.players.length === 1
+        && sa.players.every((p) => p.sgr === pvpSpawnHardGraceTicks() && p.ssh === pvpSpawnShieldTicks()));
       check("FFA team rides PlayerWire.tm", sa.players.every((p) => p.tm === 0));
       check("the scoreboard lists both seats", (sa.match?.sc.length ?? 0) === 2);
 

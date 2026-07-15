@@ -20,9 +20,10 @@ const metrics = report.aggregate;
 process.stdout.write(`${report.policy}\n`);
 
 check("20 deterministic adversarial seeds are reported", metrics.seedCount === 20);
-check("the policy exercises repeated completed respawns",
-  metrics.episodeCount >= 20 && metrics.damagedEpisodeCount >= 20 && metrics.deathEpisodeCount >= 20,
-  `episodes=${metrics.episodeCount} damaged=${metrics.damagedEpisodeCount} deaths=${metrics.deathEpisodeCount}`);
+check("the policy exercises repeated completed post-death respawns in every seed",
+  metrics.postRespawnEpisodeCount >= 60
+  && report.seeds.every((seed) => seed.episodes.filter((episode) => !episode.isInitialSpawn).length >= 3),
+  `episodes=${metrics.episodeCount} postRespawns=${metrics.postRespawnEpisodeCount}`);
 check("spawn-to-first-damage P10 is at least 2s",
   metrics.spawnToFirstDamageP10Sec >= 2,
   `p10=${metrics.spawnToFirstDamageP10Sec.toFixed(2)}s`);

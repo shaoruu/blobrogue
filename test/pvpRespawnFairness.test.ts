@@ -369,8 +369,41 @@ section("absent, downed, and respawning bodies are not spawn threats");
     forceRespawn(world, victim) === 0);
 }
 
+section("live joins enter the same authoritative spawn-memory policy");
+{
+  const world = liveWorld(350, 2);
+  const joined = spawnPlayerInWorld(world, "p3");
+  check("a mid-match join records its selected spawn immediately",
+    joined.pvpRecentSpawnIndices.length === 1
+    && joined.pvpRecentSpawnIndices[0] >= 0);
+}
+
 section("2p/4p/6p cross-cover stress is deterministic and never starves");
 {
+  const simultaneousRespawns = (order: string[]): string => {
+    const world = createWorld(399, 1, {
+      mode: "pvp",
+      isShared: true,
+      skipLocalPlayer: true,
+    });
+    for (const id of order) spawnPlayerInWorld(world, id);
+    let guard = 0;
+    while (world.match?.phase !== "live" && guard++ < 200) stepWorld(world, new Map(), DT);
+    for (const id of ["p1", "p2"]) {
+      const player = world.players.get(id)!;
+      player.hp = 0;
+      player.respawnT = 1;
+      clearProtection(player);
+    }
+    stepWorld(world, currentInputs(world), DT);
+    return ["p1", "p2"].map((id) => {
+      const player = world.players.get(id)!;
+      return `${id}:${player.x},${player.y}:${player.pvpRecentSpawnIndices.join(".")}`;
+    }).join("|");
+  };
+  check("simultaneous respawns are map-order independent",
+    simultaneousRespawns(["p1", "p2", "p3"]) === simultaneousRespawns(["p3", "p2", "p1"]));
+
   const run = (seed: number, count: number): number[] => {
     const world = liveWorld(seed, count);
     const target = world.players.get("p1")!;
@@ -413,7 +446,7 @@ section("2p/4p/6p cross-cover stress is deterministic and never starves");
 
 section("reconnect preserves protection and spawn memory exactly");
 {
-  const world = liveWorld(500, 2);
+  const world = liveWorld(500, 4);
   const player = world.players.get("p1")!;
   player.respawnT = 17;
   player.spawnGraceT = 13;
@@ -426,6 +459,7 @@ section("reconnect preserves protection and spawn memory exactly");
     memory: player.pvpRecentSpawnIndices,
   });
   setPlayerAbsence(world, player.id, true);
+  for (let i = 0; i < 10; i++) stepWorld(world, currentInputs(world), DT);
   setPlayerAbsence(world, player.id, false);
   const after = JSON.stringify({
     respawnT: player.respawnT,
@@ -433,7 +467,7 @@ section("reconnect preserves protection and spawn memory exactly");
     spawnShieldT: player.spawnShieldT,
     memory: player.pvpRecentSpawnIndices,
   });
-  check("reserved-seat reconnect neither resets nor extends respawn state", before === after);
+  check("reserved-seat reconnect freezes and restores respawn state in a live 4p match", before === after);
 }
 
 process.stdout.write(`\n${failed === 0 ? "PASS" : "FAIL"} — ${passed} passed, ${failed} failed\n`);

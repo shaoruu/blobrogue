@@ -14,6 +14,7 @@ const MAX_SECONDS = 150;
 export interface RespawnPolicyEpisode {
   seed: number;
   spawnTick: number;
+  isInitialSpawn: boolean;
   firstDamageSec: number | null;
   deathSec: number | null;
   isDashedBeforeDamage: boolean;
@@ -35,6 +36,7 @@ export interface RespawnPolicySeedReport {
 export interface RespawnPolicyAggregate {
   seedCount: number;
   episodeCount: number;
+  postRespawnEpisodeCount: number;
   damagedEpisodeCount: number;
   deathEpisodeCount: number;
   spawnToFirstDamageP10Sec: number;
@@ -144,11 +146,12 @@ function victimInput(
   };
 }
 
-function openEpisode(seed: number, victim: PlayerSim, tick: number): ActiveEpisode {
+function openEpisode(seed: number, victim: PlayerSim, tick: number, isInitialSpawn: boolean): ActiveEpisode {
   return {
     metric: {
       seed,
       spawnTick: tick,
+      isInitialSpawn,
       firstDamageSec: null,
       deathSec: null,
       isDashedBeforeDamage: false,
@@ -190,7 +193,7 @@ export function runRespawnPolicySeed(seed: number): RespawnPolicySeedReport {
   victim.weapon = "pistol";
   victim.ownedWeapons = ["pistol"];
   const liveStartTick = world.tick;
-  let active = openEpisode(seed, victim, world.tick);
+  let active = openEpisode(seed, victim, world.tick, true);
   const episodes: RespawnPolicyEpisode[] = [];
   const respawnOnlyFragTimesSec: number[] = [];
   let previousRespawnT = victim.respawnT;
@@ -205,7 +208,7 @@ export function runRespawnPolicySeed(seed: number): RespawnPolicySeedReport {
     const elapsedSec = (world.tick - liveStartTick) * DT;
 
     if (previousRespawnT > 0 && victim.respawnT === 0 && victim.hp > 0) {
-      active = openEpisode(seed, victim, world.tick);
+      active = openEpisode(seed, victim, world.tick, false);
     }
     previousRespawnT = victim.respawnT;
 
@@ -267,6 +270,7 @@ export function runRespawnPolicyReport(seedCount = 20): RespawnPolicyReport {
     runRespawnPolicySeed(0x5eed0000 + index)
   );
   const episodes = seeds.flatMap((seed) => seed.episodes);
+  const postRespawns = episodes.filter((episode) => !episode.isInitialSpawn);
   const firstDamage = episodes.flatMap((episode) =>
     episode.firstDamageSec === null ? [] : [episode.firstDamageSec]
   );
@@ -284,6 +288,7 @@ export function runRespawnPolicyReport(seedCount = 20): RespawnPolicyReport {
     aggregate: {
       seedCount,
       episodeCount: episodes.length,
+      postRespawnEpisodeCount: postRespawns.length,
       damagedEpisodeCount: firstDamage.length,
       deathEpisodeCount: deaths.length,
       spawnToFirstDamageP10Sec: percentile(firstDamage, 0.1),
