@@ -1971,6 +1971,8 @@ export class Game {
       tick: snap.tick,
       selfId: snap.selfId,
       respawnTicks: snap.self?.rsp ?? 0,
+      spawnGraceTicks: snap.self?.sgr ?? 0,
+      spawnShieldTicks: snap.self?.ssh ?? 0,
       nameOf: (id, isSelf) => this.arenaNameOf(id, isSelf),
     });
   }
@@ -8343,6 +8345,9 @@ export class Game {
     for (const r of remotes) {
       const sx = r.x - cam.x, sy = r.y - cam.y;
       const isArenaRespawning = this.isArena && r.hp <= 0;
+      if (!r.isAbsent && !isArenaRespawning) {
+        this.renderPvpSpawnProtection(sx, sy, r.spawnGraceT, r.spawnShieldT);
+      }
       // Identity still unresolved (no verified color claim yet): an explicit NEUTRAL
       // placeholder at the exact body/label geometry the real render uses, so the resolve
       // happens in place. Never a guessed color that pops to the real one later.
@@ -8361,7 +8366,17 @@ export class Game {
       // A network-absent teammate renders as an explicit ghost (their body is reserved for
       // the reconnect grace) — never mistakable for a live player or a corpse. A live one
       // blinks through its authoritative i-frames exactly like the local blob does.
-      const alpha = r.isAbsent ? 0.35 : r.isDown || isArenaRespawning ? 0.4 : isInvulnBlinkFrame(r.invuln, r.dashInvuln) ? 0.4 : 1;
+      const alpha = r.isAbsent
+        ? 0.35
+        : r.isDown || isArenaRespawning
+          ? 0.4
+          : r.spawnGraceT > 0
+            ? 0.62
+            : r.spawnShieldT > 0
+              ? 0.82
+              : isInvulnBlinkFrame(r.invuln, r.dashInvuln)
+                ? 0.4
+                : 1;
       ctx.globalAlpha = alpha;
       ctx.translate(sx + xf.ox, sy + xf.oy);
       ctx.rotate(xf.rot);
@@ -8533,6 +8548,28 @@ export class Game {
     ctx.textAlign = "left";
   }
 
+  private renderPvpSpawnProtection(sx: number, sy: number, graceTicks: number, shieldTicks: number): void {
+    if (!this.isArena || shieldTicks <= 0) return;
+    const isGrace = graceTicks > 0;
+    const pulse = 0.78 + 0.12 * Math.sin(this.animClock * (isGrace ? 8 : 5));
+    const radius = this.pr + (isGrace ? 10 : 7);
+    const { ctx } = this;
+    ctx.save();
+    ctx.globalAlpha = pulse;
+    ctx.strokeStyle = isGrace ? "#7fe9ff" : "#ffd27a";
+    ctx.lineWidth = isGrace ? 3 : 2;
+    ctx.setLineDash(isGrace ? [5, 3] : []);
+    ctx.beginPath();
+    ctx.arc(sx, sy, radius, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.globalAlpha = isGrace ? 0.16 : 0.09;
+    ctx.fillStyle = isGrace ? "#7fe9ff" : "#ffd27a";
+    ctx.beginPath();
+    ctx.arc(sx, sy, radius - 2, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }
+
   private renderPlayer() {
     const { ctx, renderCam: cam } = this;
     const isArenaRespawning = this.isArenaRespawning();
@@ -8541,6 +8578,9 @@ export class Game {
     const ipx = this.renderPrevX + (this.px - this.renderPrevX) * a;
     const ipy = this.renderPrevY + (this.py - this.renderPrevY) * a;
     const psx = ipx - cam.x, psy = ipy - cam.y;
+    if (!isArenaRespawning && !this.isDown) {
+      this.renderPvpSpawnProtection(psx, psy, this.p.spawnGraceT, this.p.spawnShieldT);
+    }
     // GUNNER OVERHEAT (Wave 2): a building heat glow on the body as Momentum ramps, FLARING on the
     // boil-over burst — the visible "charge" the HUD pip row mirrors. Local read off authoritative
     // state (passiveState stacks + overheatT window); drawn under the body.
@@ -8557,6 +8597,8 @@ export class Game {
     let alpha = 1;
     if (isArenaRespawning) alpha = 0.25;
     else if (this.isDown) alpha = 0.4;
+    else if (this.p.spawnGraceT > 0) alpha = 0.62;
+    else if (this.p.spawnShieldT > 0) alpha = 0.82;
     else if (isInvulnBlinkFrame(this.invuln, this.p.dashInvuln)) alpha = 0.4;
     const clip: SheetClip = this.playerAnim.move > 0.5 ? "walk" : "idle";
     const xf = characterXform(this.playerAnim, CHARACTER_STYLE);

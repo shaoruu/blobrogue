@@ -4,7 +4,7 @@
 //   - DAMAGE TARGETING: an owned round/swing hits a NON-OWNER foe (co-op passes friendly through);
 //     every hit routes through the ONE damagePlayer funnel with `by` attribution.
 //   - NO AI / ARENA: the symmetric buildPvpArena() (fair, point-symmetric, spread spawns).
-//   - SPAWNS: id-sorted spread placement + break-on-fire spawn i-frames.
+//   - SPAWNS: id-sorted spread placement + two-stage authoritative spawn protection.
 //   - MATCH: the tick-based FRAG-LIMIT RESPAWN state machine (lobby->countdown->live->over),
 //     deterministic + reconnect-stable winner, respawn (never elimination).
 // Plus the balancer numbers (fixed 100 HP, global 1.78x + per-weapon outliers, 35% per-hit cap,
@@ -22,8 +22,9 @@ import {
   pvpRespawnDelayTicks, pvpCountdownTicks, pvpEnvKillCreditWindowTicks, pvpChainWindowTicks,
   pvpDraftEveryTicks, pvpDraftSeed, pvpBlessingBlacklist, pvpComebackTierBump,
   pvpPitEdgeDistance, pvpNearestPitEdgeDistance, pvpSingleDashDistance, pvpRespawnIndex,
-  isPvpPitWarningTile,
+  isPvpPitWarningTile, pvpSpawnHardGraceTicks, pvpSpawnShieldTicks,
 } from "../src/sim/pvp.js";
+import type { PvpRespawnCandidate } from "../src/sim/pvp.js";
 import type { Vec2 } from "../src/sim/types.js";
 import { WEAPONS } from "../src/sim/weapons.js";
 import { ULT } from "../src/sim/kits.js";
@@ -64,6 +65,7 @@ function pvpWorld(seed: number, ids: string[]): WorldState {
 function advanceToLive(w: WorldState, inputs: Map<string, InputCmd> = new Map()): void {
   let guard = 0;
   while (w.match !== null && w.match.phase !== "live" && guard++ < 5000) stepWorld(w, inputs, DT);
+  for (const player of w.players.values()) clearPvpProtection(player);
 }
 
 function stepN(w: WorldState, n: number, inputs: Map<string, InputCmd>): void {
@@ -81,11 +83,17 @@ function snapOf(w: WorldState, selfPid: string): Extract<ServerMsg, { t: "snap" 
   return buildSnapshot(w, selfPid, 0, [], 0, true, { worldId: "arena-1", sseq: 1 }) as Extract<ServerMsg, { t: "snap" }>;
 }
 
+function clearPvpProtection(player: PlayerSim): void {
+  player.invuln = 0;
+  player.spawnGraceT = 0;
+  player.spawnShieldT = 0;
+}
+
 // Drop two players next to each other on a CLEAR horizontal lane of the 19x19 arena (row 4 has
 // no cover props), protection cleared, `a` facing `b` (straight right). Returns the aim angle.
 function faceOff(a: PlayerSim, b: PlayerSim, gap: number): number {
-  a.x = 300; a.y = 216; a.invuln = 0; // tile (6,4)
-  b.x = 300 + gap; b.y = 216; b.invuln = 0;
+  a.x = 300; a.y = 216; clearPvpProtection(a); // tile (6,4)
+  b.x = 300 + gap; b.y = 216; clearPvpProtection(b);
   return 0;
 }
 
@@ -114,7 +122,8 @@ section("damage model (balancer numbers)");
   check("global dmgMult = 1.78", PVP.dmgMult === 1.78);
   check("per-hit cap = 35% of maxHp = 35", pvpPerHitCap() === 35);
   check("ults disabled flag", PVP.ultsEnabled === false);
-  check("spawn iframe = 2.0s", PVP.spawnIframeSec === 2.0);
+  check("spawn hard grace = 1.25s", PVP.spawnHardGraceSec === 1.25 && pvpSpawnHardGraceTicks() === 25);
+  check("spawn shield = 3.0s", PVP.spawnShieldSec === 3.0 && pvpSpawnShieldTicks() === 60);
   check("player knockback constants are exact", PVP.kbScalar === 1.0 && PVP.kbMaxPerHit === 180 && PVP.kbSelfDuringIframe === 0);
   check("pit guardrail constants are exact", PVP.pitEdgeClearance === 200 && PVP.pitWarningBandTiles === 1);
   check("environmental credit window = 2.0s", PVP.envKillCreditWindowSec === 2.0);
@@ -461,23 +470,57 @@ section("SPAWNS: symmetric 19x19 arena + pits + spread + break-on-fire protectio
   }
   check("cover is small + flankable (no cluster > 2 props to hide behind)", maxCluster <= 2, `maxCluster=${maxCluster}`);
 
-  // Break-on-fire: a respawn-protected player who fires drops protection immediately.
+  // Hard grace preserves control but suppresses every outgoing attack before entity creation.
   const w = pvpWorld(5, ["p1", "p2"]);
   advanceToLive(w);
   const p1 = w.players.get("p1")!;
-  p1.invuln = PVP.spawnIframeSec;
+  p1.x = 300;
+  p1.y = 216;
+  p1.spawnGraceT = pvpSpawnHardGraceTicks();
+  p1.spawnShieldT = pvpSpawnShieldTicks();
+  const protectedStartX = p1.x;
+  const protectedShotSeq = p1.shotSeq;
+  const graceEvents = stepCollect(
+    w,
+    pvpSpawnHardGraceTicks(),
+    new Map([["p1", inp({ moveX: 1, aim: Math.PI / 2, firing: true, dash: true })]]),
+  );
+  check("hard grace grants move, aim, and dash control",
+    p1.x > protectedStartX && p1.aimAngle === Math.PI / 2
+    && graceEvents.some((event) => event.t === "dashStart"));
+  check("hard grace suppresses bullets, effects, melee, and shot events",
+    p1.shotSeq === protectedShotSeq
+    && w.bullets.every((bullet) => bullet.owner !== "p1")
+    && w.effects.every((effect) => effect.owner !== "p1")
+    && !graceEvents.some((event) =>
+      event.t === "shot" || event.t === "wirePlanted" || event.t === "haloFlare"
+      || event.t === "sentryPlaced" || event.t === "tetherLatch"
+    ));
+  check("hard grace lasts exactly 25 authoritative ticks", p1.spawnGraceT === 0 && p1.spawnShieldT === 35);
+  const legalAttack = stepCollect(w, 1, new Map([["p1", inp({ firing: true, aim: 0 })]]));
+  check("the first legal attack after grace spawns and breaks the remaining shield",
+    p1.spawnShieldT === 0 && legalAttack.some((event) => event.t === "shot"));
   stepN(w, 1, new Map([["p1", inp({ firing: true, aim: 0 })]]));
-  check("first outgoing attack breaks spawn protection", p1.invuln === 0);
+  check("the broken shield stays broken", p1.spawnShieldT === 0);
 
-  // Spawn protection blocks incoming damage (no instant re-death).
+  // Spawn protection blocks incoming damage and knockback, then expires without extension.
   const w2 = pvpWorld(6, ["p1", "p2"]);
   advanceToLive(w2);
   const s2 = w2.players.get("p1")!; const v2 = w2.players.get("p2")!;
   const aim2 = faceOff(s2, v2, 60);
-  v2.invuln = PVP.spawnIframeSec; // victim freshly (re)spawned
+  v2.spawnGraceT = pvpSpawnHardGraceTicks();
+  v2.spawnShieldT = pvpSpawnShieldTicks();
   s2.weapon = "pistol"; s2.ownedWeapons = ["pistol"];
-  stepN(w2, 20, new Map([["p1", inp({ firing: true, aim: aim2 })]]));
-  check("spawn i-frames prevent instant re-death", v2.hp === PVP.maxHp, `hp=${v2.hp}`);
+  const protectedX = v2.x;
+  stepN(w2, pvpSpawnShieldTicks() - 1, new Map([["p1", inp({ firing: true, aim: aim2 })]]));
+  check("incoming attacks deal zero damage and knockback through tick 59",
+    v2.hp === PVP.maxHp && v2.x === protectedX && v2.spawnShieldT === 1,
+    `hp=${v2.hp} shield=${v2.spawnShieldT}`);
+  stepN(w2, 1, new Map([["p1", inp({ firing: true, aim: aim2 })]]));
+  check("holding fire protects until the exact 3.0s expiry without damage extension",
+    v2.hp === PVP.maxHp && v2.spawnShieldT === 0);
+  stepN(w2, 8, new Map([["p1", inp({ firing: true, aim: aim2 })]]));
+  check("damage becomes legal after shield expiry", v2.hp < PVP.maxHp, `hp=${v2.hp}`);
 
   // farthestSpawnIndex is deterministic and avoids an occupied spawn.
   const occupied = [spawns[0]];
@@ -485,7 +528,23 @@ section("SPAWNS: symmetric 19x19 arena + pits + spread + break-on-fire protectio
   check("respawn picks a spawn away from occupants", idx !== 0);
   const safestPitDistance = Math.max(...spawns.map((spawn) => pvpNearestPitEdgeDistance(spawn, pits)));
   const pitWeightedStart = farthestSpawnIndex(spawns, [], pits);
-  const pitWeightedRespawn = pvpRespawnIndex(spawns, [], pits);
+  const pitCandidates: PvpRespawnCandidate[] = spawns.map((spawn, index) => {
+    const pitDistance = pvpNearestPitEdgeDistance(spawn, pits);
+    return {
+      index,
+      minOpponentDistance: 0,
+      pitDistance,
+      losThreatCount: 0,
+      isAimedAt: false,
+      incomingThreatEtaSec: null,
+      predictedIncomingDamage: 0,
+      isCoveredFromNearest: false,
+      isInwardExitWalkable: true,
+      isCamped: false,
+      isPitEligible: pitDistance > pvpSingleDashDistance(),
+    };
+  });
+  const pitWeightedRespawn = pvpRespawnIndex(pitCandidates);
   check("opening and respawn selection weight equally open choices away from pits",
     pvpNearestPitEdgeDistance(spawns[pitWeightedStart], pits) === safestPitDistance
     && pvpNearestPitEdgeDistance(spawns[pitWeightedRespawn], pits) === safestPitDistance);
@@ -541,7 +600,7 @@ section("SPAWNS: symmetric 19x19 arena + pits + spread + break-on-fire protectio
 }
 
 // ---------------------------------------------------------------------------------------------
-section("PLAYER KNOCKBACK: weapon impulse, hard clamp, and iframe immunity");
+section("PLAYER KNOCKBACK: weapon impulse, hard clamp, and spawn-shield immunity");
 {
   const w = pvpWorld(60, ["p1", "p2"]);
   advanceToLive(w);
@@ -633,11 +692,12 @@ section("PLAYER KNOCKBACK: weapon impulse, hard clamp, and iframe immunity");
   const protectedAim = faceOff(protectedShooter, protectedVictim, 60);
   protectedShooter.weapon = "railgun";
   protectedShooter.ownedWeapons = ["railgun"];
-  protectedVictim.invuln = PVP.spawnIframeSec;
+  protectedVictim.spawnGraceT = pvpSpawnHardGraceTicks();
+  protectedVictim.spawnShieldT = pvpSpawnShieldTicks();
   const protectedX = protectedVictim.x;
   const protectedY = protectedVictim.y;
   stepN(protectedWorld, 12, new Map([["p1", inp({ firing: true, aim: protectedAim })]]));
-  check("spawn-iframe player takes zero knockback",
+  check("spawn-shielded player takes zero knockback",
     protectedVictim.x === protectedX && protectedVictim.y === protectedY);
 }
 
@@ -681,7 +741,7 @@ section("PIT WARNING BAND: fastest drafted movement can dash clear");
 }
 
 // ---------------------------------------------------------------------------------------------
-section("LETHAL PITS: ring-out, bounded credit, and iframe safety");
+section("LETHAL PITS: ring-out, bounded credit, and spawn-shield safety");
 {
   const pit = buildPvpArena().pits[0];
 
@@ -776,11 +836,12 @@ section("LETHAL PITS: ring-out, bounded credit, and iframe safety");
   const protectedPlayer = protectedWorld.players.get("p2")!;
   protectedPlayer.x = pit.x;
   protectedPlayer.y = pit.y;
-  protectedPlayer.invuln = PVP.spawnIframeSec;
+  protectedPlayer.spawnGraceT = pvpSpawnHardGraceTicks();
+  protectedPlayer.spawnShieldT = pvpSpawnShieldTicks();
   stepN(protectedWorld, 1, new Map());
-  check("an iframe player standing over a pit is not spawn-locked",
+  check("a spawn-shielded player standing over a pit is not spawn-locked",
     protectedPlayer.hp === PVP.maxHp && protectedPlayer.respawnT === 0);
-  protectedPlayer.invuln = 0;
+  clearPvpProtection(protectedPlayer);
   const ringEvents = stepCollect(protectedWorld, 1, new Map());
   const walkedIn = ringEvents.find((event) => event.t === "pvpRingOut");
   check("the same pit kills immediately once protection ends",
@@ -902,7 +963,8 @@ section("frag-limit RESPAWN (death schedules a respawn, never elimination)");
   const respawnCd = victim.respawnT;
   stepN(w, respawnCd + 2, new Map()); // stop firing; let the respawn resolve
   check("the player respawns at full HP after the delay", victim.hp === PVP.maxHp && victim.respawnT === 0);
-  check("respawn arms fresh spawn protection", victim.invuln > 0);
+  check("respawn arms fresh two-stage spawn protection",
+    victim.spawnGraceT > 0 && victim.spawnShieldT > victim.spawnGraceT);
   check("respawn delay matches the named constant", Math.abs(respawnCd - pvpRespawnDelayTicks()) <= 1);
 }
 
@@ -1017,7 +1079,7 @@ section("DETERMINISM: identical inputs -> byte-identical, and reconnect-stable s
     const ids = [...w.players.keys()].sort();
     const parts = ids.map((id) => {
       const p = w.players.get(id)!;
-      return `${id}:${p.x.toFixed(3)},${p.y.toFixed(3)},${p.hp.toFixed(3)},${p.respawnT},${p.invuln.toFixed(3)}#${w.match!.scores.get(id) ?? 0}`;
+      return `${id}:${p.x.toFixed(3)},${p.y.toFixed(3)},${p.hp.toFixed(3)},${p.respawnT},${p.spawnGraceT},${p.spawnShieldT},${p.pvpRecentSpawnIndices.join(".")}#${w.match!.scores.get(id) ?? 0}`;
     });
     return `t${w.tick}|${w.match!.phase}|${w.match!.winner}|${parts.join("|")}`;
   }
@@ -1162,7 +1224,7 @@ section("CAN-DAMAGE COMPLETENESS: AoE / chain / homing / deployables all hit foe
 }
 
 // ---------------------------------------------------------------------------------------------
-section("DETERMINISM EDGE-CASES: self-immune, same-tick order-stable, no shoot-from-iframe");
+section("DETERMINISM EDGE-CASES: self-immune, same-tick order-stable, no shoot-from-shield");
 {
   // SELF-IMMUNE: a player's OWN AoE deals 0 to themselves (decided once in canDamage), but the
   // same blast still hits a foe standing in it — proving the rule is self-scoped, not inert.
@@ -1199,35 +1261,46 @@ section("DETERMINISM EDGE-CASES: self-immune, same-tick order-stable, no shoot-f
     check("same-tick attribution is map/add-order independent (reconnect-stable)", forward === reversed, `forward=${forward} reversed=${reversed}`);
   }
 
-  // NO SHOOT-FROM-IFRAME: spawn protection blocks INCOMING fire while active, then drops the
-  // instant the protected player fires — so they can never peek-shoot from invuln.
+  // NO SHOOT-FROM-SHIELD: grace suppresses the trigger; the first legal shot drops the shield.
   {
     const w = pvpWorld(52, ["p1", "p2"]);
     advanceToLive(w);
     const s = w.players.get("p1")!; const foe = w.players.get("p2")!;
     s.x = 300; s.y = 216; s.weapon = "pistol"; s.ownedWeapons = ["pistol"];
-    s.invuln = PVP.spawnIframeSec; // freshly respawned, protected
-    foe.x = 360; foe.y = 216; foe.invuln = 0; foe.weapon = "pistol"; foe.ownedWeapons = ["pistol"];
+    s.spawnGraceT = pvpSpawnHardGraceTicks();
+    s.spawnShieldT = pvpSpawnShieldTicks();
+    foe.x = 360; foe.y = 216; clearPvpProtection(foe); foe.weapon = "pistol"; foe.ownedWeapons = ["pistol"];
     stepN(w, 6, new Map([["p2", inp({ firing: true, aim: Math.PI })]])); // foe fires; s idle + protected
-    check("iframed player takes no incoming damage while protected", s.hp === PVP.maxHp && s.invuln > 0, `hp=${s.hp} inv=${s.invuln.toFixed(2)}`);
+    check("spawn-shielded player takes no incoming damage", s.hp === PVP.maxHp && s.spawnShieldT > 0,
+      `hp=${s.hp} shield=${s.spawnShieldT}`);
+    const shotSeq = s.shotSeq;
     stepN(w, 1, new Map([["p1", inp({ firing: true, aim: 0 })], ["p2", inp({ firing: true, aim: Math.PI })]]));
-    check("firing drops the iframe the instant the shot goes out", s.invuln === 0);
+    check("firing during hard grace is suppressed without breaking shield",
+      s.shotSeq === shotSeq && s.spawnShieldT > 0);
+    stepN(w, s.spawnGraceT, new Map([["p2", inp({ firing: true, aim: Math.PI })]]));
+    stepN(w, 1, new Map([["p1", inp({ firing: true, aim: 0 })], ["p2", inp({ firing: true, aim: Math.PI })]]));
+    check("the first legal shot drops the shield on its spawn tick",
+      s.shotSeq === shotSeq + 1 && s.spawnShieldT === 0);
     const before = s.hp;
     stepN(w, 8, new Map([["p2", inp({ firing: true, aim: Math.PI })]]));
-    check("after firing, the player is immediately vulnerable (no shoot-from-invuln)", s.hp < before, `hp=${s.hp}`);
+    check("after firing, the player is vulnerable (no shoot-from-invuln)", s.hp < before, `hp=${s.hp}`);
   }
 }
 
 // ---------------------------------------------------------------------------------------------
-section("P2 WIRE: protocol v29, match block + team + respawn round-trip, reliable events");
+section("P2 WIRE: protocol v30, match block + spawn protection + reliable events");
 {
-  check("PROTOCOL_VERSION bumped to 29", PROTOCOL_VERSION === 29);
+  check("PROTOCOL_VERSION bumped to 30", PROTOCOL_VERSION === 30);
 
   // A pvp snapshot round-trips the match block, per-player team, and the local respawn field.
   const w = pvpWorld(30, ["p1", "p2"]);
   advanceToLive(w);
   w.match!.scores.set("p1", 4);
   w.match!.scores.set("p2", 2);
+  w.players.get("p1")!.spawnGraceT = 12;
+  w.players.get("p1")!.spawnShieldT = 42;
+  w.players.get("p2")!.spawnGraceT = 7;
+  w.players.get("p2")!.spawnShieldT = 31;
   const raw = jsonCodec.encodeServer(snapOf(w, "p1"));
   const dec = jsonCodec.decodeServer(raw);
   if (dec.t !== "snap") { check("snapshot decodes as a snap", false); }
@@ -1240,6 +1313,11 @@ section("P2 WIRE: protocol v29, match block + team + respawn round-trip, reliabl
     check("per-player alive rides the wire", s1?.a === true);
     check("other player's FFA team rides PlayerWire.tm", dec.players.find((p) => p.id === "p2")?.tm === 0);
     check("local respawn countdown rides SelfWire.rsp", dec.self !== null && dec.self.rsp === 0);
+    check("local authoritative grace/shield ticks ride SelfWire",
+      dec.self?.sgr === 12 && dec.self.ssh === 42);
+    const remote = dec.players.find((p) => p.id === "p2");
+    check("remote authoritative grace/shield ticks ride PlayerWire",
+      remote?.sgr === 7 && remote.ssh === 31);
   }
 
   // A co-op snapshot carries a null match block (mode selects meaning; no leak).

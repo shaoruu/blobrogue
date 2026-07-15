@@ -18,6 +18,7 @@ export interface ArenaMatchHudState {
   selfFrags: number;
   isSelfWinner: boolean | null;
   respawnSeconds: number;
+  spawnProtection: "grace" | "shield" | null;
 }
 
 export interface ArenaMatchHudSource {
@@ -25,13 +26,15 @@ export interface ArenaMatchHudSource {
   tick: number;
   selfId: PlayerId | null;
   respawnTicks: number;
+  spawnGraceTicks: number;
+  spawnShieldTicks: number;
   nameOf: (id: PlayerId, isSelf: boolean) => string;
 }
 
 export interface ArenaCenterCopy {
   title: string;
   detail: string | null;
-  tone: "countdown" | "victory" | "defeat" | "result" | "respawn";
+  tone: "countdown" | "victory" | "defeat" | "result" | "respawn" | "spawn-safe" | "spawn-shield";
 }
 
 export interface ArenaHpView {
@@ -77,6 +80,13 @@ export function buildArenaMatchHud(source: ArenaMatchHudSource): ArenaMatchHudSt
     respawnSeconds: source.match.ph === "live"
       ? Math.max(0, Math.ceil(source.respawnTicks * FIXED_DT))
       : 0,
+    spawnProtection: source.match.ph !== "live"
+      ? null
+      : source.spawnGraceTicks > 0
+        ? "grace"
+        : source.spawnShieldTicks > 0
+          ? "shield"
+          : null,
   };
 }
 
@@ -113,6 +123,20 @@ export function arenaCenterCopy(match: ArenaMatchHudState | null): ArenaCenterCo
       title: "YOU WERE FRAGGED",
       detail: `RESPAWNING IN ${match.respawnSeconds}`,
       tone: "respawn",
+    };
+  }
+  if (match.spawnProtection === "grace") {
+    return {
+      title: "SPAWN SAFE",
+      detail: "MOVE / AIM / DASH",
+      tone: "spawn-safe",
+    };
+  }
+  if (match.spawnProtection === "shield") {
+    return {
+      title: "SPAWN SHIELD",
+      detail: null,
+      tone: "spawn-shield",
     };
   }
   return null;

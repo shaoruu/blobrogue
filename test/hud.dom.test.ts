@@ -494,6 +494,8 @@ function arenaHudDomTests(): void {
     tick: 100,
     selfId: "p1",
     respawnTicks: 0,
+    spawnGraceTicks: 0,
+    spawnShieldTicks: 0,
     nameOf: (id, isSelf) => isSelf ? "YOU" : id === "p2" ? "RIVAL" : id,
   });
   settings.setHpDisplay("hearts");
@@ -548,6 +550,8 @@ function arenaHudDomTests(): void {
     tick: 100,
     selfId: "p1",
     respawnTicks: 0,
+    spawnGraceTicks: 0,
+    spawnShieldTicks: 0,
     nameOf: () => "YOU",
   });
   hud.update(mkState({ hp: 100, maxHp: 100, isArena: true, arenaMatch: countdown }));
@@ -559,16 +563,44 @@ function arenaHudDomTests(): void {
     tick: 100,
     selfId: "p1",
     respawnTicks: 41,
+    spawnGraceTicks: 0,
+    spawnShieldTicks: 0,
     nameOf: () => "YOU",
   });
   hud.update(mkState({ hp: 0, maxHp: 100, isArena: true, arenaMatch: respawning }));
   check("respawn state renders the authoritative self.rsp countdown",
     center.textContent === "YOU WERE FRAGGEDRESPAWNING IN 3");
+  const grace = buildArenaMatchHud({
+    match: { ph: "live", end: 6080, sc: [{ id: "p1", f: 3, a: true }], win: null },
+    tick: 100,
+    selfId: "p1",
+    respawnTicks: 0,
+    spawnGraceTicks: 8,
+    spawnShieldTicks: 35,
+    nameOf: () => "YOU",
+  });
+  hud.update(mkState({ hp: 100, maxHp: 100, isArena: true, arenaMatch: grace }));
+  check("hard grace renders in the same fixed center slot with movement instructions",
+    center.classList.contains("tone-spawn-safe") && center.textContent === "SPAWN SAFEMOVE / AIM / DASH");
+  const shield = buildArenaMatchHud({
+    match: { ph: "live", end: 6080, sc: [{ id: "p1", f: 3, a: true }], win: null },
+    tick: 100,
+    selfId: "p1",
+    respawnTicks: 0,
+    spawnGraceTicks: 0,
+    spawnShieldTicks: 20,
+    nameOf: () => "YOU",
+  });
+  hud.update(mkState({ hp: 100, maxHp: 100, isArena: true, arenaMatch: shield }));
+  check("remaining shield renders a distinct concise cue",
+    center.classList.contains("tone-spawn-shield") && center.textContent === "SPAWN SHIELD");
   const result = buildArenaMatchHud({
     match: { ph: "over", end: 0, sc: [{ id: "p1", f: 8, a: true }], win: "p1" },
     tick: 100,
     selfId: "p1",
     respawnTicks: 0,
+    spawnGraceTicks: 0,
+    spawnShieldTicks: 0,
     nameOf: () => "YOU",
   });
   hud.update(mkState({ hp: 100, maxHp: 100, isArena: true, arenaMatch: result }));

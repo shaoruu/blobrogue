@@ -283,7 +283,9 @@ export const FIXED_DT = 1 / TICK_HZ; // 50ms authoritative step
 // block (phase / phase-end tick / per-player frags + alive / winner), and the reliable
 // pvpKill / pvpMatchOver events. All inert in co-op (team 0, respawn 0, match null).
 // v29: PVP Wave 1 presentation events — ring-out, chain-frag, and sudden-death crescendo.
-export const PROTOCOL_VERSION = 29;
+// v30: distinct authoritative PvP spawn-grace + spawn-shield tick windows on SelfWire and
+// PlayerWire. The split drives exact attack suppression and unambiguous local/remote safety cues.
+export const PROTOCOL_VERSION = 30;
 
 // How long the server reserves a disconnected player's body (their seat) before the
 // authoritative leave lifecycle applies. 90s per the studio balance gate's reconnect
@@ -359,6 +361,8 @@ export interface SelfWire {
   uiv: number;                 // Phase invuln seconds (<= 1.2s)
   pst: number;                 // per-kit passive channel (momentum / lifebloom / hardened)
   rsp: number;                 // pvp respawn countdown in ticks (0 = alive); gates local prediction
+  sgr: number;                 // pvp hard-grace ticks (attacks suppressed)
+  ssh: number;                 // pvp spawn-shield ticks (breaks on first legal attack)
 }
 
 // Another player as seen by this client (rendered via interpolation, never predicted).
@@ -385,6 +389,8 @@ export interface PlayerWire {
   ddx: number; ddy: number;
   dnv: number;
   inv: number;
+  sgr: number;
+  ssh: number;
   rv: number;   // authoritative revive-channel progress on a DOWNED body (seconds)
   out: boolean; // past the floor's down limit — teammates stop offering the revive
   bcl: boolean; // has claimed this floor's boss weapon choice (gate §4 personal claim)
@@ -1120,6 +1126,8 @@ function validateSelfWire(v: unknown): SelfWire {
     uiv: num(o, "uiv", 0, 1e4),
     pst: num(o, "pst", 0, 1e4),
     rsp: intOf(o, "rsp", 0, 1e6),
+    sgr: intOf(o, "sgr", 0, 1e6),
+    ssh: intOf(o, "ssh", 0, 1e6),
   };
 }
 
@@ -1148,6 +1156,8 @@ function validatePlayerWire(v: unknown): PlayerWire {
     ddx: num(o, "ddx", -8, 8), ddy: num(o, "ddy", -8, 8),
     dnv: num(o, "dnv", 0, 1e4),
     inv: num(o, "inv", 0, 1e4),
+    sgr: intOf(o, "sgr", 0, 1e6),
+    ssh: intOf(o, "ssh", 0, 1e6),
     rv: num(o, "rv", 0, 1e4),
     out: boolOf(o, "out"),
     bcl: boolOf(o, "bcl"),
@@ -1525,6 +1535,7 @@ export function selfWireFromSnapshot(s: AuthoritativePlayerSnapshot): SelfWire {
     kit: s.kitId, uc: s.ultCharge, ura: s.ultReadyAtTick, ovt: s.overdriveT,
     ovh: s.overheatT, osh: s.overshield, pra: s.pulseReadyAtTick, phs: s.phaseSpeed,
     uiv: s.ultInvuln, pst: s.passiveState, rsp: s.respawnT,
+    sgr: s.spawnGraceT, ssh: s.spawnShieldT,
   };
 }
 
@@ -1541,6 +1552,7 @@ export function snapshotFromSelfWire(w: SelfWire): AuthoritativePlayerSnapshot {
     kitId: w.kit, ultCharge: w.uc, ultReadyAtTick: w.ura, overdriveT: w.ovt,
     overheatT: w.ovh, overshield: w.osh, pulseReadyAtTick: w.pra, phaseSpeed: w.phs,
     ultInvuln: w.uiv, passiveState: w.pst, respawnT: w.rsp,
+    spawnGraceT: w.sgr, spawnShieldT: w.ssh,
   };
 }
 
@@ -1576,6 +1588,7 @@ export function toPlayerWire(p: PlayerSim, identity?: PlayerIdentity): PlayerWir
   return {
     id: p.id, x: p.x, y: p.y, hp: p.hp, mhp: p.maxHp, fac: p.facing, aim: p.aimAngle, wpn: p.weapon, down: p.isDown,
     dti: p.dashTime, ddx: p.dashDx, ddy: p.dashDy, dnv: p.dashInvuln, inv: p.invuln,
+    sgr: p.spawnGraceT, ssh: p.spawnShieldT,
     rv: p.reviveProgress,
     out: isPlayerOut(p),
     bcl: p.hasClaimedBossChoice,

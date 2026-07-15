@@ -27,12 +27,23 @@ function section(name: string): void {
   process.stdout.write(`\n[${name}]\n`);
 }
 
-function build(match: MatchWire, args: { tick?: number; selfId?: string | null; respawnTicks?: number } = {}) {
+function build(
+  match: MatchWire,
+  args: {
+    tick?: number;
+    selfId?: string | null;
+    respawnTicks?: number;
+    spawnGraceTicks?: number;
+    spawnShieldTicks?: number;
+  } = {},
+) {
   return buildArenaMatchHud({
     match,
     tick: args.tick ?? 100,
     selfId: args.selfId === undefined ? "p2" : args.selfId,
     respawnTicks: args.respawnTicks ?? 0,
+    spawnGraceTicks: args.spawnGraceTicks ?? 0,
+    spawnShieldTicks: args.spawnShieldTicks ?? 0,
     nameOf: (id, isSelf) => isSelf ? "YOU" : `Player ${id}`,
   });
 }
@@ -82,6 +93,25 @@ section("countdown, result, and respawn states");
   check("respawn seconds come from authoritative self.rsp ticks", respawning.respawnSeconds === 3);
   check("respawn overlay names the state and countdown",
     center?.title === "YOU WERE FRAGGED" && center.detail === "RESPAWNING IN 3");
+
+  const grace = build(
+    { ph: "live", end: 6080, sc: SCORES, win: null },
+    { spawnGraceTicks: 8, spawnShieldTicks: 33 },
+  );
+  const shield = build(
+    { ph: "live", end: 6080, sc: SCORES, win: null },
+    { spawnGraceTicks: 0, spawnShieldTicks: 20 },
+  );
+  check("hard grace cue names available controls without implying a broken weapon",
+    arenaCenterCopy(grace)?.title === "SPAWN SAFE"
+    && arenaCenterCopy(grace)?.detail === "MOVE / AIM / DASH");
+  check("remaining protection has a distinct concise shield cue",
+    arenaCenterCopy(shield)?.title === "SPAWN SHIELD");
+  const broken = build(
+    { ph: "live", end: 6080, sc: SCORES, win: null },
+    { spawnGraceTicks: 0, spawnShieldTicks: 0 },
+  );
+  check("spawn cue disappears on authoritative break or expiry", arenaCenterCopy(broken) === null);
 }
 
 section("arena copy cannot fall back to dungeon exit chrome");

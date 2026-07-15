@@ -954,6 +954,8 @@ export class WSTransport implements Transport {
         dashDirY: p.ddy,
         invuln: p.inv,
         dashInvuln: p.dnv,
+        spawnGraceT: p.sgr,
+        spawnShieldT: p.ssh,
         aimAngle: pose ? pose.aimAngle : p.aim,
         shotSeq: 0,
         colorIndex: p.cl,

@@ -1,0 +1,389 @@
+import {
+  createWorld,
+  setPlayerAbsence,
+  spawnPlayerInWorld,
+  stepWorld,
+} from "../src/sim/world.js";
+import type { PlayerSim, WorldState } from "../src/sim/world.js";
+import {
+  PVP,
+  pvpRespawnBaseScore,
+  pvpRespawnIndex,
+} from "../src/sim/pvp.js";
+import type { PvpRespawnCandidate } from "../src/sim/pvp.js";
+import type { Bullet, Vec2, WeaponId, WireEffect } from "../src/sim/types.js";
+import type { InputCmd } from "../src/sim/input.js";
+
+const DT = 1 / 20;
+let passed = 0;
+let failed = 0;
+const failures: string[] = [];
+
+function check(name: string, isPassing: boolean, detail = ""): void {
+  if (isPassing) {
+    passed++;
+    process.stdout.write(`  PASS ${name}${detail ? ` — ${detail}` : ""}\n`);
+    return;
+  }
+  failed++;
+  failures.push(name + (detail ? ` — ${detail}` : ""));
+  process.stdout.write(`  FAIL ${name}${detail ? ` — ${detail}` : ""}\n`);
+}
+
+function section(name: string): void {
+  process.stdout.write(`\n[${name}]\n`);
+}
+
+function input(aim = 0): InputCmd {
+  return { seq: 0, moveX: 0, moveY: 0, aim, firing: false, dash: false };
+}
+
+function clearProtection(player: PlayerSim): void {
+  player.invuln = 0;
+  player.spawnGraceT = 0;
+  player.spawnShieldT = 0;
+}
+
+function liveWorld(seed: number, count: number): WorldState {
+  const world = createWorld(seed, 1, {
+    mode: "pvp",
+    isShared: true,
+    skipLocalPlayer: true,
+  });
+  for (let i = 0; i < count; i++) spawnPlayerInWorld(world, `p${i + 1}`);
+  let guard = 0;
+  while (world.match?.phase !== "live" && guard++ < 200) stepWorld(world, new Map(), DT);
+  for (const player of world.players.values()) clearProtection(player);
+  return world;
+}
+
+function currentInputs(world: WorldState): Map<string, InputCmd> {
+  return new Map([...world.players.values()].map((player) => [player.id, input(player.aimAngle)]));
+}
+
+function forceRespawn(world: WorldState, player: PlayerSim): number {
+  player.hp = 0;
+  player.respawnT = 1;
+  clearProtection(player);
+  stepWorld(world, currentInputs(world), DT);
+  const spawns = world.match?.spawns ?? [];
+  return spawns.findIndex((spawn) => spawn.x === player.x && spawn.y === player.y);
+}
+
+function candidate(index: number, score: number, over: Partial<PvpRespawnCandidate> = {}): PvpRespawnCandidate {
+  return {
+    index,
+    minOpponentDistance: score,
+    pitDistance: 0,
+    losThreatCount: 0,
+    isAimedAt: false,
+    incomingThreatEtaSec: null,
+    predictedIncomingDamage: 0,
+    isCoveredFromNearest: false,
+    isInwardExitWalkable: true,
+    isCamped: false,
+    isPitEligible: true,
+    ...over,
+  };
+}
+
+function setRespawnArena(world: WorldState, spawns: Vec2[]): void {
+  if (world.match === null) throw new Error("missing PvP match");
+  world.match.spawns = spawns;
+  world.match.pits = [];
+  world.bullets = [];
+  world.effects = [];
+}
+
+function addIncomingBullet(
+  world: WorldState,
+  owner: PlayerSim,
+  target: PlayerSim,
+  spawn: Vec2,
+  etaSec: number,
+  weapon: WeaponId,
+): void {
+  const speed = 400;
+  const radius = 4;
+  const bullet: Bullet = {
+    x: spawn.x,
+    y: spawn.y - speed * (etaSec + DT) - target.pr - radius,
+    vx: 0,
+    vy: speed,
+    radius,
+    life: 4,
+    friendly: true,
+    owner: owner.id,
+    damage: 5,
+    color: "#fff",
+    pierce: 0,
+    hitList: null,
+    isCrit: false,
+    fx: weapon,
+  };
+  world.bullets.push(bullet);
+}
+
+section("pure scorer: exact penalties, anti-camp memory, and damage fallback");
+{
+  const scored = candidate(0, 500, {
+    pitDistance: 200,
+    losThreatCount: 2,
+    isAimedAt: true,
+    incomingThreatEtaSec: 1.5,
+    isCoveredFromNearest: true,
+  });
+  check("score follows the named formula exactly",
+    pvpRespawnBaseScore(scored)
+      === 500 + 0.5 * 200 + PVP.respawnCoverBonus
+      - PVP.respawnLosPenaltyCap - PVP.respawnAimPenalty - PVP.respawnProjectileNearPenalty);
+
+  check("a camped candidate is ineligible when a non-camped candidate exists",
+    pvpRespawnIndex([
+      candidate(0, 1000, { isCamped: true }),
+      candidate(1, 0),
+    ]) === 1);
+  check("recent spawn receives the 400 penalty",
+    pvpRespawnIndex([candidate(0, 100), candidate(1, 0)], [0]) === 1);
+  check("recent penalty is waived only for an alternative more than 800 points worse",
+    pvpRespawnIndex([candidate(0, 901), candidate(1, 0)], [0]) === 0);
+  check("the same spawn cannot be selected a third time with two valid alternatives",
+    pvpRespawnIndex([candidate(0, 1000), candidate(1, 10), candidate(2, 0)], [0, 0]) === 1);
+
+  const fallback = pvpRespawnIndex([
+    candidate(0, 1000, { losThreatCount: 1, predictedIncomingDamage: 30 }),
+    candidate(1, 0, { incomingThreatEtaSec: 1, predictedIncomingDamage: 5 }),
+  ]);
+  check("all-threatened fallback minimizes predicted 1.5s incoming damage before score", fallback === 1);
+}
+
+section("actual walls and intact props provide cover; broken props do not");
+{
+  const spawns = [{ x: 300, y: 216 }, { x: 600, y: 216 }];
+  const wallWorld = liveWorld(100, 2);
+  setRespawnArena(wallWorld, spawns);
+  const wallVictim = wallWorld.players.get("p1")!;
+  const wallOpponent = wallWorld.players.get("p2")!;
+  wallOpponent.x = 300;
+  wallOpponent.y = 600;
+  wallWorld.dungeon.tiles[8 * wallWorld.dungeon.w + 6] = 1;
+  wallVictim.pvpRecentSpawnIndices = [];
+  check("an actual wall-blocked spawn beats the exposed farther spawn",
+    forceRespawn(wallWorld, wallVictim) === 0);
+
+  const propWorld = liveWorld(101, 2);
+  setRespawnArena(propWorld, spawns);
+  const propVictim = propWorld.players.get("p1")!;
+  const propOpponent = propWorld.players.get("p2")!;
+  propOpponent.x = 300;
+  propOpponent.y = 600;
+  propWorld.props = [{
+    id: 900,
+    kind: "crate",
+    x: 300,
+    y: 400,
+    radius: 15,
+    hp: 20,
+    dead: false,
+  }];
+  propVictim.pvpRecentSpawnIndices = [];
+  check("an intact prop blocks LOS and earns cover preference",
+    forceRespawn(propWorld, propVictim) === 0);
+
+  const brokenWorld = liveWorld(102, 2);
+  setRespawnArena(brokenWorld, spawns);
+  const brokenVictim = brokenWorld.players.get("p1")!;
+  const brokenOpponent = brokenWorld.players.get("p2")!;
+  brokenOpponent.x = 300;
+  brokenOpponent.y = 600;
+  brokenWorld.props = [{
+    id: 901,
+    kind: "crate",
+    x: 300,
+    y: 400,
+    radius: 15,
+    hp: 0,
+    dead: true,
+    breakT: 0,
+  }];
+  brokenVictim.pvpRecentSpawnIndices = [];
+  check("a broken prop no longer counts as LOS cover",
+    forceRespawn(brokenWorld, brokenVictim) === 1);
+}
+
+section("swept projectile ETA and shipped ranged/trap threats");
+{
+  const spawns = [{ x: 300, y: 216 }, { x: 600, y: 216 }];
+  for (const etaSec of [0.5, 1, 1.5, 2]) {
+    const world = liveWorld(200 + Math.round(etaSec * 10), 2);
+    setRespawnArena(world, spawns);
+    const victim = world.players.get("p1")!;
+    const owner = world.players.get("p2")!;
+    owner.x = 450;
+    owner.y = 600;
+    owner.aimAngle = Math.PI / 2;
+    victim.pvpRecentSpawnIndices = [];
+    addIncomingBullet(world, owner, victim, spawns[0], etaSec, "rapid");
+    check(`rapid round at ETA ${etaSec}s avoids its swept candidate`,
+      forceRespawn(world, victim) === 1);
+  }
+
+  const beamWorld = liveWorld(250, 2);
+  setRespawnArena(beamWorld, spawns);
+  const beamVictim = beamWorld.players.get("p1")!;
+  const beamOwner = beamWorld.players.get("p2")!;
+  beamOwner.x = 450;
+  beamOwner.y = 600;
+  addIncomingBullet(beamWorld, beamOwner, beamVictim, spawns[0], 1, "beam");
+  check("beam trajectory is included in incoming threat prediction",
+    forceRespawn(beamWorld, beamVictim) === 1);
+
+  const mortarWorld = liveWorld(251, 2);
+  setRespawnArena(mortarWorld, spawns);
+  const mortarVictim = mortarWorld.players.get("p1")!;
+  const mortarOwner = mortarWorld.players.get("p2")!;
+  mortarOwner.x = 450;
+  mortarOwner.y = 600;
+  const mortarSpeed = 300;
+  mortarWorld.bullets.push({
+    x: spawns[0].x,
+    y: spawns[0].y - mortarSpeed * (1 + DT),
+    vx: 0,
+    vy: mortarSpeed,
+    radius: 5,
+    life: 1 + DT,
+    friendly: true,
+    owner: mortarOwner.id,
+    damage: 9,
+    color: "#fff",
+    pierce: 0,
+    hitList: null,
+    isCrit: false,
+    fx: "mortar",
+    isLob: true,
+    blast: 90,
+  });
+  check("mortar landing ETA is included in predicted incoming damage",
+    forceRespawn(mortarWorld, mortarVictim) === 1);
+
+  const wireWorld = liveWorld(252, 2);
+  setRespawnArena(wireWorld, spawns);
+  const wireVictim = wireWorld.players.get("p1")!;
+  const wireOwner = wireWorld.players.get("p2")!;
+  wireOwner.x = 450;
+  wireOwner.y = 600;
+  const wire: WireEffect = {
+    id: 500,
+    kind: "wire",
+    owner: wireOwner.id,
+    fx: "snapwire",
+    x: spawns[0].x - 80,
+    y: spawns[0].y,
+    x2: spawns[0].x + 80,
+    y2: spawns[0].y,
+    width: 14,
+    arm: 0,
+    life: 10,
+    maxLife: 10,
+    damage: 9,
+  };
+  wireWorld.effects.push(wire);
+  check("an armed trap excludes its threatened spawn when a safe candidate exists",
+    forceRespawn(wireWorld, wireVictim) === 1);
+}
+
+section("absent, downed, and respawning bodies are not spawn threats");
+{
+  const world = liveWorld(300, 4);
+  const spawns = [{ x: 300, y: 216 }, { x: 600, y: 216 }];
+  setRespawnArena(world, spawns);
+  const victim = world.players.get("p1")!;
+  const absent = world.players.get("p2")!;
+  const downed = world.players.get("p3")!;
+  const respawning = world.players.get("p4")!;
+  for (const player of [absent, downed, respawning]) {
+    player.x = spawns[0].x;
+    player.y = spawns[0].y;
+    player.aimAngle = 0;
+  }
+  setPlayerAbsence(world, absent.id, true);
+  downed.isDown = true;
+  respawning.hp = 0;
+  respawning.respawnT = 20;
+  victim.pvpRecentSpawnIndices = [];
+  check("non-live bodies cannot camp, aim, or contribute LOS",
+    forceRespawn(world, victim) === 0);
+}
+
+section("2p/4p/6p cross-cover stress is deterministic and never starves");
+{
+  const run = (seed: number, count: number): number[] => {
+    const world = liveWorld(seed, count);
+    const target = world.players.get("p1")!;
+    const opponents = [...world.players.values()].filter((player) => player !== target);
+    const cross = [
+      { x: 456, y: 300 },
+      { x: 612, y: 456 },
+      { x: 456, y: 612 },
+      { x: 300, y: 456 },
+      { x: 552, y: 360 },
+    ];
+    opponents.forEach((player, index) => {
+      player.x = cross[index].x;
+      player.y = cross[index].y;
+      player.aimAngle = index * Math.PI / 2;
+      clearProtection(player);
+    });
+    target.pvpRecentSpawnIndices = [];
+    const sequence: number[] = [];
+    for (let i = 0; i < 16; i++) {
+      world.bullets = [];
+      world.effects = [];
+      sequence.push(forceRespawn(world, target));
+    }
+    return sequence;
+  };
+
+  for (const count of [2, 4, 6]) {
+    const a = run(400 + count, count);
+    const b = run(400 + count, count);
+    const isNeverTriple = a.every((index, i) =>
+      i < 2 || index !== a[i - 1] || index !== a[i - 2]
+    );
+    check(`${count}p sequence is replay deterministic`,
+      JSON.stringify(a) === JSON.stringify(b), a.join(","));
+    check(`${count}p sequence always selects a spawn without triple-lane starvation`,
+      a.every((index) => index >= 0) && isNeverTriple, a.join(","));
+  }
+}
+
+section("reconnect preserves protection and spawn memory exactly");
+{
+  const world = liveWorld(500, 2);
+  const player = world.players.get("p1")!;
+  player.respawnT = 17;
+  player.spawnGraceT = 13;
+  player.spawnShieldT = 43;
+  player.pvpRecentSpawnIndices = [2, 5];
+  const before = JSON.stringify({
+    respawnT: player.respawnT,
+    spawnGraceT: player.spawnGraceT,
+    spawnShieldT: player.spawnShieldT,
+    memory: player.pvpRecentSpawnIndices,
+  });
+  setPlayerAbsence(world, player.id, true);
+  setPlayerAbsence(world, player.id, false);
+  const after = JSON.stringify({
+    respawnT: player.respawnT,
+    spawnGraceT: player.spawnGraceT,
+    spawnShieldT: player.spawnShieldT,
+    memory: player.pvpRecentSpawnIndices,
+  });
+  check("reserved-seat reconnect neither resets nor extends respawn state", before === after);
+}
+
+process.stdout.write(`\n${failed === 0 ? "PASS" : "FAIL"} — ${passed} passed, ${failed} failed\n`);
+if (failed > 0) {
+  process.stdout.write(failures.map((failure) => `  - ${failure}`).join("\n") + "\n");
+  process.exit(1);
+}

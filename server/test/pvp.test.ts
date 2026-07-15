@@ -16,7 +16,7 @@
 // Run: npm run test:pvp (in server/)
 
 import { startTestServer, Bot, idle, waitUntil, sleep } from "../harness/lib.js";
-import { PVP } from "../../src/sim/pvp.js";
+import { PVP, pvpSpawnHardGraceTicks, pvpSpawnShieldTicks } from "../../src/sim/pvp.js";
 
 let passed = 0;
 let failed = 0;
@@ -52,6 +52,10 @@ async function main(): Promise<void> {
       const sa = a.transport.getLatestSnapshot()!;
       check("the wire carries a non-null match block", sa.match !== null);
       check("every player gets the FIXED 100 HP pool", sa.self !== null && sa.self.mhp === PVP.maxHp, `mhp=${sa.self?.mhp}`);
+      check("authoritative two-stage protection rides the local wire",
+        sa.self?.sgr === pvpSpawnHardGraceTicks() && sa.self.ssh === pvpSpawnShieldTicks());
+      check("authoritative two-stage protection rides observer wires",
+        sa.players.every((p) => p.sgr === pvpSpawnHardGraceTicks() && p.ssh === pvpSpawnShieldTicks()));
       check("FFA team rides PlayerWire.tm", sa.players.every((p) => p.tm === 0));
       check("the scoreboard lists both seats", (sa.match?.sc.length ?? 0) === 2);
 
@@ -85,6 +89,84 @@ async function main(): Promise<void> {
     }
   });
 
+  await test("real-socket hard grace preserves control while suppressing authoritative attacks", async () => {
+    const s = await startTestServer({ pvpPublicEnabled: true });
+    try {
+      const world = "pvp:room:SAFE";
+      const movingFire = () => ({
+        seq: 0,
+        moveX: 1,
+        moveY: 0,
+        aim: Math.PI / 2,
+        firing: true,
+        dash: true,
+      });
+      const actor = new Bot({
+        url: s.url,
+        secret: s.secret,
+        playerId: "safe",
+        world,
+        name: "safe",
+        colorIndex: 1,
+        script: movingFire,
+      });
+      const rival = new Bot({
+        url: s.url,
+        secret: s.secret,
+        playerId: "rival",
+        world,
+        name: "rival",
+        colorIndex: 2,
+        script: () => idle(),
+      });
+      actor.start();
+      rival.start();
+      await waitUntil(() => actor.transport.isReady() && rival.transport.isReady(), 4000);
+      const gw = s.server.getWorld(world)!;
+      await waitUntil(() => gw.state.match?.phase === "live", 6000);
+      const actorId = actor.transport.getSelfServerId()!;
+      const rivalId = rival.transport.getSelfServerId()!;
+      const player = gw.state.players.get(actorId)!;
+      const other = gw.state.players.get(rivalId)!;
+      player.x = 300;
+      player.y = 216;
+      player.fireCd = 0;
+      player.spawnGraceT = pvpSpawnHardGraceTicks();
+      player.spawnShieldT = pvpSpawnShieldTicks();
+      other.x = 700;
+      other.y = 700;
+      gw.state.bullets = gw.state.bullets.filter((bullet) => bullet.owner !== actorId);
+      gw.state.effects = gw.state.effects.filter((effect) => effect.owner !== actorId);
+      const startX = player.x;
+      const startShotSeq = player.shotSeq;
+
+      await sleep(800);
+      check("move, aim, and dash inputs change authoritative state during hard grace",
+        player.x > startX && player.aimAngle === Math.PI / 2 && player.dashCd > 0);
+      check("held attack creates zero authoritative bullets/effects/shots during hard grace",
+        player.shotSeq === startShotSeq
+        && gw.state.bullets.every((bullet) => bullet.owner !== actorId)
+        && gw.state.effects.every((effect) => effect.owner !== actorId));
+
+      const isFirstLegalAttack = await waitUntil(
+        () => player.spawnGraceT === 0 && player.shotSeq > startShotSeq,
+        2000,
+      );
+      check("the first legal post-grace attack fires and breaks shield", isFirstLegalAttack && player.spawnShieldT === 0);
+      const isWireUpdated = await waitUntil(
+        () => actor.transport.getLatestSnapshot()?.self?.sgr === 0
+          && actor.transport.getLatestSnapshot()?.self?.ssh === 0,
+        1000,
+      );
+      check("the authoritative break is visible on the client wire", isWireUpdated);
+
+      actor.stop();
+      rival.stop();
+    } finally {
+      await s.close();
+    }
+  });
+
   await test("adversarial E2E: two real sockets through damage -> exact-once pvpKill -> respawn -> match-over", async () => {
     const s = await startTestServer({ pvpPublicEnabled: true });
     try {
@@ -105,8 +187,9 @@ async function main(): Promise<void> {
       // Stage a point-blank duel on the authoritative world (the pure sim proves the mechanics;
       // this proves the server plumbs them end-to-end). Positions/weapons are server-owned.
       const sh = gw.state.players.get(shPid)!; const vic = gw.state.players.get(vicPid)!;
-      sh.x = 300; sh.y = 216; sh.invuln = 0; sh.weapon = "railgun"; sh.ownedWeapons = ["railgun"];
-      vic.x = 360; vic.y = 216; vic.invuln = 0;
+      sh.x = 300; sh.y = 216; sh.invuln = 0; sh.spawnGraceT = 0; sh.spawnShieldT = 0;
+      sh.weapon = "railgun"; sh.ownedWeapons = ["railgun"];
+      vic.x = 360; vic.y = 216; vic.invuln = 0; vic.spawnGraceT = 0; vic.spawnShieldT = 0;
 
       // 1) authoritative damage: the victim's HP falls on the SERVER and the same value rides the wire.
       const isHurt = await waitUntil(() => (gw.state.players.get(vicPid)?.hp ?? PVP.maxHp) < PVP.maxHp, 4000);

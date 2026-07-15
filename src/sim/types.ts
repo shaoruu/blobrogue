@@ -756,6 +756,8 @@ export interface RemotePlayer {
   dashDirY: number;
   invuln: number;
   dashInvuln: number;
+  spawnGraceT: number;
+  spawnShieldT: number;
   aimAngle: number;
   shotSeq: number;    // increments each time they fire, so we can flash a tracer
   // The player's AUTHORITATIVE identity color (verified ticket claim / presence row).

@@ -63,6 +63,8 @@ export interface AuthoritativePlayerSnapshot {
   // pvp respawn countdown (ticks; 0 = alive). Server-owned + reconciled so client prediction
   // gates movement/shooting on the local player's dead-awaiting-respawn state. Always 0 in co-op.
   respawnT: number;
+  spawnGraceT: number;
+  spawnShieldT: number;
 }
 
 type ServerOwnedField = keyof AuthoritativePlayerSnapshot;
@@ -107,6 +109,7 @@ type ClientOwnedField = "id" | "pr" | "aimAngle" | "shotSeq" | "rewindTicks" | "
 //              bookkeeping, off the wire.
 // - lastPvpHitBy/lastPvpHitTick: authoritative damage attribution bookkeeping.
 // - lastPvpKnockbackBy/lastPvpKnockbackTick: authoritative ring-out credit bookkeeping.
+// - pvpRecentSpawnIndices: authoritative anti-camp memory retained by the server seat.
 // - pvpDraft*: authoritative offer cadence, deterministic seed identity, and comeback weighting.
 //              The server sends the validated offer itself; prediction never rolls an online pick.
 type ServerOnlyField =
@@ -122,6 +125,7 @@ type ServerOnlyField =
   | "lastPvpHitTick"
   | "lastPvpKnockbackBy"
   | "lastPvpKnockbackTick"
+  | "pvpRecentSpawnIndices"
   | "pvpDraftFrags"
   | "pvpNextDraftTick"
   | "pvpDraftOrdinal"
@@ -183,6 +187,8 @@ export function projectPlayer(p: PlayerSim): AuthoritativePlayerSnapshot {
     ultInvuln: p.ultInvuln,
     passiveState: p.passiveState,
     respawnT: p.respawnT,
+    spawnGraceT: p.spawnGraceT,
+    spawnShieldT: p.spawnShieldT,
   };
 }
 
@@ -233,6 +239,8 @@ export function applyPlayerSnapshot(p: PlayerSim, s: AuthoritativePlayerSnapshot
   p.ultInvuln = s.ultInvuln;
   p.passiveState = s.passiveState;
   p.respawnT = s.respawnT;
+  p.spawnGraceT = s.spawnGraceT;
+  p.spawnShieldT = s.spawnShieldT;
 }
 
 // Reconstruct a full PlayerMods from a received mods value (a JSON-parse boundary: the input is

@@ -34,8 +34,8 @@ export const pvpBlessingBlacklist = [
 // ---- PVP CONFIG (balancer + designer surface) ---------------------------------------------
 // Numbers are the shipped balancer finals (2026-07-12): FIXED 100 HP + a global 2.0x scalar
 // (PvE damage 100% untouched) tuned to a ~4.0s median TTK (3-5s band), a small per-weapon
-// outlier table, a 35%-of-maxHp anti-one-shot per-hit cap, ults blanket-disabled, and 2.0s
-// break-on-fire spawn protection. The match is a FRAG-LIMIT RESPAWN deathmatch (no rounds).
+// outlier table, a 35%-of-maxHp anti-one-shot per-hit cap, ults blanket-disabled, and two-stage
+// spawn protection. The match is a FRAG-LIMIT RESPAWN deathmatch (no rounds).
 export const PVP = {
   // FIXED pvp HP pool — NOT the PvE 6-HP pool (too coarse). 100 gives smooth, readable TTK
   // (a hit = 3-8%). PvP-only; PvE maxHp is unchanged.
@@ -114,10 +114,22 @@ export const PVP = {
   // Match-point or the final clock window fires one presentation-only crescendo.
   suddenDeathFrags: 1,
   suddenDeathFinalSec: 30,
-  // (Re)spawn invulnerability in seconds. Ends at this OR the first OUTGOING attack, whichever
-  // comes first (can't shoot from invuln). Reuses the shared post-hit iframe channel (invuln),
-  // which pvp otherwise leaves off so it never dominates TTK.
-  spawnIframeSec: 2.0,
+  // Guaranteed control time suppresses outgoing combat while movement, aim, and dash remain live.
+  // The longer shield permits attacks, but the first legal attack ends it.
+  spawnHardGraceSec: 1.25,
+  spawnShieldSec: 3.0,
+  spawnThreatHorizonSec: 1.5,
+  spawnThreatOuterHorizonSec: 2.5,
+  respawnLosPenalty: 600,
+  respawnLosPenaltyCap: 1200,
+  respawnAimPenalty: 800,
+  respawnAimConeDeg: 35,
+  respawnProjectileNearPenalty: 1200,
+  respawnProjectileFarPenalty: 600,
+  respawnCoverBonus: 300,
+  respawnRecentPenalty: 400,
+  respawnRecentOverride: 800,
+  respawnCampRadius: 180,
   // Respawn delay after death (frag-limit deathmatch: dead players respawn, never eliminate).
   respawnDelaySec: 2.5,
   // Pre-match countdown after enough players are present.
@@ -139,6 +151,8 @@ export const PVP = {
 // The match timers are counted in TICKS (never ms / wall-clock) for determinism; these convert
 // the named second-values at the authoritative tick rate.
 export function pvpRespawnDelayTicks(): number { return Math.round(PVP.respawnDelaySec * TICKS_PER_SECOND); }
+export function pvpSpawnHardGraceTicks(): number { return Math.round(PVP.spawnHardGraceSec * TICKS_PER_SECOND); }
+export function pvpSpawnShieldTicks(): number { return Math.round(PVP.spawnShieldSec * TICKS_PER_SECOND); }
 export function pvpCountdownTicks(): number { return Math.round(PVP.countdownSec * TICKS_PER_SECOND); }
 export function pvpMatchTimeTicks(): number { return Math.round(PVP.matchTimeSec * TICKS_PER_SECOND); }
 export function pvpEnvKillCreditWindowTicks(): number { return Math.round(PVP.envKillCreditWindowSec * TICKS_PER_SECOND); }
@@ -310,39 +324,102 @@ export function farthestSpawnIndex(spawns: Vec2[], occupied: Vec2[], pits: reado
   return best;
 }
 
-// A respawn spot is "in an opponent's crosshair" if the opponent is facing within this cone of
-// the spawn — respawning there drops you straight into their line of fire.
-const CROSSHAIR_CONE = 0.44; // ~25 degrees
+export interface PvpRespawnCandidate {
+  index: number;
+  minOpponentDistance: number;
+  pitDistance: number;
+  losThreatCount: number;
+  isAimedAt: boolean;
+  incomingThreatEtaSec: number | null;
+  predictedIncomingDamage: number;
+  isCoveredFromNearest: boolean;
+  isInwardExitWalkable: boolean;
+  isCamped: boolean;
+  isPitEligible: boolean;
+}
 
-// The RESPAWN spawn index (anti-camp core): maximize distance to the nearest living opponent AND
-// avoid opponents' crosshairs. Pit distance shares the score, and candidates inside one dash
-// of a lethal edge are ineligible. Deterministic ties break to the lowest index.
-export function pvpRespawnIndex(
-  spawns: Vec2[],
-  opponents: Array<{ x: number; y: number; aim: number }>,
-  pits: readonly Vec2[] = [],
+export function pvpRespawnProjectilePenalty(candidate: PvpRespawnCandidate): number {
+  const eta = candidate.incomingThreatEtaSec;
+  if (eta === null) return 0;
+  if (eta <= PVP.spawnThreatHorizonSec) return PVP.respawnProjectileNearPenalty;
+  if (eta <= PVP.spawnThreatOuterHorizonSec) return PVP.respawnProjectileFarPenalty;
+  return 0;
+}
+
+export function pvpRespawnBaseScore(candidate: PvpRespawnCandidate): number {
+  const losPenalty = Math.min(
+    PVP.respawnLosPenaltyCap,
+    candidate.losThreatCount * PVP.respawnLosPenalty,
+  );
+  const coverBonus = candidate.isCoveredFromNearest && candidate.isInwardExitWalkable
+    ? PVP.respawnCoverBonus
+    : 0;
+  return candidate.minOpponentDistance
+    + 0.5 * candidate.pitDistance
+    + coverBonus
+    - losPenalty
+    - (candidate.isAimedAt ? PVP.respawnAimPenalty : 0)
+    - pvpRespawnProjectilePenalty(candidate);
+}
+
+function pvpRespawnScore(
+  candidate: PvpRespawnCandidate,
+  candidates: readonly PvpRespawnCandidate[],
+  recentSpawnIndices: readonly number[],
 ): number {
-  let best = 0;
-  let bestScore = -Infinity;
-  for (let i = 0; i < spawns.length; i++) {
-    let minD = Infinity;
-    let inCrosshair = false;
-    for (const o of opponents) {
-      const dx = spawns[i].x - o.x;
-      const dy = spawns[i].y - o.y;
-      const d = Math.hypot(dx, dy);
-      if (d < minD) minD = d;
-      const bearing = Math.atan2(dy, dx);
-      const delta = Math.abs(Math.atan2(Math.sin(bearing - o.aim), Math.cos(bearing - o.aim)));
-      if (delta < CROSSHAIR_CONE) inCrosshair = true;
-    }
-    if (opponents.length === 0) minD = 0;
-    const pitDistance = pitDistanceWeight(spawns[i], pits);
-    if (pits.length > 0 && pitDistance <= pvpSingleDashDistance()) continue;
-    const score = minD + pitDistance - (inCrosshair ? 1e6 : 0);
-    if (score > bestScore) { bestScore = score; best = i; }
+  let score = pvpRespawnBaseScore(candidate);
+  if (!recentSpawnIndices.includes(candidate.index)) return score;
+  const alternatives = candidates.filter((other) => other.index !== candidate.index);
+  const bestAlternative = alternatives.reduce(
+    (best, other) => Math.max(best, pvpRespawnBaseScore(other)),
+    -Infinity,
+  );
+  const isRecentPenaltyWaived = alternatives.length === 0
+    || score - bestAlternative > PVP.respawnRecentOverride;
+  if (!isRecentPenaltyWaived) score -= PVP.respawnRecentPenalty;
+  return score;
+}
+
+export function pvpRespawnIndex(
+  candidates: readonly PvpRespawnCandidate[],
+  recentSpawnIndices: readonly number[] = [],
+): number {
+  if (candidates.length === 0) return 0;
+  const pitEligible = candidates.filter((candidate) => candidate.isPitEligible);
+  let valid = pitEligible.length > 0 ? pitEligible : candidates.slice();
+  const nonCamped = valid.filter((candidate) => !candidate.isCamped);
+  if (nonCamped.length > 0) valid = nonCamped;
+
+  const last = recentSpawnIndices.at(-1);
+  const previous = recentSpawnIndices.at(-2);
+  if (last !== undefined && last === previous) {
+    const alternatives = valid.filter((candidate) => candidate.index !== last);
+    if (alternatives.length >= 2) valid = alternatives;
   }
-  return best;
+
+  const isEveryCandidateThreatened = valid.every((candidate) =>
+    candidate.losThreatCount > 0 || pvpRespawnProjectilePenalty(candidate) > 0
+  );
+  let best = valid[0];
+  let bestScore = pvpRespawnScore(best, valid, recentSpawnIndices);
+  for (let i = 1; i < valid.length; i++) {
+    const candidate = valid[i];
+    const score = pvpRespawnScore(candidate, valid, recentSpawnIndices);
+    if (isEveryCandidateThreatened) {
+      if (candidate.predictedIncomingDamage < best.predictedIncomingDamage
+        || (candidate.predictedIncomingDamage === best.predictedIncomingDamage
+          && (score > bestScore || (score === bestScore && candidate.index < best.index)))) {
+        best = candidate;
+        bestScore = score;
+      }
+      continue;
+    }
+    if (score > bestScore || (score === bestScore && candidate.index < best.index)) {
+      best = candidate;
+      bestScore = score;
+    }
+  }
+  return best.index;
 }
 
 // ---- symmetric arena ----------------------------------------------------------------------
