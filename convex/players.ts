@@ -405,15 +405,6 @@ export const ensurePlayer = mutation({
   },
 });
 
-// Bank the deepest floor a run has reached, PROGRESSIVELY, on each descend — the fix for
-// depth that never charted because recordRun only fires on a clean full-party-wipe game
-// over (a death-while-teammates-continue, a disconnect, or a quit all skipped it, so the
-// board showed a stale floor). Deliberately NARROW: it only raises deepestFloor via
-// Math.max and folds the floor into the leaderboard (foldFloorProgress). It must NOT do
-// what recordRun does — no gamesPlayed increment, no kills/coins summing, no cosmetic
-// unlock grants, no amber — because those are per-RUN, not per-floor, and would multiply
-// wildly across a descent. Idempotent by Math.max: re-banking the same floor is a no-op,
-// so a run that later disconnects still keeps the depth it already reached.
 export const recordFloorProgress = mutation({
   args: { clientId: v.string(), floor: v.number() },
   handler: async () => {
@@ -586,11 +577,6 @@ export async function foldVerifiedRun(
   return updated;
 }
 
-// Fold a finished run into the caller's all-time stats + the global leaderboard (called on
-// game over). Amber is computed SERVER-SIDE from the run facts here — a client can never mint
-// it. Signed in: folds into the account row, creating/migrating it if login hadn't yet (so a
-// run is never lost to a startup race). Guest: folds into the existing clientId row, or no-ops
-// if there isn't one. Every gameplay-fact arg is optional so an older client still records.
 export const recordRun = mutation({
   args: {
     clientId: v.string(),

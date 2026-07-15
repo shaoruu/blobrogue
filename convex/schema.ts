@@ -107,9 +107,9 @@ export default defineSchema({
     .index("by_client", ["clientId"]),
 
   // Global leaderboard: ONE row per player — their best run (deepest floor, kills as the
-  // tie-break) — folded in by players.recordRun. The row SNAPSHOTS the run's build and the
-  // player's cosmetic loadout separately from the mutable profile, so the leaderboard
-  // profile view needs no join against players (and can never leak account fields:
+  // tie-break) — folded only from a verified game-server receipt. The row SNAPSHOTS the
+  // run's build and player's cosmetic loadout separately from the mutable profile, so the
+  // leaderboard profile view needs no join against players (and can never leak account fields:
   // name/appearance/run stats only, by construction).
   leaderboard: defineTable({
     playerId: v.id("players"),
