@@ -32,7 +32,7 @@ import {
   BOSS_DPS_CEILING, ELITE_BRACE,
 } from "../src/sim/balance.js";
 import { itemById, recomputeMods, createMods, rollItemChoicesWith, ITEMS, MAX_ITEM_LEVEL } from "../src/sim/items.js";
-import { shopWeaponPrice } from "../src/sim/shop.js";
+import { shopSlotForViewer, shopWeaponPrice } from "../src/sim/shop.js";
 import type { EnemyTier } from "../src/sim/balance.js";
 import { biomeIndexForFloor } from "../src/sim/biomes.js";
 import { readFileSync, writeFileSync } from "node:fs";
@@ -979,11 +979,13 @@ function partyRewardGates(): void {
       buyFromShopInWorld(w, "b", weapon.id, []) === "sold" && b.coins === weapon.price
       && !b.ownedWeapons.includes(weapon.weapon!));
     const blessing = w.shop!.slots.find((s) => s.kind === "blessing")!;
+    const blessingA = shopSlotForViewer(w.shop!, blessing, a.id);
+    const blessingB = shopSlotForViewer(w.shop!, blessing, b.id);
     a.coins = blessing.price; b.coins = blessing.price;
     a.x = blessing.x; a.y = blessing.y; b.x = blessing.x; b.y = blessing.y;
     check("the FOR-YOU blessing pedestal serves BOTH buyers (personal, never depletes)",
       buyFromShopInWorld(w, "a", blessing.id, []) === "ok" && buyFromShopInWorld(w, "b", blessing.id, []) === "ok"
-      && a.ownedItemIds.includes(blessing.itemId!) && b.ownedItemIds.includes(blessing.itemId!));
+      && a.ownedItemIds.includes(blessingA.itemId!) && b.ownedItemIds.includes(blessingB.itemId!));
   }
 
   section("studio gate §4: boss reward = P+1 personal choices; claims never starve teammates");

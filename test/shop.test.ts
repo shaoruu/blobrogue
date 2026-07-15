@@ -26,7 +26,7 @@ import {
 import type { WorldState, PlayerSim, ShopBuyOutcome } from "../src/sim/world.js";
 import {
   isShopFloor, hasShopRoomOnFloor, buildShopState, shopSlotStatusFor, shopViewerOf, shopWeaponPrice,
-  isPremiumKind, SHOP_FOCUS_RANGE, SHOP_BUY_RANGE,
+  shopSlotForViewer, isPremiumKind, SHOP_FOCUS_RANGE, SHOP_BUY_RANGE,
 } from "../src/sim/shop.js";
 import type { ShopSlot, ShopState } from "../src/sim/shop.js";
 import { SHOP, PREMIUM, isPremiumShopFloor, isSpoilsFloor } from "../src/sim/balance.js";
@@ -325,7 +325,7 @@ function buyCommandTests(): void {
     const w = createWorld(0xDEA1, 3);
     const p = w.players.get(LOCAL_ID)!;
     const blessing = slotOf(w, "blessing");
-    const itemId = blessing.itemId!;
+    const itemId = shopSlotForViewer(w.shop!, blessing, p.id).itemId!;
     p.coins = 99;
     for (let i = 0; i < MAX_ITEM_LEVEL; i++) p.ownedItemIds.push(itemId);
     check("a maxed blessing reads 'maxLevel', consumes nothing",
@@ -411,13 +411,15 @@ function ownershipTests(): void {
     const { w, ps } = partyWorld(0xC0C0B, 3, 4);
     const blessing = slotOf(w, "blessing");
     const heart = slotOf(w, "heart");
+    const itemIds = new Map(ps.map((p) => [p.id, shopSlotForViewer(w.shop!, blessing, p.id).itemId!]));
     for (const p of ps) { p.coins = 99; p.hp = 1; }
     const blessingOk = ps.every((p) => buyAt(w, p, blessing) === "ok");
-    check("P4: all four buy the SAME blessing pedestal (instanced per player)",
-      blessingOk && ps.every((p) => p.ownedItemIds.includes(blessing.itemId!)) && blessing.buyers.length === 4);
+    check("P4: all four buy their deterministic viewer-specific blessing (instanced per player)",
+      blessingOk && ps.every((p) => p.ownedItemIds.includes(itemIds.get(p.id)!)) && blessing.buyers.length === 4);
+    const hpBefore = new Map(ps.map((p) => [p.id, p.hp]));
     const heartOk = ps.every((p) => buyAt(w, p, heart) === "ok");
     check("P4: all four buy their own heart (+1 HP each — the P-heart supply preserved)",
-      heartOk && ps.every((p) => p.hp === 2) && heart.buyers.length === 4);
+      heartOk && ps.every((p) => p.hp === Math.min(p.maxHp, (hpBefore.get(p.id) ?? 0) + 1)) && heart.buyers.length === 4);
     check("personal rebuy reads 'sold' per buyer", ps.every((p) => buyAt(w, p, heart) === "sold"));
   }
 }
@@ -514,13 +516,13 @@ function flowAndWireTests(): void {
     const decoded = jsonCodec.decodeServer(jsonCodec.encodeServer(snap)) as Extract<ServerMsg, { t: "snap" }>;
     check("the snapshot carries the stall", decoded.shop !== null);
     check("claim + buyer state survives encode/decode byte-for-byte",
-      JSON.stringify(decoded.shop) === JSON.stringify(toShopWire(w.shop!)));
+      JSON.stringify(decoded.shop) === JSON.stringify(toShopWire(w.shop!, a.id)));
     const rebuilt = shopFromWire(decoded.shop!);
     // Lossless on the WIRE projection: a mystery pedestal's identity/twist are sim
     // secrets by design (hidden until the buy), so the sim-side struct is compared
     // through toShopWire — the exact view every client reconstructs.
     check("shopFromWire(toShopWire(s)) is lossless on the wire projection",
-      JSON.stringify(toShopWire(rebuilt)) === JSON.stringify(toShopWire(w.shop!)));
+      JSON.stringify(toShopWire(rebuilt)) === JSON.stringify(toShopWire(w.shop!, a.id)));
     check("non-shop floors carry shop: null on the wire",
       (buildSnapshot(createWorld(0xB1E, 4), LOCAL_ID, 0, [], 0, true, { worldId: "room:TEST" }) as Extract<ServerMsg, { t: "snap" }>).shop === null);
   }

@@ -22,7 +22,7 @@ import {
 } from "../src/sim/world.js";
 import type { WorldState, PlayerSim } from "../src/sim/world.js";
 import { createWeaponBag, drawWeaponFromBag } from "../src/sim/weaponBag.js";
-import { PICKUP_WEAPONS } from "../src/sim/weapons.js";
+import { PICKUP_WEAPONS, WEAPONS } from "../src/sim/weapons.js";
 import { KING_REWARD_TABLE, WEAPON_VARIETY, bossWeaponChoices } from "../src/sim/balance.js";
 import type { WeaponId } from "../src/sim/types.js";
 import type { SimEvent } from "../src/sim/events.js";
@@ -145,7 +145,8 @@ section("wood chests: the ambient weapon roll skips universally-owned guns");
 {
   const { w, p } = soloWorld(0xCAFE, 2);
   w.enemies = []; w.pendingSpawns = [];
-  const unowned: WeaponId[] = ["railgun", "longsword", "homing"];
+  const unowned: WeaponId[] = (["common", "rare", "legendary"] as const)
+    .map((rarity) => PICKUP_WEAPONS.find((id) => WEAPONS[id].rarity === rarity)!);
   p.ownedWeapons = ["pistol", ...PICKUP_WEAPONS.filter((id) => !unowned.includes(id))];
   const dealt: WeaponId[] = [];
   for (let i = 0; i < 300 && dealt.length < 6; i++) {
