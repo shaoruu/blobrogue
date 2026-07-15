@@ -3447,7 +3447,16 @@ function killEnemy(w: WorldState, p: PlayerSim | null, e: Enemy, ev: SimEvent[])
     accrueUlt(p, "kill", ultChargeFromKill());
   }
   const big = isBossKind(e.kind);
-  ev.push({ t: "enemyKill", eid: e.id, kind: e.kind, tier: e.tier, x: e.x, y: e.y, combo: p ? p.combo : 0 });
+  ev.push({
+    t: "enemyKill",
+    eid: e.id,
+    kind: e.kind,
+    tier: e.tier,
+    x: e.x,
+    y: e.y,
+    combo: p ? p.combo : 0,
+    by: p?.id ?? "",
+  });
   if (big) endBossDanger(w, e, ev);
   // The Weaver's earned-window mechanic bodies: a SHOT knot collapses its lane (P1:
   // the exposure; always loose debris). Sacs need no hook — the climb loop polls the

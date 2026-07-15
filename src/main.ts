@@ -62,19 +62,47 @@ async function bootNormal() {
     const prevProfile = session.profile;
     const prevBest = prevProfile?.deepestFloor ?? 0;
     const prevAmber = prevProfile?.amber ?? 0;
-    const saved = await session.recordRun(result);
-    const isNewBest = saved !== null && result.floor > prevBest;
+    const previousGamesPlayed = prevProfile?.gamesPlayed ?? 0;
+    const isReceiptEligible = online !== null && online.mode === "coop";
+    const saved = isReceiptEligible
+      ? await session.refreshVerifiedProgress(previousGamesPlayed)
+      : session.profile;
+    const isProgressVerified = isReceiptEligible
+      && saved !== null
+      && saved.gamesPlayed > previousGamesPlayed;
+    const isNewBest = isProgressVerified && result.floor > prevBest;
     // Only diff unlocks against a KNOWN before-state — a cold start with no prior profile
     // can't tell "new this run" from "earned long ago", so it stays quiet.
-    const newUnlocks = saved && prevProfile ? saved.unlocks.filter((id) => !prevProfile.unlocks.includes(id)) : [];
+    const newUnlocks = isProgressVerified && saved && prevProfile
+      ? saved.unlocks.filter((id) => !prevProfile.unlocks.includes(id))
+      : [];
     // The banked-Amber delta is the SERVER's authoritative grant (never a client number): the
     // difference between the profile's Amber before and after recordRun folded the run.
-    const bankedAmber = saved && prevProfile ? Math.max(0, saved.amber - prevAmber) : 0;
-    menu.showGameOver(result, saved ?? session.profile, { isNewBest, online, newUnlocks, bankedAmber });
+    const bankedAmber = isProgressVerified && saved && prevProfile
+      ? Math.max(0, saved.amber - prevAmber)
+      : 0;
+    const progressNote = !isReceiptEligible
+      ? "SOLO RUN · UNVERIFIED — Mastery, Amber, rescues, and leaderboard unchanged"
+      : isProgressVerified
+        ? ""
+        : "SERVER RECEIPT PENDING — progress will appear after verification";
+    menu.showGameOver(result, saved ?? session.profile, {
+      isNewBest,
+      online,
+      newUnlocks,
+      bankedAmber,
+      isProgressVerified,
+      progressNote,
+    });
   }
 
   function onExit(reason?: ExitReason, detail?: string) {
     isInRun = false;
+    if (reason === "client_outdated") {
+      activeOnline = null;
+      void menu.showTitle(undefined, exitNoteFor(reason));
+      return;
+    }
     // Stepping out of an online run (Esc/cancel, a failed start, an outage) lands back in
     // the room lobby, not the title — the run may still be live for friends (the lobby's
     // REJOIN RUN / leave buttons are the contract's resume-failed choices). The exact copy
@@ -113,10 +141,7 @@ async function bootNormal() {
           canvas, minimap, document.body,
           (result) => void onGameOver(result),
           onExit,
-          // Progressive deepest-floor banking on each descend (fire-and-forget); no-ops without a
-          // Convex client. This is what keeps the leaderboard's floor honest when a run ends by a
-          // teammate continuing / a disconnect / a quit instead of a clean full-party wipe.
-          (floor) => session.recordFloorProgress(floor),
+          () => {},
           () => void requeueArena(),
         );
         // Dev-server-only QA hook (dropped from production builds): lets headless tooling —

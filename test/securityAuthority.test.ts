@@ -1,0 +1,79 @@
+import { readFileSync } from "node:fs";
+import { isGuestSessionAuthorized } from "../convex/guestCapabilityCore.js";
+import { ConvexError } from "convex/values";
+import { normalizeOnlineError } from "../src/net/onlineError.js";
+
+let passed = 0;
+let failed = 0;
+
+function check(name: string, isPassing: boolean): void {
+  if (isPassing) {
+    passed++;
+    process.stdout.write(`  PASS ${name}\n`);
+  } else {
+    failed++;
+    process.stdout.write(`  FAIL ${name}\n`);
+  }
+}
+
+const now = 1_000_000;
+const session = {
+  token: "guest-secret",
+  clientId: "browser-a",
+  playerId: "guest-player",
+  scopes: ["profile", "room", "ticket", "economy"] as const,
+  expiresAt: now + 60_000,
+};
+const guest = {
+  playerId: "guest-player",
+  clientId: "browser-a",
+  isAccount: false,
+};
+
+check("valid scoped guest capability authorizes its guest row",
+  isGuestSessionAuthorized(session, guest, "browser-a", "guest-secret", "ticket", now));
+check("wrong token rejects",
+  !isGuestSessionAuthorized(session, guest, "browser-a", "wrong", "ticket", now));
+check("wrong browser rejects",
+  !isGuestSessionAuthorized(session, guest, "browser-b", "guest-secret", "ticket", now));
+check("wrong scope rejects",
+  !isGuestSessionAuthorized({ ...session, scopes: ["profile"] }, guest, "browser-a", "guest-secret", "ticket", now));
+check("expired capability rejects",
+  !isGuestSessionAuthorized({ ...session, expiresAt: now }, guest, "browser-a", "guest-secret", "ticket", now));
+check("revoked capability rejects",
+  !isGuestSessionAuthorized({ ...session, revokedAt: now - 1 }, guest, "browser-a", "guest-secret", "ticket", now));
+check("capability can never authorize an account row after sign-out",
+  !isGuestSessionAuthorized(session, { ...guest, isAccount: true }, "browser-a", "guest-secret", "ticket", now));
+const upgradeError = normalizeOnlineError(new ConvexError({
+  code: "guest_capability_required",
+  message: "legacy client",
+}));
+check("legacy clients receive a clean refresh-required error",
+  upgradeError.code === "client_outdated"
+  && upgradeError.message.includes("refresh the page"));
+
+const playersSource = readFileSync(new URL("../convex/players.ts", import.meta.url), "utf8");
+const roomsSource = readFileSync(new URL("../convex/rooms.ts", import.meta.url), "utf8");
+const ticketSource = readFileSync(new URL("../convex/gsTicket.ts", import.meta.url), "utf8");
+const receiptSource = readFileSync(new URL("../convex/runReceipt.ts", import.meta.url), "utf8");
+
+check("public recordRun and recordFloorProgress fail closed",
+  (playersSource.match(/verified_receipt_required/g) ?? []).length >= 2);
+check("guest merge guards and rewires room references before delete",
+  playersSource.includes("guardAndRewireGuestReferences(ctx, guest, account)")
+  && playersSource.indexOf("guardAndRewireGuestReferences(ctx, guest, account)")
+    < playersSource.indexOf("await ctx.db.delete(guest._id)"));
+check("ticket mint signs one transaction-consistent internal snapshot",
+  ticketSource.includes("internal.rooms.ticketSnapshot")
+  && !ticketSource.includes("api.players.getProfile")
+  && !ticketSource.includes("api.rooms.membership"));
+check("generation reopen requires server-attested completion",
+  roomsSource.includes('room.generationState !== "completed"')
+  && !/reopen[\s\S]{0,2500}rows\.some\(\(row\) => row\.gsWorldId/.test(roomsSource));
+check("receipt consumption is one-time and generation-bound",
+  receiptSource.includes('withIndex("by_jti"')
+  && receiptSource.includes('"receipt_replayed"')
+  && receiptSource.includes('room.generationState !== "active"'));
+
+process.stdout.write(`\n${passed} checks passed, ${failed} failed\n`);
+if (failed > 0) process.exit(1);

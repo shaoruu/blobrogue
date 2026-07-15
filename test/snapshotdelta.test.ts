@@ -193,7 +193,7 @@ function eventPassthroughTests(): void {
   const base = makeBaseSnap();
   const next = cloneSnap(base); next.sseq = 2; next.tick = base.tick + 1;
   const events: WireEvent[] = [
-    { id: 5, e: { t: "enemyKill", eid: 1, kind: "slime", tier: "swarm", x: 1, y: 2, combo: 1 } },
+    { id: 5, e: { t: "enemyKill", eid: 1, kind: "slime", tier: "swarm", x: 1, y: 2, combo: 1, by: "p1" } },
     { id: 6, e: { t: "descend", toFloor: 2 } },
   ];
   next.events = events;
@@ -264,7 +264,7 @@ function safetyTests(): void {
   const d = diffSnapshot(snapshotToWire(base), snapshotToWire(next), next.sseq, fullWorld(next));
   check("a delta advertises its baseline sseq so a client can refuse a gap", d.b === base.sseq && d.q === 7);
 
-  check("protocol version is current (v32: authoritative PvP protection endpoints)", PROTOCOL_VERSION === 32);
+  check("protocol version is current (v33: authority-plane hard cut)", PROTOCOL_VERSION === 33);
 }
 
 function main(): void {

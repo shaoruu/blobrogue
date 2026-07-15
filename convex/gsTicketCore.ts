@@ -33,6 +33,7 @@ export interface GsTicketPayload {
   ml?: number;  // account MASTERY level (the game server re-gates kt against it)
   pt?: string;  // cosmetic companion pet id (visual-only; see src/sim/camp_nodes.ts)
   pc?: boolean; // explicit pet-or-No-Pet choice was validated for this run
+  sv?: boolean; // loopback control-plane synthetic verification ticket
 }
 
 // Optional identity/room claims for a mint. Field names are the long-form of the wire keys.
@@ -46,6 +47,7 @@ export interface GsTicketClaims {
   masteryLevel?: number;
   pet?: string;
   isPetChoiceMade?: boolean;
+  isSyntheticVerify?: boolean;
 }
 
 // The single room-code -> authoritative-world-id mapping. Convex mints with it; the game
@@ -104,6 +106,7 @@ export async function mintGsTicket(
   if (claims.masteryLevel !== undefined) payload.ml = claims.masteryLevel;
   if (claims.pet !== undefined) payload.pt = claims.pet;
   if (claims.isPetChoiceMade !== undefined) payload.pc = claims.isPetChoiceMade;
+  if (claims.isSyntheticVerify !== undefined) payload.sv = claims.isSyntheticVerify;
   const enc = new TextEncoder();
   const body = "v1." + b64urlFromBytes(enc.encode(JSON.stringify(payload)));
   const key = await crypto.subtle.importKey("raw", enc.encode(secret), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);

@@ -65,6 +65,7 @@ export interface TicketPayload {
   ml?: number;  // account mastery level
   pt?: string;  // cosmetic companion pet id (visual-only; META spec §3)
   pc?: boolean; // explicit pet-or-No-Pet choice was validated for this run
+  sv?: boolean; // loopback control-plane synthetic verification ticket
 }
 
 // Optional claims for a mint (long-form field names of the wire keys above).
@@ -78,6 +79,7 @@ export interface TicketClaims {
   masteryLevel?: number;
   pet?: string;
   isPetChoiceMade?: boolean;
+  isSyntheticVerify?: boolean;
 }
 
 export interface AuthResult {
@@ -92,6 +94,7 @@ export interface AuthResult {
   masteryLevel?: number;// account mastery level (drives the server-side kit-unlock gate)
   pet?: string;         // format-validated cosmetic companion pet id (visual-only)
   isPetChoiceMade?: boolean;
+  isSyntheticVerify?: boolean;
   isDev?: boolean;
   reason?: string;
 }
@@ -135,6 +138,7 @@ export function mintTicket(secret: string, playerId: string, ttlSecs = 120, nowM
   if (claims.masteryLevel !== undefined) payload.ml = claims.masteryLevel;
   if (claims.pet !== undefined) payload.pt = claims.pet;
   if (claims.isPetChoiceMade !== undefined) payload.pc = claims.isPetChoiceMade;
+  if (claims.isSyntheticVerify !== undefined) payload.sv = claims.isSyntheticVerify;
   const body = "v1." + b64url(Buffer.from(JSON.stringify(payload), "utf8"));
   return body + "." + sign(secret, body);
 }
@@ -225,6 +229,12 @@ export function verifyTicket(cfg: AuthConfig, ticket: string, nowMs = Date.now()
   if (payload.pc !== undefined) {
     if (typeof payload.pc !== "boolean") return { ok: false, reason: "bad_pet_choice" };
     out.isPetChoiceMade = payload.pc;
+  }
+  if (payload.sv !== undefined) {
+    if (payload.sv !== true || payload.pid !== "synthetic-verify") {
+      return { ok: false, reason: "bad_synthetic_verify" };
+    }
+    out.isSyntheticVerify = true;
   }
   return out;
 }

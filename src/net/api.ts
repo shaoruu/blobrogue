@@ -42,6 +42,8 @@ export interface ProfileDoc {
   image?: string;
   // True when this stats row is linked to a signed-in account.
   isAccount: boolean;
+  // Rotated, expiring capability for this pure guest row. Returned only when issued.
+  guestCapability?: string;
 }
 
 // One public leaderboard entry: a player's best run plus the appearance snapshot AS WORN
@@ -94,6 +96,11 @@ export type RunLoadoutArg = {
   petId: string | null;
   isKitChoiceMade: boolean;
   isPetChoiceMade: boolean;
+};
+
+export type GuestCallArg = {
+  clientId: string;
+  guestCapability?: string;
 };
 
 export type LoadoutMutationResult = {
@@ -216,21 +223,22 @@ export type PresenceUpdateArgs = {
 
 export const api = {
   players: {
-    ensurePlayer: makeFunctionReference<"mutation", { clientId: string; name: string; colorIndex?: number; cosmetics?: CosmeticsArg }, ProfileDoc>("players:ensurePlayer"),
-    getProfile: makeFunctionReference<"query", { clientId: string }, ProfileDoc | null>("players:getProfile"),
+    ensurePlayer: makeFunctionReference<"mutation", { clientId: string; guestCapability?: string; name: string; colorIndex?: number; cosmetics?: CosmeticsArg }, ProfileDoc>("players:ensurePlayer"),
+    getProfile: makeFunctionReference<"query", { clientId: string; guestCapability?: string }, ProfileDoc | null>("players:getProfile"),
     currentUser: makeFunctionReference<"query", Record<string, never>, CurrentUserDoc | null>("players:currentUser"),
     recordRun: makeFunctionReference<"mutation", RecordRunArgs, ProfileDoc | null>("players:recordRun"),
     // Set a signed-in account's chosen display-name OVERRIDE (authenticated only). Returns the
     // updated profile (name reflects the custom name), or the unchanged profile when rejected.
     setCustomName: makeFunctionReference<"mutation", { clientId: string; name: string }, ProfileDoc | null>("players:setCustomName"),
+    prepareSignOutGuest: makeFunctionReference<"mutation", { clientId: string; name: string }, ProfileDoc>("players:prepareSignOutGuest"),
     // Progressive deepest-floor banking (fired on each descend) — raises deepestFloor +
     // charts the floor without the per-run folding recordRun does. Returns nothing.
     recordFloorProgress: makeFunctionReference<"mutation", { clientId: string; floor: number }, null>("players:recordFloorProgress"),
     // WAVE 1 Amber Camp SPEND (server-authoritative): buy an owned camp node (cost/prereqs/
     // ownership validated server-side, Amber deducted), and equip/clear the active pet.
-    buyNode: makeFunctionReference<"mutation", { clientId: string; nodeId: string }, CampMutationResult | null>("players:buyNode"),
-    equipPet: makeFunctionReference<"mutation", { clientId: string; petId: string | null }, CampMutationResult | null>("players:equipPet"),
-    confirmRunLoadout: makeFunctionReference<"mutation", { clientId: string } & RunLoadoutArg, LoadoutMutationResult | null>("players:confirmRunLoadout"),
+    buyNode: makeFunctionReference<"mutation", { clientId: string; guestCapability?: string; nodeId: string }, CampMutationResult | null>("players:buyNode"),
+    equipPet: makeFunctionReference<"mutation", { clientId: string; guestCapability?: string; petId: string | null }, CampMutationResult | null>("players:equipPet"),
+    confirmRunLoadout: makeFunctionReference<"mutation", { clientId: string; guestCapability?: string } & RunLoadoutArg, LoadoutMutationResult | null>("players:confirmRunLoadout"),
   },
   leaderboard: {
     // The global top-N best runs (deepest floor, kills tie-break), public fields only.
@@ -248,22 +256,22 @@ export const api = {
     // Trusted mint for the authoritative game-server join ticket (HMAC over GS_AUTH_SECRET).
     // With a roomCode, the mint verifies room membership and binds the room's world id into
     // the ticket, so friends sharing a code land in the same isolated server world.
-    mint: makeFunctionReference<"action", { clientId: string; roomCode: string }, { ticket: string; playerId: string }>("gsTicket:mint"),
+    mint: makeFunctionReference<"action", GuestCallArg & { roomCode: string }, { ticket: string; playerId: string }>("gsTicket:mint"),
   },
   rooms: {
-    create: makeFunctionReference<"mutation", { clientId: string; kind?: RoomKind; mode?: RoomMode; colorIndex?: number } & RunLoadoutArg, { roomId: string; code: string; seed: number; floor: number; mode?: RoomMode; loadoutGeneration: number; kitId: string; petId: string | null }>("rooms:create"),
-    quickPlay: makeFunctionReference<"mutation", { clientId: string; kind?: RoomKind; mode?: RoomMode; colorIndex?: number } & RunLoadoutArg, { roomId: string; code: string; seed: number; floor: number; status: RoomStatus; mode?: RoomMode; joined?: boolean; loadoutGeneration: number; kitId: string; petId: string | null }>("rooms:quickPlay"),
-    join: makeFunctionReference<"mutation", { code: string; clientId: string; kind?: RoomKind; mode?: RoomMode; colorIndex?: number } & RunLoadoutArg, { roomId: string; code: string; seed: number; floor: number; status: RoomStatus; mode?: RoomMode; loadoutGeneration: number; kitId: string; petId: string | null }>("rooms:join"),
+    create: makeFunctionReference<"mutation", GuestCallArg & { kind?: RoomKind; mode?: RoomMode; colorIndex?: number } & RunLoadoutArg, { roomId: string; code: string; seed: number; floor: number; mode?: RoomMode; loadoutGeneration: number; kitId: string; petId: string | null }>("rooms:create"),
+    quickPlay: makeFunctionReference<"mutation", GuestCallArg & { kind?: RoomKind; mode?: RoomMode; colorIndex?: number } & RunLoadoutArg, { roomId: string; code: string; seed: number; floor: number; status: RoomStatus; mode?: RoomMode; joined?: boolean; loadoutGeneration: number; kitId: string; petId: string | null }>("rooms:quickPlay"),
+    join: makeFunctionReference<"mutation", GuestCallArg & { code: string; kind?: RoomKind; mode?: RoomMode; colorIndex?: number } & RunLoadoutArg, { roomId: string; code: string; seed: number; floor: number; status: RoomStatus; mode?: RoomMode; loadoutGeneration: number; kitId: string; petId: string | null }>("rooms:join"),
     get: makeFunctionReference<"query", { roomId: string }, RoomDoc | null>("rooms:get"),
-    start: makeFunctionReference<"mutation", { roomId: string; clientId: string }, RoomStartResult>("rooms:start"),
-    reopen: makeFunctionReference<"mutation", { roomId: string; clientId: string; generation: number }, { loadoutGeneration: number; isReopened: boolean }>("rooms:reopen"),
-    beginLoadoutEdit: makeFunctionReference<"mutation", { roomId: string; clientId: string; generation: number }, RoomDraftMutationResult>("rooms:beginLoadoutEdit"),
-    chooseDraftKit: makeFunctionReference<"mutation", { roomId: string; clientId: string; generation: number; editRevision: number; kitId: string }, RoomDraftMutationResult>("rooms:chooseDraftKit"),
-    chooseDraftPet: makeFunctionReference<"mutation", { roomId: string; clientId: string; generation: number; editRevision: number; petId: string | null }, RoomDraftMutationResult>("rooms:chooseDraftPet"),
-    confirmLoadout: makeFunctionReference<"mutation", { roomId: string; clientId: string; generation: number; editRevision: number }, RoomLoadoutResult>("rooms:confirmLoadout"),
-    heartbeat: makeFunctionReference<"mutation", { roomId: string; clientId: string; name?: string; colorIndex?: number; pingMs?: number }, null>("rooms:heartbeat"),
+    start: makeFunctionReference<"mutation", GuestCallArg & { roomId: string }, RoomStartResult>("rooms:start"),
+    reopen: makeFunctionReference<"mutation", GuestCallArg & { roomId: string; generation: number }, { loadoutGeneration: number; isReopened: boolean }>("rooms:reopen"),
+    beginLoadoutEdit: makeFunctionReference<"mutation", GuestCallArg & { roomId: string; generation: number }, RoomDraftMutationResult>("rooms:beginLoadoutEdit"),
+    chooseDraftKit: makeFunctionReference<"mutation", GuestCallArg & { roomId: string; generation: number; editRevision: number; kitId: string }, RoomDraftMutationResult>("rooms:chooseDraftKit"),
+    chooseDraftPet: makeFunctionReference<"mutation", GuestCallArg & { roomId: string; generation: number; editRevision: number; petId: string | null }, RoomDraftMutationResult>("rooms:chooseDraftPet"),
+    confirmLoadout: makeFunctionReference<"mutation", GuestCallArg & { roomId: string; generation: number; editRevision: number }, RoomLoadoutResult>("rooms:confirmLoadout"),
+    heartbeat: makeFunctionReference<"mutation", GuestCallArg & { roomId: string; name?: string; colorIndex?: number; pingMs?: number }, null>("rooms:heartbeat"),
     descend: makeFunctionReference<"mutation", { roomId: string; floor: number }, null>("rooms:descend"),
-    leave: makeFunctionReference<"mutation", { roomId: string; clientId: string }, null>("rooms:leave"),
+    leave: makeFunctionReference<"mutation", GuestCallArg & { roomId: string }, null>("rooms:leave"),
   },
   presence: {
     update: makeFunctionReference<"mutation", PresenceUpdateArgs, null>("presence:update"),
@@ -274,8 +282,8 @@ export const api = {
     revive: makeFunctionReference<"mutation", { roomId: string; targetPlayerId: string }, null>("presence:revive"),
     // Mirror of the authoritative game-server connection state (ONLINE rooms): worldId after
     // a verified world join, null on leaving. Powers the lobby's per-member readiness readout.
-    reportWorld: makeFunctionReference<"mutation", { roomId: string; clientId: string; generation: number; worldId: string | null }, null>("presence:reportWorld"),
+    reportWorld: makeFunctionReference<"mutation", GuestCallArg & { roomId: string; generation: number; worldId: string | null }, null>("presence:reportWorld"),
     // The lobby READY toggle (roster READY/NOT READY; gates the host's START).
-    setReady: makeFunctionReference<"mutation", { roomId: string; clientId: string; isReady: boolean }, ReadyMutationResult>("presence:setReady"),
+    setReady: makeFunctionReference<"mutation", GuestCallArg & { roomId: string; isReady: boolean }, ReadyMutationResult>("presence:setReady"),
   },
 };

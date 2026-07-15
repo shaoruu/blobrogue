@@ -4358,6 +4358,7 @@ export class Game {
     if (mismatch) { this.quitToMenu("world_mismatch", `expected ${mismatch.expected}, got ${mismatch.got}`); return; }
     switch (kind) {
       case "connection_lost": this.quitToMenu("connection_lost"); return;
+      case "client_outdated": this.quitToMenu("client_outdated"); return;
       case "superseded": this.quitToMenu("superseded"); return;
       case "resume_rejected": this.quitToMenu("connection_lost", "resume rejected"); return;
       // The run ended while we were still behind the veil — nothing was played; regroup.

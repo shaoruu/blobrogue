@@ -244,6 +244,21 @@ function fakeConvex(opts: FakeOpts = {}, calls: string[] = []): FakeConvex {
         }
         return Promise.resolve(result);
       }
+      if (name === "players:prepareSignOutGuest") {
+        mutationCount++;
+        return Promise.resolve({
+          ...profile,
+          playerId: "signed-out-guest",
+          isAccount: false,
+          guestCapability: "signed-out-capability",
+          totalKills: 0,
+          deepestFloor: 0,
+          totalCoins: 0,
+          gamesPlayed: 0,
+          amber: 0,
+          unlocks: [],
+        });
+      }
       if (name === "players:setCustomName") {
         // The account custom-name override: the server echoes the sanitized name as the
         // effective display name (fail mode still models a network failure).
@@ -1695,6 +1710,26 @@ async function main(): Promise<void> {
     await fresh.menu.showProfile("closet");
     await settle();
     check("the NEW badge clears on the next visit (marked seen)", !textOf(crownCard() ?? {}).includes("NEW"));
+  }
+
+  section("solo progression is explicitly unverified and grants nothing competitive");
+  {
+    const { menu, overlay } = makeMenu({ auth: fakeAuth(false) });
+    menu.showGameOver(RUN, PROFILE, {
+      isNewBest: false,
+      online: null,
+      bankedAmber: 0,
+      newUnlocks: [],
+      isProgressVerified: false,
+      progressNote: "SOLO RUN · UNVERIFIED — Mastery, Amber, rescues, and leaderboard unchanged",
+    });
+    check("results name the unverified solo restriction",
+      textOf(overlay).includes("SOLO RUN · UNVERIFIED")
+      && textOf(overlay).includes("leaderboard unchanged"));
+    check("unverified run shows no authoritative reward celebration",
+      !textOf(overlay).includes("Banked") && !textOf(overlay).includes("NEW BEST"));
+    check("unverified solo run does not trigger a saved-progress sign-in nudge",
+      !buttonsOf(overlay).some((button) => button.includes("Sign in with Google")));
   }
 
   section("post-run sign-in nudge: guests once per session, cooldown-guarded, honest copy");

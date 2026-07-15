@@ -115,6 +115,13 @@ export class OnlineLobby {
     return { colorIndex: this.session.colorIndex ?? 0 };
   }
 
+  private callerArg() {
+    return {
+      clientId: this.session.clientId,
+      ...this.session.guestCapabilityArgs,
+    };
+  }
+
   private loadoutArg(loadout: RunLoadout) {
     return {
       kitId: loadout.kitId,
@@ -147,7 +154,7 @@ export class OnlineLobby {
     await this.flushIdentity();
     const playerId = this.requirePlayerId();
     const res = await this.client.mutation(api.rooms.create, {
-      clientId: this.session.clientId, kind: "online", mode,
+      ...this.callerArg(), kind: "online", mode,
       ...this.colorArg(), ...this.loadoutArg(loadout),
     });
     this.roomId = res.roomId;
@@ -167,7 +174,7 @@ export class OnlineLobby {
     await this.flushIdentity();
     this.requirePlayerId();
     const res = await this.client.mutation(api.rooms.join, {
-      code: code.trim().toUpperCase(), clientId: this.session.clientId, kind: "online",
+      code: code.trim().toUpperCase(), ...this.callerArg(), kind: "online",
       ...this.colorArg(), ...this.loadoutArg(loadout),
     });
     // TEMP kill switch: the room dictates the mode (the joiner adopts it), so a pvp room is
@@ -192,7 +199,7 @@ export class OnlineLobby {
     await this.flushIdentity();
     this.requirePlayerId();
     const res = await this.client.mutation(api.rooms.quickPlay, {
-      clientId: this.session.clientId, kind: "online", mode,
+      ...this.callerArg(), kind: "online", mode,
       ...this.colorArg(), ...this.loadoutArg(loadout),
     });
     this.roomId = res.roomId;
@@ -240,7 +247,7 @@ export class OnlineLobby {
       if (!this.roomId || !this.selfPlayerId) return;
       const sentAt = Date.now();
       this.client.mutation(api.rooms.heartbeat, {
-        roomId: this.roomId, clientId: this.session.clientId,
+        roomId: this.roomId, ...this.callerArg(),
         ...(this.session.name ? { name: this.session.name } : {}),
         ...this.colorArg(),
         ...(this.lastPingMs !== null ? { pingMs: this.lastPingMs } : {}),
@@ -308,7 +315,7 @@ export class OnlineLobby {
     if (!this.roomId || !playerId) return "You are no longer in this room";
     try {
       const result = await this.client.mutation(api.presence.setReady, {
-        roomId: this.roomId, clientId: this.session.clientId, isReady,
+        roomId: this.roomId, ...this.callerArg(), isReady,
       });
       if (!result.ok) return result.message ?? "Confirm KIT + PET before readying up";
       const row = this.presenceRows.find((candidate) => candidate.playerId === playerId);
@@ -336,7 +343,7 @@ export class OnlineLobby {
     if (!this.roomId || !playerId) return;
     this.client.mutation(api.presence.reportWorld, {
       roomId: this.roomId,
-      clientId: this.session.clientId,
+      ...this.callerArg(),
       generation,
       worldId,
     }).catch(() => {});
@@ -347,7 +354,7 @@ export class OnlineLobby {
     this.requirePlayerId();
     try {
       const result = await this.client.mutation(api.rooms.start, {
-        roomId: this.roomId, clientId: this.session.clientId,
+        roomId: this.roomId, ...this.callerArg(),
       });
       return result.ok ? null : result.message ?? "The party cannot start yet";
     } catch {
@@ -362,7 +369,7 @@ export class OnlineLobby {
       this.loadoutDraftError = null;
       const result = await this.client.mutation(api.rooms.beginLoadoutEdit, {
         roomId: this.roomId,
-        clientId: this.session.clientId,
+        ...this.callerArg(),
         generation,
       });
       if (!result.ok || result.editRevision === undefined) {
@@ -409,7 +416,7 @@ export class OnlineLobby {
     this.pendingLoadoutDraft = this.pendingLoadoutDraft.then(async () => {
       const result = await this.client.mutation(api.rooms.chooseDraftKit, {
         roomId,
-        clientId: this.session.clientId,
+        ...this.callerArg(),
         generation,
         editRevision,
         kitId,
@@ -439,7 +446,7 @@ export class OnlineLobby {
     this.pendingLoadoutDraft = this.pendingLoadoutDraft.then(async () => {
       const result = await this.client.mutation(api.rooms.chooseDraftPet, {
         roomId,
-        clientId: this.session.clientId,
+        ...this.callerArg(),
         generation,
         editRevision,
         petId,
@@ -457,7 +464,7 @@ export class OnlineLobby {
       if (editRevision === null) return "Loadout editing expired — reopen it";
       const result = await this.client.mutation(api.rooms.confirmLoadout, {
         roomId: this.roomId,
-        clientId: this.session.clientId,
+        ...this.callerArg(),
         generation,
         editRevision,
       });
@@ -495,12 +502,17 @@ export class OnlineLobby {
     const playerId = this.selfPlayerId;
     if (!this.roomId || !playerId) return false;
     try {
-      const result = await this.client.mutation(api.rooms.reopen, {
-        roomId: this.roomId,
-        clientId: this.session.clientId,
-        generation: this.loadoutGeneration,
-      });
-      if (!result.isReopened) return false;
+      let result: { loadoutGeneration: number; isReopened: boolean } | null = null;
+      for (const delayMs of [0, 150, 400, 800, 1500]) {
+        if (delayMs > 0) await new Promise((resolve) => setTimeout(resolve, delayMs));
+        result = await this.client.mutation(api.rooms.reopen, {
+          roomId: this.roomId,
+          ...this.callerArg(),
+          generation: this.loadoutGeneration,
+        });
+        if (result.isReopened) break;
+      }
+      if (!result?.isReopened) return false;
       this.loadoutGeneration = result.loadoutGeneration;
       this.confirmedLoadout = null;
       this.confirmedLoadoutGeneration = null;
@@ -527,7 +539,7 @@ export class OnlineLobby {
   async mintTicket(): Promise<string> {
     await this.flushIdentity();
     const res = await this.client.action(api.gsTicket.mint, {
-      clientId: this.session.clientId,
+      ...this.callerArg(),
       roomCode: this.code,
     });
     return res.ticket;
@@ -537,7 +549,7 @@ export class OnlineLobby {
     const playerId = this.selfPlayerId;
     if (this.roomId && playerId) {
       this.client.mutation(api.rooms.leave, {
-        roomId: this.roomId, clientId: this.session.clientId,
+        roomId: this.roomId, ...this.callerArg(),
       }).catch(() => {});
     }
     this.stopHeartbeat();

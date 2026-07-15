@@ -14,6 +14,7 @@ const NAME_KEY = "blobrogue.name";
 const NAME_CONFIRMED_KEY = "blobrogue.nameConfirmed";
 const COLOR_KEY = "blobrogue.color";
 const COSMETICS_KEY = "blobrogue.cosmetics";
+const GUEST_CAPABILITY_KEY = "blobrogue.guestCapability";
 
 export type SessionLoadoutResult =
   | { ok: true; profile: ProfileDoc | null; isOffline: boolean }
@@ -78,6 +79,7 @@ export class Session {
   // signed-in players keep it across devices.
   colorIndex: number | null;
   private cosmeticPicks: StoredCosmetics;
+  private guestCapability: string | null;
   profile: ProfileDoc | null = null;
   private client: ConvexClient | null;
 
@@ -94,6 +96,22 @@ export class Session {
     if (this.name !== stored) { try { localStorage.setItem(NAME_KEY, this.name); } catch { /* ignore */ } }
     this.colorIndex = readStoredColor();
     this.cosmeticPicks = readStoredCosmetics();
+    try { this.guestCapability = localStorage.getItem(GUEST_CAPABILITY_KEY); } catch { this.guestCapability = null; }
+  }
+
+  get guestCapabilityArgs(): { guestCapability?: string } {
+    return this.guestCapability ? { guestCapability: this.guestCapability } : {};
+  }
+
+  private adoptGuestCapability(profile: ProfileDoc): void {
+    if (profile.isAccount) {
+      this.guestCapability = null;
+      try { localStorage.removeItem(GUEST_CAPABILITY_KEY); } catch {}
+      return;
+    }
+    if (!profile.guestCapability) return;
+    this.guestCapability = profile.guestCapability;
+    try { localStorage.setItem(GUEST_CAPABILITY_KEY, profile.guestCapability); } catch {}
   }
 
   get playerId(): string | null {
@@ -114,6 +132,22 @@ export class Session {
   // adopted cosmetics — can leak into the next render; the guest hydrate refills it.
   clearProfile(): void {
     this.profile = null;
+  }
+
+  async prepareSignOutGuest(): Promise<ProfileDoc | null> {
+    if (!this.client) return null;
+    try {
+      const profile = await this.client.mutation(api.players.prepareSignOutGuest, {
+        clientId: this.clientId,
+        name: this.name,
+      });
+      this.profile = profile;
+      this.adoptGuestCapability(profile);
+      delete profile.guestCapability;
+      return profile;
+    } catch {
+      return null;
+    }
   }
 
   // The equipped loadout as the renderer consumes it: local explicit picks win, the
@@ -212,11 +246,14 @@ export class Session {
     const hasPicks = COSMETIC_PICK_SLOTS.some((slot) => sent[slot] !== undefined);
     this.profile = await this.client.mutation(api.players.ensurePlayer, {
       clientId: this.clientId,
+      ...this.guestCapabilityArgs,
       name: this.name,
       // Only explicit local picks are sent — undefined never overwrites a saved pick.
       ...(this.colorIndex !== null ? { colorIndex: this.colorIndex } : {}),
       ...(hasPicks ? { cosmetics: sent } : {}),
     });
+    this.adoptGuestCapability(this.profile);
+    delete this.profile.guestCapability;
     // A signed-in account may carry picks made on another device; adopt them locally.
     if (this.colorIndex === null && this.profile.colorIndex !== null) {
       this.colorIndex = this.profile.colorIndex;
@@ -259,48 +296,35 @@ export class Session {
 
   async refreshProfile(): Promise<ProfileDoc | null> {
     if (!this.client) return null;
-    this.profile = await this.client.query(api.players.getProfile, { clientId: this.clientId });
+    this.profile = await this.client.query(api.players.getProfile, {
+      clientId: this.clientId,
+      ...this.guestCapabilityArgs,
+    });
+    if (this.profile) {
+      this.adoptGuestCapability(this.profile);
+      delete this.profile.guestCapability;
+    }
     return this.profile;
   }
 
-  // Bank the deepest floor reached, PROGRESSIVELY, on each descend — so a run that ends by
-  // a teammate carrying on / a disconnect / a quit (never a clean full-party-wipe game over,
-  // the only thing that calls recordRun) still records its depth on the leaderboard. Fire-
-  // and-forget: a failed floor-bank must never interrupt play, and the mutation is
-  // idempotent (Math.max) so a re-bank of the same floor is harmless.
-  recordFloorProgress(floor: number): void {
-    if (!this.client || !Number.isFinite(floor) || floor < 1) return;
-    void this.client.mutation(api.players.recordFloorProgress, {
-      clientId: this.clientId,
-      floor: Math.floor(floor),
-    }).catch(() => { /* never let a depth-bank failure interrupt the run */ });
+  recordFloorProgress(_floor: number): void {
+    // Competitive progress is applied only from a GS-signed terminal receipt.
   }
 
-  async recordRun(result: RunResult): Promise<ProfileDoc | null> {
-    if (!this.client) return null;
-    try {
-      this.profile = await this.client.mutation(api.players.recordRun, {
-        clientId: this.clientId,
-        floor: result.floor,
-        kills: result.kills,
-        coins: result.coins,
-        // The authoritative run FACTS — the server banks Amber from these (never a client
-        // amber number). floorsCleared/bossKills come from the sim's own descend/kill events.
-        floorsCleared: result.floorsCleared,
-        bossKills: result.bossKills,
-        isCacheArmed: result.isCacheArmed,
-        amberWindfall: result.amberWindfall,
-        outcome: result.outcome,
-        durationMs: Math.round(result.durationMs),
-        // The run's final build rides along for the player's leaderboard entry (ids only —
-        // display names resolve client-side from the weapon/item catalogs).
-        build: {
-          weapons: (result.build?.weapons ?? []).map((w) => w.id),
-          items: (result.build?.items ?? []).map((it) => ({ id: it.id, count: it.count })),
-        },
-      });
-    } catch {
-      // Never let a stats-save failure interrupt the play loop.
+  async recordRun(_result: RunResult): Promise<ProfileDoc | null> {
+    return this.profile;
+  }
+
+  async refreshVerifiedProgress(previousGamesPlayed: number): Promise<ProfileDoc | null> {
+    if (!this.client) return this.profile;
+    for (const delayMs of [0, 100, 250, 500, 1000]) {
+      if (delayMs > 0) await new Promise((resolve) => setTimeout(resolve, delayMs));
+      try {
+        const profile = await this.refreshProfile();
+        if (profile && profile.gamesPlayed > previousGamesPlayed) return profile;
+      } catch {
+        // The direct GS receipt dispatcher retries independently.
+      }
     }
     return this.profile;
   }
@@ -362,6 +386,7 @@ export class Session {
       await this.flushIdentity();
       const result = await this.client.mutation(api.players.confirmRunLoadout, {
         clientId: this.clientId,
+        ...this.guestCapabilityArgs,
         kitId: loadout.kitId,
         petId: loadout.petId,
         isKitChoiceMade: true,
@@ -392,7 +417,11 @@ export class Session {
   async buyNode(nodeId: string): Promise<CampMutationResult | null> {
     if (!this.client) return null;
     try {
-      const res = await this.client.mutation(api.players.buyNode, { clientId: this.clientId, nodeId });
+      const res = await this.client.mutation(api.players.buyNode, {
+        clientId: this.clientId,
+        ...this.guestCapabilityArgs,
+        nodeId,
+      });
       if (res) this.profile = res.profile;
       return res;
     } catch {
@@ -405,7 +434,11 @@ export class Session {
   async equipPet(petId: string | null): Promise<CampMutationResult | null> {
     if (!this.client) return null;
     try {
-      const res = await this.client.mutation(api.players.equipPet, { clientId: this.clientId, petId });
+      const res = await this.client.mutation(api.players.equipPet, {
+        clientId: this.clientId,
+        ...this.guestCapabilityArgs,
+        petId,
+      });
       if (res) {
         this.profile = res.profile;
         if (res.ok) rememberPet(petId);

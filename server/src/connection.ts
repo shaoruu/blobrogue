@@ -40,6 +40,7 @@ export interface Conn {
   log: import("./logger.js").Logger;
 
   authed: boolean;
+  isAdmissionPending: boolean;
   playerId: PlayerId | null; // world-scoped id ("p<connId>"; a resume adopts the seat's id)
   authName: string | null;   // the verified identity from the ticket (for logs)
   worldId: string | null;
@@ -158,7 +159,7 @@ export function newRateWindows(now: number): RateWindows {
 }
 
 export function newConnState(now: number): Pick<Conn,
-  "authed" | "playerId" | "authName" | "worldId" | "displayName" | "colorIndex" | "hat" | "face" | "pet" | "kitId" | "resumeToken"
+  "authed" | "isAdmissionPending" | "playerId" | "authName" | "worldId" | "displayName" | "colorIndex" | "hat" | "face" | "pet" | "kitId" | "resumeToken"
   | "presentedResumeToken" | "isResumeTokenConfirmed" | "isLeaving" | "malformed"
   | "connectedAt" | "lastInboundAt" | "isSoftAbsent" | "rate"
   | "queue" | "lastAppliedSeq" | "lastInput" | "starveTicks" | "ackedEventId" | "lastCseq"
@@ -170,7 +171,7 @@ export function newConnState(now: number): Pick<Conn,
   | "cliReconciliations" | "cliCorrectionMaxPx"
 > {
   return {
-    authed: false, playerId: null, authName: null, worldId: null, displayName: null, colorIndex: null, hat: null, face: null, pet: null,
+    authed: false, isAdmissionPending: false, playerId: null, authName: null, worldId: null, displayName: null, colorIndex: null, hat: null, face: null, pet: null,
     kitId: "none",
     resumeToken: null, presentedResumeToken: null, isResumeTokenConfirmed: false, isLeaving: false, malformed: 0,
     connectedAt: now, lastInboundAt: now, isSoftAbsent: false, rate: newRateWindows(now),

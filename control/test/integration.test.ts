@@ -32,7 +32,7 @@ const GS_SECRET = "itest-gs-secret";
 const CTX: OperationContext = { actor: "op", requestId: "itest", idempotencyKey: null, tokenJti: "jti", confirmJti: "cf" };
 
 async function bootGs(heartbeatMs: number): Promise<{ port: number; close: () => Promise<void> }> {
-  const cfg = { ...loadGsConfig({}), host: "127.0.0.1", port: 0, auth: { secret: GS_SECRET, allowDev: true }, heartbeatMs, heartbeatMisses: 3 };
+  const cfg = { ...loadGsConfig({}), host: "127.0.0.1", port: 0, auth: { secret: GS_SECRET, allowDev: false }, heartbeatMs, heartbeatMisses: 3 };
   const gs = new GameServer(cfg, { logger: createGsLogger({ app: "gs-itest" }, "error") });
   const port = await gs.listen();
   return { port, close: () => gs.close() };
@@ -42,7 +42,7 @@ export async function suite(t: TestRunner): Promise<void> {
   await t.suite("integration: real gs status + synthetic-join verify", async () => {
     t.check("synthetic join speaks the current game protocol", SYNTHETIC_JOIN_PROTOCOL === PROTOCOL_VERSION,
       `probe=${SYNTHETIC_JOIN_PROTOCOL} game=${PROTOCOL_VERSION}`);
-    t.check("control rejects missing or malformed v32 spawn protection self fields",
+    t.check("control rejects missing or malformed v33 spawn protection self fields",
       isSyntheticSpawnProtectionSelf({ spo: 0, sge: 0, sse: 0, sgr: 0, ssh: 0, sfl: false })
       && !isSyntheticSpawnProtectionSelf({ spo: 0, sge: 0, sse: 0, sgr: 0, ssh: 0 })
       && !isSyntheticSpawnProtectionSelf({ spo: 10, sge: 9, sse: 20, sgr: 0, ssh: 0, sfl: false }));
@@ -69,9 +69,17 @@ export async function suite(t: TestRunner): Promise<void> {
           catch (error) { reject(error); }
         });
       });
-      socket.send(JSON.stringify({ t: "join", ticket: mintGsTicket(GS_SECRET, "panel-player", 60, Date.now(), { worldId: "room:OPSX", name: "PanelPlayer" }), protocol: SYNTHETIC_JOIN_PROTOCOL }));
+      socket.send(JSON.stringify({
+        t: "join",
+        ticket: mintGsTicket(GS_SECRET, "synthetic-verify", 60, Date.now(), {
+          worldId: "verify:OPSX",
+          name: "PanelPlayer",
+          isSyntheticVerify: true,
+        }),
+        protocol: SYNTHETIC_JOIN_PROTOCOL,
+      }));
       const decoded = await decodedFrame;
-      t.check("shared decoder validates v32 synthetic self spawn-protection fields",
+      t.check("shared decoder validates v33 synthetic self spawn-protection fields",
         decoded.t === "snap"
         && decoded.self !== null
         && Number.isInteger(decoded.self.spo)
@@ -83,7 +91,7 @@ export async function suite(t: TestRunner): Promise<void> {
       let room: WorldSummary | undefined;
       for (let i = 0; i < 100 && room === undefined; i++) {
         await new Promise((r) => setTimeout(r, 20));
-        room = (await probe.worlds()).find((w) => w.id === "room:OPSX");
+        room = (await probe.worlds()).find((w) => w.id === "verify:OPSX");
       }
       t.check("live /worlds lists the room world with its occupant", room !== undefined && room.players === 1 && room.names[0] === "PanelPlayer",
         `world=${JSON.stringify(room ?? null)}`);
@@ -123,6 +131,11 @@ export async function suite(t: TestRunner): Promise<void> {
         new NodeTailReader(),
       );
       const pm2 = new FakePm2();
+      const reload = pm2.reload.bind(pm2);
+      pm2.reload = async (app) => {
+        await reload(app);
+        await fetch(`http://127.0.0.1:${gs.port}/admin/resume`, { method: "POST" });
+      };
       const gameServer = new DefaultGameServerAdmin(probe, pm2);
       const controller = new DeployController({ releases, operations, gameServer, verifier, audit, lock: new DeployLock(), clock, log, retainedReleases: 5 });
 

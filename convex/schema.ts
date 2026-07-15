@@ -85,6 +85,24 @@ export default defineSchema({
     .index("by_clientId", ["clientId"])
     .index("by_userId", ["userId"]),
 
+  guestSessions: defineTable({
+    token: v.string(),
+    clientId: v.string(),
+    playerId: v.id("players"),
+    scopes: v.array(v.union(
+      v.literal("profile"),
+      v.literal("room"),
+      v.literal("ticket"),
+      v.literal("economy"),
+    )),
+    createdAt: v.number(),
+    expiresAt: v.number(),
+    revokedAt: v.optional(v.number()),
+  })
+    .index("by_token", ["token"])
+    .index("by_player", ["playerId"])
+    .index("by_client", ["clientId"]),
+
   // Global leaderboard: ONE row per player — their best run (deepest floor, kills as the
   // tie-break) — folded in by players.recordRun. The row SNAPSHOTS the run's build and the
   // player's cosmetic loadout separately from the mutable profile, so the leaderboard
@@ -134,10 +152,18 @@ export default defineSchema({
     // confirmation, so a confirmation from the previous run cannot ready or mint a ticket
     // for the next one.
     loadoutGeneration: v.optional(v.number()),
+    generationState: v.optional(v.union(
+      v.literal("pending"),
+      v.literal("active"),
+      v.literal("completed"),
+    )),
+    generationCompletedAt: v.optional(v.number()),
+    generationCompletionJti: v.optional(v.string()),
     createdAt: v.number(),
     lastActivity: v.number(),
   })
     .index("by_code", ["code"])
+    .index("by_host", ["hostPlayerId"])
     .index("by_public_status", ["isPublic", "status", "lastActivity"]),
 
   // Live per-player state inside a room, synced ~10x/sec by the client.
@@ -187,5 +213,27 @@ export default defineSchema({
     isDeparted: v.optional(v.boolean()),
   })
     .index("by_room", ["roomId"])
+    .index("by_player", ["playerId"])
     .index("by_room_player", ["roomId", "playerId"]),
+
+  runReceipts: defineTable({
+    jti: v.string(),
+    runId: v.string(),
+    worldId: v.string(),
+    roomId: v.id("rooms"),
+    generation: v.number(),
+    status: v.union(
+      v.literal("completed"),
+      v.literal("abandoned"),
+      v.literal("server_restart"),
+    ),
+    playerIds: v.array(v.id("players")),
+    rewardedPlayerIds: v.array(v.id("players")),
+    issuedAt: v.number(),
+    expiresAt: v.number(),
+    consumedAt: v.number(),
+  })
+    .index("by_jti", ["jti"])
+    .index("by_run", ["runId"])
+    .index("by_expiry", ["expiresAt"]),
 });

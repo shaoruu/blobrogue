@@ -56,6 +56,7 @@ function fakeConvex(calls: Call[], opts: FakeConvexOpts = {}): ConvexClient {
           totalKills: 0, deepestFloor: 0, totalCoins: 0, gamesPlayed: 0,
           unlocks: [], equippedPet: null, lastKitId: "gunner",
           masteryXp: 0, masteryLevel: 1, isAccount: false,
+          guestCapability: "guest-capability",
         };
       case "rooms:create":
         return {
@@ -144,7 +145,9 @@ async function main(): Promise<void> {
     const createArgs = calls[createIdx].args;
     check("the room row is created with the chosen color", createArgs.colorIndex === 4, JSON.stringify(createArgs));
     check("online authority is bound by clientId, never a caller-supplied playerId",
-      createArgs.clientId === session.clientId && !("playerId" in createArgs), JSON.stringify(createArgs));
+      createArgs.clientId === session.clientId
+      && createArgs.guestCapability === "guest-capability"
+      && !("playerId" in createArgs), JSON.stringify(createArgs));
     check("explicit No Pet carries null plus both deliberate choice bits",
       createArgs.petId === null
       && createArgs.isKitChoiceMade === true
@@ -171,6 +174,7 @@ async function main(): Promise<void> {
     const mintArgs = calls[mintIdx].args;
     check("the mint is bound to this room's code", mintArgs.roomCode === "ABCD", JSON.stringify(mintArgs));
     check("the mint carries this browser's clientId", mintArgs.clientId === session.clientId);
+    check("the mint carries the scoped guest capability", mintArgs.guestCapability === "guest-capability");
     check("the ticket request carries no browser-authored kit or pet", !("kit" in mintArgs) && !("petId" in mintArgs));
     lobby.leave();
   }

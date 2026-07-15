@@ -289,7 +289,10 @@ export const FIXED_DT = 1 / TICK_HZ; // 50ms authoritative step
 // PlayerWire. The split drives exact attack suppression and unambiguous local/remote safety cues.
 // v31: authoritative PvP shield-break event, ordered before the offense that broke it.
 // v32: shared spawn-origin/end ticks, held-offense latch, and rate-limited arming feedback.
-export const PROTOCOL_VERSION = 32;
+// v33: authority-plane hard cut. Guest capabilities, signed run receipts, and durable generation
+// admission require the coordinated client/Convex/GS rollout; stale clients get a terminal
+// refresh-required rejection instead of retrying through the reconnect grace.
+export const PROTOCOL_VERSION = 33;
 
 // How long the server reserves a disconnected player's body (their seat) before the
 // authoritative leave lifecycle applies. 90s per the studio balance gate's reconnect
@@ -843,7 +846,7 @@ const EVENT_SPECS: Record<SimEvent["t"], EventSpec> = {
   thornsHit: { scope: "pos", fields: { eid: "num", x: "num", y: "num", radius: "num", dmg: "num", tint: "str" } },
   burnTick: { scope: "pos", fields: { x: "num", y: "num", radius: "num", dmg: "num" } },
   shockArc: { scope: "pos", fields: { eid: "num", x: "num", y: "num", tx: "num", ty: "num", tRadius: "num", dmg: "num", color: "str", killed: "bool" } },
-  enemyKill: { scope: "pos", fields: { eid: "num", kind: "str", tier: "str", x: "num", y: "num", combo: "num" } },
+  enemyKill: { scope: "pos", fields: { eid: "num", kind: "str", tier: "str", x: "num", y: "num", combo: "num", by: "str" } },
   heal: { scope: "pos", fields: { pid: "str", x: "num", y: "num" } },
   // Deliberately pid-scoped: these drive the DASHER's own juice. Teammates render a remote
   // dash off the PlayerWire dash state (dti/ddx/ddy — v9), which is interp-aligned with the

@@ -22,7 +22,7 @@ export type SimEvent =
   | { t: "thornsHit"; eid: number; x: number; y: number; radius: number; dmg: number; tint: string }
   | { t: "burnTick"; x: number; y: number; radius: number; dmg: number }
   | { t: "shockArc"; eid: number; x: number; y: number; tx: number; ty: number; tRadius: number; dmg: number; color: string; killed: boolean }
-  | { t: "enemyKill"; eid: number; kind: EnemyKind; tier: string; x: number; y: number; combo: number }
+  | { t: "enemyKill"; eid: number; kind: EnemyKind; tier: string; x: number; y: number; combo: number; by: PlayerId }
   | { t: "heal"; pid: PlayerId; x: number; y: number }
   // player movement / state
   | { t: "dashStart"; pid: PlayerId; x: number; y: number }

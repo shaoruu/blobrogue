@@ -1,12 +1,13 @@
-import { mutation, query } from "./_generated/server";
+import { internalQuery, mutation, query } from "./_generated/server";
 import { ConvexError, v } from "convex/values";
 import type { MutationCtx } from "./_generated/server";
 import type { Doc, Id } from "./_generated/dataModel";
 import { assertPvpModeAllowed } from "./pvpFlag";
 import { validateCombinedLoadout, validateKitDraft, validatePetDraft } from "./loadoutCore";
 import type { CombinedLoadoutInput, ConfirmedKitId, LoadoutValidation } from "./loadoutCore";
-import { getAuthUserId } from "@convex-dev/auth/server";
 import { evaluateLobbyStart } from "./lobbyLoadoutCore";
+import { resolveAuthorizedPlayer } from "./guestAuth";
+import { pvpWorldIdForRoomCode, worldIdForRoomCode } from "./gsTicketCore";
 
 // Rooms come in two kinds that never cross-match (see schema.ts):
 //   "coop"   — classic peer-synced co-op (the pre-authoritative path, fully preserved).
@@ -72,22 +73,16 @@ function kindOf(room: Doc<"rooms">): RoomKind {
   return room.kind ?? "coop";
 }
 
-async function resolveOnlineCaller(ctx: MutationCtx, clientId: string): Promise<Doc<"players">> {
-  const userId = await getAuthUserId(ctx);
-  const player = userId
-    ? await ctx.db.query("players").withIndex("by_userId", (queryBuilder) => queryBuilder.eq("userId", userId)).unique()
-    : await ctx.db.query("players").withIndex("by_clientId", (queryBuilder) => queryBuilder.eq("clientId", clientId)).unique();
-  if (!player) throw new ConvexError({ code: "unknown_player", message: "player session not found" });
-  return player;
-}
-
 async function resolveRoomCaller(
   ctx: MutationCtx,
   kind: RoomKind,
   clientId: string | undefined,
+  guestCapability: string | undefined,
   playerId: Id<"players"> | undefined,
 ): Promise<Doc<"players">> {
-  if (kind === "online") return await resolveOnlineCaller(ctx, clientId ?? "");
+  if (kind === "online") {
+    return await resolveAuthorizedPlayer(ctx, clientId ?? "", guestCapability, "room");
+  }
   if (!playerId) throw new Error("unknown player");
   const player = await ctx.db.get(playerId);
   if (!player) throw new Error("unknown player");
@@ -210,16 +205,17 @@ async function persistLoadoutConvenience(
 // chosen blob color for their roster dot (classic co-op keeps the assigned palette slot).
 export const create = mutation({
   args: {
-    clientId: v.optional(v.string()), playerId: v.optional(v.id("players")), kind: kindArg, mode: modeArg,
+    clientId: v.optional(v.string()), guestCapability: v.optional(v.string()),
+    playerId: v.optional(v.id("players")), kind: kindArg, mode: modeArg,
     colorIndex: v.optional(v.number()), ...loadoutArgs,
   },
   handler: async (ctx, args) => {
-    const { clientId, playerId: requestedPlayerId, kind, mode, colorIndex } = args;
+    const { clientId, guestCapability, playerId: requestedPlayerId, kind, mode, colorIndex } = args;
     // TEMP kill switch (independent of the client UI): a pvp room can't be hosted while PVP is
     // disabled, so a stale client with a cached bundle can't create one either. Co-op untouched.
     assertPvpModeAllowed(mode);
     const roomKind = kind ?? "coop";
-    const player = await resolveRoomCaller(ctx, roomKind, clientId, requestedPlayerId);
+    const player = await resolveRoomCaller(ctx, roomKind, clientId, guestCapability, requestedPlayerId);
     const playerId = player._id;
     const loadout = roomKind === "online" ? requireLoadout(player, loadoutInput(args)) : null;
     const code = await uniqueCode(ctx);
@@ -229,6 +225,7 @@ export const create = mutation({
     const roomId = await ctx.db.insert("rooms", {
       code, kind: roomKind, mode: mode ?? "coop", hostPlayerId: playerId, seed, floor: 1,
       status: "lobby", isPublic: false, loadoutGeneration: generation,
+      generationState: roomKind === "online" ? "pending" : undefined,
       createdAt: now, lastActivity: now,
     });
     const effectiveLoadout = await ensurePresence(
@@ -248,11 +245,12 @@ export const create = mutation({
 // code can never pull someone into classic co-op (or vice versa).
 export const join = mutation({
   args: {
-    code: v.string(), clientId: v.optional(v.string()), playerId: v.optional(v.id("players")), kind: kindArg,
+    code: v.string(), clientId: v.optional(v.string()), guestCapability: v.optional(v.string()),
+    playerId: v.optional(v.id("players")), kind: kindArg,
     colorIndex: v.optional(v.number()), ...loadoutArgs,
   },
   handler: async (ctx, args) => {
-    const { code, clientId, playerId: requestedPlayerId, kind, colorIndex } = args;
+    const { code, clientId, guestCapability, playerId: requestedPlayerId, kind, colorIndex } = args;
     const room = await ctx.db
       .query("rooms")
       .withIndex("by_code", (q) => q.eq("code", code.trim().toUpperCase()))
@@ -262,7 +260,7 @@ export const join = mutation({
     if (kindOf(room) !== wantKind) {
       throw new Error(wantKind === "online" ? "that code is a classic co-op room" : "that code is an online room");
     }
-    const player = await resolveRoomCaller(ctx, wantKind, clientId, requestedPlayerId);
+    const player = await resolveRoomCaller(ctx, wantKind, clientId, guestCapability, requestedPlayerId);
     const playerId = player._id;
     if (room.status === "ended") throw new Error("that game has ended");
     // TEMP kill switch: the mode comes from the EXISTING room doc, so joining a pvp room (even
@@ -302,16 +300,17 @@ export const join = mutation({
 // and players drop in/out of the public pool freely.
 export const quickPlay = mutation({
   args: {
-    clientId: v.optional(v.string()), playerId: v.optional(v.id("players")), kind: kindArg, mode: modeArg,
+    clientId: v.optional(v.string()), guestCapability: v.optional(v.string()),
+    playerId: v.optional(v.id("players")), kind: kindArg, mode: modeArg,
     colorIndex: v.optional(v.number()), ...loadoutArgs,
   },
   handler: async (ctx, args) => {
-    const { clientId, playerId: requestedPlayerId, kind, mode, colorIndex } = args;
+    const { clientId, guestCapability, playerId: requestedPlayerId, kind, mode, colorIndex } = args;
     // TEMP kill switch: quick-play into the pvp pool is closed while disabled (independent of
     // the UI), so a stale client can neither join an open pvp room nor spin up a fresh one.
     assertPvpModeAllowed(mode);
     const wantKind: RoomKind = kind ?? "coop";
-    const player = await resolveRoomCaller(ctx, wantKind, clientId, requestedPlayerId);
+    const player = await resolveRoomCaller(ctx, wantKind, clientId, guestCapability, requestedPlayerId);
     const playerId = player._id;
     const wantMode: RoomMode = mode ?? "coop";
     const loadout = wantKind === "online" ? requireLoadout(player, loadoutInput(args)) : null;
@@ -328,6 +327,7 @@ export const quickPlay = mutation({
       if (room.status === "ended") continue;
       if (kindOf(room) !== wantKind) continue;
       if (modeOf(room) !== wantMode) continue; // a pvp quick-play only pools with pvp rooms
+      if (wantKind === "online" && room.generationState !== "active") continue;
       if (now - room.lastActivity > QUICKPLAY_STALE_MS) continue;
       const players = await ctx.db
         .query("presence")
@@ -358,7 +358,9 @@ export const quickPlay = mutation({
     const generation = 1;
     const roomId = await ctx.db.insert("rooms", {
       code, kind: wantKind, mode: wantMode, hostPlayerId: playerId, seed, floor: 1,
-      status, isPublic: true, loadoutGeneration: generation, createdAt: now, lastActivity: now,
+      status, isPublic: true, loadoutGeneration: generation,
+      generationState: wantKind === "online" ? "active" : undefined,
+      createdAt: now, lastActivity: now,
     });
     const effectiveLoadout = await ensurePresence(
       ctx, roomId, playerId, player.name, 1, colorIndex ?? 0,
@@ -434,17 +436,117 @@ export const membership = query({
   },
 });
 
+export const ticketSnapshot = internalQuery({
+  args: {
+    clientId: v.string(),
+    guestCapability: v.optional(v.string()),
+    code: v.string(),
+  },
+  handler: async (ctx, { clientId, guestCapability, code }) => {
+    const player = await resolveAuthorizedPlayer(ctx, clientId, guestCapability, "ticket");
+    const room = await ctx.db.query("rooms")
+      .withIndex("by_code", (queryBuilder) => queryBuilder.eq("code", code.trim().toUpperCase()))
+      .unique();
+    if (!room || kindOf(room) !== "online" || room.status !== "playing") {
+      throw new ConvexError({ code: "room_not_active", message: "that room is not active" });
+    }
+    if (room.generationState !== "active") {
+      throw new ConvexError({ code: "generation_not_active", message: "that run generation is not active" });
+    }
+    const row = await ctx.db.query("presence")
+      .withIndex("by_room_player", (queryBuilder) => (
+        queryBuilder.eq("roomId", room._id).eq("playerId", player._id)
+      ))
+      .unique();
+    const generation = room.loadoutGeneration ?? 1;
+    const isMember = row !== null
+      && row.isDeparted !== true
+      && (room.isPublic === true || row.isReady === true);
+    const isConfirmed = row !== null
+      && row.isKitChoiceMade === true
+      && row.isPetChoiceMade === true
+      && row.isLoadoutConfirmed === true
+      && row.loadoutGeneration === generation
+      && row.loadoutKitId !== undefined;
+    if (!isMember || !isConfirmed || !row?.loadoutKitId) {
+      throw new ConvexError({ code: "loadout_not_confirmed", message: "confirm and ready the loadout first" });
+    }
+    return {
+      playerId: player._id,
+      name: player.name,
+      colorIndex: player.colorIndex ?? 0,
+      hat: player.cosmeticLoadout?.hat ?? null,
+      face: player.cosmeticLoadout?.face ?? null,
+      masteryXp: player.masteryXp ?? 0,
+      kitId: row.loadoutKitId,
+      petId: row.loadoutPetId ?? null,
+      roomCode: room.code,
+      mode: modeOf(room),
+      generation,
+    };
+  },
+});
+
+export const generationAdmission = internalQuery({
+  args: {
+    playerId: v.string(),
+    worldId: v.string(),
+    roomCode: v.string(),
+    generation: v.number(),
+    kitId: v.string(),
+    petId: v.union(v.string(), v.null()),
+  },
+  handler: async (ctx, args) => {
+    const room = await ctx.db.query("rooms")
+      .withIndex("by_code", (queryBuilder) => queryBuilder.eq("code", args.roomCode))
+      .unique();
+    if (!room || kindOf(room) !== "online" || room.status !== "playing") {
+      return { isAllowed: false as const, code: "room_not_active" };
+    }
+    const generation = room.loadoutGeneration ?? 1;
+    const expectedWorldId = modeOf(room) === "pvp"
+      ? pvpWorldIdForRoomCode(room.code, generation)
+      : worldIdForRoomCode(room.code, generation);
+    if (room.generationState !== "active"
+      || generation !== args.generation
+      || expectedWorldId !== args.worldId) {
+      return { isAllowed: false as const, code: "generation_not_active" };
+    }
+    const playerId = args.playerId as Id<"players">;
+    const player = await ctx.db.get(playerId);
+    if (!player) return { isAllowed: false as const, code: "player_missing" };
+    const row = await ctx.db.query("presence")
+      .withIndex("by_room_player", (queryBuilder) => (
+        queryBuilder.eq("roomId", room._id).eq("playerId", playerId)
+      ))
+      .unique();
+    const isLoadoutCurrent = row !== null
+      && row.isDeparted !== true
+      && row.isKitChoiceMade === true
+      && row.isPetChoiceMade === true
+      && row.isLoadoutConfirmed === true
+      && row.loadoutGeneration === generation
+      && row.loadoutKitId === args.kitId
+      && (row.loadoutPetId ?? null) === args.petId;
+    const isMember = isLoadoutCurrent && (room.isPublic === true || row?.isReady === true);
+    return isMember
+      ? { isAllowed: true as const, code: "ok" }
+      : { isAllowed: false as const, code: "membership_changed" };
+  },
+});
+
 // Host flips the lobby into a live game; everyone waiting begins.
 export const start = mutation({
   args: {
     roomId: v.id("rooms"),
     clientId: v.optional(v.string()),
+    guestCapability: v.optional(v.string()),
     playerId: v.optional(v.id("players")),
   },
-  handler: async (ctx, { roomId, clientId, playerId }) => {
+  handler: async (ctx, { roomId, clientId, guestCapability, playerId }) => {
     const room = await ctx.db.get(roomId);
     if (!room) throw new Error("no such room");
-    const caller = await resolveRoomCaller(ctx, kindOf(room), clientId, playerId);
+    const caller = await resolveRoomCaller(ctx, kindOf(room), clientId, guestCapability, playerId);
     if (room.hostPlayerId !== caller._id) throw new Error("only the host can start");
     if (room.status !== "lobby") {
       return { ok: false as const, code: "run_already_started" as const, message: "this run already started" };
@@ -461,7 +563,13 @@ export const start = mutation({
       );
       if (!decision.ok) return decision;
     }
-    await ctx.db.patch(roomId, { status: "playing", lastActivity: Date.now() });
+    await ctx.db.patch(roomId, {
+      status: "playing",
+      generationState: kindOf(room) === "online" ? "active" : room.generationState,
+      generationCompletedAt: undefined,
+      generationCompletionJti: undefined,
+      lastActivity: Date.now(),
+    });
     return { ok: true as const };
   },
 });
@@ -470,9 +578,10 @@ export const beginLoadoutEdit = mutation({
   args: {
     roomId: v.id("rooms"),
     clientId: v.string(),
+    guestCapability: v.optional(v.string()),
     generation: v.number(),
   },
-  handler: async (ctx, { roomId, clientId, generation }) => {
+  handler: async (ctx, { roomId, clientId, guestCapability, generation }) => {
     const room = await ctx.db.get(roomId);
     if (!room || kindOf(room) !== "online" || room.status !== "lobby") {
       return { ok: false as const, reason: "run_locked" as const };
@@ -481,7 +590,7 @@ export const beginLoadoutEdit = mutation({
     if (generation !== currentGeneration) {
       return { ok: false as const, reason: "generation_changed" as const };
     }
-    const player = await resolveOnlineCaller(ctx, clientId);
+    const player = await resolveAuthorizedPlayer(ctx, clientId, guestCapability, "room");
     const row = await ctx.db
       .query("presence")
       .withIndex("by_room_player", (q) => q.eq("roomId", roomId).eq("playerId", player._id))
@@ -506,11 +615,12 @@ export const chooseDraftKit = mutation({
   args: {
     roomId: v.id("rooms"),
     clientId: v.string(),
+    guestCapability: v.optional(v.string()),
     generation: v.number(),
     editRevision: v.number(),
     kitId: v.string(),
   },
-  handler: async (ctx, { roomId, clientId, generation, editRevision, kitId }) => {
+  handler: async (ctx, { roomId, clientId, guestCapability, generation, editRevision, kitId }) => {
     const room = await ctx.db.get(roomId);
     if (!room || kindOf(room) !== "online" || room.status !== "lobby") {
       return { ok: false as const, reason: "run_locked" as const };
@@ -519,7 +629,7 @@ export const chooseDraftKit = mutation({
     if (generation !== currentGeneration) {
       return { ok: false as const, reason: "generation_changed" as const };
     }
-    const player = await resolveOnlineCaller(ctx, clientId);
+    const player = await resolveAuthorizedPlayer(ctx, clientId, guestCapability, "room");
     const row = await ctx.db
       .query("presence")
       .withIndex("by_room_player", (q) => q.eq("roomId", roomId).eq("playerId", player._id))
@@ -547,11 +657,12 @@ export const chooseDraftPet = mutation({
   args: {
     roomId: v.id("rooms"),
     clientId: v.string(),
+    guestCapability: v.optional(v.string()),
     generation: v.number(),
     editRevision: v.number(),
     petId: v.union(v.string(), v.null()),
   },
-  handler: async (ctx, { roomId, clientId, generation, editRevision, petId }) => {
+  handler: async (ctx, { roomId, clientId, guestCapability, generation, editRevision, petId }) => {
     const room = await ctx.db.get(roomId);
     if (!room || kindOf(room) !== "online" || room.status !== "lobby") {
       return { ok: false as const, reason: "run_locked" as const };
@@ -560,7 +671,7 @@ export const chooseDraftPet = mutation({
     if (generation !== currentGeneration) {
       return { ok: false as const, reason: "generation_changed" as const };
     }
-    const player = await resolveOnlineCaller(ctx, clientId);
+    const player = await resolveAuthorizedPlayer(ctx, clientId, guestCapability, "room");
     const row = await ctx.db
       .query("presence")
       .withIndex("by_room_player", (q) => q.eq("roomId", roomId).eq("playerId", player._id))
@@ -588,6 +699,7 @@ export const confirmLoadout = mutation({
   args: {
     roomId: v.id("rooms"),
     clientId: v.string(),
+    guestCapability: v.optional(v.string()),
     generation: v.number(),
     editRevision: v.number(),
   },
@@ -599,7 +711,12 @@ export const confirmLoadout = mutation({
     const generation = room.loadoutGeneration ?? 1;
     if (room.status !== "lobby") return { ok: false as const, reason: "run_locked" as const };
     if (args.generation !== generation) return { ok: false as const, reason: "generation_changed" as const };
-    const player = await resolveOnlineCaller(ctx, args.clientId);
+    const player = await resolveAuthorizedPlayer(
+      ctx,
+      args.clientId,
+      args.guestCapability,
+      "room",
+    );
     const row = await ctx.db
       .query("presence")
       .withIndex("by_room_player", (q) => q.eq("roomId", args.roomId).eq("playerId", player._id))
@@ -637,17 +754,16 @@ export const confirmLoadout = mutation({
   },
 });
 
-// After an online run ends (party wipe), the room regroups: back from "playing" to "lobby" so
-// the same code hosts the next run. The host advances the generation once no member reports
-// a live world connection; later member calls observe the already-reopened lobby.
+// After a server-attested completion, the host advances exactly one generation.
 export const reopen = mutation({
   args: {
     roomId: v.id("rooms"),
     clientId: v.optional(v.string()),
+    guestCapability: v.optional(v.string()),
     playerId: v.optional(v.id("players")),
     generation: v.optional(v.number()),
   },
-  handler: async (ctx, { roomId, clientId, playerId, generation }) => {
+  handler: async (ctx, { roomId, clientId, guestCapability, playerId, generation }) => {
     const room = await ctx.db.get(roomId);
     if (!room) return { loadoutGeneration: 1, isReopened: false };
     const currentGeneration = room.loadoutGeneration ?? 1;
@@ -657,7 +773,7 @@ export const reopen = mutation({
     if (room.status !== "playing") {
       return { loadoutGeneration: currentGeneration, isReopened: room.status === "lobby" };
     }
-    const caller = await resolveRoomCaller(ctx, kindOf(room), clientId, playerId);
+    const caller = await resolveRoomCaller(ctx, kindOf(room), clientId, guestCapability, playerId);
     if (kindOf(room) === "online" && room.hostPlayerId !== caller._id) {
       return { loadoutGeneration: currentGeneration, isReopened: false };
     }
@@ -665,23 +781,36 @@ export const reopen = mutation({
       .query("presence")
       .withIndex("by_room_player", (q) => q.eq("roomId", roomId).eq("playerId", caller._id))
       .unique();
-    if (!member) return { loadoutGeneration: currentGeneration, isReopened: false };
-    const rows = await ctx.db.query("presence").withIndex("by_room", (q) => q.eq("roomId", roomId)).collect();
-    if (kindOf(room) === "online" && rows.some((row) => row.gsWorldId !== undefined)) {
+    if (!member || member.isDeparted === true) {
       return { loadoutGeneration: currentGeneration, isReopened: false };
     }
+    if (kindOf(room) === "online" && room.generationState !== "completed") {
+      return { loadoutGeneration: currentGeneration, isReopened: false };
+    }
+    const rows = await ctx.db.query("presence").withIndex("by_room", (q) => q.eq("roomId", roomId)).collect();
     const nextGeneration = currentGeneration + 1;
     await ctx.db.patch(roomId, {
       status: "lobby",
       loadoutGeneration: nextGeneration,
+      generationState: kindOf(room) === "online" ? "pending" : room.generationState,
+      generationCompletedAt: undefined,
+      generationCompletionJti: undefined,
       lastActivity: Date.now(),
     });
     for (const row of rows) {
+      if (row.isDeparted === true) {
+        await ctx.db.delete(row._id);
+        continue;
+      }
       await ctx.db.patch(row._id, {
         isKitChoiceMade: undefined,
         isPetChoiceMade: undefined,
         isLoadoutConfirmed: undefined,
         isReady: undefined,
+        gsWorldId: undefined,
+        gsJoinedAt: undefined,
+        loadoutGeneration: nextGeneration,
+        loadoutEditRevision: undefined,
       });
     }
     return { loadoutGeneration: nextGeneration, isReopened: true };
@@ -699,20 +828,21 @@ export const heartbeat = mutation({
   args: {
     roomId: v.id("rooms"),
     clientId: v.optional(v.string()),
+    guestCapability: v.optional(v.string()),
     playerId: v.optional(v.id("players")),
     name: v.optional(v.string()),
     colorIndex: v.optional(v.number()),
     pingMs: v.optional(v.number()),
   },
-  handler: async (ctx, { roomId, clientId, playerId, name, colorIndex, pingMs }) => {
+  handler: async (ctx, { roomId, clientId, guestCapability, playerId, name, colorIndex, pingMs }) => {
     const room = await ctx.db.get(roomId);
     if (!room || room.status === "ended") return;
-    const caller = await resolveRoomCaller(ctx, kindOf(room), clientId, playerId);
+    const caller = await resolveRoomCaller(ctx, kindOf(room), clientId, guestCapability, playerId);
     const row = await ctx.db
       .query("presence")
       .withIndex("by_room_player", (q) => q.eq("roomId", roomId).eq("playerId", caller._id))
       .unique();
-    if (!row) return;
+    if (!row || row.isDeparted === true) return;
     const now = Date.now();
     const isOnline = kindOf(room) === "online";
     await ctx.db.patch(row._id, {
@@ -742,12 +872,13 @@ export const leave = mutation({
   args: {
     roomId: v.id("rooms"),
     clientId: v.optional(v.string()),
+    guestCapability: v.optional(v.string()),
     playerId: v.optional(v.id("players")),
   },
-  handler: async (ctx, { roomId, clientId, playerId }) => {
+  handler: async (ctx, { roomId, clientId, guestCapability, playerId }) => {
     const room = await ctx.db.get(roomId);
     if (!room) return;
-    const caller = await resolveRoomCaller(ctx, kindOf(room), clientId, playerId);
+    const caller = await resolveRoomCaller(ctx, kindOf(room), clientId, guestCapability, playerId);
     const mine = await ctx.db
       .query("presence")
       .withIndex("by_room_player", (q) => q.eq("roomId", roomId).eq("playerId", caller._id))
@@ -761,16 +892,15 @@ export const leave = mutation({
         updatedAt: 0,
       });
       const remaining = (await ctx.db.query("presence").withIndex("by_room", (q) => q.eq("roomId", roomId)).collect())
-        .filter((member) => member.isDeparted !== true);
-      if (remaining.length === 0) {
-        await ctx.db.patch(roomId, { status: "ended", lastActivity: Date.now() });
-        const tombstones = await ctx.db.query("presence").withIndex("by_room", (q) => q.eq("roomId", roomId)).collect();
-        for (const tombstone of tombstones) await ctx.db.delete(tombstone._id);
-      } else if (room.hostPlayerId === caller._id) {
+        .filter((member) => member.isDeparted !== true)
+        .sort((left, right) => left._creationTime - right._creationTime);
+      if (remaining.length > 0 && room.hostPlayerId === caller._id) {
         await ctx.db.patch(roomId, {
           hostPlayerId: remaining[0].playerId,
           lastActivity: Date.now(),
         });
+      } else {
+        await ctx.db.patch(roomId, { lastActivity: Date.now() });
       }
       return;
     }

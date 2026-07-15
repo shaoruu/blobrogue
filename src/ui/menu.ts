@@ -62,6 +62,8 @@ export interface GameOverContext {
   // The SERVER-authoritative Amber banked this run (the profile's amber delta across
   // recordRun) — shown as "Banked N Amber". Never a client-computed number.
   bankedAmber?: number;
+  isProgressVerified?: boolean;
+  progressNote?: string;
 }
 
 type LoadoutGateDestination = "solo" | "online" | "invite" | "lobby" | "replay" | "preselect";
@@ -713,10 +715,9 @@ export class Menu {
 
   private async doSignOut() {
     if (!this.auth) return;
+    const guest = await this.session.prepareSignOutGuest();
+    if (!guest) return;
     await this.auth.signOut();
-    // Flush the cached profile so no prior-account data (name/stats/cosmetics/unlocks)
-    // survives into the guest render — the title hydrate refills from the guest row.
-    this.session.clearProfile();
     await this.showTitle();
   }
 
@@ -3199,6 +3200,9 @@ export class Menu {
     wrap.appendChild(grid);
 
     const banked = ctx.bankedAmber ?? 0;
+    if (ctx.progressNote) {
+      wrap.appendChild(el("p", "muted progress-authority-note", ctx.progressNote));
+    }
     if (banked > 0) {
       const amber = el("p", "", `\u25c6 Banked ${banked} Amber \u2014 spend it at the Camp`);
       amber.style.color = "var(--amber)";
@@ -3292,7 +3296,7 @@ export class Menu {
       isSignInAvailable: this.auth !== null,
       isSignedIn: this.auth?.isSignedIn ?? false,
       // Meaningful progress = the run actually saved (a dead backend makes the pitch hollow).
-      hasMeaningfulProgress: profile !== null,
+      hasMeaningfulProgress: profile !== null && ctx.isProgressVerified !== false,
       isShownThisSession: this.isNudgeShownThisSession,
     });
     if (!isEligible) return null;

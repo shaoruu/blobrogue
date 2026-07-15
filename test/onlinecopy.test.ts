@@ -78,6 +78,7 @@ function main(): void {
   check("world_mismatch note IS the contract string", exitNoteFor("world_mismatch") === WORLD_MISMATCH_NOTE);
   check("run_ended_away note IS the contract string", exitNoteFor("run_ended_away") === RUN_ENDED_AWAY_NOTE);
   check("connection_lost offers REJOIN", exitNoteFor("connection_lost").includes("REJOIN RUN"));
+  check("client_outdated requires a refresh", exitNoteFor("client_outdated").includes("refresh the page"));
   check("a plain quit adds no note", exitNoteFor("quit") === "" && exitNoteFor(undefined) === "");
 
   section("START ANYWAY is a 3s hold");
@@ -117,7 +118,7 @@ function main(): void {
       onlineHudLabel({ phase: "connected", roomCode: "ABCD", worldId: null, connected: 2, away: 1 }),
       reconnectOverlayCopy(t0 + 5000, info(t0, 2, t0 + 90000)).hint ?? "",
       exitNoteFor("connection_lost"), exitNoteFor("world_mismatch"), exitNoteFor("party_incomplete", "Bob"),
-      exitNoteFor("superseded"), exitNoteFor("connect_failed"), exitNoteFor("run_ended_away"),
+      exitNoteFor("superseded"), exitNoteFor("connect_failed"), exitNoteFor("client_outdated"), exitNoteFor("run_ended_away"),
       COPY_INVITE_LABEL, INVITE_COPIED_LABEL, INVITE_SHARED_LABEL, INVITE_COPY_FAILED_LABEL,
       INVITE_SHARE_HINT, INVITE_OFFLINE_NOTE, INVITE_INVALID_NOTE, INVITE_UNREACHABLE_NOTE,
       INVITE_TRY_AGAIN_LABEL, inviteJoiningNote("ABCD"), inviteFailState("that room is full").note,

@@ -19,12 +19,14 @@ import type { InputCmd, PlayerId } from "../../src/sim/input.js";
 import { TILE, type WeaponId } from "../../src/sim/types.js";
 import { Rng, randomSeed } from "../../src/sim/rng.js";
 import { rollPvpDraftChoicesWith, itemById, isPvpBlessingId } from "../../src/sim/items.js";
+import { isBossKind } from "../../src/sim/enemies.js";
 import { LAGCOMP_MAX_TICKS } from "../../src/sim/constants.js";
 import { FIXED_DT, TICK_HZ, INTERP_BASE_DELAY_MS, type WireEvent } from "../../src/net/protocol.js";
 import { resumeTokensEqual } from "./auth.js";
 import type { Conn, InputIntent } from "./connection.js";
 import type { ServerConfig } from "./config.js";
 import type { RoomRuntime, BlessingOfferRequest, Seat, TakeSeatResult } from "./ports.js";
+import type { RunReceiptParticipant } from "../../src/net/runReceipt.js";
 
 const BLESSING_CHOICES = 3;
 const TICK_MS = 1000 / TICK_HZ;
@@ -75,6 +77,10 @@ export class GameWorld implements RoomRuntime {
   // Offers whose TTL expired this tick (already resolved on BOTH sides here) — surfaced for
   // the server's logging/metrics.
   private expiredOffersThisTick: PlayerId[] = [];
+  private joinedAtTick = new Map<PlayerId, number>();
+  private joinedAtFloor = new Map<PlayerId, number>();
+  private bossKillsByPlayer = new Map<PlayerId, Set<string>>();
+  private authIdentityByPlayer = new Map<PlayerId, string>();
   constructor(id: string, seed: number = randomSeed(), arena = false, mode: WorldMode = "coop") {
     this.id = id;
     // Production: a REAL generated dungeon (isShared) with a FRESH random run seed — the server
@@ -97,6 +103,10 @@ export class GameWorld implements RoomRuntime {
     this.gameOverThisTick = [];
     this.offerThisTick = [];
     this.seatMap.clear();
+    this.joinedAtTick.clear();
+    this.joinedAtFloor.clear();
+    this.bossKillsByPlayer.clear();
+    this.authIdentityByPlayer.clear();
   }
 
   private seedArenaEnemies(): void {
@@ -114,6 +124,10 @@ export class GameWorld implements RoomRuntime {
 
   addPlayer(pid: PlayerId, kit: KitId = "none", offerIdentity: string = pid): void {
     spawnPlayerInWorld(this.state, pid, offerIdentity);
+    this.joinedAtTick.set(pid, this.state.tick);
+    this.joinedAtFloor.set(pid, this.state.floor);
+    this.bossKillsByPlayer.set(pid, new Set());
+    this.authIdentityByPlayer.set(pid, offerIdentity);
     // Apply the VALIDATED kit (spec §9.5): the stat lean + starting weapon land through the one
     // recompute path. "none" leaves the neutral baseline untouched. In pvp the loadout is FORCED
     // symmetric (spawnPlayerInWorld already set the neutral kit + fixed HP pool), so the chosen
@@ -123,6 +137,10 @@ export class GameWorld implements RoomRuntime {
 
   removePlayer(pid: PlayerId): void {
     removePlayerFromWorld(this.state, pid);
+    this.joinedAtTick.delete(pid);
+    this.joinedAtFloor.delete(pid);
+    this.bossKillsByPlayer.delete(pid);
+    this.authIdentityByPlayer.delete(pid);
   }
 
   setPlayerAbsent(pid: PlayerId, isAbsent: boolean): void {
@@ -194,6 +212,10 @@ export class GameWorld implements RoomRuntime {
 
   seats(): IterableIterator<Seat> {
     return this.seatMap.values();
+  }
+
+  clearSeats(): void {
+    for (const seat of [...this.seatMap.values()]) this.dropSeat(seat);
   }
 
   private dropSeat(seat: Seat): void {
@@ -301,6 +323,36 @@ export class GameWorld implements RoomRuntime {
   gameOverPlayers(): PlayerId[] {
     return this.gameOverThisTick;
   }
+  runReceiptId(): string {
+    return `${this.id}:${this.state.seed}:${this.state.rev}`;
+  }
+  runReceiptParticipants(): RunReceiptParticipant[] {
+    const participants: RunReceiptParticipant[] = [];
+    for (const [pid, player] of this.state.players) {
+      const conn = [...this.conns.values()].find((candidate) => candidate.playerId === pid);
+      const seat = [...this.seatMap.values()].find((candidate) => candidate.pid === pid);
+      const playerId = conn?.authName ?? seat?.authName ?? this.authIdentityByPlayer.get(pid);
+      if (!playerId) continue;
+      const itemCounts = new Map<string, number>();
+      for (const itemId of player.ownedItemIds) {
+        itemCounts.set(itemId, (itemCounts.get(itemId) ?? 0) + 1);
+      }
+      participants.push({
+        playerId,
+        floor: this.state.floor,
+        kills: Math.max(0, Math.floor(player.kills)),
+        coins: Math.max(0, Math.floor(player.coins)),
+        floorsCleared: Math.max(0, this.state.floor - (this.joinedAtFloor.get(pid) ?? this.state.floor)),
+        bossKills: [...(this.bossKillsByPlayer.get(pid) ?? new Set<string>())],
+        isCacheArmed: player.isAmberCacheArmed,
+        amberWindfall: Math.max(0, Math.floor(player.amberWindfall)),
+        durationMs: Math.max(0, Math.round((this.state.tick - (this.joinedAtTick.get(pid) ?? this.state.tick)) * FIXED_DT * 1000)),
+        weapons: player.ownedWeapons.slice(),
+        items: [...itemCounts].map(([id, count]) => ({ id, count })),
+      });
+    }
+    return participants;
+  }
   offerPlayers(): BlessingOfferRequest[] {
     return this.offerThisTick;
   }
@@ -373,6 +425,9 @@ export class GameWorld implements RoomRuntime {
     this.expiredOffersThisTick = [];
     for (const e of ev) {
       this.eventLog.push({ id: this.nextEventId++, e });
+      if (e.t === "enemyKill" && e.by.length > 0 && isBossKind(e.kind)) {
+        this.bossKillsByPlayer.get(e.by)?.add(e.kind);
+      }
       if (e.t === "gameOver") this.gameOverThisTick.push(e.pid);
       else if (e.t === "offerBlessing") this.offerThisTick.push({ pid: e.pid, rare: e.rare });
       else if (e.t === "blessingExpired") {
