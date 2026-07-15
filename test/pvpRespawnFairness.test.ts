@@ -17,6 +17,7 @@ import {
 } from "../src/sim/pvp.js";
 import type { PvpRespawnCandidate } from "../src/sim/pvp.js";
 import type { Bullet, Vec2, WeaponId, WireEffect } from "../src/sim/types.js";
+import { TILE } from "../src/sim/types.js";
 import type { InputCmd } from "../src/sim/input.js";
 
 const DT = 1 / 20;
@@ -137,6 +138,38 @@ function addIncomingBullet(
   world.bullets.push(bullet);
 }
 
+function addImmediateThreats(world: WorldState, owner: PlayerSim, target: PlayerSim): void {
+  const spawns = world.match?.spawns ?? [];
+  const centerX = world.dungeon.spawn.x * TILE + TILE / 2;
+  const centerY = world.dungeon.spawn.y * TILE + TILE / 2;
+  const speed = 300;
+  const radius = 4;
+  for (const spawn of spawns) {
+    const dx = spawn.x - centerX;
+    const dy = spawn.y - centerY;
+    const magnitude = Math.hypot(dx, dy) || 1;
+    const ux = dx / magnitude;
+    const uy = dy / magnitude;
+    const travel = speed * (0.5 + DT) + target.pr + radius;
+    world.bullets.push({
+      x: spawn.x - ux * travel,
+      y: spawn.y - uy * travel,
+      vx: ux * speed,
+      vy: uy * speed,
+      radius,
+      life: 2,
+      friendly: true,
+      owner: owner.id,
+      damage: 5,
+      color: "#fff",
+      pierce: 0,
+      hitList: null,
+      isCrit: false,
+      fx: "rapid",
+    });
+  }
+}
+
 section("pure scorer: exact penalties, anti-camp memory, and damage fallback");
 {
   const scored = candidate(0, 500, {
@@ -165,7 +198,7 @@ section("pure scorer: exact penalties, anti-camp memory, and damage fallback");
 
   const fallback = pvpRespawnIndex([
     candidate(0, 1000, { losThreatCount: 1, predictedIncomingDamage: 30 }),
-    candidate(1, 0, { incomingThreatEtaSec: 1, predictedIncomingDamage: 5 }),
+    candidate(1, 300, { incomingThreatEtaSec: 1, predictedIncomingDamage: 5 }),
   ], [], "timeout");
   check("all-threatened fallback minimizes predicted 1.5s incoming damage before score", fallback === 1);
   check("zero hard-projectile threat dominates an arbitrarily large distance score",
@@ -235,6 +268,7 @@ section("all-eight unsafe candidates wait, poll, and time out deterministically"
   opensOpponent.x = 456;
   opensOpponent.y = 456;
   clearProtection(opensOpponent);
+  addImmediateThreats(opensWorld, opensOpponent, opensVictim);
   opensVictim.hp = 0;
   opensVictim.respawnT = 1;
   stepWorld(opensWorld, currentInputs(opensWorld), DT);
@@ -242,7 +276,7 @@ section("all-eight unsafe candidates wait, poll, and time out deterministically"
     opensVictim.hp === 0
     && opensVictim.respawnT === 1
     && opensVictim.respawnWaitSafeT === pvpRespawnWaitSafeMaxTicks());
-  opensOpponent.isDown = true;
+  opensWorld.bullets = [];
   stepWorld(opensWorld, currentInputs(opensWorld), DT);
   stepWorld(opensWorld, currentInputs(opensWorld), DT);
   check("a safe lane opening at the first 0.10s poll respawns immediately",
@@ -252,13 +286,16 @@ section("all-eight unsafe candidates wait, poll, and time out deterministically"
     && opensVictim.pvpRespawnTelemetry?.waitSafeMs === 100
     && !opensVictim.pvpRespawnTelemetry.isFallbackShield);
 
-  const timeoutWorld = liveWorld(41, 2);
+  const timeoutWorld = liveWorld(41, 9);
   timeoutWorld.props = [];
   const timeoutVictim = timeoutWorld.players.get("p1")!;
-  const timeoutOpponent = timeoutWorld.players.get("p2")!;
-  timeoutOpponent.x = 456;
-  timeoutOpponent.y = 456;
-  clearProtection(timeoutOpponent);
+  const timeoutSpawns = timeoutWorld.match?.spawns ?? [];
+  [...timeoutWorld.players.values()].filter((player) => player !== timeoutVictim)
+    .forEach((opponent, index) => {
+      opponent.x = timeoutSpawns[index].x;
+      opponent.y = timeoutSpawns[index].y;
+      clearProtection(opponent);
+    });
   timeoutVictim.hp = 0;
   timeoutVictim.respawnT = 1;
   stepWorld(timeoutWorld, currentInputs(timeoutWorld), DT);
@@ -389,8 +426,8 @@ section("swept projectile ETA and shipped ranged/trap threats");
     victim.pvpRecentSpawnIndices = [];
     addIncomingBullet(world, owner, victim, spawns[0], etaSec, "rapid");
     const selected = forceRespawn(world, victim);
-    check(`rapid round at ETA ${etaSec}s avoids its swept candidate`,
-      selected === 1,
+    check(`rapid round at ETA ${etaSec}s ${etaSec <= 1.5 ? "avoids" : "soft-ranks"} its swept candidate`,
+      selected === (etaSec <= 1.5 ? 1 : 0),
       `selected=${selected} bullet=${world.bullets.map((bullet) => `${bullet.x.toFixed(1)},${bullet.y.toFixed(1)},${bullet.life.toFixed(2)}`).join("|")}`);
   }
 

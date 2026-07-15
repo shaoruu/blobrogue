@@ -354,16 +354,18 @@ export function runRespawnPolicySeed(
   let shieldFireAttempts = 0;
   const playtestState = createPlaytestBotState(bot);
   const reactionMs: number[] = [];
-  let previousVictimShieldT = victim.spawnShieldT;
-  let shieldEndedTick: number | null = null;
+  let lastReactionSpawnTick = -1;
 
   for (let i = 0; i < MAX_SECONDS / DT; i++) {
     const botCommand = profile === "conformanceBot"
       ? conformanceBotInput(world, bot, victim, seed)
       : playtestBotInput(world, bot, victim, seed, playtestState);
-    if (profile === "playtestBot" && shieldEndedTick !== null && botCommand.firing) {
-      reactionMs.push((world.tick + 1 - shieldEndedTick) * 1000 * DT);
-      shieldEndedTick = null;
+    if (profile === "playtestBot"
+      && botCommand.firing
+      && playtestState.shieldEndedTick !== null
+      && playtestState.observedSpawnTick !== lastReactionSpawnTick) {
+      reactionMs.push((world.tick + 1 - playtestState.shieldEndedTick) * 1000 * DT);
+      lastReactionSpawnTick = playtestState.observedSpawnTick;
     }
     if (botCommand.firing && victim.spawnShieldT > 0) shieldFireAttempts++;
     const inputs = new Map<string, InputCmd>([
@@ -372,12 +374,6 @@ export function runRespawnPolicySeed(
     ]);
     stepWorld(world, inputs, DT);
     const elapsedSec = (world.tick - liveStartTick) * DT;
-    if (previousVictimShieldT > 0 && victim.spawnShieldT === 0 && victim.hp > 0) {
-      shieldEndedTick = world.tick;
-    }
-    if (victim.hp <= 0) shieldEndedTick = null;
-    previousVictimShieldT = victim.spawnShieldT;
-
     if (previousRespawnT > 0 && victim.respawnT === 0 && victim.hp > 0) {
       active = openEpisode(world, seed, victim, world.tick, false);
     }
