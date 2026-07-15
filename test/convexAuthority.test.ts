@@ -65,6 +65,11 @@ const reportWorld = makeFunctionReference<
   },
   null
 >("presence:reportWorld");
+const backfillGenerationState = makeFunctionReference<
+  "mutation",
+  { isLegacyWorldsDrained: boolean },
+  number
+>("migrations:backfillGenerationState");
 
 function receipt(
   playerId: string,
@@ -430,5 +435,44 @@ describe("Convex run authority", () => {
     expect(state.guest).not.toBeNull();
     expect(state.room?.hostPlayerId).toBe(seeded.guestId);
     expect(state.presence[0]?.playerId).toBe(seeded.guestId);
+  });
+
+  test("legacy generation migration requires an explicit drained-world assertion", async () => {
+    const t = convexTest(schema, modules);
+    const roomId = await t.run(async (ctx) => {
+      const now = Date.now();
+      const playerId = await ctx.db.insert("players", {
+        clientId: "legacy-browser",
+        name: "Legacy",
+        totalKills: 0,
+        deepestFloor: 0,
+        totalCoins: 0,
+        gamesPlayed: 0,
+        unlocks: [],
+        createdAt: now,
+        lastSeen: now,
+      });
+      return await ctx.db.insert("rooms", {
+        code: "OLDX",
+        kind: "online",
+        mode: "coop",
+        hostPlayerId: playerId,
+        seed: 1,
+        floor: 1,
+        status: "playing",
+        isPublic: false,
+        loadoutGeneration: 1,
+        createdAt: now,
+        lastActivity: now,
+      });
+    });
+    await expect(t.mutation(backfillGenerationState, {
+      isLegacyWorldsDrained: false,
+    })).rejects.toThrow();
+    await expect(t.mutation(backfillGenerationState, {
+      isLegacyWorldsDrained: true,
+    })).resolves.toBe(1);
+    const room = await t.run(async (ctx) => await ctx.db.get(roomId));
+    expect(room?.generationState).toBe("completed");
   });
 });

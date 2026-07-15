@@ -1,7 +1,6 @@
 import type { ConvexClient } from "convex/browser";
 import { api } from "./api.js";
 import type { ProfileDoc, CampMutationResult } from "./api.js";
-import type { RunResult } from "../game/game.js";
 import { bodyItemForPaletteIndex } from "../game/cosmetics.js";
 import type { CosmeticSlot, CosmeticLoadout } from "../game/cosmetics.js";
 import { generatedBlobName, sanitizeBlobName } from "./blobName.js";
@@ -307,14 +306,6 @@ export class Session {
     return this.profile;
   }
 
-  recordFloorProgress(_floor: number): void {
-    // Competitive progress is applied only from a GS-signed terminal receipt.
-  }
-
-  async recordRun(_result: RunResult): Promise<ProfileDoc | null> {
-    return this.profile;
-  }
-
   async refreshVerifiedProgress(previousGamesPlayed: number): Promise<ProfileDoc | null> {
     if (!this.client) return this.profile;
     for (const delayMs of [0, 100, 250, 500, 1000]) {
@@ -323,7 +314,6 @@ export class Session {
         const profile = await this.refreshProfile();
         if (profile && profile.gamesPlayed > previousGamesPlayed) return profile;
       } catch {
-        // The direct GS receipt dispatcher retries independently.
       }
     }
     return this.profile;

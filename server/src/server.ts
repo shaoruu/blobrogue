@@ -56,6 +56,17 @@ const MAX_MALFORMED = 3;
 // join rejects, game over, superseded connections, and explicit client leaves.
 const SEATLESS_CLOSE_CODES: ReadonlySet<number> = new Set([4001, 4008, 4009, 4010, 4011]);
 
+interface PendingCompletion {
+  runId: string;
+  participants: RunReceiptParticipant[];
+}
+
+function isWorldSeatless(room: RoomRuntime): boolean {
+  return room.playerCount === 0
+    && room.conns.size === 0
+    && [...room.seats()].length === 0;
+}
+
 // Optional dependency overrides (DI) for tests / alternative backends. Anything omitted uses the
 // production default.
 export interface ServerDeps {
@@ -82,6 +93,7 @@ export class GameServer {
   private receiptDispatcher: RunReceiptDispatcher;
   private admissionClient: GenerationAdmissionClient;
   private completedWorlds = new Set<string>();
+  private pendingCompletions = new Map<string, PendingCompletion>();
   private isAcceptingJoins = true;
 
   private conns = new Map<number, Conn>();
@@ -192,13 +204,21 @@ export class GameServer {
     this.isAcceptingJoins = false;
     for (const room of [...this.sessions.rooms()]) {
       this.completedWorlds.add(room.id);
-      const runId = room.runReceiptId();
+      const pending = this.pendingCompletions.get(room.id);
+      this.pendingCompletions.delete(room.id);
+      const runId = pending?.runId ?? room.runReceiptId();
       for (const conn of [...room.conns.values()]) {
         if (!conn.closing) this.closeConn(conn, 4011, "server update");
       }
       room.clearSeats();
-      const isNoActiveSeat = room.conns.size === 0 && [...room.seats()].length === 0;
-      this.submitCompletion(room.id, runId, "abandoned", [], isNoActiveSeat);
+      const isNoActiveSeat = isWorldSeatless(room);
+      this.submitCompletion(
+        room.id,
+        runId,
+        pending ? "completed" : "abandoned",
+        pending?.participants ?? [],
+        isNoActiveSeat,
+      );
     }
     this.sessions.sweep(this.clock.now());
   }
@@ -293,18 +313,32 @@ export class GameServer {
     const gameOverPlayers = room.gameOverPlayers();
     if (gameOverPlayers.length === 0) return;
     const participants = room.runReceiptParticipants();
-    this.completedWorlds.add(room.id);
+    this.pendingCompletions.set(room.id, {
+      runId: room.runReceiptId(),
+      participants,
+    });
     for (const pid of gameOverPlayers) {
       const conn = this.connForPlayer(room, pid);
       if (conn && !conn.closing) { conn.gameOver = true; this.closeConn(conn, 4008, "game over"); }
     }
-    room.clearSeats();
-    const isNoActiveSeat = room.conns.size === 0 && [...room.seats()].length === 0;
-    this.submitCompletion(room.id, room.runReceiptId(), "completed", participants, isNoActiveSeat);
-    this.sessions.sweep(this.clock.now());
+    if (isWorldSeatless(room)) {
+      const pending = this.pendingCompletions.get(room.id);
+      if (pending) {
+        this.pendingCompletions.delete(room.id);
+        this.completedWorlds.add(room.id);
+        this.submitCompletion(room.id, pending.runId, "completed", pending.participants, true);
+        this.sessions.sweep(this.clock.now());
+      }
+    }
   }
 
   private onWorldReleased(room: RoomRuntime): void {
+    const pending = this.pendingCompletions.get(room.id);
+    if (pending) {
+      this.pendingCompletions.delete(room.id);
+      this.submitCompletion(room.id, pending.runId, "completed", pending.participants, true);
+      return;
+    }
     if (this.completedWorlds.delete(room.id)) return;
     this.submitCompletion(room.id, room.runReceiptId(), "abandoned", [], true);
   }

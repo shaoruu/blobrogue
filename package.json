@@ -77,6 +77,7 @@
     "test:loadoutcss": "tsx test/loadoutCss.test.ts",
     "test:securityauthority": "tsx test/securityAuthority.test.ts",
     "prepare:convex-test": "node tools/prepareConvexTestBindings.mjs",
+    "typecheck:convex": "npm run prepare:convex-test && tsc -p convex/tsconfig.json --noEmit",
     "test:convexauthority": "npm run prepare:convex-test && vitest run test/convexAuthority.test.ts",
     "test:guestsession": "tsx test/guestSession.test.ts",
     "test:pvpkillswitch": "tsx test/pvpkillswitch.test.ts",
