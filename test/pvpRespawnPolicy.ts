@@ -30,7 +30,7 @@ export interface RespawnPolicySeedReport {
   victimFrags: number;
   respawnOnlyFragTimesSec: number[];
   maxRespawnOnlyFragsPer20Sec: number;
-  timeToEightSec: number;
+  timeToEightSec: number | null;
 }
 
 export interface RespawnPolicyAggregate {
@@ -44,7 +44,8 @@ export interface RespawnPolicyAggregate {
   spawnToDeathP10Sec: number;
   spawnToDeathMedianSec: number;
   maxRespawnOnlyFragsPer20Sec: number;
-  timeToEightMinSec: number;
+  timeToEightReachedCount: number;
+  timeToEightMinSec: number | null;
   controlEstablishedRate: number;
 }
 
@@ -197,7 +198,7 @@ export function runRespawnPolicySeed(seed: number): RespawnPolicySeedReport {
   const episodes: RespawnPolicyEpisode[] = [];
   const respawnOnlyFragTimesSec: number[] = [];
   let previousRespawnT = victim.respawnT;
-  let timeToEightSec = MAX_SECONDS;
+  let timeToEightSec: number | null = null;
 
   for (let i = 0; i < MAX_SECONDS / DT; i++) {
     const inputs = new Map<string, InputCmd>([
@@ -277,6 +278,9 @@ export function runRespawnPolicyReport(seedCount = 20): RespawnPolicyReport {
   const deaths = episodes.flatMap((episode) =>
     episode.deathSec === null ? [] : [episode.deathSec]
   );
+  const timeToEight = seeds.flatMap((seed) =>
+    seed.timeToEightSec === null ? [] : [seed.timeToEightSec]
+  );
   const established = episodes.filter((episode) =>
     episode.isDashedBeforeDamage
     && episode.aimTurnDegBeforeDamage >= 90
@@ -296,7 +300,8 @@ export function runRespawnPolicyReport(seedCount = 20): RespawnPolicyReport {
       spawnToDeathP10Sec: percentile(deaths, 0.1),
       spawnToDeathMedianSec: percentile(deaths, 0.5),
       maxRespawnOnlyFragsPer20Sec: Math.max(...seeds.map((seed) => seed.maxRespawnOnlyFragsPer20Sec)),
-      timeToEightMinSec: Math.min(...seeds.map((seed) => seed.timeToEightSec)),
+      timeToEightReachedCount: timeToEight.length,
+      timeToEightMinSec: timeToEight.length > 0 ? Math.min(...timeToEight) : null,
       controlEstablishedRate: episodes.length > 0 ? established / episodes.length : 0,
     },
   };

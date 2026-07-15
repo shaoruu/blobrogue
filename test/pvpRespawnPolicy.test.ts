@@ -40,8 +40,10 @@ check("rapid bot earns no more than two respawn-only frags in any 20s window",
   metrics.maxRespawnOnlyFragsPer20Sec <= 2,
   `max=${metrics.maxRespawnOnlyFragsPer20Sec}`);
 check("fastest time-to-eight is at least 90s",
-  metrics.timeToEightMinSec >= 90,
-  `min=${metrics.timeToEightMinSec.toFixed(2)}s`);
+  metrics.timeToEightMinSec === null || metrics.timeToEightMinSec >= 90,
+  metrics.timeToEightMinSec === null
+    ? `not reached in ${metrics.seedCount} seeds`
+    : `min=${metrics.timeToEightMinSec.toFixed(2)}s`);
 check("at least 95% establish dash, 90-degree aim, and two-tile movement before first damage",
   metrics.controlEstablishedRate >= 0.95,
   `rate=${(metrics.controlEstablishedRate * 100).toFixed(1)}%`);
