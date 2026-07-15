@@ -39,14 +39,22 @@ function profile(overrides: Partial<ProfileDoc> = {}): ProfileDoc {
 }
 
 localStorage.removeItem("blobrogue.guestCapability");
+localStorage.removeItem("blobrogue.guestRefreshCapability");
 const calls: Array<{ name: string; args: Record<string, string> }> = [];
-let ensureResponse = profile({ guestCapability: "cap-one" });
+let ensureResponse = profile({
+  guestCapability: "cap-one",
+  guestRefreshCapability: "refresh-one",
+});
 const fake = {
   mutation: (ref: Parameters<typeof getFunctionName>[0], args: Record<string, string>) => {
     const name = getFunctionName(ref);
     calls.push({ name, args });
     if (name === "players:prepareSignOutGuest") {
-      return Promise.resolve(profile({ playerId: "fresh-guest", guestCapability: "cap-two" }));
+      return Promise.resolve(profile({
+        playerId: "fresh-guest",
+        guestCapability: "cap-two",
+        guestRefreshCapability: "refresh-two",
+      }));
     }
     return Promise.resolve(ensureResponse);
   },
@@ -58,12 +66,14 @@ const session = new Session(fake as never as ConvexClient);
 await session.login();
 check("first guest bootstrap stores the issued capability",
   session.guestCapabilityArgs.guestCapability === "cap-one"
-  && localStorage.getItem("blobrogue.guestCapability") === "cap-one");
+  && localStorage.getItem("blobrogue.guestCapability") === "cap-one"
+  && localStorage.getItem("blobrogue.guestRefreshCapability") === "refresh-one");
 
 await session.login();
 const secondEnsure = calls.filter((call) => call.name === "players:ensurePlayer")[1];
 check("subsequent guest writes carry the scoped capability",
-  secondEnsure?.args.guestCapability === "cap-one");
+  secondEnsure?.args.guestCapability === "cap-one"
+  && secondEnsure.args.guestRefreshCapability === "refresh-one");
 
 ensureResponse = profile({
   playerId: "account-player",
@@ -73,12 +83,14 @@ ensureResponse = profile({
 await session.login();
 check("authenticated account adoption revokes local guest authority",
   session.guestCapabilityArgs.guestCapability === undefined
-  && localStorage.getItem("blobrogue.guestCapability") === null);
+  && localStorage.getItem("blobrogue.guestCapability") === null
+  && localStorage.getItem("blobrogue.guestRefreshCapability") === null);
 
 await session.prepareSignOutGuest();
 check("sign-out preparation rotates to a fresh guest capability",
   session.profile?.playerId === "fresh-guest"
-  && session.guestCapabilityArgs.guestCapability === "cap-two");
+  && session.guestCapabilityArgs.guestCapability === "cap-two"
+  && localStorage.getItem("blobrogue.guestRefreshCapability") === "refresh-two");
 
 process.stdout.write(`\n${passed} checks passed, ${failed} failed\n`);
 if (failed > 0) process.exit(1);

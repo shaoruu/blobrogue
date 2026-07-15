@@ -44,6 +44,7 @@ export interface ProfileDoc {
   isAccount: boolean;
   // Rotated, expiring capability for this pure guest row. Returned only when issued.
   guestCapability?: string;
+  guestRefreshCapability?: string;
 }
 
 // One public leaderboard entry: a player's best run plus the appearance snapshot AS WORN
@@ -223,7 +224,7 @@ export type PresenceUpdateArgs = {
 
 export const api = {
   players: {
-    ensurePlayer: makeFunctionReference<"mutation", { clientId: string; guestCapability?: string; name: string; colorIndex?: number; cosmetics?: CosmeticsArg }, ProfileDoc>("players:ensurePlayer"),
+    ensurePlayer: makeFunctionReference<"mutation", { clientId: string; guestCapability?: string; guestRefreshCapability?: string; name: string; colorIndex?: number; cosmetics?: CosmeticsArg }, ProfileDoc>("players:ensurePlayer"),
     getProfile: makeFunctionReference<"query", { clientId: string; guestCapability?: string }, ProfileDoc | null>("players:getProfile"),
     currentUser: makeFunctionReference<"query", Record<string, never>, CurrentUserDoc | null>("players:currentUser"),
     recordRun: makeFunctionReference<"mutation", RecordRunArgs, ProfileDoc | null>("players:recordRun"),

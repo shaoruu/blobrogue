@@ -14,6 +14,7 @@ const NAME_CONFIRMED_KEY = "blobrogue.nameConfirmed";
 const COLOR_KEY = "blobrogue.color";
 const COSMETICS_KEY = "blobrogue.cosmetics";
 const GUEST_CAPABILITY_KEY = "blobrogue.guestCapability";
+const GUEST_REFRESH_CAPABILITY_KEY = "blobrogue.guestRefreshCapability";
 
 export type SessionLoadoutResult =
   | { ok: true; profile: ProfileDoc | null; isOffline: boolean }
@@ -79,6 +80,7 @@ export class Session {
   colorIndex: number | null;
   private cosmeticPicks: StoredCosmetics;
   private guestCapability: string | null;
+  private guestRefreshCapability: string | null;
   profile: ProfileDoc | null = null;
   private client: ConvexClient | null;
 
@@ -96,21 +98,47 @@ export class Session {
     this.colorIndex = readStoredColor();
     this.cosmeticPicks = readStoredCosmetics();
     try { this.guestCapability = localStorage.getItem(GUEST_CAPABILITY_KEY); } catch { this.guestCapability = null; }
+    try { this.guestRefreshCapability = localStorage.getItem(GUEST_REFRESH_CAPABILITY_KEY); } catch { this.guestRefreshCapability = null; }
   }
 
   get guestCapabilityArgs(): { guestCapability?: string } {
     return this.guestCapability ? { guestCapability: this.guestCapability } : {};
   }
 
+  private get guestSessionArgs(): {
+    guestCapability?: string;
+    guestRefreshCapability?: string;
+  } {
+    return {
+      ...this.guestCapabilityArgs,
+      ...(this.guestRefreshCapability
+        ? { guestRefreshCapability: this.guestRefreshCapability }
+        : {}),
+    };
+  }
+
   private adoptGuestCapability(profile: ProfileDoc): void {
     if (profile.isAccount) {
       this.guestCapability = null;
-      try { localStorage.removeItem(GUEST_CAPABILITY_KEY); } catch {}
+      this.guestRefreshCapability = null;
+      try {
+        localStorage.removeItem(GUEST_CAPABILITY_KEY);
+        localStorage.removeItem(GUEST_REFRESH_CAPABILITY_KEY);
+      } catch {}
       return;
     }
-    if (!profile.guestCapability) return;
+    if (!profile.guestCapability || !profile.guestRefreshCapability) return;
     this.guestCapability = profile.guestCapability;
-    try { localStorage.setItem(GUEST_CAPABILITY_KEY, profile.guestCapability); } catch {}
+    this.guestRefreshCapability = profile.guestRefreshCapability;
+    try {
+      localStorage.setItem(GUEST_CAPABILITY_KEY, profile.guestCapability);
+      localStorage.setItem(GUEST_REFRESH_CAPABILITY_KEY, profile.guestRefreshCapability);
+    } catch {}
+  }
+
+  private stripGuestCredentials(profile: ProfileDoc): void {
+    delete profile.guestCapability;
+    delete profile.guestRefreshCapability;
   }
 
   get playerId(): string | null {
@@ -142,7 +170,7 @@ export class Session {
       });
       this.profile = profile;
       this.adoptGuestCapability(profile);
-      delete profile.guestCapability;
+      this.stripGuestCredentials(profile);
       return profile;
     } catch {
       return null;
@@ -245,14 +273,14 @@ export class Session {
     const hasPicks = COSMETIC_PICK_SLOTS.some((slot) => sent[slot] !== undefined);
     this.profile = await this.client.mutation(api.players.ensurePlayer, {
       clientId: this.clientId,
-      ...this.guestCapabilityArgs,
+      ...this.guestSessionArgs,
       name: this.name,
       // Only explicit local picks are sent — undefined never overwrites a saved pick.
       ...(this.colorIndex !== null ? { colorIndex: this.colorIndex } : {}),
       ...(hasPicks ? { cosmetics: sent } : {}),
     });
     this.adoptGuestCapability(this.profile);
-    delete this.profile.guestCapability;
+    this.stripGuestCredentials(this.profile);
     // A signed-in account may carry picks made on another device; adopt them locally.
     if (this.colorIndex === null && this.profile.colorIndex !== null) {
       this.colorIndex = this.profile.colorIndex;
@@ -301,7 +329,7 @@ export class Session {
     });
     if (this.profile) {
       this.adoptGuestCapability(this.profile);
-      delete this.profile.guestCapability;
+      this.stripGuestCredentials(this.profile);
     }
     return this.profile;
   }

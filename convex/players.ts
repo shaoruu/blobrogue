@@ -14,10 +14,11 @@ import { validateCombinedLoadout } from "./loadoutCore";
 import {
   activeGuestSession,
   mintGuestSession,
+  refreshGuestSession,
   resolveAuthorizedPlayer,
   revokePlayerGuestSessions,
 } from "./guestAuth";
-import type { GuestScope } from "./guestAuth";
+import type { GuestScope, GuestSessionCredentials } from "./guestAuth";
 
 export interface Profile {
   playerId: string;
@@ -49,12 +50,13 @@ export interface Profile {
   isAccount: boolean;
   // Returned only when a new/rotated guest session is issued.
   guestCapability?: string;
+  guestRefreshCapability?: string;
 }
 
 function toProfile(
   doc: Doc<"players">,
   user?: Doc<"users"> | null,
-  guestCapability?: string,
+  guestCredentials?: GuestSessionCredentials,
 ): Profile {
   return {
     playerId: doc._id,
@@ -78,7 +80,7 @@ function toProfile(
     masteryLevel: masteryLevelForXp(doc.masteryXp ?? 0),
     image: user?.image,
     isAccount: doc.userId !== undefined,
-    ...(guestCapability ? { guestCapability } : {}),
+    ...(guestCredentials ?? {}),
   };
 }
 
@@ -325,6 +327,7 @@ export const ensurePlayer = mutation({
   args: {
     clientId: v.string(),
     guestCapability: v.optional(v.string()),
+    guestRefreshCapability: v.optional(v.string()),
     name: v.string(),
     colorIndex: v.optional(v.number()),
     cosmetics: v.optional(v.object({
@@ -334,7 +337,14 @@ export const ensurePlayer = mutation({
       title: v.optional(v.string()),
     })),
   },
-  handler: async (ctx, { clientId, guestCapability, name, colorIndex, cosmetics }) => {
+  handler: async (ctx, {
+    clientId,
+    guestCapability,
+    guestRefreshCapability,
+    name,
+    colorIndex,
+    cosmetics,
+  }) => {
     const color = cleanColor(colorIndex);
     const userId = await getAuthUserId(ctx);
     if (userId) {
@@ -356,7 +366,7 @@ export const ensurePlayer = mutation({
           message: "sign in to access this account",
         });
       }
-      let nextCapability: string | undefined;
+      let nextCredentials: GuestSessionCredentials | undefined;
       const activeSession = await activeGuestSession(ctx, existing._id);
       if (activeSession) {
         await resolveAuthorizedPlayer(ctx, clientId, guestCapability, "profile");
@@ -365,27 +375,20 @@ export const ensurePlayer = mutation({
           .withIndex("by_player", (queryBuilder) => queryBuilder.eq("playerId", existing._id))
           .collect();
         if (sessions.length > 0) {
-          const renewal = guestCapability
-            ? await ctx.db.query("guestSessions")
-              .withIndex("by_token", (queryBuilder) => queryBuilder.eq("token", guestCapability))
-              .unique()
-            : null;
-          if (!renewal
-            || renewal.playerId !== existing._id
-            || renewal.clientId !== clientId
-            || renewal.revokedAt !== undefined) {
-            throw new ConvexError({
-              code: "guest_capability_required",
-              message: "guest session expired — start a new guest",
-            });
-          }
+          nextCredentials = await refreshGuestSession(
+            ctx,
+            existing,
+            clientId,
+            guestRefreshCapability,
+          );
+        } else {
+          nextCredentials = await mintGuestSession(ctx, existing, clientId);
         }
-        nextCapability = await mintGuestSession(ctx, existing, clientId);
       }
       await ctx.db.patch(existing._id, { name: trimmed, lastSeen: now });
       const updated = await applyAppearance(ctx, { ...existing, name: trimmed, lastSeen: now }, color, cosmetics);
       await syncIdentity(ctx, updated);
-      return toProfile(updated, null, nextCapability);
+      return toProfile(updated, null, nextCredentials);
     }
     const id = await ctx.db.insert("players", {
       clientId,
@@ -397,8 +400,8 @@ export const ensurePlayer = mutation({
     });
     const inserted = (await ctx.db.get(id))!;
     const updated = await applyAppearance(ctx, inserted, undefined, cosmetics);
-    const nextCapability = await mintGuestSession(ctx, updated, clientId);
-    return toProfile(updated, null, nextCapability);
+    const nextCredentials = await mintGuestSession(ctx, updated, clientId);
+    return toProfile(updated, null, nextCredentials);
   },
 });
 
@@ -472,8 +475,8 @@ export const prepareSignOutGuest = mutation({
       });
       guest = (await ctx.db.get(guestId))!;
     }
-    const guestCapability = await mintGuestSession(ctx, guest, clientId);
-    return toProfile(guest, null, guestCapability);
+    const guestCredentials = await mintGuestSession(ctx, guest, clientId);
+    return toProfile(guest, null, guestCredentials);
   },
 });
 

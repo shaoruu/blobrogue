@@ -40,8 +40,17 @@ const buyNode = makeFunctionReference<
 >("players:buyNode");
 const ensurePlayer = makeFunctionReference<
   "mutation",
-  { clientId: string; guestCapability?: string; name: string },
-  { playerId: string }
+  {
+    clientId: string;
+    guestCapability?: string;
+    guestRefreshCapability?: string;
+    name: string;
+  },
+  {
+    playerId: string;
+    guestCapability?: string;
+    guestRefreshCapability?: string;
+  }
 >("players:ensurePlayer");
 const generationAdmission = makeFunctionReference<
   "query",
@@ -174,11 +183,13 @@ async function seedGeneration(isDeparted = false) {
     });
     await ctx.db.insert("guestSessions", {
       token: "guest-capability",
+      refreshToken: "guest-refresh-capability",
       clientId: "browser-a",
       playerId,
       scopes: ["profile", "room", "ticket", "economy"],
       createdAt: now,
       expiresAt: now + 60_000,
+      refreshExpiresAt: now + 120_000,
     });
     return { playerId, roomId };
   });
@@ -403,17 +414,74 @@ describe("Convex run authority", () => {
       });
       await ctx.db.insert("guestSessions", {
         token: "retained-capability",
+        refreshToken: "retained-refresh-capability",
         clientId: "browser-account",
         playerId,
         scopes: ["profile", "room", "ticket", "economy"],
         createdAt: now,
         expiresAt: now + 60_000,
+        refreshExpiresAt: now + 120_000,
       });
     });
     await expect(t.mutation(buyNode, {
       clientId: "browser-account",
       guestCapability: "retained-capability",
       nodeId: "camp_shell",
+    })).rejects.toThrow();
+  });
+
+  test("expired access rotates only through a live refresh capability", async () => {
+    const t = convexTest(schema, modules);
+    const playerId = await t.run(async (ctx) => {
+      const now = Date.now();
+      const id = await ctx.db.insert("players", {
+        clientId: "refresh-browser",
+        name: "Guest",
+        totalKills: 0,
+        deepestFloor: 0,
+        totalCoins: 0,
+        gamesPlayed: 0,
+        unlocks: [],
+        createdAt: now,
+        lastSeen: now,
+      });
+      await ctx.db.insert("guestSessions", {
+        token: "expired-access",
+        refreshToken: "live-refresh",
+        clientId: "refresh-browser",
+        playerId: id,
+        scopes: ["profile", "room", "ticket", "economy"],
+        createdAt: now - 120_000,
+        expiresAt: now - 60_000,
+        refreshExpiresAt: now + 60_000,
+      });
+      return id;
+    });
+    const rotated = await t.mutation(ensurePlayer, {
+      clientId: "refresh-browser",
+      guestCapability: "expired-access",
+      guestRefreshCapability: "live-refresh",
+      name: "Guest",
+    });
+    expect(rotated.playerId).toBe(playerId);
+    expect(rotated.guestCapability).toMatch(/^[a-f0-9]{64}$/);
+    expect(rotated.guestRefreshCapability).toMatch(/^[a-f0-9]{64}$/);
+    await t.run(async (ctx) => {
+      const sessions = await ctx.db.query("guestSessions")
+        .withIndex("by_player", (queryBuilder) => queryBuilder.eq("playerId", playerId))
+        .collect();
+      const active = sessions.find((session) => session.revokedAt === undefined);
+      if (!active) throw new Error("rotated session missing");
+      await ctx.db.patch(active._id, {
+        expiresAt: Date.now() - 1,
+        refreshExpiresAt: Date.now() - 1,
+      });
+    });
+    await expect(t.mutation(ensurePlayer, {
+      clientId: "refresh-browser",
+      guestCapability: rotated.guestCapability,
+      guestRefreshCapability: rotated.guestRefreshCapability,
+      name: "Guest",
     })).rejects.toThrow();
   });
 

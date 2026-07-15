@@ -87,6 +87,7 @@ export default defineSchema({
 
   guestSessions: defineTable({
     token: v.string(),
+    refreshToken: v.string(),
     clientId: v.string(),
     playerId: v.id("players"),
     scopes: v.array(v.union(
@@ -97,9 +98,11 @@ export default defineSchema({
     )),
     createdAt: v.number(),
     expiresAt: v.number(),
+    refreshExpiresAt: v.number(),
     revokedAt: v.optional(v.number()),
   })
     .index("by_token", ["token"])
+    .index("by_refresh", ["refreshToken"])
     .index("by_player", ["playerId"])
     .index("by_client", ["clientId"]),
 

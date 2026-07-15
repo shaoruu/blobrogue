@@ -1,5 +1,8 @@
 import { readFileSync } from "node:fs";
-import { isGuestSessionAuthorized } from "../convex/guestCapabilityCore.js";
+import {
+  isGuestRefreshAuthorized,
+  isGuestSessionAuthorized,
+} from "../convex/guestCapabilityCore.js";
 import { ConvexError } from "convex/values";
 import { normalizeOnlineError } from "../src/net/onlineError.js";
 
@@ -19,10 +22,12 @@ function check(name: string, isPassing: boolean): void {
 const now = 1_000_000;
 const session = {
   token: "guest-secret",
+  refreshToken: "guest-refresh-secret",
   clientId: "browser-a",
   playerId: "guest-player",
   scopes: ["profile", "room", "ticket", "economy"] as const,
   expiresAt: now + 60_000,
+  refreshExpiresAt: now + 120_000,
 };
 const guest = {
   playerId: "guest-player",
@@ -40,6 +45,22 @@ check("wrong scope rejects",
   !isGuestSessionAuthorized({ ...session, scopes: ["profile"] }, guest, "browser-a", "guest-secret", "ticket", now));
 check("expired capability rejects",
   !isGuestSessionAuthorized({ ...session, expiresAt: now }, guest, "browser-a", "guest-secret", "ticket", now));
+check("valid refresh capability rotates an expired access capability",
+  isGuestRefreshAuthorized(
+    { ...session, expiresAt: now },
+    guest,
+    "browser-a",
+    "guest-refresh-secret",
+    now,
+  ));
+check("expired refresh capability rejects",
+  !isGuestRefreshAuthorized(
+    { ...session, expiresAt: now, refreshExpiresAt: now },
+    guest,
+    "browser-a",
+    "guest-refresh-secret",
+    now,
+  ));
 check("revoked capability rejects",
   !isGuestSessionAuthorized({ ...session, revokedAt: now - 1 }, guest, "browser-a", "guest-secret", "ticket", now));
 check("capability can never authorize an account row after sign-out",

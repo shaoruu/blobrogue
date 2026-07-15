@@ -2,14 +2,23 @@ import { getAuthUserId } from "@convex-dev/auth/server";
 import { ConvexError } from "convex/values";
 import type { Doc } from "./_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
-import { isGuestSessionAuthorized } from "./guestCapabilityCore";
+import {
+  isGuestRefreshAuthorized,
+  isGuestSessionAuthorized,
+} from "./guestCapabilityCore";
 import type { GuestScope } from "./guestCapabilityCore";
 
 export type { GuestScope } from "./guestCapabilityCore";
 type ReadCtx = QueryCtx | MutationCtx;
 
 const GUEST_SESSION_TTL_MS = 24 * 60 * 60_000;
+const GUEST_REFRESH_TTL_MS = 30 * 24 * 60 * 60_000;
 const ALL_GUEST_SCOPES: GuestScope[] = ["profile", "room", "ticket", "economy"];
+
+export interface GuestSessionCredentials {
+  guestCapability: string;
+  guestRefreshCapability: string;
+}
 
 async function playerByUserId(ctx: ReadCtx, userId: Doc<"users">["_id"]): Promise<Doc<"players"> | null> {
   return await ctx.db.query("players")
@@ -59,7 +68,7 @@ export async function mintGuestSession(
   ctx: MutationCtx,
   player: Doc<"players">,
   clientId: string,
-): Promise<string> {
+): Promise<GuestSessionCredentials> {
   if (player.userId !== undefined || player.clientId !== clientId) {
     throw new ConvexError({ code: "guest_only", message: "cannot issue a guest session for an account" });
   }
@@ -71,15 +80,52 @@ export async function mintGuestSession(
     if (session.revokedAt === undefined) await ctx.db.patch(session._id, { revokedAt: now });
   }
   const token = `${crypto.randomUUID().replace(/-/g, "")}${crypto.randomUUID().replace(/-/g, "")}`;
+  const refreshToken = `${crypto.randomUUID().replace(/-/g, "")}${crypto.randomUUID().replace(/-/g, "")}`;
   await ctx.db.insert("guestSessions", {
     token,
+    refreshToken,
     clientId,
     playerId: player._id,
     scopes: ALL_GUEST_SCOPES,
     createdAt: now,
     expiresAt: now + GUEST_SESSION_TTL_MS,
+    refreshExpiresAt: now + GUEST_REFRESH_TTL_MS,
   });
-  return token;
+  return {
+    guestCapability: token,
+    guestRefreshCapability: refreshToken,
+  };
+}
+
+export async function refreshGuestSession(
+  ctx: MutationCtx,
+  player: Doc<"players">,
+  clientId: string,
+  refreshToken: string | undefined,
+): Promise<GuestSessionCredentials> {
+  const session = refreshToken
+    ? await ctx.db.query("guestSessions")
+      .withIndex("by_refresh", (queryBuilder) => queryBuilder.eq("refreshToken", refreshToken))
+      .unique()
+    : null;
+  if (!session
+    || !isGuestRefreshAuthorized(
+      session,
+      {
+        playerId: player._id,
+        clientId: player.clientId,
+        isAccount: player.userId !== undefined,
+      },
+      clientId,
+      refreshToken ?? "",
+      Date.now(),
+    )) {
+    throw new ConvexError({
+      code: "guest_refresh_invalid",
+      message: "guest session expired — start a new guest",
+    });
+  }
+  return await mintGuestSession(ctx, player, clientId);
 }
 
 export async function revokePlayerGuestSessions(
