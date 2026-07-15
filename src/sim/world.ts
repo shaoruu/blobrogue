@@ -46,6 +46,7 @@ import {
   pvpEnvKillCreditWindowTicks, pvpChainWindowTicks, pvpDraftEveryTicks,
   pvpSuddenDeathFinalTicks, pvpComebackTierBump, pvpSpawnHardGraceTicks, pvpSpawnShieldTicks,
   pvpSpawnFallbackShieldTicks,
+  pvpDeathWithinSpawnTicks,
   pvpNearestPitEdgeDistance, pvpSingleDashDistance,
   pvpRespawnWaitSafeIntervalTicks, pvpRespawnWaitSafeMaxTicks,
   isPvpRespawnCandidateSafe, isPvpRespawnCandidateThreatened, pvpRespawnThreatFlags,
@@ -810,8 +811,7 @@ function predictPvpBulletThreat(
     const etaSec = speed > 0 ? distance / speed : Infinity;
     if (centerDistance <= HOMING_ACQUIRE_RANGE + target.pr
       && etaSec <= bullet.life
-      && etaSec <= PVP.spawnThreatOuterHorizonSec
-      && isPvpSpawnLineOfSightClear(w, bullet.x, bullet.y, spawn.x, spawn.y)) {
+      && etaSec <= PVP.spawnThreatOuterHorizonSec) {
       return {
         etaSec,
         damage: pvpHitDamage(bullet.fx ?? PVP.startWeapon, bullet.damage),
@@ -1508,6 +1508,14 @@ export function removePlayerFromWorld(w: WorldState, id: PlayerId): boolean {
   w.pendingBlessings.delete(id);
   for (const downed of w.players.values()) {
     if (downed.reviveBy === id) { downed.reviveBy = null; downed.reviveProgress = 0; }
+    if (downed.lastPvpHitBy === id) {
+      downed.lastPvpHitBy = null;
+      downed.lastPvpHitTick = -1;
+    }
+    if (downed.lastPvpKnockbackBy === id) {
+      downed.lastPvpKnockbackBy = null;
+      downed.lastPvpKnockbackTick = -1;
+    }
   }
   // Drop every per-player server-side map keyed by this id so a departure leaves no stale frag
   // credit, no lag-comp history, and no scoreboard ghost (and none of these maps grows unbounded
@@ -1517,6 +1525,8 @@ export function removePlayerFromWorld(w: WorldState, id: PlayerId): boolean {
   if (m !== null) {
     m.scores.delete(id);
     m.dmgThisTick.delete(id);
+    m.lastFragTick.delete(id);
+    m.fragChain.delete(id);
   }
   const removed = w.players.delete(id);
   // pvp FINAL removal (grace expired / hard leave): if the roster falls below the minimum PRESENT
@@ -11181,12 +11191,20 @@ function isPlayerCenterInPvpPit(w: WorldState, p: PlayerSim): boolean {
 function recentPvpKnockbackSource(w: WorldState, p: PlayerSim): PlayerId | null {
   const by = p.lastPvpKnockbackBy;
   if (by === null || p.lastPvpKnockbackTick < 0) return null;
-  return w.tick - p.lastPvpKnockbackTick <= pvpEnvKillCreditWindowTicks() ? by : null;
+  return w.tick - p.lastPvpKnockbackTick <= pvpEnvKillCreditWindowTicks()
+    && isValidPvpKillCreditSource(w, by)
+    ? by
+    : null;
+}
+
+function isValidPvpKillCreditSource(w: WorldState, by: PlayerId): boolean {
+  const attacker = w.players.get(by);
+  return attacker !== undefined && !attacker.isAbsent;
 }
 
 function awardPvpFrag(w: WorldState, by: PlayerId, x: number, y: number): SimEvent | null {
   const m = w.match;
-  if (m === null) return null;
+  if (m === null || !isValidPvpKillCreditSource(w, by)) return null;
   m.scores.set(by, (m.scores.get(by) ?? 0) + 1);
   const attacker = w.players.get(by);
   if (attacker !== undefined) attacker.pvpDraftFrags++;
@@ -11206,11 +11224,15 @@ function eliminatePvpPlayer(
   ev: SimEvent[],
 ): void {
   if (p.respawnT > 0) return;
-  const creditedBy = by !== null && by !== p.id ? by : null;
+  const creditedBy = by !== null
+    && by !== p.id
+    && isValidPvpKillCreditSource(w, by)
+    ? by
+    : null;
   const chainEvent = creditedBy === null ? null : awardPvpFrag(w, creditedBy, p.x, p.y);
   const telemetry = p.pvpRespawnTelemetry;
   if (telemetry !== null) {
-    telemetry.isDeathWithin3s = telemetry.activeTicks <= pvpSpawnShieldTicks();
+    telemetry.isDeathWithin3s = telemetry.activeTicks <= pvpDeathWithinSpawnTicks();
     const killer = creditedBy === null ? undefined : w.players.get(creditedBy);
     telemetry.killerDistance = killer === undefined
       ? null

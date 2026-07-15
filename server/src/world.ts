@@ -319,7 +319,8 @@ export class GameWorld implements RoomRuntime {
   step(cfg: ServerConfig): void {
     const ev: SimEvent[] = [];
     if (this.injectedEvents.length > 0) { for (const e of this.injectedEvents) ev.push(e); this.injectedEvents.length = 0; }
-    beginWorldTick(this.state);
+    const isPvpWorld = isPvp(this.state);
+    if (isPvpWorld) beginWorldTick(this.state);
 
     const connections = isPvp(this.state)
       ? [...this.conns.values()].sort((a, b) => {
@@ -360,6 +361,7 @@ export class GameWorld implements RoomRuntime {
     }
 
     stepWorldPhase(this.state, FIXED_DT, ev);
+    if (!isPvpWorld) this.state.tick++;
     this.commitEvents(ev);
   }
 

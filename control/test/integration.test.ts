@@ -6,10 +6,14 @@
 
 import { WebSocket } from "ws";
 
-import { HttpGameServerProbe, SYNTHETIC_JOIN_PROTOCOL } from "../src/adapters/httpProbe.js";
+import {
+  HttpGameServerProbe,
+  SYNTHETIC_JOIN_PROTOCOL,
+  isSyntheticSpawnProtectionSelf,
+} from "../src/adapters/httpProbe.js";
 import { NodeTailReader } from "../src/adapters/tail.js";
 import type { WorldSummary } from "../src/types.js";
-import { PROTOCOL_VERSION } from "../../src/net/protocol.js";
+import { PROTOCOL_VERSION, jsonCodec } from "../../src/net/protocol.js";
 import { mintTicket as mintGsTicket } from "../../server/src/auth.js";
 import { ChecksumArtifactVerifier } from "../src/artifactVerifier.js";
 import { DeployController, type OperationContext } from "../src/deployController.js";
@@ -38,6 +42,10 @@ export async function suite(t: TestRunner): Promise<void> {
   await t.suite("integration: real gs status + synthetic-join verify", async () => {
     t.check("synthetic join speaks the current game protocol", SYNTHETIC_JOIN_PROTOCOL === PROTOCOL_VERSION,
       `probe=${SYNTHETIC_JOIN_PROTOCOL} game=${PROTOCOL_VERSION}`);
+    t.check("control rejects missing or malformed v32 spawn protection self fields",
+      isSyntheticSpawnProtectionSelf({ spo: 0, sge: 0, sse: 0, sgr: 0, ssh: 0, sfl: false })
+      && !isSyntheticSpawnProtectionSelf({ spo: 0, sge: 0, sse: 0, sgr: 0, ssh: 0 })
+      && !isSyntheticSpawnProtectionSelf({ spo: 10, sge: 9, sse: 20, sgr: 0, ssh: 0, sfl: false }));
     const gs = await bootGs(200);
     try {
       const probe = new HttpGameServerProbe(
@@ -55,7 +63,23 @@ export async function suite(t: TestRunner): Promise<void> {
       // that answers "did the room's members land in one world?".
       const socket = new WebSocket(`ws://127.0.0.1:${gs.port}/ws`);
       await new Promise<void>((resolve) => socket.on("open", () => resolve()));
+      const decodedFrame = new Promise<ReturnType<typeof jsonCodec.decodeServer>>((resolve, reject) => {
+        socket.once("message", (data) => {
+          try { resolve(jsonCodec.decodeServer(data.toString())); }
+          catch (error) { reject(error); }
+        });
+      });
       socket.send(JSON.stringify({ t: "join", ticket: mintGsTicket(GS_SECRET, "panel-player", 60, Date.now(), { worldId: "room:OPSX", name: "PanelPlayer" }), protocol: SYNTHETIC_JOIN_PROTOCOL }));
+      const decoded = await decodedFrame;
+      t.check("shared decoder validates v32 synthetic self spawn-protection fields",
+        decoded.t === "snap"
+        && decoded.self !== null
+        && Number.isInteger(decoded.self.spo)
+        && Number.isInteger(decoded.self.sge)
+        && Number.isInteger(decoded.self.sse)
+        && Number.isInteger(decoded.self.sgr)
+        && Number.isInteger(decoded.self.ssh)
+        && typeof decoded.self.sfl === "boolean");
       let room: WorldSummary | undefined;
       for (let i = 0; i < 100 && room === undefined; i++) {
         await new Promise((r) => setTimeout(r, 20));

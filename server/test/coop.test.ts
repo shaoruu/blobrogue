@@ -21,6 +21,8 @@ import { TILE } from "../../src/sim/types.js";
 import { REVIVE } from "../../src/sim/balance.js";
 import { devSpawnEnemy } from "../../src/sim/world.js";
 import type { InputCmd } from "../../src/sim/input.js";
+import { GameWorld } from "../src/world.js";
+import { loadConfig } from "../src/config.js";
 
 let passed = 0;
 let failed = 0;
@@ -40,6 +42,21 @@ async function test(name: string, fn: () => Promise<void>): Promise<void> {
 const holdInteract = (): InputCmd => ({ seq: 0, moveX: 0, moveY: 0, aim: 0, firing: false, dash: false, interact: true });
 
 async function main(): Promise<void> {
+  await test("online co-op preserves post-phase tick increment and tick-0 Lifebloom", async () => {
+    const world = new GameWorld("room:TICK", 0x71c0, false, "coop");
+    world.addPlayer("mender", "mender");
+    const mender = world.state.players.get("mender")!;
+    mender.maxHp = 6;
+    mender.hp = 5;
+    mender.passiveState = 1;
+    mender.lastDamagedTick = -1000;
+    mender.selfHealReadyTick = 0;
+    world.step(loadConfig({}));
+    check("tick-0 Lifebloom pays before the co-op post-phase increment",
+      world.state.tick === 1 && mender.hp === 6 && mender.passiveState === 0,
+      `tick=${world.state.tick} hp=${mender.hp} passive=${mender.passiveState}`);
+  });
+
   await test("two real clients in one room agree on EVERYTHING (full snapshots, prod default)", async () => {
     const s = await startTestServer();
     try {

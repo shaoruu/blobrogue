@@ -469,6 +469,42 @@ section("swept projectile ETA and shipped ranged/trap threats");
   check("off-axis homing acquisition is included in candidate threat prediction",
     forceRespawn(homingWorld, homingVictim) === 1);
 
+  const coveredHomingWorld = liveWorld(2503, 2);
+  setRespawnArena(coveredHomingWorld, spawns);
+  const coveredHomingVictim = coveredHomingWorld.players.get("p1")!;
+  const coveredHomingOwner = coveredHomingWorld.players.get("p2")!;
+  coveredHomingOwner.x = 300;
+  coveredHomingOwner.y = 600;
+  coveredHomingOwner.aimAngle = Math.PI;
+  coveredHomingWorld.props = [{
+    id: 902,
+    kind: "crate",
+    x: 780,
+    y: 406,
+    radius: 20,
+    hp: 20,
+    dead: false,
+  }];
+  coveredHomingWorld.bullets.push({
+    x: spawns[0].x - 120,
+    y: spawns[0].y - 100,
+    vx: 300,
+    vy: 0,
+    radius: 4,
+    life: 2,
+    friendly: true,
+    owner: coveredHomingOwner.id,
+    damage: 3,
+    color: "#fff",
+    pierce: 0,
+    hitList: null,
+    isCrit: false,
+    homing: 4,
+    fx: "homing",
+  });
+  check("around-cover homing acquisition matches runtime and remains a spawn threat",
+    forceRespawn(coveredHomingWorld, coveredHomingVictim) === 1);
+
   const distantHomingWorld = liveWorld(2502, 2);
   setRespawnArena(distantHomingWorld, spawns);
   const distantVictim = distantHomingWorld.players.get("p1")!;

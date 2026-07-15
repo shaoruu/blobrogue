@@ -23,7 +23,7 @@ import {
   pvpDraftEveryTicks, pvpDraftSeed, pvpBlessingBlacklist, pvpComebackTierBump,
   pvpPitEdgeDistance, pvpNearestPitEdgeDistance, pvpSingleDashDistance, pvpRespawnIndex,
   isPvpPitWarningTile, pvpSpawnHardGraceTicks, pvpSpawnShieldTicks, pvpSpawnFallbackShieldTicks,
-  pvpRespawnWaitSafeMaxTicks,
+  pvpRespawnWaitSafeMaxTicks, pvpDeathWithinSpawnTicks,
 } from "../src/sim/pvp.js";
 import type { PvpRespawnCandidate } from "../src/sim/pvp.js";
 import type { Vec2, WireEffect } from "../src/sim/types.js";
@@ -131,6 +131,8 @@ section("damage model (balancer numbers)");
   check("normal spawn shield = 2.0s", PVP.spawnShieldSec === 2.0 && pvpSpawnShieldTicks() === 40);
   check("all-unsafe fallback shield = 3.0s",
     PVP.spawnFallbackShieldSec === 3.0 && pvpSpawnFallbackShieldTicks() === 60);
+  check("death-within-spawn telemetry has an independent 3.0s threshold",
+    PVP.deathWithinSpawnSec === 3.0 && pvpDeathWithinSpawnTicks() === 60);
   check("6p geometry proximity floor = 192px and LOS/aim range = 480px",
     PVP.spawnMinOpponentDist === 192 && PVP.spawnLosAimRange === 480);
   const tickZeroWorld = pvpWorld(1001, ["p1"]);
@@ -938,6 +940,88 @@ section("LETHAL PITS: ring-out, bounded credit, and spawn-shield safety");
     fallEvents.some((event) => event.t === "pvpRingOut")
     && !fallEvents.some((event) => event.t === "pvpKill")
     && (fallWorld.match!.scores.get("p1") ?? 0) === 0);
+}
+
+section("RING-OUT CREDIT FAILS CLOSED FOR REMOVED OR ABSENT SOURCES");
+{
+  const pit = buildPvpArena().pits[0];
+
+  const removedWorld = pvpWorld(731, ["p1", "p2", "p3"]);
+  advanceToLive(removedWorld);
+  const removedSource = removedWorld.players.get("p1")!;
+  const removedVictim = removedWorld.players.get("p2")!;
+  removedVictim.lastPvpHitBy = removedSource.id;
+  removedVictim.lastPvpHitTick = removedWorld.tick;
+  removedVictim.lastPvpKnockbackBy = removedSource.id;
+  removedVictim.lastPvpKnockbackTick = removedWorld.tick;
+  removedWorld.match!.lastFragTick.set(removedSource.id, removedWorld.tick);
+  removedWorld.match!.fragChain.set(removedSource.id, 2);
+  removePlayerFromWorld(removedWorld, removedSource.id);
+  check("removal scrubs reverse hit/knockback refs and every match map entry",
+    removedVictim.lastPvpHitBy === null
+    && removedVictim.lastPvpHitTick === -1
+    && removedVictim.lastPvpKnockbackBy === null
+    && removedVictim.lastPvpKnockbackTick === -1
+    && !removedWorld.match!.scores.has(removedSource.id)
+    && !removedWorld.match!.dmgThisTick.has(removedSource.id)
+    && !removedWorld.match!.lastFragTick.has(removedSource.id)
+    && !removedWorld.match!.fragChain.has(removedSource.id)
+    && !removedWorld.playerHist.has(removedSource.id));
+  removedVictim.x = pit.x;
+  removedVictim.y = pit.y;
+  clearPvpProtection(removedVictim);
+  const removedEvents = stepCollect(removedWorld, 1, new Map());
+  const removedRingOut = removedEvents.find((event) =>
+    event.t === "pvpRingOut" && event.victim === removedVictim.id
+  );
+  check("removed source cannot receive a ghost ring-out frag or recreate its score",
+    removedRingOut?.t === "pvpRingOut"
+    && removedRingOut.by === ""
+    && !removedWorld.match!.scores.has(removedSource.id)
+    && removedWorld.match!.phase === "live");
+
+  const absentWorld = pvpWorld(732, ["p1", "p2", "p3"]);
+  advanceToLive(absentWorld);
+  const absentSource = absentWorld.players.get("p1")!;
+  const absentVictim = absentWorld.players.get("p2")!;
+  absentVictim.lastPvpHitBy = absentSource.id;
+  absentVictim.lastPvpHitTick = absentWorld.tick;
+  absentVictim.lastPvpKnockbackBy = absentSource.id;
+  absentVictim.lastPvpKnockbackTick = absentWorld.tick;
+  setPlayerAbsence(absentWorld, absentSource.id, true);
+  absentVictim.x = pit.x;
+  absentVictim.y = pit.y;
+  clearPvpProtection(absentVictim);
+  const absentEvents = stepCollect(absentWorld, 1, new Map());
+  const absentRingOut = absentEvents.find((event) =>
+    event.t === "pvpRingOut" && event.victim === absentVictim.id
+  );
+  check("absent source is neutral at award time while the 3p match stays live",
+    absentRingOut?.t === "pvpRingOut"
+    && absentRingOut.by === ""
+    && (absentWorld.match!.scores.get(absentSource.id) ?? 0) === 0
+    && absentWorld.match!.phase === "live");
+}
+
+section("DEATH-WITHIN-3S TELEMETRY USES ITS OWN INCLUSIVE 60-TICK BOUNDARY");
+{
+  const pit = buildPvpArena().pits[0];
+  const deathWithinAt = (activeTicksAtDeath: number): boolean => {
+    const w = pvpWorld(740 + activeTicksAtDeath, ["p1", "p2"]);
+    advanceToLive(w);
+    const victim = w.players.get("p2")!;
+    if (victim.pvpRespawnTelemetry === null) throw new Error("missing respawn telemetry");
+    victim.pvpRespawnTelemetry.activeTicks = activeTicksAtDeath - 1;
+    victim.x = pit.x;
+    victim.y = pit.y;
+    clearPvpProtection(victim);
+    stepN(w, 1, new Map());
+    check(`elimination observes activeTicks=${activeTicksAtDeath}`,
+      victim.pvpRespawnTelemetry.activeTicks === activeTicksAtDeath);
+    return victim.pvpRespawnTelemetry.isDeathWithin3s;
+  };
+  check("active ticks 59 and 60 are within 3s; tick 61 is outside",
+    deathWithinAt(59) && deathWithinAt(60) && !deathWithinAt(61));
 }
 
 // ---------------------------------------------------------------------------------------------

@@ -119,6 +119,7 @@ export const PVP = {
   spawnHardGraceSec: 0.75,
   spawnShieldSec: 2.0,
   spawnFallbackShieldSec: 3.0,
+  deathWithinSpawnSec: 3.0,
   spawnMinOpponentDist: 192,
   spawnLosAimRange: 480,
   spawnProjectileHardHorizonSec: 0.75,
@@ -161,6 +162,9 @@ export function pvpSpawnHardGraceTicks(): number { return Math.round(PVP.spawnHa
 export function pvpSpawnShieldTicks(): number { return Math.round(PVP.spawnShieldSec * TICKS_PER_SECOND); }
 export function pvpSpawnFallbackShieldTicks(): number {
   return Math.round(PVP.spawnFallbackShieldSec * TICKS_PER_SECOND);
+}
+export function pvpDeathWithinSpawnTicks(): number {
+  return Math.round(PVP.deathWithinSpawnSec * TICKS_PER_SECOND);
 }
 export function pvpRespawnWaitSafeIntervalTicks(): number {
   return Math.round(PVP.respawnWaitSafeIntervalSec * TICKS_PER_SECOND);
