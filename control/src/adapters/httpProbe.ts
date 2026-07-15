@@ -73,7 +73,8 @@ import type {
 // v28: the PVP MVP — PlayerWire.tm (FFA team), SelfWire.rsp (respawn countdown), the top-level
 // `match` block, and the reliable pvpKill / pvpMatchOver events (all inert in co-op).
 // v29: PVP Wave 1 reliable presentation events (ring-out, chain-frag, sudden-death).
-export const SYNTHETIC_JOIN_PROTOCOL = 29;
+// v30: distinct authoritative PvP hard-grace and spawn-shield ticks.
+export const SYNTHETIC_JOIN_PROTOCOL = 30;
 
 export interface HttpProbeConfig {
   baseUrl: string;
