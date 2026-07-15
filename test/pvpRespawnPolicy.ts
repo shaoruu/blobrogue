@@ -241,7 +241,10 @@ export function runRespawnPolicySeed(seed: number): RespawnPolicySeedReport {
       }
     }
 
-    if ((world.match?.scores.get(bot.id) ?? 0) >= 8) {
+    if (Math.max(
+      world.match?.scores.get(bot.id) ?? 0,
+      world.match?.scores.get(victim.id) ?? 0,
+    ) >= 8) {
       timeToEightSec = elapsedSec;
       break;
     }
