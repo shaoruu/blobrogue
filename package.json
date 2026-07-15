@@ -46,6 +46,7 @@
     "test:rarity": "tsx test/rarity.test.ts",
     "test:weaponbag": "tsx test/weaponbag.test.ts",
     "test:smartvariety": "tsx test/smartvariety.test.ts",
+    "report:smartvariety": "tsx tools/smartVarietyReport.ts --seeds=1000",
     "test:nav": "tsx test/nav.test.ts",
     "test:propbreak": "tsx test/propbreak.test.ts",
     "test:pickupclamp": "tsx test/pickupclamp.test.ts",
