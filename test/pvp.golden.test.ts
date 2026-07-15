@@ -95,6 +95,10 @@ function runScriptedMatch(addOrder: string[]): string[] {
     if (i === 60) setPlayerAbsence(w, "p2", false);
     trace.push(digest(w, stepWorld(w, presentInputs(), DT)));
   }
+  guard = 0;
+  while (b.respawnT > 0 && guard++ < 100) {
+    trace.push(digest(w, stepWorld(w, presentInputs(), DT)));
+  }
 
   // 4) match-over: seat the leader one frag short, stage a clean duel, and let the next kill end
   //    the match — captured through the "over" transition and one settled tick past it.
