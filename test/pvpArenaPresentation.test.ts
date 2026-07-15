@@ -26,6 +26,8 @@ interface ArenaGameAccess {
   isClearCelebrated: boolean;
   tick(dt: number): void;
   updateHud(): void;
+  renderPlayer(): void;
+  renderRemotePlayers(): void;
   renderExit(): void;
   renderTiles(): void;
   renderMinimap(): void;
@@ -241,6 +243,8 @@ async function main(): Promise<void> {
   const game = gameInstance as object as ArenaGameAccess;
   game.tick(FIXED_DT);
   game.updateHud();
+  game.renderPlayer();
+  game.renderRemotePlayers();
   const hudState = currentHudState();
   check("authoritative world identity selects arena presentation", game.isArena && hudState.isArena);
   check("HUD phase, timer, score, and roster names come from the latest match snapshot",
@@ -270,6 +274,8 @@ async function main(): Promise<void> {
     roster,
   }));
   game.tick(FIXED_DT);
+  game.renderPlayer();
+  game.renderRemotePlayers();
   check("remaining shield draws a distinct local and remote world cue",
     canvasLog.spawnSafeStrokeCalls === 0 && canvasLog.spawnShieldStrokeCalls >= 2,
     `safe=${canvasLog.spawnSafeStrokeCalls} shield=${canvasLog.spawnShieldStrokeCalls}`);
@@ -283,6 +289,8 @@ async function main(): Promise<void> {
     roster,
   }));
   game.tick(FIXED_DT);
+  game.renderPlayer();
+  game.renderRemotePlayers();
   check("world protection cues disappear on authoritative break or expiry",
     canvasLog.spawnShieldStrokeCalls === 0);
 
