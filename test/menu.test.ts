@@ -251,6 +251,7 @@ function fakeConvex(opts: FakeOpts = {}, calls: string[] = []): FakeConvex {
           playerId: "signed-out-guest",
           isAccount: false,
           guestCapability: "signed-out-capability",
+          guestRefreshCapability: "signed-out-refresh-capability",
           totalKills: 0,
           deepestFloor: 0,
           totalCoins: 0,

@@ -57,6 +57,7 @@ function fakeConvex(calls: Call[], opts: FakeConvexOpts = {}): ConvexClient {
           unlocks: [], equippedPet: null, lastKitId: "gunner",
           masteryXp: 0, masteryLevel: 1, isAccount: false,
           guestCapability: "guest-capability",
+          guestRefreshCapability: "guest-refresh-capability",
         };
       case "rooms:create":
         return {
