@@ -119,6 +119,7 @@ type ClientOwnedField = "id" | "pr" | "aimAngle" | "shotSeq" | "rewindTicks" | "
 // - pvpDraft*: authoritative offer cadence, deterministic seed identity, and comeback weighting.
 //              The server sends the validated offer itself; prediction never rolls an online pick.
 type ServerOnlyField =
+  | "offerIdentity"
   | "reviveBy"
   | "downsThisFloor"
   | "ultSources"
@@ -139,7 +140,13 @@ type ServerOnlyField =
   | "pvpNextDraftTick"
   | "pvpDraftOrdinal"
   | "pvpDraftTick"
-  | "pvpDraftTierBump";
+  | "pvpDraftTierBump"
+  | "weaponOfferHistory"
+  | "blessingOfferHistory"
+  | "blessingOfferOrdinal"
+  | "shopWeaponOfferOrdinal"
+  | "shopBlessingOfferOrdinal"
+  | "premiumWeaponOfferOrdinal";
 
 // Compile-time exhaustiveness: every PlayerSim key must be classified exactly once. The
 // MustBeNever constraint fails to instantiate for any non-empty type, so adding a PlayerSim

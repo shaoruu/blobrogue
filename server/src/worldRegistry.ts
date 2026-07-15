@@ -45,7 +45,7 @@ export class WorldRegistry implements SessionStore {
   // Bind a connection to a room: add its player + register the conn on the room.
   bind(conn: Conn, roomId: string): RoomRuntime {
     const room = this.ensureRoom(roomId);
-    room.addPlayer(conn.playerId!, conn.kitId);
+    room.addPlayer(conn.playerId!, conn.kitId, conn.authName ?? conn.playerId!);
     room.conns.set(conn.id, conn);
     conn.worldId = room.id;
     return room;

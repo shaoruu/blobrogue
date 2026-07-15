@@ -26,7 +26,7 @@ import {
 import type { WorldState, PlayerSim, ShopBuyOutcome } from "../src/sim/world.js";
 import {
   isShopFloor, hasShopRoomOnFloor, buildShopState, shopSlotStatusFor, shopViewerOf, shopWeaponPrice,
-  isPremiumKind, SHOP_FOCUS_RANGE, SHOP_BUY_RANGE,
+  shopSlotForViewer, isPremiumKind, SHOP_FOCUS_RANGE, SHOP_BUY_RANGE,
 } from "../src/sim/shop.js";
 import type { ShopSlot, ShopState } from "../src/sim/shop.js";
 import { SHOP, PREMIUM, isPremiumShopFloor, isSpoilsFloor } from "../src/sim/balance.js";
@@ -325,7 +325,7 @@ function buyCommandTests(): void {
     const w = createWorld(0xDEA1, 3);
     const p = w.players.get(LOCAL_ID)!;
     const blessing = slotOf(w, "blessing");
-    const itemId = blessing.itemId!;
+    const itemId = shopSlotForViewer(w.shop!, blessing, p.id).itemId!;
     p.coins = 99;
     for (let i = 0; i < MAX_ITEM_LEVEL; i++) p.ownedItemIds.push(itemId);
     check("a maxed blessing reads 'maxLevel', consumes nothing",
@@ -411,13 +411,15 @@ function ownershipTests(): void {
     const { w, ps } = partyWorld(0xC0C0B, 3, 4);
     const blessing = slotOf(w, "blessing");
     const heart = slotOf(w, "heart");
+    const itemIds = new Map(ps.map((p) => [p.id, shopSlotForViewer(w.shop!, blessing, p.id).itemId!]));
     for (const p of ps) { p.coins = 99; p.hp = 1; }
     const blessingOk = ps.every((p) => buyAt(w, p, blessing) === "ok");
-    check("P4: all four buy the SAME blessing pedestal (instanced per player)",
-      blessingOk && ps.every((p) => p.ownedItemIds.includes(blessing.itemId!)) && blessing.buyers.length === 4);
+    check("P4: all four buy their deterministic viewer-specific blessing (instanced per player)",
+      blessingOk && ps.every((p) => p.ownedItemIds.includes(itemIds.get(p.id)!)) && blessing.buyers.length === 4);
+    const hpBefore = new Map(ps.map((p) => [p.id, p.hp]));
     const heartOk = ps.every((p) => buyAt(w, p, heart) === "ok");
     check("P4: all four buy their own heart (+1 HP each — the P-heart supply preserved)",
-      heartOk && ps.every((p) => p.hp === 2) && heart.buyers.length === 4);
+      heartOk && ps.every((p) => p.hp === Math.min(p.maxHp, (hpBefore.get(p.id) ?? 0) + 1)) && heart.buyers.length === 4);
     check("personal rebuy reads 'sold' per buyer", ps.every((p) => buyAt(w, p, heart) === "sold"));
   }
 }
@@ -464,6 +466,21 @@ function rerollTests(): void {
       return JSON.stringify(toShopWire(w.shop!).slots.map((s) => s.wpn ?? s.it));
     };
     check("reroll restock is deterministic from (seed, floor, rerollsUsed)", roll() === roll());
+  }
+  {
+    const { w, ps: [a, b] } = partyWorld(0x9E93, 3, 2);
+    const blessing = slotOf(w, "blessing");
+    const reroll = slotOf(w, "reroll");
+    const aBefore = shopSlotForViewer(w.shop!, blessing, a.id).itemId;
+    const bBefore = shopSlotForViewer(w.shop!, blessing, b.id).itemId;
+    a.coins = 99;
+    b.coins = 99;
+    check("A buys only A's blessing projection", buyAt(w, a, blessing) === "ok");
+    check("B can still reroll B's unbought personal projection", buyAt(w, b, reroll) === "ok");
+    const aAfter = shopSlotForViewer(w.shop!, blessing, a.id).itemId;
+    const bAfter = shopSlotForViewer(w.shop!, blessing, b.id).itemId;
+    check("the bought projection stays fixed while the unbought viewer receives new stock",
+      aAfter === aBefore && bAfter !== bBefore);
   }
   {
     // Nothing left to restock: every pedestal bought -> the reroll is honest about it.
@@ -514,13 +531,36 @@ function flowAndWireTests(): void {
     const decoded = jsonCodec.decodeServer(jsonCodec.encodeServer(snap)) as Extract<ServerMsg, { t: "snap" }>;
     check("the snapshot carries the stall", decoded.shop !== null);
     check("claim + buyer state survives encode/decode byte-for-byte",
-      JSON.stringify(decoded.shop) === JSON.stringify(toShopWire(w.shop!)));
+      JSON.stringify(decoded.shop) === JSON.stringify(toShopWire(w.shop!, a.id)));
     const rebuilt = shopFromWire(decoded.shop!);
     // Lossless on the WIRE projection: a mystery pedestal's identity/twist are sim
     // secrets by design (hidden until the buy), so the sim-side struct is compared
     // through toShopWire — the exact view every client reconstructs.
     check("shopFromWire(toShopWire(s)) is lossless on the wire projection",
-      JSON.stringify(toShopWire(rebuilt)) === JSON.stringify(toShopWire(w.shop!)));
+      JSON.stringify(toShopWire(rebuilt)) === JSON.stringify(toShopWire(w.shop!, a.id)));
+    const localShop = shopFromWire(toShopWire(w.shop!, b.id), b.id);
+    const localHeart = localShop.slots.find((slot) => slot.kind === "heart")!;
+    check("online wire reconstruction re-keys the viewer's personal purchase to LOCAL_ID",
+      shopSlotStatusFor(localShop, localHeart, shopViewerOf({ ...b, id: LOCAL_ID })) === "sold");
+    for (const weapon of w.shop!.slots.filter((slot) => slot.kind === "weapon")) {
+      weapon.soldTo = a.id;
+    }
+    const blessing = slotOf(w, "blessing");
+    blessing.buyers = [a.id];
+    const rerollId = slotOf(w, "reroll").id;
+    const shopForA = shopFromWire(toShopWire(w.shop!, a.id), a.id);
+    const shopForB = shopFromWire(toShopWire(w.shop!, b.id), b.id);
+    check("flattened online stock derives reroll availability from the local viewer's purchase",
+      shopSlotStatusFor(
+        shopForA,
+        shopForA.slots.find((slot) => slot.id === rerollId)!,
+        shopViewerOf({ ...a, id: LOCAL_ID, coins: 99 }),
+      ) === "exhausted"
+      && shopSlotStatusFor(
+        shopForB,
+        shopForB.slots.find((slot) => slot.id === rerollId)!,
+        shopViewerOf({ ...b, id: LOCAL_ID, coins: 99 }),
+      ) === "buy");
     check("non-shop floors carry shop: null on the wire",
       (buildSnapshot(createWorld(0xB1E, 4), LOCAL_ID, 0, [], 0, true, { worldId: "room:TEST" }) as Extract<ServerMsg, { t: "snap" }>).shop === null);
   }
@@ -537,6 +577,10 @@ function flowAndWireTests(): void {
     check("the winner reads OWNED, the teammate reads SOLD — one wire, honest per-viewer states",
       shopSlotStatusFor(wire, slot, shopViewerOf(a)) === "owned"
       && shopSlotStatusFor(wire, slot, shopViewerOf(b)) === "sold");
+    const localWire = shopFromWire(toShopWire(w.shop!, a.id), a.id);
+    const localSlot = localWire.slots.find((candidate) => candidate.id === weapon.id)!;
+    check("the online winner reads OWNED after its server id is localized",
+      shopSlotStatusFor(localWire, localSlot, shopViewerOf({ ...a, id: LOCAL_ID })) === "owned");
   }
 }
 

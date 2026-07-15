@@ -30,7 +30,15 @@ import {
   rollWeaponRarity, rollMysteryTwist, LEGENDARY_WEAPONS, WEAPON_RARITY_COLOR, MYSTERY_COLOR,
 } from "./weapons.js";
 import type { ShotSpec, Weapon } from "./weapons.js";
-import { createMods, recomputeMods, itemLevelsOf, itemById, itemMaxLevel, isPvpBlessingId } from "./items.js";
+import {
+  createMods,
+  recomputeMods,
+  itemLevelsOf,
+  itemById,
+  itemMaxLevel,
+  isPvpBlessingId,
+  rollItemChoicesWith,
+} from "./items.js";
 import {
   ULT, OVERDRIVE, SANCTUARY, LIFEBLOOM, AEGIS, PHASE, MOMENTUM, OVERHEAT, HARDENED, OVERSHIELD,
   MAX_TOTAL_DR, MENDER_HEAL_CLAMP, HEAL_PULSE, PHANTOM_MARK, MENDER_REVIVE_SPEED, isRealKit, canCastUlt,
@@ -84,10 +92,33 @@ import { isControllerKind } from "./bestiary.js";
 import { biomeIndexForFloor } from "./biomes.js";
 import { resolveFloorDescriptor, floorHazardMutation, floorExtraElites, floorDashProfile } from "./floorRolls.js";
 import type { FloorDescriptor } from "./floorRolls.js";
-import { buildShopState, restockShop, shopSlotStatusFor, shopSlotPriceFor, shopViewerOf, upgradeTargetTier, SHOP_BUY_RANGE } from "./shop.js";
+import {
+  buildShopState,
+  restockShop,
+  shopSlotStatusFor,
+  shopSlotPriceFor,
+  shopViewerOf,
+  shopSlotForViewer,
+  stockShopForViewer,
+  upgradeTargetTier,
+  SHOP_BUY_RANGE,
+} from "./shop.js";
 import type { ShopSlot, ShopSlotStatus, ShopState } from "./shop.js";
-import { createWeaponBag, drawWeaponFromBag } from "./weaponBag.js";
+import { createWeaponBag, drawWeaponFromBag, rollWeaponOfferWithHistory } from "./weaponBag.js";
 import type { WeaponBag } from "./weaponBag.js";
+import {
+  createBlessingOfferHistory,
+  createWeaponOfferHistory,
+  recordBlessingOffer,
+  recordWeaponOffer,
+  resetBlessingOfferHistory,
+  resetWeaponOfferHistory,
+  stablePlayerIdHash,
+} from "./offerHistory.js";
+import type {
+  BlessingOfferHistory,
+  WeaponOfferHistory,
+} from "./offerHistory.js";
 
 const HOMING_ACQUIRE_RANGE = 260;
 
@@ -160,6 +191,7 @@ function freshUltSources(): UltSourceCharge { return { dmg: 0, kill: 0, taken: 0
 
 export interface PlayerSim {
   id: PlayerId;
+  offerIdentity: string;
   x: number; y: number; pr: number;
   hp: number; maxHp: number;
   mods: PlayerMods;
@@ -217,6 +249,12 @@ export interface PlayerSim {
   rewindTicks: number;
   kills: number; coins: number; combo: number; comboTimer: number;
   ownedItemIds: string[];
+  weaponOfferHistory: WeaponOfferHistory;
+  blessingOfferHistory: BlessingOfferHistory;
+  blessingOfferOrdinal: number;
+  shopWeaponOfferOrdinal: number;
+  shopBlessingOfferOrdinal: number;
+  premiumWeaponOfferOrdinal: number;
   meleeSwing: MeleeSwing | null;
   // Studio gate §4: the boss chest offers P+1 weapon CHOICES and each player claims exactly
   // one per boss floor. Reset on every floor build.
@@ -515,7 +553,7 @@ export interface WorldState {
 
 export function createPlayer(id: PlayerId, x: number, y: number): PlayerSim {
   return {
-    id, x, y, pr: 18,
+    id, offerIdentity: id, x, y, pr: 18,
     hp: PLAYER.baseMaxHp, maxHp: PLAYER.baseMaxHp,
     mods: createMods(),
     invuln: 0, lastDamagedTick: -1, selfHealReadyTick: 0, dashInvuln: 0,
@@ -526,6 +564,12 @@ export function createPlayer(id: PlayerId, x: number, y: number): PlayerSim {
     shotSeq: 0, isDown: false, isAbsent: false, reviveProgress: 0, reviveBy: null, downsThisFloor: 0, isInteracting: false, rewindTicks: 0,
     kills: 0, coins: 0, combo: 0, comboTimer: 0,
     ownedItemIds: [],
+    weaponOfferHistory: createWeaponOfferHistory(),
+    blessingOfferHistory: createBlessingOfferHistory(),
+    blessingOfferOrdinal: 0,
+    shopWeaponOfferOrdinal: 0,
+    shopBlessingOfferOrdinal: 0,
+    premiumWeaponOfferOrdinal: 0,
     meleeSwing: null,
     hasClaimedBossChoice: false,
     premiumHpBuys: 0,
@@ -667,20 +711,81 @@ export function createWorld(seed: number, floor: number, opts: WorldOptions = {}
     // reposition loop in loadFloorIntoWorld ran before this player existed).
     p.invuln = C.PLAYER_SPAWN_GRACE;
     w.players.set(LOCAL_ID, p);
+    recordCurrentSharedWeaponOffers(w, p);
+    stockCurrentShopForPlayer(w, p);
   }
   return w;
 }
 
 // Add a fresh player to a live world at the current dungeon spawn (authoritative server:
 // on join). Returns the created PlayerSim. No-ops to the existing entry if the id is taken.
-export function spawnPlayerInWorld(w: WorldState, id: PlayerId): PlayerSim {
+export function spawnPlayerInWorld(
+  w: WorldState,
+  id: PlayerId,
+  offerIdentity: string = id,
+): PlayerSim {
   const existing = w.players.get(id);
   if (existing) return existing;
   const spawn = w.dungeon.spawn;
   const p = createPlayer(id, spawn.x * TILE + TILE / 2, spawn.y * TILE + TILE / 2);
+  p.offerIdentity = offerIdentity;
   w.players.set(id, p);
   if (isPvp(w)) initPvpPlayer(w, p);
+  recordCurrentSharedWeaponOffers(w, p);
+  stockCurrentShopForPlayer(w, p);
   return p;
+}
+
+function recordCurrentSharedWeaponOffers(w: WorldState, p: PlayerSim): void {
+  const current: WeaponId[] = [];
+  for (const chest of w.chests) {
+    if (!chest.opened && chest.weapon !== undefined) current.push(chest.weapon);
+  }
+  for (const pickup of w.pickups) {
+    if (pickup.kind === "weapon" && pickup.weapon !== null) current.push(pickup.weapon);
+  }
+  for (const slot of w.shop?.slots ?? []) {
+    if (slot.isShared && slot.weapon !== null) current.push(slot.weapon);
+  }
+  for (const id of current) recordWeaponOffer(p.weaponOfferHistory, id);
+}
+
+function stockCurrentShopForPlayer(
+  w: WorldState,
+  p: PlayerSim,
+  refreshedSlotIds?: ReadonlySet<number>,
+): void {
+  if (!w.shop) return;
+  stockShopForViewer(w.shop, w.seed, w.floor, p, refreshedSlotIds);
+}
+
+function recordRestockedSharedWeapons(w: WorldState, restockedSlotIds: readonly number[]): void {
+  if (!w.shop) return;
+  const restocked = new Set(restockedSlotIds);
+  for (const slot of w.shop.slots) {
+    if (!restocked.has(slot.id) || !slot.isShared || slot.weapon === null) continue;
+    for (const p of w.players.values()) recordWeaponOffer(p.weaponOfferHistory, slot.weapon);
+  }
+}
+
+function refreshPersonalShopStock(w: WorldState, restockedSlotIds: readonly number[]): void {
+  if (!w.shop || restockedSlotIds.length === 0) return;
+  const refreshed = new Set(restockedSlotIds);
+  const players = [...w.players.values()].sort((a, b) => a.id.localeCompare(b.id));
+  for (const p of players) stockCurrentShopForPlayer(w, p, refreshed);
+}
+
+function refreshMaxedShopBlessings(w: WorldState, p: PlayerSim): void {
+  if (!w.shop) return;
+  const levels = itemLevelsOf(p.ownedItemIds);
+  const invalid = new Set<number>();
+  for (const slot of w.shop.slots) {
+    if (slot.buyers.includes(p.id)) continue;
+    if (slot.kind !== "blessing" && slot.kind !== "rare_blessing" && slot.kind !== "core_infusion") continue;
+    const item = itemById(shopSlotForViewer(w.shop, slot, p.id).itemId ?? "");
+    if (item && (levels.get(item.id) ?? 0) >= itemMaxLevel(item)) invalid.add(slot.id);
+  }
+  if (invalid.size > 0) stockCurrentShopForPlayer(w, p, invalid);
 }
 
 // Give a freshly-joined pvp player the flat symmetric loadout (fixed HP pool, neutral kit +
@@ -1521,6 +1626,12 @@ export function removePlayerFromWorld(w: WorldState, id: PlayerId): boolean {
   // credit, no lag-comp history, and no scoreboard ghost (and none of these maps grows unbounded
   // across join/leave churn). playerHist stays empty in co-op, so this is inert there.
   w.playerHist.delete(id);
+  if (w.shop) {
+    delete w.shop.viewerStock[id];
+    for (const slot of w.shop.slots) {
+      slot.buyers = slot.buyers.filter((buyer) => buyer !== id);
+    }
+  }
   const m = w.match;
   if (m !== null) {
     m.scores.delete(id);
@@ -1671,8 +1782,26 @@ export function loadFloorIntoWorld(w: WorldState, floor: number, playerCountAtLo
   // upward from the identical solo prefix.
   const shopRoom = w.dungeon.rooms.find((r) => r.kind === "shop");
   w.shop = !isBare && shopRoom !== undefined
-    ? buildShopState(w.seed, floor, shopRoom, [...weaponsOwnedByAll(w)], w.encounterPlayers)
+    ? buildShopState(
+      w.seed,
+      floor,
+      shopRoom,
+      [...weaponsOwnedByAll(w)],
+      w.encounterPlayers,
+      w.weaponBag,
+    )
     : null;
+  if (w.shop) {
+    const players = [...w.players.values()].sort((a, b) => a.id.localeCompare(b.id));
+    for (const p of players) {
+      for (const slot of w.shop.slots) {
+        if (slot.isShared && slot.weapon !== null) {
+          recordWeaponOffer(p.weaponOfferHistory, slot.weapon);
+        }
+      }
+      stockCurrentShopForPlayer(w, p);
+    }
+  }
   w.obstacleRev++;
   const spawns = isBare
     ? { active: [], pending: [] }
@@ -1723,6 +1852,15 @@ export function resetRunInWorld(w: WorldState, seed: number): void {
   w.seed = seed;
   w.rng = new Rng(seed ^ 0x53696d21);
   w.weaponBag = createWeaponBag(seed);
+  for (const p of w.players.values()) {
+    resetWeaponOfferHistory(p.weaponOfferHistory);
+    resetBlessingOfferHistory(p.blessingOfferHistory);
+    p.blessingOfferOrdinal = 0;
+    p.shopWeaponOfferOrdinal = 0;
+    p.shopBlessingOfferOrdinal = 0;
+    p.premiumWeaponOfferOrdinal = 0;
+    p.isBlessingRerollArmed = false;
+  }
   w.isRunOver = false;
   w.pityStreak = 0;
   w.isPityHeartArmed = false;
@@ -1810,7 +1948,9 @@ function rollBagWeapon(
     for (const id of LEGENDARY_WEAPONS) withGate.add(id);
     gated = withGate;
   }
-  return drawWeaponFromBag(w.weaponBag, gated, tier);
+  const pick = drawWeaponFromBag(w.weaponBag, gated, tier);
+  for (const p of w.players.values()) recordWeaponOffer(p.weaponOfferHistory, pick);
+  return pick;
 }
 
 // Weapons owned by EVERY player — the set a fresh drop would waste (nobody left to
@@ -2398,7 +2538,10 @@ export function swapWeaponInWorld(w: WorldState, pid: PlayerId, pickupId: number
   let mysteryTwist: MysteryTwist | null = null;
   if (pk.isBossChoice) {
     p.hasClaimedBossChoice = true;
-    if (p.ownedWeapons.includes(pk.weapon)) grant = drawWeaponFromBag(w.weaponBag, new Set(p.ownedWeapons));
+    if (p.ownedWeapons.includes(pk.weapon)) {
+      grant = drawWeaponFromBag(w.weaponBag, new Set(p.ownedWeapons));
+      recordWeaponOffer(p.weaponOfferHistory, grant);
+    }
   } else {
     if (pk.isMystery) {
       grant = revealMysteryPickup(w, p, pk, ev);
@@ -2456,6 +2599,7 @@ export function applyItemToWorld(w: WorldState, pid: PlayerId, item: ItemDef): S
     applyMaxHpBonus(p);
     if (p.maxHp > maxHpBefore) p.hp = Math.min(p.maxHp, p.hp + 1);
   }
+  refreshMaxedShopBlessings(w, p);
   return [{ t: "itemPicked", pid, x: p.x, y: p.y, tint: item.tint }];
 }
 
@@ -2520,28 +2664,43 @@ export function shopViewerFor(w: WorldState, p: PlayerSim) {
 // 45-170 price buys a floor under the gamble the base pedestal mystery (1.25× ladder)
 // doesn't have. The pick is distinct-from-owned while the tier permits.
 function premiumMysteryRoll(w: WorldState, slot: ShopSlot, p: PlayerSim): WeaponId {
-  let h = 5381;
-  for (let i = 0; i < p.id.length; i++) h = ((h * 33) ^ p.id.charCodeAt(i)) | 0;
-  const rng = new Rng((w.seed ^ 0x6d757374) + w.floor * 68041 + slot.id * 977 + (w.shop?.rerollsUsed ?? 0) * 31337 + h);
+  const rng = new Rng(
+    (w.seed ^ 0x6d757374)
+    + w.floor * 68041
+    + slot.id * 977
+    + (w.shop?.rerollsUsed ?? 0) * 31337
+    + stablePlayerIdHash(p.offerIdentity)
+    + p.premiumWeaponOfferOrdinal++ * 0x6a09e667,
+  );
   const rolled = rollWeaponRarity(() => rng.next(), w.floor, { isMystery: true, legendaryWeight: premiumMysteryLegendaryWeight(w.floor) });
   const tier: WeaponRarity = rolled === "common" ? "rare" : rolled;
   const inTier = PICKUP_WEAPONS.filter((id) => WEAPONS[id].rarity === tier);
-  const fresh = inTier.filter((id) => !p.ownedWeapons.includes(id));
-  const rarePlusFresh = PICKUP_WEAPONS.filter((id) => WEAPONS[id].rarity !== "common" && !p.ownedWeapons.includes(id));
-  const pool = fresh.length > 0 ? fresh : rarePlusFresh.length > 0 ? rarePlusFresh : inTier;
-  return rng.pick(pool);
+  return rollWeaponOfferWithHistory(
+    inTier,
+    () => rng.next(),
+    p.weaponOfferHistory,
+    new Set(p.ownedWeapons),
+  );
 }
 
 // The upgrade station's reforge target: a seeded weapon of the NEXT tier up from the
 // buyer's equipped gun, distinct-from-owned while the tier permits. Same per-buyer
 // salted-stream determinism as the mystery reveal.
 function weaponUpgradeRoll(w: WorldState, slot: ShopSlot, p: PlayerSim, target: WeaponRarity): WeaponId {
-  let h = 5381;
-  for (let i = 0; i < p.id.length; i++) h = ((h * 33) ^ p.id.charCodeAt(i)) | 0;
-  const rng = new Rng((w.seed ^ 0x46049e5) + w.floor * 68041 + slot.id * 977 + h);
+  const rng = new Rng(
+    (w.seed ^ 0x46049e5)
+    + w.floor * 68041
+    + slot.id * 977
+    + stablePlayerIdHash(p.offerIdentity)
+    + p.premiumWeaponOfferOrdinal++ * 0x6a09e667,
+  );
   const inTier = PICKUP_WEAPONS.filter((id) => WEAPONS[id].rarity === target);
-  const fresh = inTier.filter((id) => !p.ownedWeapons.includes(id));
-  return rng.pick(fresh.length > 0 ? fresh : inTier);
+  return rollWeaponOfferWithHistory(
+    inTier,
+    () => rng.next(),
+    p.weaponOfferHistory,
+    new Set(p.ownedWeapons),
+  );
 }
 
 // Burn a player's armed blessing-offer reroll (a reroll-everything purchase). The caller
@@ -2552,6 +2711,36 @@ export function consumeBlessingReroll(w: WorldState, pid: PlayerId): boolean {
   if (!p || !p.isBlessingRerollArmed) return false;
   p.isBlessingRerollArmed = false;
   return true;
+}
+
+export function rollBlessingChoicesInWorld(
+  w: WorldState,
+  pid: PlayerId,
+  isRareOnly: boolean,
+  count = 3,
+): ItemDef[] {
+  const p = w.players.get(pid);
+  if (!p || isPvp(w)) return [];
+  const draw = (): ItemDef[] => {
+    const rng = new Rng(
+      (w.seed ^ 0x0b1e55)
+      + stablePlayerIdHash(p.offerIdentity)
+      + p.blessingOfferOrdinal++ * 0x6a09e667,
+    );
+    return rollItemChoicesWith(
+      count,
+      () => rng.next(),
+      p.ownedItemIds,
+      {
+        isRareOnly,
+        history: p.blessingOfferHistory,
+      },
+    );
+  };
+  if (consumeBlessingReroll(w, pid)) draw();
+  const choices = draw();
+  recordBlessingOffer(p.blessingOfferHistory, choices.map((item) => item.id));
+  return choices;
 }
 
 // The validated, authoritative shop purchase — the ONLY way coins leave a player at the
@@ -2570,10 +2759,11 @@ export function buyFromShopInWorld(w: WorldState, pid: PlayerId, slotId: number,
   const slot = shop.slots.find((s) => s.id === slotId);
   if (!slot) return "invalid";
   if (Math.hypot(p.x - slot.x, p.y - slot.y) > SHOP_BUY_RANGE) return "invalid";
+  const stockedSlot = shopSlotForViewer(shop, slot, pid);
   const viewer = shopViewerFor(w, p);
-  const status = shopSlotStatusFor(shop, slot, viewer);
+  const status = shopSlotStatusFor(shop, stockedSlot, viewer);
   if (status !== "buy") return status;
-  p.coins -= shopSlotPriceFor(shop, slot, viewer);
+  p.coins -= shopSlotPriceFor(shop, stockedSlot, viewer);
   switch (slot.kind) {
     case "weapon": {
       slot.soldTo = pid;
@@ -2581,23 +2771,23 @@ export function buyFromShopInWorld(w: WorldState, pid: PlayerId, slotId: number,
         // The mystery pedestal reveals ON PURCHASE: an already-owned identity rerolls
         // into something the buyer lacks (never a dead buy), the twist lands, and the
         // slot flips to its true face — the SOLD pedestal shows what it was.
-        const grant = p.ownedWeapons.includes(slot.weapon!)
+        const grant = p.ownedWeapons.includes(stockedSlot.weapon!)
           ? rollBagWeapon(w, () => w.rng.next(), new Set(p.ownedWeapons), { isMystery: true })
-          : slot.weapon!;
+          : stockedSlot.weapon!;
         slot.weapon = grant;
         slot.isMystery = false;
         acquireWeapon(p, grant);
-        applyMysteryTwist(p, slot.twist ?? "plain", ev);
-        ev.push({ t: "mysteryReveal", pid, weapon: grant, twist: slot.twist ?? "plain", x: slot.x, y: slot.y });
+        applyMysteryTwist(p, stockedSlot.twist ?? "plain", ev);
+        ev.push({ t: "mysteryReveal", pid, weapon: grant, twist: stockedSlot.twist ?? "plain", x: slot.x, y: slot.y });
         slot.twist = null;
       } else {
-        acquireWeapon(p, slot.weapon!);
+        acquireWeapon(p, stockedSlot.weapon!);
       }
       break;
     }
     case "blessing": {
       slot.buyers.push(pid);
-      const item = itemById(slot.itemId!);
+      const item = itemById(stockedSlot.itemId!);
       if (item) for (const e of applyItemToWorld(w, pid, item)) ev.push(e);
       break;
     }
@@ -2608,7 +2798,16 @@ export function buyFromShopInWorld(w: WorldState, pid: PlayerId, slotId: number,
     }
     case "reroll": {
       shop.rerollsUsed++;
-      restockShop(shop, w.seed, w.floor, [...weaponsOwnedByAll(w)]);
+      const restocked = restockShop(
+        shop,
+        w.seed,
+        w.floor,
+        [...weaponsOwnedByAll(w)],
+        false,
+        w.weaponBag,
+      );
+      recordRestockedSharedWeapons(w, restocked);
+      refreshPersonalShopStock(w, restocked);
       break;
     }
     // ---- the premium sinks ----
@@ -2623,13 +2822,13 @@ export function buyFromShopInWorld(w: WorldState, pid: PlayerId, slotId: number,
     }
     case "legendary": {
       slot.buyers.push(pid);
-      acquireWeapon(p, slot.weapon!);
+      acquireWeapon(p, stockedSlot.weapon!);
       break;
     }
     case "rare_blessing":
     case "core_infusion": {
       slot.buyers.push(pid);
-      const item = itemById(slot.itemId!);
+      const item = itemById(stockedSlot.itemId!);
       if (item) for (const e of applyItemToWorld(w, pid, item)) ev.push(e);
       break;
     }
@@ -2673,7 +2872,16 @@ export function buyFromShopInWorld(w: WorldState, pid: PlayerId, slotId: number,
     }
     case "reroll_all": {
       shop.rerollsUsed++;
-      restockShop(shop, w.seed, w.floor, [...weaponsOwnedByAll(w)], true);
+      const restocked = restockShop(
+        shop,
+        w.seed,
+        w.floor,
+        [...weaponsOwnedByAll(w)],
+        true,
+        w.weaponBag,
+      );
+      recordRestockedSharedWeapons(w, restocked);
+      refreshPersonalShopStock(w, restocked);
       p.isBlessingRerollArmed = true;
       break;
     }
@@ -2694,13 +2902,13 @@ export function buyFromShopInWorld(w: WorldState, pid: PlayerId, slotId: number,
       slot.buyers.push(pid);
       p.hpTithe += PREMIUM.artifactHeartCost;
       applyMaxHpBonus(p);
-      acquireWeapon(p, slot.weapon!);
+      acquireWeapon(p, stockedSlot.weapon!);
       break;
     }
     // ---- the mythic capstone (one shared claim per party per shop) ----
     case "mythic_weapon": {
       slot.soldTo = pid;
-      acquireWeapon(p, slot.weapon!);
+      acquireWeapon(p, stockedSlot.weapon!);
       break;
     }
     case "mythic_trio": {
@@ -10703,6 +10911,10 @@ function openChest(w: WorldState, p: PlayerSim, c: Chest, ev: SimEvent[]): void 
     // claims exactly one (see updatePickups); a claim never removes a teammate's options.
     // (Only signature-bearing chests — every real boss drop — carry the choice set.)
     if (c.weapon !== undefined) {
+      recordWeaponOffer(w.weaponBag, c.weapon);
+      for (const member of w.players.values()) {
+        recordWeaponOffer(member.weaponOfferHistory, c.weapon);
+      }
       const choices: WeaponId[] = [c.weapon];
       // Alternates come from the run's shuffled bag, skipping the signature, this set,
       // and guns the whole party already owns — every pedestal is a real option. The
@@ -10926,9 +11138,11 @@ function updatePickups(w: WorldState, dt: number, ev: SimEvent[]): void {
             // damage); the pedestal itself persists for teammates either way.
             if (player.hasClaimedBossChoice) continue;
             player.hasClaimedBossChoice = true;
-            const grant = player.ownedWeapons.includes(p.weapon)
-              ? drawWeaponFromBag(w.weaponBag, new Set(player.ownedWeapons))
-              : p.weapon;
+            let grant = p.weapon;
+            if (player.ownedWeapons.includes(p.weapon)) {
+              grant = drawWeaponFromBag(w.weaponBag, new Set(player.ownedWeapons));
+              recordWeaponOffer(player.weaponOfferHistory, grant);
+            }
             acquireWeapon(player, grant);
             ev.push({ t: "pickup", pid: player.id, kind: "weapon", x: p.x, y: p.y });
             continue;

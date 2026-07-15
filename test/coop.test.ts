@@ -35,7 +35,7 @@ import {
   pedestalWeaponRolls, bossWeaponChoices,
 } from "../src/sim/balance.js";
 import { ITEMS } from "../src/sim/items.js";
-import { shopWeaponPrice } from "../src/sim/shop.js";
+import { shopSlotForViewer, shopWeaponPrice } from "../src/sim/shop.js";
 import { WEAPONS, PICKUP_WEAPONS } from "../src/sim/weapons.js";
 import * as C from "../src/sim/constants.js";
 import {
@@ -629,11 +629,13 @@ function weaponEconomyTests(): void {
     check("the teammate reads the honest SOLD — exactly one winner, coins untouched",
       buyFromShopInWorld(w, b.id, stall.id, []) === "sold" && !b.ownedWeapons.includes(merch) && b.coins === price);
     const blessing = w.shop!.slots.find((s) => s.kind === "blessing")!;
+    const blessingA = shopSlotForViewer(w.shop!, blessing, a.id);
+    const blessingB = shopSlotForViewer(w.shop!, blessing, b.id);
     a.coins = blessing.price; b.coins = blessing.price;
     a.x = blessing.x; a.y = blessing.y; b.x = blessing.x; b.y = blessing.y;
     check("the FOR-YOU blessing pedestal serves BOTH buyers (personal, never depletes)",
       buyFromShopInWorld(w, a.id, blessing.id, []) === "ok" && buyFromShopInWorld(w, b.id, blessing.id, []) === "ok"
-      && a.ownedItemIds.includes(blessing.itemId!) && b.ownedItemIds.includes(blessing.itemId!));
+      && a.ownedItemIds.includes(blessingA.itemId!) && b.ownedItemIds.includes(blessingB.itemId!));
   }
 
   section("economy: the heart station — an invalid BUY never consumes, and touch never buys");

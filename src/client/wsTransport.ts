@@ -895,7 +895,9 @@ export class WSTransport implements Transport {
     // Patch's stall: authoritative wire state only — the client never rolls or mutates
     // stock (its locally-rebuilt geometry still names the shop ROOM; the snapshot names
     // what is on the pedestals and who claimed what).
-    this.renderState.shop = this.latestSnap?.shop ? shopFromWire(this.latestSnap.shop) : null;
+    this.renderState.shop = this.latestSnap?.shop
+      ? shopFromWire(this.latestSnap.shop, this.selfServerId)
+      : null;
     // Self-owned effects re-key to LOCAL_ID so the render/audio layers recognize the
     // local player's own ring/tether/charge exactly like solo (owner-anchored draws,
     // the halo loop, the chain pull loop).

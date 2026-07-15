@@ -1,7 +1,7 @@
 // Patch's shop over REAL sockets: the authoritative shopBuy command end-to-end. Real
 // WSTransport clients join a room-scoped world moved onto a shop floor, and the suite
 // asserts:
-//   1. both wires carry the IDENTICAL stall (slots/prices/claims) on every snapshot;
+//   1. both wires carry identical shared stock/layout and viewer-specific personal stock;
 //   2. a client's BUY intent resolves server-side — coins server-owned, weapon granted,
 //      the claim flips to SOLD on every wire (state, not events);
 //   3. two clients racing one shared pedestal get exactly ONE winner; the loser's coins
@@ -15,6 +15,7 @@
 import { startTestServer, Bot, idle, waitUntil, sleep } from "../harness/lib.js";
 import { mintTicket } from "../src/auth.js";
 import { jsonCodec, PROTOCOL_VERSION } from "../../src/net/protocol.js";
+import type { ShopWire } from "../../src/net/protocol.js";
 import { loadFloorIntoWorld } from "../../src/sim/world.js";
 import type { RoomRuntime } from "../src/ports.js";
 import { SHOP } from "../../src/sim/balance.js";
@@ -64,8 +65,20 @@ async function main(): Promise<void> {
       const hasStall = await waitUntil(() => (a.transport.getLatestSnapshot()?.shop?.slots.length ?? 0) === 5
         && (b.transport.getLatestSnapshot()?.shop?.slots.length ?? 0) === 5, 3000);
       check("both wires carry the 5-station stall after the floor move", hasStall);
-      check("the stall is byte-identical on both wires",
-        JSON.stringify(a.transport.getLatestSnapshot()!.shop) === JSON.stringify(b.transport.getLatestSnapshot()!.shop));
+      const sharedProjection = (shop: ShopWire): string =>
+        JSON.stringify(shop.slots.map((slot) => ({
+          id: slot.id,
+          kind: slot.k,
+          isShared: slot.sh,
+          weapon: slot.sh ? slot.wpn : null,
+          price: slot.pr,
+          x: slot.x,
+          y: slot.y,
+          isMystery: slot.myst,
+        })));
+      check("both wires agree on shared stock, layout, rarity prices, and mystery state",
+        sharedProjection(a.transport.getLatestSnapshot()!.shop!)
+        === sharedProjection(b.transport.getLatestSnapshot()!.shop!));
 
       const aSim = world.state.players.get(a.serverId()!)!;
       const slot = world.state.shop!.slots.find((x) => x.kind === "weapon")!;

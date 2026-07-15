@@ -12,6 +12,7 @@
 
 import type { PlayerSim, WorldState } from "../sim/world.js";
 import { isFloorCleared, playersAtExit, isPlayerOut } from "../sim/world.js";
+import { shopSlotForViewer } from "../sim/shop.js";
 import type { ShopSlot, ShopSlotKind, ShopState } from "../sim/shop.js";
 import type {
   Enemy, Bullet, Prop, Pickup, Chest, Hazard, HazardKind, EnemyKind, WeaponId, AttackPhase,
@@ -23,6 +24,7 @@ import { PROP_RADIUS } from "../sim/constants.js";
 import { WEAPONS } from "../sim/weapons.js";
 import { ENEMY_ARCHETYPES, isBossKind } from "../sim/enemies.js";
 import type { SimEvent } from "../sim/events.js";
+import { LOCAL_ID } from "../sim/input.js";
 import type { PlayerId } from "../sim/input.js";
 import type { KitId } from "../sim/kits.js";
 import { isKitId } from "../sim/kits.js";
@@ -1720,20 +1722,23 @@ export function enemyFromWire(w: EnemyWire, x: number, y: number): Enemy {
 export function toPropWire(p: Prop): PropWire {
   return { id: p.id, kind: p.kind, x: p.x, y: p.y, brk: p.breakT ?? -1 };
 }
-export function toShopWire(s: ShopState): ShopWire {
+export function toShopWire(s: ShopState, viewerId?: PlayerId): ShopWire {
   return {
     md: s.mode, kx: s.keeperX, ky: s.keeperY, ru: s.rerollsUsed,
-    slots: s.slots.map((slot): ShopSlotWire => ({
-      id: slot.id, k: slot.kind, sh: slot.isShared,
-      // A mystery pedestal's identity NEVER rides the wire (a tampered client must not
-      // be able to peek the gamble); the buy flips isMystery false, revealing it.
-      wpn: slot.isMystery ? null : slot.weapon, it: slot.itemId, pr: slot.price,
-      x: slot.x, y: slot.y, sold: slot.soldTo, by: slot.buyers.slice(),
-      myst: slot.isMystery,
-    })),
+    slots: s.slots.map((baseSlot): ShopSlotWire => {
+      const slot = viewerId === undefined ? baseSlot : shopSlotForViewer(s, baseSlot, viewerId);
+      return {
+        id: slot.id, k: slot.kind, sh: slot.isShared,
+        // A mystery pedestal's identity NEVER rides the wire (a tampered client must not
+        // be able to peek the gamble); the buy flips isMystery false, revealing it.
+        wpn: slot.isMystery ? null : slot.weapon, it: slot.itemId, pr: slot.price,
+        x: slot.x, y: slot.y, sold: slot.soldTo, by: slot.buyers.slice(),
+        myst: slot.isMystery,
+      };
+    }),
   };
 }
-export function shopFromWire(w: ShopWire): ShopState {
+export function shopFromWire(w: ShopWire, selfServerId?: PlayerId | null): ShopState {
   // Field order mirrors buildShopState so a decoded shop is byte-identical to the sim's
   // on its wire projection (the shop suite locks toShopWire round-trips; a mystery
   // slot's hidden identity/twist are sim secrets and never reconstructable here).
@@ -1743,9 +1748,13 @@ export function shopFromWire(w: ShopWire): ShopState {
     slots: w.slots.map((s): ShopSlot => ({
       id: s.id, kind: s.k, isShared: s.sh,
       weapon: s.wpn, itemId: s.it, price: s.pr,
-      x: s.x, y: s.y, soldTo: s.sold, buyers: s.by.slice(),
+      x: s.x,
+      y: s.y,
+      soldTo: selfServerId != null && s.sold === selfServerId ? LOCAL_ID : s.sold,
+      buyers: s.by.map((pid) => selfServerId != null && pid === selfServerId ? LOCAL_ID : pid),
       isMystery: s.myst, twist: null,
     })),
+    viewerStock: {},
     rerollsUsed: w.ru,
   };
 }
@@ -2023,7 +2032,7 @@ export function buildSnapshot(
     hzds: w.hazards.map(toHazardWire),
     // Unfiltered too: the stall is a shared objective (≤5 slots, shop floors only) whose
     // SOLD/claim state every client must agree on regardless of where they stand.
-    shop: w.shop ? toShopWire(w.shop) : null,
+    shop: w.shop ? toShopWire(w.shop, selfPid) : null,
     // Effects share the hazard rule: hard sim caps per family, so the list stays small.
     effs: w.effects.map(toEffectWire),
     // pvp match block (one small object; null in co-op).

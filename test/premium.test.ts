@@ -28,7 +28,7 @@ import {
 import type { WorldState, PlayerSim, ShopBuyOutcome } from "../src/sim/world.js";
 import {
   isShopFloor, hasShopRoomOnFloor, shopSlotStatusFor, shopSlotPriceFor,
-  shopViewerOf, isPremiumKind, isMythicKind, upgradeTargetTier, dealerRarityCeiling,
+  shopViewerOf, shopSlotForViewer, isPremiumKind, isMythicKind, upgradeTargetTier, dealerRarityCeiling,
   PREMIUM_LOCK_KINDS, DEALER_LEGENDARY_FROM_FLOOR,
 } from "../src/sim/shop.js";
 import type { ShopSlot, ShopSlotKind } from "../src/sim/shop.js";
@@ -346,9 +346,10 @@ function sinkTests(): void {
   section("legendary weapon: known stock, guaranteed top rarity, inside the envelope");
   {
     const { w, ps: [p], slot } = worldWithSlot("legendary", 14);
+    const stock = shopSlotForViewer(w.shop!, slot, p.id);
     give(p, 1000);
-    check("the stocked weapon is a real legendary", slot.weapon !== null && WEAPONS[slot.weapon!].rarity === "legendary");
-    check("buy grants it", buyAt(w, p, slot) === "ok" && p.ownedWeapons.includes(slot.weapon!));
+    check("the stocked weapon is a real legendary", stock.weapon !== null && WEAPONS[stock.weapon!].rarity === "legendary");
+    check("buy grants it", buyAt(w, p, slot) === "ok" && p.ownedWeapons.includes(stock.weapon!));
     check("every legendary is a PICKUP_WEAPONS envelope weapon under the boss DPS gates (identity, not raw DPS)",
       LEGENDARY_WEAPONS.every((id) => PICKUP_WEAPONS.includes(id))
       && Object.values(BOSS_DPS_CEILING).every((v) => v !== undefined));
@@ -357,17 +358,20 @@ function sinkTests(): void {
   section("rare blessing: premium 1-of-1, Lv1-3 + raw caps respected");
   {
     const { w, ps: [p], slot } = worldWithSlot("rare_blessing", 9);
+    const stock = shopSlotForViewer(w.shop!, slot, p.id);
     give(p, 1000);
-    check("the stock is a real RARE blessing", itemById(slot.itemId ?? "")?.rarity === "rare");
+    check("the stock is a real RARE blessing", itemById(stock.itemId ?? "")?.rarity === "rare");
     check("buy applies it as a normal leveled pick", buyAt(w, p, slot) === "ok"
-      && (itemLevelsOf(p.ownedItemIds).get(slot.itemId!) ?? 0) === 1);
-    // Cap audit: a maxed viewer reads MAX LV and the buy refuses.
+      && (itemLevelsOf(p.ownedItemIds).get(stock.itemId!) ?? 0) === 1);
     const { w: w2, ps: [p2], slot: slot2 } = worldWithSlot("rare_blessing", 9);
     give(p2, 1000);
-    for (let i = 0; i < MAX_ITEM_LEVEL; i++) applyItemToWorld(w2, p2.id, itemById(slot2.itemId!)!);
-    check("a maxed blessing reads MAX LV and the buy mutates nothing",
-      shopSlotStatusFor(w2.shop!, slot2, shopViewerOf(p2)) === "maxLevel"
-      && buyAt(w2, p2, slot2) === "maxLevel" && p2.coins === 1000);
+    const firstStock = shopSlotForViewer(w2.shop!, slot2, p2.id);
+    for (let i = 0; i < MAX_ITEM_LEVEL; i++) applyItemToWorld(w2, p2.id, itemById(firstStock.itemId!)!);
+    const replacement = shopSlotForViewer(w2.shop!, slot2, p2.id);
+    check("maxing current stock deterministically projects a non-maxed replacement",
+      replacement.itemId !== firstStock.itemId
+      && shopSlotStatusFor(w2.shop!, replacement, shopViewerOf(p2)) !== "maxLevel"
+      && p2.coins === 1000);
   }
 
   section("+1 max heart: run-only, ×1.6 ladder, hard +4 TOTAL cap incl Vitality");
@@ -693,13 +697,14 @@ function catalogTests(): void {
     }
     check("the artifact never appears outside the climax vendor", isClimaxOnly);
     const { w, ps: [p], slot } = worldWithSlot("artifact", PREMIUM.climaxFloor);
+    const stock = shopSlotForViewer(w.shop!, slot, p.id);
     p.coins = 0; // hearts are the currency — a broke wallet must not matter
     const maxBefore = p.maxHp;
     check("the deal takes hearts, not coins", buyAt(w, p, slot) === "ok"
       && p.coins === 0
       && p.maxHp === maxBefore - PREMIUM.artifactHeartCost
-      && p.ownedWeapons.includes(slot.weapon!)
-      && WEAPONS[slot.weapon!].rarity === "legendary");
+      && p.ownedWeapons.includes(stock.weapon!)
+      && WEAPONS[stock.weapon!].rarity === "legendary");
     check("the tithe is permanent for the run and the deal is 1/run",
       p.hpTithe === PREMIUM.artifactHeartCost
       && shopSlotStatusFor(w.shop!, slot, shopViewerOf(p)) === "owned");
@@ -855,7 +860,7 @@ function wireTests(): void {
       const { w } = partyWorld(0x317e40, floor, 2);
       const msg = buildSnapshot(w, "p0", 0, [], 0, true, { worldId: "room:TEST" });
       const decoded = jsonCodec.decodeServer(jsonCodec.encodeServer(msg)) as Extract<ServerMsg, { t: "snap" }>;
-      if (JSON.stringify(decoded.shop) !== JSON.stringify(toShopWire(w.shop!))) isLossless = false;
+      if (JSON.stringify(decoded.shop) !== JSON.stringify(toShopWire(w.shop!, "p0"))) isLossless = false;
     }
     check("every premium landing's stall survives encode→decode byte-identically", isLossless);
   }

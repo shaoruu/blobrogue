@@ -11,13 +11,18 @@
 import type { WeaponId, WeaponRarity } from "./types.js";
 import { PICKUP_WEAPONS, WEAPONS } from "./weapons.js";
 import { Rng } from "./rng.js";
-import { WEAPON_VARIETY } from "./balance.js";
+import {
+  createWeaponOfferHistory,
+  recordWeaponOffer,
+  weaponSeenWeight,
+} from "./offerHistory.js";
+import type { WeaponOfferHistory } from "./offerHistory.js";
 
-export interface WeaponBag {
+export interface WeaponBag extends WeaponOfferHistory {
   seed: number;        // the run seed the shuffles derive from
   order: WeaponId[];   // the undealt remainder of the current pass
-  refills: number;     // completed shuffles — keys each pass to its own derived stream
-  recent: WeaponId[];  // last few dealt ids, so a fresh pass never opens on a repeat
+  refills: number;     // completed passes
+  weightedDraws: number;
 }
 
 // Own seed stream, like every placement system (props 0x2f6a35c1, pedestals 0x51ed270b, …):
@@ -25,7 +30,14 @@ export interface WeaponBag {
 const BAG_SALT = 0x3b9a5e17;
 
 export function createWeaponBag(seed: number): WeaponBag {
-  const bag: WeaponBag = { seed, order: [], refills: 0, recent: [] };
+  const history = createWeaponOfferHistory();
+  const bag: WeaponBag = {
+    seed,
+    order: [],
+    refills: 0,
+    weightedDraws: 0,
+    ...history,
+  };
   refillBag(bag);
   return bag;
 }
@@ -45,8 +57,36 @@ function refillBag(bag: WeaponBag): void {
 
 function takeAt(bag: WeaponBag, idx: number): WeaponId {
   const pick = bag.order.splice(idx, 1)[0];
-  bag.recent.push(pick);
-  if (bag.recent.length > WEAPON_VARIETY.recentDrops) bag.recent.shift();
+  recordWeaponOffer(bag, pick);
+  return pick;
+}
+
+export function rollWeaponOfferWithHistory(
+  candidates: readonly WeaponId[],
+  rand: () => number,
+  history: WeaponOfferHistory,
+  exclude: ReadonlySet<WeaponId> = new Set(),
+): WeaponId {
+  const unique = [...new Set(candidates)];
+  if (unique.length === 0) throw new Error("weapon offer pool is empty");
+
+  const unexcluded = unique.filter((id) => !exclude.has(id));
+  let pool = unexcluded.length > 0 ? unexcluded : unique;
+  const outsideRecent = pool.filter((id) => !history.recentWeaponOffers.includes(id));
+  if (outsideRecent.length > 0) pool = outsideRecent;
+
+  let total = 0;
+  for (const id of pool) total += weaponSeenWeight(history, id);
+  let roll = rand() * total;
+  let pick = pool[pool.length - 1];
+  for (const id of pool) {
+    roll -= weaponSeenWeight(history, id);
+    if (roll <= 0) {
+      pick = id;
+      break;
+    }
+  }
+  recordWeaponOffer(history, pick);
   return pick;
 }
 
@@ -64,20 +104,28 @@ function takeAt(bag: WeaponBag, idx: number): WeaponId {
 // legendary floor gate through `exclude`, whose skip-while-others-remain semantics
 // already guarantee a draw never hangs.
 export function drawWeaponFromBag(bag: WeaponBag, exclude: ReadonlySet<WeaponId>, rarity?: WeaponRarity): WeaponId {
-  if (rarity !== undefined) {
-    if (bag.order.length === 0) refillBag(bag);
+  if (bag.order.length > 0 && rarity !== undefined) {
     const fitsTier = (id: WeaponId): boolean => WEAPONS[id].rarity === rarity && !exclude.has(id);
-    let idx = bag.order.findIndex((id) => fitsTier(id) && !bag.recent.includes(id));
+    let idx = bag.order.findIndex((id) => fitsTier(id) && !bag.recentWeaponOffers.includes(id));
     if (idx < 0) idx = bag.order.findIndex(fitsTier);
     if (idx >= 0) return takeAt(bag, idx);
   }
-  for (let pass = 0; pass < 2; pass++) {
-    if (bag.order.length === 0) refillBag(bag);
-    let idx = bag.order.findIndex((id) => !exclude.has(id) && !bag.recent.includes(id));
+  if (bag.order.length > 0) {
+    let idx = bag.order.findIndex((id) => !exclude.has(id) && !bag.recentWeaponOffers.includes(id));
     if (idx < 0) idx = bag.order.findIndex((id) => !exclude.has(id));
     if (idx >= 0) return takeAt(bag, idx);
-    bag.order.length = 0; // every undealt id is excluded: start the next pass early
+    bag.order.length = 0;
   }
-  refillBag(bag);
-  return takeAt(bag, 0);
+
+  const rng = new Rng(
+    (bag.seed ^ BAG_SALT)
+    + 0x1f83d9ab
+    + bag.weightedDraws * 0x6a09e667,
+  );
+  bag.weightedDraws++;
+  if ((bag.weightedDraws - 1) % PICKUP_WEAPONS.length === 0) bag.refills++;
+  const tierPool = rarity === undefined
+    ? PICKUP_WEAPONS
+    : PICKUP_WEAPONS.filter((id) => WEAPONS[id].rarity === rarity);
+  return rollWeaponOfferWithHistory(tierPool, () => rng.next(), bag, exclude);
 }

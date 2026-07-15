@@ -8,6 +8,8 @@ import { CAPS } from "./balance.js";
 import { applyKitStatLean } from "./kits.js";
 import type { KitId } from "./kits.js";
 import { PVP } from "./pvp.js";
+import { blessingHistoryWeight, blessingSeenCount } from "./offerHistory.js";
+import type { BlessingOfferHistory } from "./offerHistory.js";
 
 // The neutral run-stat modifiers. Every field starts at its identity value (1 for a
 // multiplier, 0 for an additive) so an un-blessed run behaves exactly as before.
@@ -403,9 +405,11 @@ export function recomputeMods(mods: PlayerMods, ownedItemIds: readonly string[],
 }
 
 export interface RollOpts {
-  // Boss-chest reward: restrict the pool to rare blessings (falls back to the full pool
-  // if every rare is maxed).
-  rareOnly?: boolean;
+  isRareOnly?: boolean;
+  history?: BlessingOfferHistory;
+  eligibleItems?: readonly ItemDef[];
+  excludedIds?: ReadonlySet<string>;
+  isPremiumAllowed?: boolean;
 }
 
 // Weighted, distinct draw for one blessing offer. The roll function is injected so the same
@@ -420,27 +424,54 @@ export function rollItemChoicesWith(
   opts: RollOpts = {},
 ): ItemDef[] {
   const levels = itemLevelsOf(ownedItemIds);
-  // Premium-only defs (the shop's cores) never enter an offer pool: the eligible set —
-  // and therefore every seeded offer stream — is byte-identical to the pre-core game.
-  const eligible = ITEMS.filter((it) => it.isPremiumOnly !== true && (levels.get(it.id) ?? 0) < MAX_ITEM_LEVEL);
-  let pool = opts.rareOnly ? eligible.filter((it) => it.rarity === "rare") : eligible;
-  if (pool.length === 0) pool = eligible;
-  const weightOf = (it: ItemDef) => RARITY_WEIGHT[it.rarity] * (levels.has(it.id) ? 1 : NEW_ITEM_WEIGHT);
+  const eligible = (opts.eligibleItems ?? ITEMS).filter((item) =>
+    (opts.isPremiumAllowed === true || item.isPremiumOnly !== true)
+    && (levels.get(item.id) ?? 0) < itemMaxLevel(item)
+    && !opts.excludedIds?.has(item.id)
+  );
+  const pool = opts.isRareOnly
+    ? eligible.filter((item) => item.rarity === "rare")
+    : eligible;
+  const weightOf = (item: ItemDef): number =>
+    RARITY_WEIGHT[item.rarity]
+    * (levels.has(item.id) ? 1 : NEW_ITEM_WEIGHT)
+    * (opts.history ? blessingHistoryWeight(opts.history, item.id) : 1);
 
   const remaining = pool.slice();
   const chosen: ItemDef[] = [];
+  const history = opts.history;
+  const previous = history?.recentBlessingOffers.at(-1) ?? [];
+  const isUnseenAvailable = history !== undefined
+    && pool.some((item) => blessingSeenCount(history, item.id) === 0);
+  let upgradeCount = 0;
   for (let n = 0; n < count && remaining.length > 0; n++) {
+    let candidates = remaining;
+    if (history && n === 0 && isUnseenAvailable) {
+      candidates = candidates.filter((item) => blessingSeenCount(history, item.id) === 0);
+    }
+    const outsidePrevious = candidates.filter((item) => !previous.includes(item.id));
+    if (outsidePrevious.length > 0) candidates = outsidePrevious;
+    if (history && isUnseenAvailable && upgradeCount >= 1) {
+      candidates = candidates.filter((item) => !levels.has(item.id));
+      if (candidates.length === 0) {
+        candidates = remaining.filter((item) => !levels.has(item.id));
+      }
+    }
+    if (candidates.length === 0) break;
+
     let total = 0;
-    for (const it of remaining) total += weightOf(it);
+    for (const item of candidates) total += weightOf(item);
     let r = rand() * total;
     let idx = 0;
-    for (; idx < remaining.length; idx++) {
-      r -= weightOf(remaining[idx]);
+    for (; idx < candidates.length; idx++) {
+      r -= weightOf(candidates[idx]);
       if (r <= 0) break;
     }
-    if (idx >= remaining.length) idx = remaining.length - 1;
-    chosen.push(remaining[idx]);
-    remaining.splice(idx, 1);
+    if (idx >= candidates.length) idx = candidates.length - 1;
+    const pick = candidates[idx];
+    chosen.push(pick);
+    if (levels.has(pick.id)) upgradeCount++;
+    remaining.splice(remaining.indexOf(pick), 1);
   }
   return chosen;
 }
