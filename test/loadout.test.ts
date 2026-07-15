@@ -89,7 +89,19 @@ function member(overrides: Partial<LobbyStartMember> = {}): LobbyStartMember {
 section("atomic start decision rejects the exact first blocker");
 {
   const now = 100_000;
-  const missingChoice = evaluateLobbyStart(
+  const missingKit = evaluateLobbyStart(
+    [member({ isKitChoiceMade: false, isPetChoiceMade: false, isLoadoutConfirmed: false })],
+    "host",
+    3,
+    now,
+    12_000,
+  );
+  check("missing kit is the first exact blocker",
+    !missingKit.ok
+    && missingKit.code === "kit_missing"
+    && missingKit.message === "Ada must choose a kit");
+
+  const missingPet = evaluateLobbyStart(
     [member(), member({
       playerId: "guest",
       name: "Bob",
@@ -101,10 +113,22 @@ section("atomic start decision rejects the exact first blocker");
     now,
     12_000,
   );
-  check("missing combined choice blocks without partial launch",
-    !missingChoice.ok
-    && missingChoice.code === "loadout_missing"
-    && missingChoice.message === "Bob must confirm KIT + PET");
+  check("missing pet is distinct from missing confirmation",
+    !missingPet.ok
+    && missingPet.code === "pet_missing"
+    && missingPet.message === "Bob must choose a pet or No Pet");
+
+  const unconfirmed = evaluateLobbyStart(
+    [member({ isLoadoutConfirmed: false })],
+    "host",
+    3,
+    now,
+    12_000,
+  );
+  check("review confirmation is required after both choices",
+    !unconfirmed.ok
+    && unconfirmed.code === "loadout_missing"
+    && unconfirmed.message === "Ada must confirm loadout");
 
   const staleGeneration = evaluateLobbyStart(
     [member({ loadoutGeneration: 2 })],

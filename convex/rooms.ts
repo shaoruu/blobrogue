@@ -3,7 +3,7 @@ import { ConvexError, v } from "convex/values";
 import type { MutationCtx } from "./_generated/server";
 import type { Doc, Id } from "./_generated/dataModel";
 import { assertPvpModeAllowed } from "./pvpFlag";
-import { validateCombinedLoadout } from "./loadoutCore";
+import { validateCombinedLoadout, validateKitDraft, validatePetDraft } from "./loadoutCore";
 import type { CombinedLoadoutInput, ConfirmedKitId, LoadoutValidation } from "./loadoutCore";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { evaluateLobbyStart } from "./lobbyLoadoutCore";
@@ -456,6 +456,114 @@ export const start = mutation({
       if (!decision.ok) return decision;
     }
     await ctx.db.patch(roomId, { status: "playing", lastActivity: Date.now() });
+    return { ok: true as const };
+  },
+});
+
+export const beginLoadoutEdit = mutation({
+  args: {
+    roomId: v.id("rooms"),
+    clientId: v.string(),
+    generation: v.number(),
+  },
+  handler: async (ctx, { roomId, clientId, generation }) => {
+    const room = await ctx.db.get(roomId);
+    if (!room || kindOf(room) !== "online" || room.status !== "lobby") {
+      return { ok: false as const, reason: "run_locked" as const };
+    }
+    const currentGeneration = room.loadoutGeneration ?? 1;
+    if (generation !== currentGeneration) {
+      return { ok: false as const, reason: "generation_changed" as const };
+    }
+    const player = await resolveOnlineCaller(ctx, clientId);
+    const row = await ctx.db
+      .query("presence")
+      .withIndex("by_room_player", (q) => q.eq("roomId", roomId).eq("playerId", player._id))
+      .unique();
+    if (!row) return { ok: false as const, reason: "not_in_room" as const };
+    await ctx.db.patch(row._id, {
+      isKitChoiceMade: undefined,
+      isPetChoiceMade: undefined,
+      isLoadoutConfirmed: undefined,
+      isReady: undefined,
+      loadoutGeneration: currentGeneration,
+      isDeparted: undefined,
+      updatedAt: Date.now(),
+    });
+    return { ok: true as const };
+  },
+});
+
+export const chooseDraftKit = mutation({
+  args: {
+    roomId: v.id("rooms"),
+    clientId: v.string(),
+    generation: v.number(),
+    kitId: v.string(),
+  },
+  handler: async (ctx, { roomId, clientId, generation, kitId }) => {
+    const room = await ctx.db.get(roomId);
+    if (!room || kindOf(room) !== "online" || room.status !== "lobby") {
+      return { ok: false as const, reason: "run_locked" as const };
+    }
+    const currentGeneration = room.loadoutGeneration ?? 1;
+    if (generation !== currentGeneration) {
+      return { ok: false as const, reason: "generation_changed" as const };
+    }
+    const player = await resolveOnlineCaller(ctx, clientId);
+    const row = await ctx.db
+      .query("presence")
+      .withIndex("by_room_player", (q) => q.eq("roomId", roomId).eq("playerId", player._id))
+      .unique();
+    if (!row) return { ok: false as const, reason: "not_in_room" as const };
+    const validation = validateKitDraft(player, kitId);
+    if (!validation.ok) return { ok: false as const, reason: validation.reason };
+    await ctx.db.patch(row._id, {
+      loadoutKitId: validation.kitId,
+      isKitChoiceMade: true,
+      isLoadoutConfirmed: undefined,
+      isReady: undefined,
+      loadoutGeneration: currentGeneration,
+      isDeparted: undefined,
+      updatedAt: Date.now(),
+    });
+    return { ok: true as const };
+  },
+});
+
+export const chooseDraftPet = mutation({
+  args: {
+    roomId: v.id("rooms"),
+    clientId: v.string(),
+    generation: v.number(),
+    petId: v.union(v.string(), v.null()),
+  },
+  handler: async (ctx, { roomId, clientId, generation, petId }) => {
+    const room = await ctx.db.get(roomId);
+    if (!room || kindOf(room) !== "online" || room.status !== "lobby") {
+      return { ok: false as const, reason: "run_locked" as const };
+    }
+    const currentGeneration = room.loadoutGeneration ?? 1;
+    if (generation !== currentGeneration) {
+      return { ok: false as const, reason: "generation_changed" as const };
+    }
+    const player = await resolveOnlineCaller(ctx, clientId);
+    const row = await ctx.db
+      .query("presence")
+      .withIndex("by_room_player", (q) => q.eq("roomId", roomId).eq("playerId", player._id))
+      .unique();
+    if (!row) return { ok: false as const, reason: "not_in_room" as const };
+    const validation = validatePetDraft(player, petId);
+    if (!validation.ok) return { ok: false as const, reason: validation.reason };
+    await ctx.db.patch(row._id, {
+      loadoutPetId: validation.petId ?? undefined,
+      isPetChoiceMade: true,
+      isLoadoutConfirmed: undefined,
+      isReady: undefined,
+      loadoutGeneration: currentGeneration,
+      isDeparted: undefined,
+      updatedAt: Date.now(),
+    });
     return { ok: true as const };
   },
 });

@@ -411,14 +411,15 @@ export interface KitMeta {
   id: Exclude<KitId, "none">;
   name: string;
   role: string;
+  passive: string;
   ult: string;
   blurb: string;
 }
 export const KIT_META: Readonly<Record<Exclude<KitId, "none">, KitMeta>> = {
-  gunner: { id: "gunner", name: "Gunner", role: "DPS", ult: "Overdrive", blurb: "Reliable rifle carry. Momentum ramps as you go unhit; Overdrive melts an exposed boss." },
-  mender: { id: "mender", name: "Mender", role: "Healer", ult: "Sanctuary", blurb: "Beam support with real offense. Lifebloom tops the lowest ally; Sanctuary drops a heal pocket." },
-  bulwark: { id: "bulwark", name: "Bulwark", role: "Tank", ult: "Aegis", blurb: "Scattergun anchor. Hardened shrugs off chip; Aegis deploys a bullet-blocking dome." },
-  phantom: { id: "phantom", name: "Phantom", role: "Mobility", ult: "Phase", blurb: "Fast dual-wield trickster. Slipstream adds a dash; Phase blinks the team out of danger." },
+  gunner: { id: "gunner", name: "Gunner", role: "DPS", passive: "Momentum", ult: "Overdrive", blurb: "Reliable rifle carry. Momentum ramps as you go unhit; Overdrive melts an exposed boss." },
+  mender: { id: "mender", name: "Mender", role: "Healer", passive: "Lifebloom", ult: "Sanctuary", blurb: "Beam support with real offense. Lifebloom tops the lowest ally; Sanctuary drops a heal pocket." },
+  bulwark: { id: "bulwark", name: "Bulwark", role: "Tank", passive: "Hardened", ult: "Aegis", blurb: "Scattergun anchor. Hardened shrugs off chip; Aegis deploys a bullet-blocking dome." },
+  phantom: { id: "phantom", name: "Phantom", role: "Mobility", passive: "Slipstream", ult: "Phase", blurb: "Fast dual-wield trickster. Slipstream adds a dash; Phase blinks the team out of danger." },
 };
 
 // The kit each kit STARTS with equipped (spec §2). The sim already owns the weapon roster; this

@@ -112,7 +112,7 @@ export type RoomLoadoutResult = {
 
 export type RoomStartResult = {
   ok: boolean;
-  code?: "run_already_started" | "loadout_missing" | "not_ready";
+  code?: "run_already_started" | "kit_missing" | "pet_missing" | "loadout_missing" | "not_ready";
   playerName?: string;
   message?: string;
 };
@@ -121,6 +121,11 @@ export type ReadyMutationResult = {
   ok: boolean;
   reason?: "not_in_room" | "loadout_missing";
   message?: string;
+};
+
+export type RoomDraftMutationResult = {
+  ok: boolean;
+  reason?: "run_locked" | "generation_changed" | "not_in_room" | "unknown_kit" | "kit_locked" | "pet_unowned";
 };
 
 // Explicit per-slot loadout picks for ensurePlayer ("none" clears a slot; absent = keep).
@@ -251,6 +256,9 @@ export const api = {
     get: makeFunctionReference<"query", { roomId: string }, RoomDoc | null>("rooms:get"),
     start: makeFunctionReference<"mutation", { roomId: string; clientId: string }, RoomStartResult>("rooms:start"),
     reopen: makeFunctionReference<"mutation", { roomId: string; clientId: string }, { loadoutGeneration: number; isReopened: boolean }>("rooms:reopen"),
+    beginLoadoutEdit: makeFunctionReference<"mutation", { roomId: string; clientId: string; generation: number }, RoomDraftMutationResult>("rooms:beginLoadoutEdit"),
+    chooseDraftKit: makeFunctionReference<"mutation", { roomId: string; clientId: string; generation: number; kitId: string }, RoomDraftMutationResult>("rooms:chooseDraftKit"),
+    chooseDraftPet: makeFunctionReference<"mutation", { roomId: string; clientId: string; generation: number; petId: string | null }, RoomDraftMutationResult>("rooms:chooseDraftPet"),
     confirmLoadout: makeFunctionReference<"mutation", { roomId: string; clientId: string; generation: number } & RunLoadoutArg, RoomLoadoutResult>("rooms:confirmLoadout"),
     heartbeat: makeFunctionReference<"mutation", { roomId: string; clientId: string; name?: string; colorIndex?: number; pingMs?: number }, null>("rooms:heartbeat"),
     descend: makeFunctionReference<"mutation", { roomId: string; floor: number }, null>("rooms:descend"),

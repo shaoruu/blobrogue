@@ -387,6 +387,10 @@ function fakeLobby(code: string, selfId = "player-1", isQuickPlay = false): {
       const row = state.rows.find((candidate) => candidate.playerId === selfId);
       return row?.kitId ? { kitId: row.kitId, petId: row.petId } : null;
     },
+    get selfPreselection() {
+      const row = state.rows.find((candidate) => candidate.playerId === selfId);
+      return row?.kitId ? { kitId: row.kitId, petId: row.petId } : null;
+    },
     get isPartyReady() { return state.rows.every((p) => p.isLoadoutConfirmed && p.isReady); },
     players: () => state.rows,
     expectedWorldId: () => worldIdForRoomCode(state.code),
@@ -398,6 +402,35 @@ function fakeLobby(code: string, selfId = "player-1", isQuickPlay = false): {
       return Promise.resolve(null);
     },
     start: () => Promise.resolve(null),
+    beginLoadoutEdit: () => {
+      const row = state.rows.find((candidate) => candidate.playerId === selfId);
+      if (row) {
+        readyCalls.push(false);
+        row.isKitChoiceMade = false;
+        row.isPetChoiceMade = false;
+        row.isLoadoutConfirmed = false;
+        row.isReady = false;
+      }
+      return Promise.resolve(null);
+    },
+    chooseDraftKit: (kitId: string) => {
+      const row = state.rows.find((candidate) => candidate.playerId === selfId);
+      if (row) {
+        row.kitId = kitId;
+        row.isKitChoiceMade = true;
+        row.isLoadoutConfirmed = false;
+        row.isReady = false;
+      }
+    },
+    chooseDraftPet: (petId: string | null) => {
+      const row = state.rows.find((candidate) => candidate.playerId === selfId);
+      if (row) {
+        row.petId = petId;
+        row.isPetChoiceMade = true;
+        row.isLoadoutConfirmed = false;
+        row.isReady = false;
+      }
+    },
     confirmLoadout: (loadout: RunLoadout) => {
       const row = state.rows.find((candidate) => candidate.playerId === selfId);
       if (row) {
@@ -410,7 +443,6 @@ function fakeLobby(code: string, selfId = "player-1", isQuickPlay = false): {
       }
       return Promise.resolve(null);
     },
-    clearLoadoutConfirmation: () => {},
     reopen: () => Promise.resolve(true),
     leave: () => {},
     reportWorld: () => {},
@@ -437,16 +469,25 @@ function member(playerId: string, name: string, opts: Partial<LobbyPlayer> = {})
 
 const RUN = { floor: 3, kills: 12, coins: 7, amber: 0, durationMs: 61_000 };
 
-async function passLoadoutGate(
+function reachLoadoutReview(
   overlay: ShimNode,
   kitId = "gunner",
   petId = "none",
-): Promise<void> {
+): void {
   const kit = byClass(overlay, "kit-option").find((card) => card.getAttribute?.("data-kit") === kitId);
   kit?.onclick?.();
   collect(overlay, (node) => node.tagName === "BUTTON" && textOf(node).includes("NEXT · CHOOSE PET"))[0]?.onclick?.();
   const pet = byClass(overlay, "pet-option").find((card) => card.getAttribute?.("data-pet") === petId);
   pet?.onclick?.();
+  byClass(overlay, "loadout-review-next")[0]?.onclick?.();
+}
+
+async function passLoadoutGate(
+  overlay: ShimNode,
+  kitId = "gunner",
+  petId = "none",
+): Promise<void> {
+  reachLoadoutReview(overlay, kitId, petId);
   byClass(overlay, "loadout-confirm")[0]?.onclick?.();
   await settle();
   await settle();
@@ -536,6 +577,8 @@ async function main(): Promise<void> {
     await menu.showTitle();
     collect(overlay, (node) => node.tagName === "BUTTON" && textOf(node) === "PLAY SOLO")[0]?.onclick?.();
     check("PLAY SOLO opens KIT instead of starting", textOf(overlay).includes("CHOOSE YOUR KIT") && soloLaunches.length === 0);
+    check("new run starts with loadoutConfirmed=false",
+      byClass(overlay, "loadout-gate")[0]?.getAttribute?.("data-loadout-confirmed") === "false");
     check("a defaulted Gunner is not called LAST USED",
       !byClass(overlay, "kit-option").some((card) => textOf(card).includes("GUNNER") && textOf(card).includes("LAST USED")));
     const next = collect(overlay, (node) => node.tagName === "BUTTON" && textOf(node).includes("NEXT · CHOOSE PET"))[0];
@@ -553,8 +596,10 @@ async function main(): Promise<void> {
       && byClass(overlay, "kit-option").some((card) => card.getAttribute?.("data-kit") === "mender"
         && (card.className ?? "").includes("selected")));
     collect(overlay, (node) => node.tagName === "BUTTON" && textOf(node).includes("NEXT · CHOOSE PET"))[0]?.onclick?.();
-    check("PET renders second and final confirm is disabled", textOf(overlay).includes("CHOOSE YOUR PET")
-      && byClass(overlay, "loadout-confirm")[0]?.disabled === true);
+    check("PET renders second with no final confirmation control",
+      textOf(overlay).includes("CHOOSE YOUR PET")
+      && byClass(overlay, "loadout-confirm").length === 0
+      && byClass(overlay, "loadout-review-next")[0]?.disabled === true);
     check("PET options are registry-derived: No Pet plus four companions and one hidden reserve",
       byClass(overlay, "pet-option").filter((card) => card.tagName === "BUTTON").length === 5
       && byClass(overlay, "pet-option").some((card) => (card.className ?? "").includes("reserved")));
@@ -574,12 +619,45 @@ async function main(): Promise<void> {
     ));
     collect(overlay, (node) => node.tagName === "BUTTON" && textOf(node).includes("NEXT · CHOOSE PET"))[0]?.onclick?.();
     fireWindowEvent("keydown", { key: "1" });
-    check("the final CTA repeats destination and both choices",
-      textOf(byClass(overlay, "loadout-confirm")[0]).includes("START SOLO · MENDER + NO PET"));
-    check("card clicks persisted nothing and launched nothing",
+    check("explicit No Pet activation only enables NEXT REVIEW",
+      byClass(overlay, "loadout-review-next")[0]?.disabled === false
+      && byClass(overlay, "loadout-confirm").length === 0);
+    check("KIT and PET activation persist nothing and launch nothing",
       localStorage.getItem("blobrogue.selectedKit") === null
       && calls.every((name) => name !== "players:confirmRunLoadout")
       && soloLaunches.length === 0);
+    byClass(overlay, "loadout-review-next")[0]?.onclick?.();
+    check("REVIEW is a distinct fourth screen with both summaries",
+      textOf(overlay).includes("REVIEW LOADOUT")
+      && textOf(overlay).includes("HEALER · SUNLANCE")
+      && textOf(overlay).includes("PASSIVE · LIFEBLOOM")
+      && textOf(overlay).includes("ULT · SANCTUARY")
+      && textOf(overlay).includes("NO COMPANION"));
+    check("only REVIEW owns the combined destination CTA",
+      textOf(byClass(overlay, "loadout-confirm")[0]).includes("CONFIRM & START SOLO")
+      && byClass(overlay, "loadout-gate")[0]?.getAttribute?.("data-loadout-confirmed") === "false");
+    collect(overlay, (node) => node.tagName === "BUTTON" && textOf(node) === "BACK · PET")[0]?.onclick?.();
+    check("Back Review → Pet preserves the deliberate No Pet draft",
+      textOf(overlay).includes("CHOOSE YOUR PET")
+      && byClass(overlay, "pet-option").some((card) => card.getAttribute?.("data-pet") === "none"
+        && (card.className ?? "").includes("selected")));
+    byClass(overlay, "loadout-review-next")[0]?.onclick?.();
+    byClass(overlay, "review-edit-kit")[0]?.onclick?.();
+    check("EDIT KIT preserves the valid pet draft",
+      byClass(overlay, "kit-option").some((card) => card.getAttribute?.("data-kit") === "mender"
+        && (card.className ?? "").includes("selected")));
+    collect(overlay, (node) => node.tagName === "BUTTON" && textOf(node).includes("NEXT · CHOOSE PET"))[0]?.onclick?.();
+    check("the preserved pet choice can continue directly back to Review",
+      byClass(overlay, "loadout-review-next")[0]?.disabled === false);
+    byClass(overlay, "loadout-review-next")[0]?.onclick?.();
+    byClass(overlay, "review-edit-pet")[0]?.onclick?.();
+    check("EDIT PET preserves the valid Mender draft",
+      textOf(overlay).includes("KIT MENDER")
+      && byClass(overlay, "pet-option").some((card) => card.getAttribute?.("data-pet") === "none"
+        && (card.className ?? "").includes("selected")));
+    byClass(overlay, "loadout-review-next")[0]?.onclick?.();
+    check("Review navigation still persisted and launched nothing",
+      calls.every((name) => name !== "players:confirmRunLoadout") && soloLaunches.length === 0);
     byClass(overlay, "loadout-confirm")[0]?.onclick?.();
     await settle();
     await settle();
@@ -601,7 +679,7 @@ async function main(): Promise<void> {
     localStorage.removeItem("blobrogue.lastPetId");
   }
 
-  section("pet persistence failure stays gated and explicit Continue No Pet never starts stale");
+  section("pet persistence failure stays on Review and Use No Pet still requires confirmation");
   {
     localStorage.removeItem("blobrogue.selectedKit");
     localStorage.removeItem("blobrogue.lastPetId");
@@ -620,18 +698,22 @@ async function main(): Promise<void> {
     byClass(overlay, "kit-option").find((card) => card.getAttribute?.("data-kit") === "gunner")?.onclick?.();
     collect(overlay, (node) => node.tagName === "BUTTON" && textOf(node).includes("NEXT · CHOOSE PET"))[0]?.onclick?.();
     byClass(overlay, "pet-option").find((card) => card.getAttribute?.("data-pet") === "doggie")?.onclick?.();
+    byClass(overlay, "loadout-review-next")[0]?.onclick?.();
     byClass(overlay, "loadout-confirm")[0]?.onclick?.();
     await settle();
     await settle();
-    check("failed pet save remains on PET and launches nothing",
-      textOf(overlay).includes("CHOOSE YOUR PET") && textOf(overlay).includes("Rescue that pet")
+    check("failed pet save remains on REVIEW and launches nothing",
+      textOf(overlay).includes("REVIEW LOADOUT") && textOf(overlay).includes("Rescue that pet")
       && soloLaunches.length === 0);
     const noPet = byClass(overlay, "loadout-no-pet")[0];
-    check("failure offers an explicit Continue No Pet action", noPet !== undefined && noPet.hidden !== true);
+    check("failure offers an explicit Use No Pet edit", noPet !== undefined && noPet.hidden !== true);
     noPet.onclick?.();
     await settle();
+    check("Use No Pet updates Review but still requires the one final CTA",
+      textOf(overlay).includes("NO COMPANION") && soloLaunches.length === 0);
+    byClass(overlay, "loadout-confirm")[0]?.onclick?.();
     await settle();
-    check("Continue No Pet launches only the explicit null pair",
+    check("the retried Review CTA launches only the explicit null pair",
       soloLaunches.length === 1 && soloLaunches[0]?.petId === null);
   }
 
@@ -666,6 +748,7 @@ async function main(): Promise<void> {
     byClass(made.overlay, "kit-option").find((card) => card.getAttribute?.("data-kit") === "gunner")?.onclick?.();
     collect(made.overlay, (node) => node.tagName === "BUTTON" && textOf(node).includes("NEXT · CHOOSE PET"))[0]?.onclick?.();
     byClass(made.overlay, "pet-option").find((card) => card.getAttribute?.("data-pet") === "none")?.onclick?.();
+    byClass(made.overlay, "loadout-review-next")[0]?.onclick?.();
     byClass(made.overlay, "loadout-confirm")[0]?.onclick?.();
     await settle();
     check("the save is genuinely pending", made.pendingLoadoutPersists.length === 1);
@@ -1580,7 +1663,12 @@ async function main(): Promise<void> {
   {
     const { menu, overlay } = makeMenu();
     await menu.showOnlineHome();
-    await passLoadoutGate(overlay);
+    reachLoadoutReview(overlay);
+    check("online REVIEW owns CONFIRM & CONTINUE ONLINE",
+      textOf(byClass(overlay, "loadout-confirm")[0]).includes("CONFIRM & CONTINUE ONLINE"));
+    byClass(overlay, "loadout-confirm")[0]?.onclick?.();
+    await settle();
+    await settle();
     const buttons = buttonsOf(overlay);
     check("QUICK PLAY present", buttons.some((b) => b.includes("QUICK PLAY")));
     check("CREATE ROOM present", buttons.some((b) => b.includes("CREATE ROOM")));
@@ -1714,7 +1802,8 @@ async function main(): Promise<void> {
     ]);
     menu.showOnlineLobby(f.lobby, PROFILE);
     const text = textOf(overlay);
-    check("a ready member reads READY", /READY \u00b7 87ms/.test(text), text.slice(0, 220));
+    check("a ready member reads LOADOUT ✓ / READY ✓",
+      text.includes("LOADOUT ✓ · READY ✓ · 87ms"), text.slice(0, 220));
     check("an unready member reads NOT READY", text.includes("NOT READY"));
     check("pings ride the roster chips", text.includes("42ms") && text.includes("87ms"));
     check("the host is identified and still carries explicit readiness", text.includes("HOST") && text.includes("NOT READY \u00b7 42ms"));
@@ -1724,6 +1813,32 @@ async function main(): Promise<void> {
     check("the lobby header carries the YOU confirmation", you.length === 1 && textOf(you[0]).includes("YOU:"), textOf(you[0] ?? {}));
     check("...with this player's actual name", textOf(you[0] ?? {}).includes(session.name), session.name);
     check("...and their committed color swatch", byClass(you[0] ?? {}, "you-swatch").length === 1);
+  }
+
+  section("lobby roster follows the authoritative blocker ladder");
+  {
+    const { menu, overlay } = makeMenu();
+    const f = fakeLobby("ABCD");
+    f.setPlayers([
+      member("player-1", "Kitless", {
+        isKitChoiceMade: false, isPetChoiceMade: false, isLoadoutConfirmed: false,
+      }),
+      member("player-2", "Petless", {
+        isPetChoiceMade: false, isLoadoutConfirmed: false,
+      }),
+      member("player-3", "Unconfirmed", {
+        isLoadoutConfirmed: false,
+      }),
+      member("player-4", "Unready"),
+      member("player-5", "Ready", { isReady: true }),
+    ]);
+    menu.showOnlineLobby(f.lobby, PROFILE);
+    const text = textOf(overlay);
+    check("missing kit is named exactly", text.includes("CHOOSE KIT"));
+    check("missing pet is named exactly", text.includes("CHOOSE PET"));
+    check("unconfirmed pair is named exactly", text.includes("CONFIRM LOADOUT"));
+    check("confirmed-but-unready is distinct", text.includes("LOADOUT ✓ · NOT READY"));
+    check("ready is the final state", text.includes("LOADOUT ✓ · READY ✓"));
   }
 
   section("private CHANGE LOADOUT uses the same gate and clears ready on final confirmation");
@@ -1737,10 +1852,19 @@ async function main(): Promise<void> {
     check("entering the editor first removes ready consent", f.readyCalls[0] === false);
     check("the shared KIT gate opens with room context",
       textOf(overlay).includes("CHOOSE YOUR KIT") && textOf(overlay).includes("ROOM ABCD"));
-    await passLoadoutGate(overlay, "mender", "none");
+    reachLoadoutReview(overlay, "mender", "none");
+    check("private REVIEW uses CONFIRM LOADOUT and never Ready",
+      textOf(byClass(overlay, "loadout-confirm")[0]).includes("CONFIRM LOADOUT")
+      && f.readyCalls.every((isReady) => !isReady));
+    byClass(overlay, "loadout-confirm")[0]?.onclick?.();
+    await settle();
+    await settle();
     const roster = textOf(overlay);
     check("final confirm returns to lobby with the new pair and NOT READY",
       roster.includes("MENDER + NO PET") && roster.includes("NOT READY"));
+    check("Review confirmation never readies implicitly",
+      f.readyCalls.every((isReady) => !isReady)
+      && buttonsOf(overlay).some((button) => button.includes("READY UP")));
   }
 
   section("host start gate: every member must be loadout-confirmed and ready");
@@ -1819,7 +1943,13 @@ async function main(): Promise<void> {
     check("the invite renders KIT before any join", textOf(overlay).includes("CHOOSE YOUR KIT") && !calls.includes("rooms:join"));
     check("the context names the room", textOf(overlay).includes("ROOM ABCD"));
     check("the URL is not consumed before final confirmation", loc.pathname === "/r/ABCD");
-    await passLoadoutGate(overlay);
+    reachLoadoutReview(overlay);
+    check("invite REVIEW owns the exact combined destination CTA",
+      textOf(byClass(overlay, "loadout-confirm")[0]).includes("CONFIRM & JOIN ABCD")
+      && !calls.includes("rooms:join"));
+    byClass(overlay, "loadout-confirm")[0]?.onclick?.();
+    await settle();
+    await settle();
     const text = textOf(overlay);
     check("success+lobby lands IN the room lobby (auto-joined, nothing to retype)", text.includes("ROOM ABCD"));
     check("the code badge renders the joined room", textOf(byClass(overlay, "code-badge")[0] ?? {}) === "ABCD");
@@ -1854,8 +1984,9 @@ async function main(): Promise<void> {
       await passLoadoutGate(overlay);
       const text = textOf(overlay);
       check(`${join}: the exact spec reason renders`, text.includes(reason), text.slice(0, 160));
-      check(`${join}: failure stays in the PET gate with retryable final CTA`,
-        text.includes("CHOOSE YOUR PET") && byClass(overlay, "loadout-confirm")[0]?.disabled !== true);
+      check(`${join}: failure stays in REVIEW with the final CTA retryable`,
+        text.includes("REVIEW LOADOUT") && byClass(overlay, "loadout-confirm")[0]?.disabled !== true);
+      collect(overlay, (node) => node.tagName === "BUTTON" && textOf(node).includes("BACK · PET"))[0]?.onclick?.();
       collect(overlay, (node) => node.tagName === "BUTTON" && textOf(node).includes("BACK · KIT"))[0]?.onclick?.();
       collect(overlay, (node) => node.tagName === "BUTTON" && textOf(node) === "BACK")[0]?.onclick?.();
       await settle();

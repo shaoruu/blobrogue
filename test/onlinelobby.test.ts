@@ -79,6 +79,10 @@ function fakeConvex(calls: Call[], opts: FakeConvexOpts = {}): ConvexClient {
           kitId: args.kitId,
           petId: args.petId,
         };
+      case "rooms:beginLoadoutEdit":
+      case "rooms:chooseDraftKit":
+      case "rooms:chooseDraftPet":
+        return { ok: true };
       case "rooms:reopen":
         return { loadoutGeneration: 2, isReopened: true };
       case "rooms:start":
@@ -339,7 +343,21 @@ async function main(): Promise<void> {
     const lobby = new OnlineLobby(client, session);
     await lobby.create("coop", LOADOUT);
     calls.length = 0;
+    const editError = await lobby.beginLoadoutEdit(1);
+    const isAuthorityCleared = editError === null && lobby.selfLoadout === null;
+    lobby.chooseDraftKit("mender", 1);
+    lobby.chooseDraftPet(null, 1);
     const error = await lobby.confirmLoadout({ kitId: "mender", petId: null }, 1);
+    check("editing clears combined authority before either draft choice", isAuthorityCleared);
+    const draftCalls = calls.filter((call) => call.fn === "rooms:chooseDraftKit" || call.fn === "rooms:chooseDraftPet");
+    check("KIT and explicit No Pet are distinct generation-bound draft writes",
+      draftCalls.length === 2
+      && draftCalls[0]?.fn === "rooms:chooseDraftKit"
+      && draftCalls[0].args.kitId === "mender"
+      && draftCalls[1]?.fn === "rooms:chooseDraftPet"
+      && draftCalls[1].args.petId === null);
+    check("draft writes do not persist profile convenience or mint a ticket",
+      calls.every((call) => call.fn !== "players:confirmRunLoadout" && call.fn !== "gsTicket:mint"));
     check("generation-1 combined confirm succeeds", error === null);
     const confirm = calls.find((call) => call.fn === "rooms:confirmLoadout");
     check("confirm carries generation, explicit null, both choice bits, and caller capability",

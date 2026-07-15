@@ -14,10 +14,41 @@ export type LobbyStartDecision =
   | { ok: true }
   | {
       ok: false;
-      code: "loadout_missing" | "not_ready";
+      code: "kit_missing" | "pet_missing" | "loadout_missing" | "not_ready";
       playerName: string;
       message: string;
     };
+
+export function loadoutBlockerForMember(
+  member: LobbyStartMember,
+  generation: number,
+): Exclude<LobbyStartDecision, { ok: true }> | null {
+  if (member.isKitChoiceMade !== true || member.loadoutKitId === undefined) {
+    return {
+      ok: false,
+      code: "kit_missing",
+      playerName: member.name,
+      message: `${member.name} must choose a kit`,
+    };
+  }
+  if (member.isPetChoiceMade !== true) {
+    return {
+      ok: false,
+      code: "pet_missing",
+      playerName: member.name,
+      message: `${member.name} must choose a pet or No Pet`,
+    };
+  }
+  if (member.isLoadoutConfirmed !== true || member.loadoutGeneration !== generation) {
+    return {
+      ok: false,
+      code: "loadout_missing",
+      playerName: member.name,
+      message: `${member.name} must confirm loadout`,
+    };
+  }
+  return null;
+}
 
 export function evaluateLobbyStart(
   members: readonly LobbyStartMember[],
@@ -39,19 +70,8 @@ export function evaluateLobbyStart(
     };
   }
   for (const member of active) {
-    const isConfirmed = member.isKitChoiceMade === true
-      && member.isPetChoiceMade === true
-      && member.isLoadoutConfirmed === true
-      && member.loadoutGeneration === generation
-      && member.loadoutKitId !== undefined;
-    if (!isConfirmed) {
-      return {
-        ok: false,
-        code: "loadout_missing",
-        playerName: member.name,
-        message: `${member.name} must confirm KIT + PET`,
-      };
-    }
+    const blocker = loadoutBlockerForMember(member, generation);
+    if (blocker) return blocker;
   }
   for (const member of active) {
     if (member.isReady !== true) {

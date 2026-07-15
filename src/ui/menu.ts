@@ -24,7 +24,6 @@ import { FocusScope, currentFocus } from "./focus.js";
 import { createSettingsControls } from "./settings.js";
 import { shouldShowSigninNudge, recordNudgeShown, recordNudgeDismissed, SIGNIN_BENEFITS } from "./signinNudge.js";
 import {
-  READY_LABEL, NOT_READY_LABEL,
   COPY_INVITE_LABEL, INVITE_COPIED_LABEL, INVITE_SHARED_LABEL, INVITE_COPY_FAILED_LABEL, INVITE_SHARE_HINT,
   INVITE_OFFLINE_NOTE, INVITE_UNREACHABLE_NOTE, INVITE_TRY_AGAIN_LABEL, inviteJoiningNote, inviteFailState,
   ARENA_LABEL, ARENA_PATCHING_LABEL,
@@ -71,6 +70,7 @@ interface LoadoutGateOptions {
   contextLabel: string;
   roomCode?: string;
   lobby?: OnlineLobby;
+  initialLoadout?: RunLoadout;
   onBack: () => void;
   onConfirm: (loadout: RunLoadout, isCurrent: () => boolean) => Promise<string | null>;
 }
@@ -742,7 +742,7 @@ export class Menu {
   async showKitPicker() {
     this.showLoadoutGate({
       destination: "preselect",
-      destinationLabel: "SAVE LOADOUT",
+      destinationLabel: "CONFIRM & SAVE PRESELECTION",
       contextLabel: "PRESELECT FOR NEXT RUN",
       onBack: () => void this.showTitle({ dest: "kit" }),
       onConfirm: async (loadout, isCurrent) => {
@@ -758,7 +758,7 @@ export class Menu {
   private doSolo() {
     this.showLoadoutGate({
       destination: "solo",
-      destinationLabel: "START SOLO",
+      destinationLabel: "CONFIRM & START SOLO",
       contextLabel: "SOLO RUN",
       onBack: () => void this.showTitle({ dest: "solo" }),
       onConfirm: async (loadout, isCurrent) => {
@@ -791,7 +791,7 @@ export class Menu {
     }
     if (result.reason === "kit_locked") return `REACH ACCOUNT LV ${kitUnlockLevel(loadout.kitId)}`;
     if (result.reason === "pet_unowned") return "Rescue that pet before choosing it.";
-    if (result.reason === "offline_pet_unavailable") return "Pet save unavailable. Retry or Continue No Pet.";
+    if (result.reason === "offline_pet_unavailable") return "Pet save unavailable. Retry or Use No Pet.";
     return "Could not save this loadout. Try again.";
   }
 
@@ -806,13 +806,14 @@ export class Menu {
     let unlocks = profile?.unlocks ?? [];
     const rememberedKit = this.session.rememberedKit;
     const rememberedPet = this.session.rememberedPet;
-    let isKitRemembered = opts.lobby?.selfLoadout !== null && opts.lobby?.selfLoadout !== undefined
+    const lobbyLoadout = opts.initialLoadout ?? opts.lobby?.selfPreselection;
+    let isKitRemembered = lobbyLoadout !== null && lobbyLoadout !== undefined
       ? true
       : rememberedKit.isRemembered;
-    let isPetRemembered = opts.lobby?.selfLoadout !== null && opts.lobby?.selfLoadout !== undefined
+    let isPetRemembered = lobbyLoadout !== null && lobbyLoadout !== undefined
       ? true
       : rememberedPet.isRemembered;
-    const openingLoadout = opts.lobby?.selfLoadout ?? {
+    const openingLoadout = lobbyLoadout ?? {
       kitId: rememberedKit.kitId,
       petId: rememberedPet.petId,
     };
@@ -827,10 +828,11 @@ export class Menu {
     if (draftPetId !== openingLoadout.petId) isPetRemembered = false;
     let isKitChoiceMade = false;
     let isPetChoiceMade = false;
+    let isLoadoutConfirmed = false;
     let isPersisting = false;
     let isProfileLoading = this.client !== null && profile === null;
     let isProfileError = false;
-    let step: "kit" | "pet" = "kit";
+    let step: "kit" | "pet" | "review" = "kit";
     let errorMessage = "";
     let announcement = "";
 
@@ -842,8 +844,6 @@ export class Menu {
       if (petId === null) return "NO PET";
       return companionNodes.find((node) => node.pet === petId)?.name.toUpperCase() ?? "NO PET";
     };
-
-    const pairLabel = (): string => `${KIT_META[draftKitId].name.toUpperCase()} + ${petName(draftPetId)}`;
 
     const profileState = (): string => {
       if (isProfileLoading) return "CHECKING UNLOCKS";
@@ -865,6 +865,7 @@ export class Menu {
       root.setAttribute("aria-modal", "true");
       root.setAttribute("aria-labelledby", "loadout-gate-title");
       root.setAttribute("data-step", step);
+      root.setAttribute("data-loadout-confirmed", String(isLoadoutConfirmed));
       root.setAttribute("data-gate-sequence", String(gateSequence));
       root.setAttribute("data-profile-state", isProfileLoading ? "loading" : isProfileError ? "error" : "ready");
       const header = el("header", "loadout-head");
@@ -951,8 +952,10 @@ export class Menu {
           if (!isUnlocked) return;
           draftKitId = kit;
           isKitChoiceMade = true;
+          isLoadoutConfirmed = false;
           errorMessage = "";
           announcement = `${meta.name} selected`;
+          opts.lobby?.chooseDraftKit(kit);
           showKit();
         };
         cards.push(card);
@@ -981,12 +984,15 @@ export class Menu {
       if (!isKitChoiceMade || !isPetChoiceMade || isPersisting) return;
       isPersisting = true;
       errorMessage = "";
-      showPet();
+      showReview();
       const error = await opts.onConfirm({ kitId: draftKitId, petId: draftPetId }, isCurrentGate);
-      if (!isCurrentGate() || !error) return;
+      if (!isCurrentGate() || !error) {
+        isLoadoutConfirmed = true;
+        return;
+      }
       isPersisting = false;
       errorMessage = error;
-      showPet();
+      showReview();
     };
 
     const showPet = () => {
@@ -1074,8 +1080,10 @@ export class Menu {
           if (!isOwned || isPersisting) return;
           draftPetId = option.petId;
           isPetChoiceMade = true;
+          isLoadoutConfirmed = false;
           errorMessage = "";
           announcement = `${name} selected`;
+          opts.lobby?.chooseDraftPet(option.petId);
           showPet();
         };
         cards.push(card);
@@ -1087,7 +1095,110 @@ export class Menu {
       layout.append(previewBox, grid);
       view.body.appendChild(layout);
 
-      const back = el("button", "secondary loadout-back", isPersisting ? "CANCEL" : "BACK · KIT");
+      const back = el("button", "secondary loadout-back", "BACK · KIT");
+      back.type = "button";
+      back.onclick = () => {
+        errorMessage = "";
+        announcement = "";
+        showKit();
+      };
+      const review = el("button", "loadout-review-next", "NEXT · REVIEW LOADOUT");
+      review.type = "button";
+      review.disabled = !isPetChoiceMade;
+      review.onclick = () => {
+        if (!isPetChoiceMade) return;
+        errorMessage = "";
+        announcement = "";
+        showReview();
+      };
+      view.footer.append(back, review);
+
+      this.show(view.root);
+      this.bindLoadoutKeys(cards, 3, 2, () => showKit());
+      queueMicrotask(() => {
+        cards.find((card) => card.getAttribute("data-pet") === (draftPetId ?? "none"))?.focus();
+      });
+    };
+
+    const showReview = () => {
+      step = "review";
+      const meta = KIT_META[draftKitId];
+      const context = opts.roomCode
+        ? `${opts.contextLabel} · ROOM ${opts.roomCode}`
+        : opts.contextLabel;
+      const view = shell(
+        "REVIEW LOADOUT",
+        "Confirm your kit and companion together for this run.",
+        context,
+      );
+      const grid = el("div", "loadout-review-grid");
+
+      const kitCard = el("section", "loadout-review-card review-kit");
+      const kitTitle = el("div", "review-title");
+      const icon = document.createElement("img");
+      icon.src = `/sprites/ui/${draftKitId}_24.png`;
+      icon.alt = "";
+      icon.width = 24;
+      icon.height = 24;
+      icon.className = "loadout-kit-icon";
+      kitTitle.append(icon, el("span", "", meta.name.toUpperCase()));
+      kitCard.append(
+        el("span", "review-kicker", "KIT"),
+        kitTitle,
+        el("span", "review-line", `${meta.role.toUpperCase()} · ${weaponName(KIT_START_WEAPON[draftKitId]).toUpperCase()}`),
+        el("span", "review-line", `PASSIVE · ${meta.passive.toUpperCase()}`),
+        el("span", "review-line", `ULT · ${meta.ult.toUpperCase()}`),
+        el("p", "review-description", meta.blurb),
+      );
+      const editKit = el("button", "secondary review-edit review-edit-kit", "EDIT KIT");
+      editKit.type = "button";
+      editKit.onclick = () => {
+        isLoadoutConfirmed = false;
+        errorMessage = "";
+        showKit();
+      };
+      kitCard.appendChild(editKit);
+
+      const petCard = el("section", "loadout-review-card review-pet");
+      petCard.appendChild(el("span", "review-kicker", "PET"));
+      const petPreview = el("div", "review-pet-preview");
+      if (!this.loadoutPreview) {
+        this.loadoutPreview = createLoadoutPreview(
+          lookOf(this.session.cosmetics, this.session.colorIndex),
+          draftPetId,
+          220,
+          244,
+        );
+      } else {
+        this.loadoutPreview.setLoadout(
+          lookOf(this.session.cosmetics, this.session.colorIndex),
+          draftPetId,
+        );
+      }
+      petPreview.appendChild(this.loadoutPreview.el);
+      petCard.append(
+        petPreview,
+        el("span", "review-pet-name", draftPetId === null ? "NO COMPANION" : petName(draftPetId)),
+        el(
+          "span",
+          "review-pet-effect",
+          draftPetId === null
+            ? "Travel alone · No gameplay change"
+            : "COSMETIC COMPANION — NO COMBAT EFFECT",
+        ),
+      );
+      const editPet = el("button", "secondary review-edit review-edit-pet", "EDIT PET");
+      editPet.type = "button";
+      editPet.onclick = () => {
+        isLoadoutConfirmed = false;
+        errorMessage = "";
+        showPet();
+      };
+      petCard.appendChild(editPet);
+      grid.append(kitCard, petCard);
+      view.body.appendChild(grid);
+
+      const back = el("button", "secondary loadout-back", isPersisting ? "CANCEL" : "BACK · PET");
       back.type = "button";
       back.onclick = () => {
         if (isPersisting) {
@@ -1096,51 +1207,52 @@ export class Menu {
           return;
         }
         errorMessage = "";
-        announcement = "";
-        showKit();
+        showPet();
       };
       const confirm = el("button", "loadout-confirm");
       confirm.type = "button";
-      confirm.disabled = !isPetChoiceMade || isPersisting;
+      confirm.disabled = !isKitChoiceMade || !isPetChoiceMade || isPersisting;
       const fullLabel = el(
         "span",
         "loadout-confirm-full",
-        isPersisting ? "CONFIRMING…" : `${opts.destinationLabel} · ${pairLabel()}`,
+        isPersisting ? "CONFIRMING…" : opts.destinationLabel,
       );
       const compactLabel = el(
         "span",
         "loadout-confirm-compact",
-        isPersisting ? "CONFIRMING…" : `CONFIRM · ${pairLabel()}`,
+        isPersisting ? "CONFIRMING…" : opts.destinationLabel,
       );
       confirm.append(fullLabel, compactLabel);
       confirm.onclick = () => void confirmDraft();
       view.footer.append(back, confirm);
 
-      const fallback = el("button", "secondary loadout-no-pet", "CONTINUE NO PET");
+      const fallback = el("button", "secondary loadout-no-pet", "USE NO PET");
       fallback.type = "button";
       const isPetSaveError = /pet save|rescue that pet|pet.*unavailable/i.test(errorMessage);
       fallback.hidden = !isPetSaveError || draftPetId === null;
       fallback.onclick = () => {
         draftPetId = null;
         isPetChoiceMade = true;
+        isLoadoutConfirmed = false;
         errorMessage = "";
         announcement = "No Pet selected";
-        void confirmDraft();
+        opts.lobby?.chooseDraftPet(null);
+        showReview();
       };
       view.fallback.appendChild(fallback);
 
       this.show(view.root);
-      this.bindLoadoutKeys(cards, 3, 2, () => {
+      this.bindLoadoutKeys([], 1, 1, () => {
         if (isPersisting) {
           this.activeLoadoutGateSequence = null;
           opts.onBack();
         } else {
-          showKit();
+          showPet();
         }
       });
       queueMicrotask(() => {
         if (isPersisting) back.focus();
-        else cards.find((card) => card.getAttribute("data-pet") === (draftPetId ?? "none"))?.focus();
+        else confirm.focus();
       });
     };
 
@@ -1150,7 +1262,9 @@ export class Menu {
         if (!isCurrentGate()) return;
         isProfileLoading = false;
         isProfileError = true;
-        if (step === "kit") showKit(); else showPet();
+        if (step === "kit") showKit();
+        else if (step === "pet") showPet();
+        else showReview();
       }, HYDRATE_TIMEOUT_MS);
       void this.session.login().then((hydrated) => {
         clearTimeout(hydrationTimer);
@@ -1174,13 +1288,17 @@ export class Menu {
           isPetRemembered = isRememberedPetValid;
           draftPetId = isRememberedPetValid ? nextPet.petId : null;
         }
-        if (step === "kit") showKit(); else showPet();
+        if (step === "kit") showKit();
+        else if (step === "pet") showPet();
+        else showReview();
       }).catch(() => {
         clearTimeout(hydrationTimer);
         if (!isCurrentGate()) return;
         isProfileLoading = false;
         isProfileError = true;
-        if (step === "kit") showKit(); else showPet();
+        if (step === "kit") showKit();
+        else if (step === "pet") showPet();
+        else showReview();
       });
     }
   }
@@ -1212,7 +1330,7 @@ export class Menu {
       const verticalDirection = key === "arrowup" || key === "w" ? -1
         : key === "arrowdown" || key === "s" ? 1
           : 0;
-      if (horizontalDirection !== 0 || verticalDirection !== 0) {
+      if (cards.length > 0 && (horizontalDirection !== 0 || verticalDirection !== 0)) {
         event.preventDefault();
         event.stopImmediatePropagation?.();
         const current = document.activeElement instanceof HTMLButtonElement
@@ -2462,7 +2580,7 @@ export class Menu {
     if (this.pendingOnlineLoadout === null && opts.isLoadoutConfirmed !== true) {
       this.showLoadoutGate({
         destination: "online",
-        destinationLabel: "CONTINUE ONLINE",
+        destinationLabel: "CONFIRM & CONTINUE ONLINE",
         contextLabel: "ONLINE RUN",
         onBack: () => void this.showTitle({ dest: "online" }),
         onConfirm: async (loadout, isCurrent) => {
@@ -2566,7 +2684,7 @@ export class Menu {
     }
     this.showLoadoutGate({
       destination: "replay",
-      destinationLabel: "FIND ANOTHER",
+      destinationLabel: "CONFIRM & FIND ANOTHER",
       contextLabel: "NEW ONLINE RUN",
       onBack: () => void this.showTitle({ dest: "online" }),
       onConfirm: async (loadout, isCurrent) => {
@@ -2615,7 +2733,7 @@ export class Menu {
     const roomCode = code.trim().toUpperCase();
     this.showLoadoutGate({
       destination: "invite",
-      destinationLabel: `JOIN ${roomCode}`,
+      destinationLabel: `CONFIRM & JOIN ${roomCode}`,
       contextLabel: `INVITE · ROOM ${roomCode}`,
       roomCode,
       onBack: () => {
@@ -2791,13 +2909,13 @@ export class Menu {
         );
         blob.el.classList.add("roster-blob");
         const you = p.playerId === lobby.selfId ? " (you)" : "";
-        const loadout = p.isLoadoutConfirmed && p.kitId
-          ? `${KIT_META[p.kitId as PlayableKitId]?.name.toUpperCase() ?? p.kitId.toUpperCase()} + ${this.petDisplayName(p.petId)}`
-          : "LOADOUT MISSING";
+        const loadout = p.isKitChoiceMade && p.kitId
+          ? ` · ${KIT_META[p.kitId as PlayableKitId]?.name.toUpperCase() ?? p.kitId.toUpperCase()}${p.isPetChoiceMade ? ` + ${this.petDisplayName(p.petId)}` : ""}`
+          : "";
         const identity = el(
           "span",
           "roster-identity",
-          `${p.name}${you}${p.isHost ? " · HOST" : ""} · ${loadout} · ${p.isLoadoutConfirmed ? "LOADOUT ✓" : "LOADOUT MISSING"}`,
+          `${p.name}${you}${p.isHost ? " · HOST" : ""}${loadout}`,
         );
         rowEl.append(blob.el, identity);
         rowEl.appendChild(this.memberStatusChip(lobby, p));
@@ -2852,20 +2970,22 @@ export class Menu {
   }
 
   private async showLobbyLoadoutGate(lobby: OnlineLobby, profile: ProfileDoc | null): Promise<void> {
-    const readyError = await lobby.setReady(false);
+    const generation = lobby.loadoutGeneration;
+    const initialLoadout = lobby.selfPreselection;
+    const editError = await lobby.beginLoadoutEdit(generation);
     const isStillInLobby = this.overlay.querySelector(".change-loadout") !== null;
     if (!isStillInLobby || !lobby.isActive || lobby.status !== "lobby") return;
-    if (readyError) {
-      this.showOnlineLobby(lobby, profile, readyError);
+    if (editError) {
+      this.showOnlineLobby(lobby, profile, editError);
       return;
     }
-    const generation = lobby.loadoutGeneration;
     this.showLoadoutGate({
       destination: "lobby",
-      destinationLabel: "CONFIRM",
+      destinationLabel: "CONFIRM LOADOUT",
       contextLabel: `PRIVATE LOBBY · GENERATION ${generation}`,
       roomCode: lobby.code,
       lobby,
+      initialLoadout: initialLoadout ?? undefined,
       onBack: () => this.showOnlineLobby(lobby, profile),
       onConfirm: async (loadout, isCurrent) => {
         const error = await lobby.confirmLoadout(loadout, generation);
@@ -2897,10 +3017,8 @@ export class Menu {
     setTimeout(() => { btn.textContent = COPY_INVITE_LABEL; }, 1600);
   }
 
-  // A member's roster chip. In the lobby it is the readiness consent (READY / NOT READY,
-  // host implicit) + their measured ping; while the run is live it is their state against
-  // the AUTHORITATIVE world (CONNECTED TO WORLD / CONNECTING…), mirrored from the server's
-  // own snapshot.
+  // A member's roster chip follows the authoritative blocker ladder in the lobby and the
+  // generation-bound world connection once the run is live.
   private memberStatusChip(lobby: OnlineLobby, p: LobbyPlayer): HTMLElement {
     const ping = p.pingMs !== null ? ` \u00b7 ${p.pingMs}ms` : "";
     let label: string;
@@ -2909,9 +3027,21 @@ export class Menu {
       const isConnected = p.gsWorldId === lobby.expectedWorldId();
       label = isConnected ? "CONNECTED TO WORLD" : "CONNECTING\u2026";
       color = isConnected ? "var(--ok)" : "var(--amber)";
+    } else if (!p.isKitChoiceMade || !p.kitId) {
+      label = "CHOOSE KIT";
+      color = "var(--amber)";
+    } else if (!p.isPetChoiceMade) {
+      label = "CHOOSE PET";
+      color = "var(--amber)";
+    } else if (!p.isLoadoutConfirmed) {
+      label = "CONFIRM LOADOUT";
+      color = "var(--amber)";
+    } else if (!p.isReady) {
+      label = "LOADOUT ✓ · NOT READY";
+      color = "var(--amber)";
     } else {
-      label = p.isReady ? READY_LABEL : NOT_READY_LABEL;
-      color = p.isReady ? "var(--ok)" : "var(--amber)";
+      label = "LOADOUT ✓ · READY ✓";
+      color = "var(--ok)";
     }
     const chip = el("span", "member-status", `${label}${ping}`);
     chip.style.marginLeft = "auto";
@@ -3146,7 +3276,7 @@ export class Menu {
     }
     this.showLoadoutGate({
       destination: "replay",
-      destinationLabel: "PLAY AGAIN",
+      destinationLabel: "CONFIRM & PLAY AGAIN",
       contextLabel: "NEW ONLINE RUN",
       onBack,
       onConfirm: async (loadout, isCurrent) => {

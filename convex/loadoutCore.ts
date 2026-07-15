@@ -26,17 +26,43 @@ export type LoadoutValidation =
   | { ok: true; kitId: ConfirmedKitId; petId: string | null }
   | { ok: false; reason: LoadoutRejectReason };
 
+export type KitDraftValidation =
+  | { ok: true; kitId: ConfirmedKitId }
+  | { ok: false; reason: "unknown_kit" | "kit_locked" };
+
+export type PetDraftValidation =
+  | { ok: true; petId: string | null }
+  | { ok: false; reason: "pet_unowned" };
+
+export function validateKitDraft(
+  authority: LoadoutAuthority,
+  kitId: string,
+): KitDraftValidation {
+  if (!isKitId(kitId) || kitId === "none") return { ok: false, reason: "unknown_kit" };
+  const level = masteryLevelForXp(authority.masteryXp ?? 0);
+  if (!isKitUnlocked(kitId, level)) return { ok: false, reason: "kit_locked" };
+  return { ok: true, kitId };
+}
+
+export function validatePetDraft(
+  authority: LoadoutAuthority,
+  petId: string | null,
+): PetDraftValidation {
+  if (petId !== null && !isPetOwned(petId, authority.unlocks)) {
+    return { ok: false, reason: "pet_unowned" };
+  }
+  return { ok: true, petId };
+}
+
 export function validateCombinedLoadout(
   authority: LoadoutAuthority,
   input: CombinedLoadoutInput,
 ): LoadoutValidation {
   if (!input.isKitChoiceMade) return { ok: false, reason: "kit_choice_required" };
   if (!input.isPetChoiceMade) return { ok: false, reason: "pet_choice_required" };
-  if (!isKitId(input.kitId) || input.kitId === "none") return { ok: false, reason: "unknown_kit" };
-  const level = masteryLevelForXp(authority.masteryXp ?? 0);
-  if (!isKitUnlocked(input.kitId, level)) return { ok: false, reason: "kit_locked" };
-  if (input.petId !== null && !isPetOwned(input.petId, authority.unlocks)) {
-    return { ok: false, reason: "pet_unowned" };
-  }
-  return { ok: true, kitId: input.kitId, petId: input.petId };
+  const kit = validateKitDraft(authority, input.kitId);
+  if (!kit.ok) return kit;
+  const pet = validatePetDraft(authority, input.petId);
+  if (!pet.ok) return pet;
+  return { ok: true, kitId: kit.kitId, petId: pet.petId };
 }

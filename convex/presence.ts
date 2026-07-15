@@ -4,6 +4,7 @@ import type { MutationCtx } from "./_generated/server";
 import type { Doc } from "./_generated/dataModel";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { pvpWorldIdForRoomCode, worldIdForRoomCode } from "./gsTicketCore";
+import { loadoutBlockerForMember } from "./lobbyLoadoutCore";
 
 const STALE_MS = 12000;   // hide players whose client stopped syncing
 const REVIVE_HP = 2;
@@ -132,16 +133,12 @@ export const setReady = mutation({
     }
     if (isReady) {
       const generation = room.loadoutGeneration ?? 1;
-      const isConfirmed = row.isKitChoiceMade === true
-        && row.isPetChoiceMade === true
-        && row.isLoadoutConfirmed === true
-        && row.loadoutGeneration === generation
-        && row.loadoutKitId !== undefined;
-      if (!isConfirmed) {
+      const blocker = loadoutBlockerForMember(row, generation);
+      if (blocker) {
         return {
           ok: false as const,
           reason: "loadout_missing" as const,
-          message: "Confirm KIT + PET before readying up",
+          message: blocker.message,
         };
       }
     }
