@@ -50,6 +50,15 @@ export function ticksLeftSeconds(args: { endTick: number; tick: number }): numbe
   return Math.max(0, Math.ceil((args.endTick - args.tick) * FIXED_DT));
 }
 
+export function pvpMaterializeFraction(args: {
+  startedTick: number;
+  tick: number;
+  shieldEndsAtTick: number;
+}): number {
+  if (args.startedTick <= 0 || args.shieldEndsAtTick <= args.tick) return 1;
+  return Math.max(0, Math.min(1, (args.tick - args.startedTick) / 5));
+}
+
 export function buildArenaMatchHud(source: ArenaMatchHudSource): ArenaMatchHudState {
   const leaderId = source.match.sc
     .slice()

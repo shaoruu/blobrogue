@@ -53,7 +53,7 @@ import { Minimap } from "./minimap.js";
 import type { MinimapDot } from "./minimap.js";
 import { Hud } from "./hud.js";
 import type { ProfileStats, HudState } from "./hud.js";
-import { buildArenaMatchHud } from "./arenaHud.js";
+import { buildArenaMatchHud, pvpMaterializeFraction } from "./arenaHud.js";
 import type { CoopBridge, LocalPlayerState } from "./coop.js";
 import {
   createAnim, resetAnim, stepAnim, triggerRecoil, triggerFlash, triggerBounce,
@@ -8368,11 +8368,11 @@ export class Game {
       const isArenaRespawning = this.isArena && r.hp <= 0;
       const spawnGraceTicks = Math.max(0, r.spawnHardGraceEndsAtTick - r.authoritativeTick);
       const spawnShieldTicks = Math.max(0, r.spawnShieldEndsAtTick - r.authoritativeTick);
-      const materialize = this.pvpMaterializeFraction(
-        r.spawnProtectionStartedTick,
-        r.authoritativeTick,
-        r.spawnShieldEndsAtTick,
-      );
+      const materialize = pvpMaterializeFraction({
+        startedTick: r.spawnProtectionStartedTick,
+        tick: r.authoritativeTick,
+        shieldEndsAtTick: r.spawnShieldEndsAtTick,
+      });
       if (!r.isAbsent && !isArenaRespawning) {
         this.renderPvpSpawnProtection(
           sx,
@@ -8609,11 +8609,6 @@ export class Game {
     };
   }
 
-  private pvpMaterializeFraction(startedTick: number, tick: number, shieldEndsAtTick: number): number {
-    if (startedTick <= 0 || shieldEndsAtTick <= tick) return 1;
-    return Math.max(0, Math.min(1, (tick - startedTick) / 5));
-  }
-
   private renderPvpSpawnProtection(
     sx: number,
     sy: number,
@@ -8707,11 +8702,11 @@ export class Game {
     const protection = this.localPvpProtectionState();
     const spawnGraceTicks = Math.max(0, protection.graceEndsAtTick - protection.tick);
     const spawnShieldTicks = Math.max(0, protection.shieldEndsAtTick - protection.tick);
-    const materialize = this.pvpMaterializeFraction(
-      protection.startedTick,
-      protection.tick,
-      protection.shieldEndsAtTick,
-    );
+    const materialize = pvpMaterializeFraction({
+      startedTick: protection.startedTick,
+      tick: protection.tick,
+      shieldEndsAtTick: protection.shieldEndsAtTick,
+    });
     if (!isArenaRespawning && !this.isDown) {
       this.renderPvpSpawnProtection(
         psx,

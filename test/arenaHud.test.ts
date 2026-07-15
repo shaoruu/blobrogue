@@ -4,6 +4,7 @@ import {
   arenaLaneCopy,
   buildArenaMatchHud,
   formatArenaClock,
+  pvpMaterializeFraction,
   ticksLeftSeconds,
 } from "../src/game/arenaHud.js";
 import type { MatchWire } from "../src/net/protocol.js";
@@ -149,6 +150,22 @@ section("countdown, result, and respawn states");
     && nested.spawnProtectionFill === 1
     && graceEndsAtTick - originTick === 25
     && shieldEndsAtTick - originTick === 60);
+  check("body materialization ramps transparently to full over exactly 0.25s",
+    pvpMaterializeFraction({
+      startedTick: originTick,
+      tick: originTick,
+      shieldEndsAtTick,
+    }) === 0
+    && pvpMaterializeFraction({
+      startedTick: originTick,
+      tick: originTick + 4,
+      shieldEndsAtTick,
+    }) === 0.8
+    && pvpMaterializeFraction({
+      startedTick: originTick,
+      tick: originTick + 5,
+      shieldEndsAtTick,
+    }) === 1);
 }
 
 section("arena copy cannot fall back to dungeon exit chrome");

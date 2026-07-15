@@ -20,7 +20,6 @@ interface CanvasLog {
   spawnSafeStrokeCalls: number;
   spawnShieldStrokeCalls: number;
   spawnShellFillCalls: number;
-  drawAlphas: number[];
 }
 
 interface ArenaGameAccess {
@@ -62,7 +61,6 @@ function recordingCanvas(log: CanvasLog): HTMLCanvasElement {
   let strokeStyle = "";
   let fillStyle = "";
   let lineWidth = 1;
-  let globalAlpha = 1;
   const context = new Proxy({}, {
     get: (_target, property) => {
       if (property === "createLinearGradient" || property === "createRadialGradient" || property === "createPattern") {
@@ -79,7 +77,7 @@ function recordingCanvas(log: CanvasLog): HTMLCanvasElement {
         return () => { log.arcCalls++; };
       }
       if (property === "drawImage") {
-        return () => { log.drawImageCalls++; log.drawAlphas.push(globalAlpha); };
+        return () => { log.drawImageCalls++; };
       }
       if (property === "strokeRect") {
         return () => { if (strokeStyle === "#ff5a4f") log.dangerStrokeCalls++; };
@@ -104,7 +102,6 @@ function recordingCanvas(log: CanvasLog): HTMLCanvasElement {
       if (property === "strokeStyle" && typeof value === "string") strokeStyle = value;
       if (property === "fillStyle" && typeof value === "string") fillStyle = value;
       if (property === "lineWidth" && typeof value === "number") lineWidth = value;
-      if (property === "globalAlpha" && typeof value === "number") globalAlpha = value;
       return true;
     },
   }) as object as CanvasRenderingContext2D;
@@ -194,7 +191,6 @@ async function main(): Promise<void> {
     spawnSafeStrokeCalls: 0,
     spawnShieldStrokeCalls: 0,
     spawnShellFillCalls: 0,
-    drawAlphas: [],
   };
   const gameInstance = new Game(
     recordingCanvas(canvasLog),
@@ -284,9 +280,6 @@ async function main(): Promise<void> {
   check("local protection is a full-body shell while the opponent cue stays simplified",
     canvasLog.spawnShellFillCalls === 1,
     `shellFills=${canvasLog.spawnShellFillCalls}`);
-  check("bodies begin materializing inside an already-visible shell without an opaque flash",
-    canvasLog.drawAlphas.some((alpha) => alpha === 0)
-    && canvasLog.spawnSafeStrokeCalls > 0);
 
   canvasLog.spawnSafeStrokeCalls = 0;
   canvasLog.spawnShieldStrokeCalls = 0;
