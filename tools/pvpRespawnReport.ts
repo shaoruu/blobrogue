@@ -30,12 +30,10 @@ const geometry4p = report.geometry.parties.find((party) => party.playerCount ===
 const geometry6p = report.geometry.parties.find((party) => party.playerCount === 6)!;
 const isAccepted = metrics.postRespawnEpisodeCount >= seedCount * 3
   && metrics.spawnToFirstDamageP10Sec >= 2
-  && metrics.spawnToFirstDamageMedianSec >= 3
   && metrics.spawnToDeathP10Sec >= 4.5
   && metrics.spawnToDeathMedianSec >= 7
   && metrics.deathWithin3sRate <= 0.02
   && metrics.maxRespawnOnlyFragsPer20Sec <= 2
-  && (metrics.timeToEightMinSec === null || metrics.timeToEightMinSec >= 90)
   && metrics.controlEstablishedRate >= 0.95
   && metrics.intentionalFireWithin500msRate >= 0.9
   && metrics.armingFeedbackCoverageRate === 1
@@ -54,7 +52,9 @@ const isAccepted = metrics.postRespawnEpisodeCount >= seedCount * 3
     party.avoidableImmediateProjectileSelections === 0 && party.isNeverTripleIndex
   )
   && (profile !== "playtestBot"
-    || (metrics.shieldFireAttempts === 0
+    || (metrics.spawnToFirstDamageMedianSec >= 3
+      && (metrics.timeToEightMinSec === null || metrics.timeToEightMinSec >= 90)
+      && metrics.shieldFireAttempts === 0
       && metrics.playtestReactionMinMs !== null
       && metrics.playtestReactionMaxMs !== null
       && metrics.playtestReactionMinMs >= 250

@@ -361,20 +361,19 @@ export function runRespawnPolicySeed(
     const botCommand = profile === "conformanceBot"
       ? conformanceBotInput(world, bot, victim, seed)
       : playtestBotInput(world, bot, victim, seed, playtestState);
+    if (profile === "playtestBot" && shieldEndedTick !== null && botCommand.firing) {
+      reactionMs.push((world.tick + 1 - shieldEndedTick) * 1000 * DT);
+      shieldEndedTick = null;
+    }
     if (botCommand.firing && victim.spawnShieldT > 0) shieldFireAttempts++;
     const inputs = new Map<string, InputCmd>([
       [bot.id, botCommand],
       [victim.id, victimInput(world, victim, bot, active)],
     ]);
-    const events = stepWorld(world, inputs, DT);
+    stepWorld(world, inputs, DT);
     const elapsedSec = (world.tick - liveStartTick) * DT;
     if (previousVictimShieldT > 0 && victim.spawnShieldT === 0 && victim.hp > 0) {
       shieldEndedTick = world.tick;
-    }
-    if (profile === "playtestBot" && shieldEndedTick !== null
-      && events.some((event) => event.t === "shot" && event.pid === bot.id)) {
-      reactionMs.push((world.tick - shieldEndedTick) * 1000 * DT);
-      shieldEndedTick = null;
     }
     if (victim.hp <= 0) shieldEndedTick = null;
     previousVictimShieldT = victim.spawnShieldT;

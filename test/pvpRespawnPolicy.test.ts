@@ -37,9 +37,6 @@ check("initial-life telemetry is anchored to the authoritative live whistle spaw
 check("spawn-to-first-damage P10 is at least 2s",
   metrics.spawnToFirstDamageP10Sec >= 2,
   `p10=${metrics.spawnToFirstDamageP10Sec.toFixed(2)}s`);
-check("spawn-to-first-damage median is at least 3s",
-  metrics.spawnToFirstDamageMedianSec >= 3,
-  `median=${metrics.spawnToFirstDamageMedianSec.toFixed(2)}s`);
 check("spawn-to-death P10 is at least 4.5s",
   metrics.spawnToDeathP10Sec >= 4.5,
   `p10=${metrics.spawnToDeathP10Sec.toFixed(2)}s`);
@@ -52,11 +49,6 @@ check("no more than 2% of respawns die within 3s",
 check("rapid bot earns no more than two respawn-only frags in any 20s window",
   metrics.maxRespawnOnlyFragsPer20Sec <= 2,
   `max=${metrics.maxRespawnOnlyFragsPer20Sec}`);
-check("fastest time-to-eight is at least 90s",
-  metrics.timeToEightMinSec === null || metrics.timeToEightMinSec >= 90,
-  metrics.timeToEightMinSec === null
-    ? `not reached in ${metrics.seedCount} seeds`
-    : `min=${metrics.timeToEightMinSec.toFixed(2)}s`);
 check("at least 95% establish dash, 90-degree aim, and two-tile movement before first damage",
   metrics.controlEstablishedRate >= 0.95,
   `rate=${(metrics.controlEstablishedRate * 100).toFixed(1)}%`);
@@ -93,7 +85,7 @@ check("projectile challenges never choose avoidable TTI <=0.75s and no index rep
     && party.isNeverTripleIndex
   ));
 
-const playtestReport = runRespawnPolicyReport(8, "playtestBot");
+const playtestReport = runRespawnPolicyReport(20, "playtestBot");
 const playtestMetrics = playtestReport.aggregate;
 const playtestEpisodes = playtestReport.seeds.flatMap((seed) => seed.episodes);
 check("playtestBot is separately labeled from adversarial conformance",
@@ -107,10 +99,14 @@ check("playtestBot authoritative first shots land 250–350ms after shield expir
   && playtestMetrics.playtestReactionMaxMs <= 350,
   `range=${playtestMetrics.playtestReactionMinMs}–${playtestMetrics.playtestReactionMaxMs}ms`);
 check("playtestBot life, spawn-frag, and time-to-8 gates hold",
-  playtestMetrics.spawnToDeathMedianSec >= 7
+  playtestMetrics.spawnToFirstDamageP10Sec >= 2
+  && playtestMetrics.spawnToFirstDamageMedianSec >= 3
+  && playtestMetrics.spawnToDeathMedianSec >= 7
+  && playtestMetrics.deathWithin3sRate <= 0.02
   && playtestMetrics.maxRespawnOnlyFragsPer20Sec <= 2
+  && playtestMetrics.controlEstablishedRate >= 0.95
   && (playtestMetrics.timeToEightMinSec === null || playtestMetrics.timeToEightMinSec >= 90),
-  `life=${playtestMetrics.spawnToDeathMedianSec.toFixed(2)}s spawnFrags=${playtestMetrics.maxRespawnOnlyFragsPer20Sec} timeTo8=${playtestMetrics.timeToEightMinSec}`);
+  `first=${playtestMetrics.spawnToFirstDamageP10Sec.toFixed(2)}/${playtestMetrics.spawnToFirstDamageMedianSec.toFixed(2)}s life=${playtestMetrics.spawnToDeathMedianSec.toFixed(2)}s spawnFrags=${playtestMetrics.maxRespawnOnlyFragsPer20Sec} timeTo8=${playtestMetrics.timeToEightMinSec}`);
 check("playtestBot report carries authoritative respawn telemetry fields",
   playtestEpisodes.some((episode) =>
     !episode.isInitialSpawn

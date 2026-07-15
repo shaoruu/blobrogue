@@ -1028,8 +1028,10 @@ section("frag-limit RESPAWN (death schedules a respawn, never elimination)");
   const respawnCd = victim.respawnT;
   stepN(w, respawnCd + pvpRespawnWaitSafeMaxTicks() + 2, new Map());
   check("the player respawns at full HP after the delay", victim.hp === PVP.maxHp && victim.respawnT === 0);
-  check("respawn arms fresh two-stage spawn protection",
-    victim.spawnGraceT > 0 && victim.spawnShieldT > victim.spawnGraceT);
+  check("respawn arms fresh nested spawn protection",
+    victim.spawnShieldT > 0
+    && victim.spawnHardGraceEndsAtTick - victim.spawnProtectionStartedTick === 15
+    && victim.spawnShieldEndsAtTick - victim.spawnProtectionStartedTick === 40);
   check("materialization exposes full HP, ready dash, and ready weapon cadence",
     victim.hp === victim.maxHp && victim.dashCd === 0 && victim.fireCd === 0);
   check("respawn delay matches the named constant exactly", respawnCd === pvpRespawnDelayTicks());

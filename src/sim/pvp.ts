@@ -461,12 +461,12 @@ export function pvpRespawnValidCandidates(
     !isPvpRespawnImmediateProjectileThreat(candidate)
   );
   if (noImmediateProjectile.length > 0) valid = noImmediateProjectile;
+  const nonCamped = valid.filter((candidate) => !candidate.isCamped);
+  if (nonCamped.length > 0) valid = nonCamped;
   const farEnough = valid.filter((candidate) =>
     candidate.minOpponentDistance >= PVP.spawnMinOpponentDist
   );
   if (farEnough.length > 0) valid = farEnough;
-  const nonCamped = valid.filter((candidate) => !candidate.isCamped);
-  if (nonCamped.length > 0) valid = nonCamped;
   const nonLos = valid.filter((candidate) => candidate.losThreatCount === 0);
   if (nonLos.length > 0) {
     valid = valid.filter((candidate) =>

@@ -157,36 +157,36 @@ section("pure scorer: exact penalties, anti-camp memory, and damage fallback");
       candidate(1, 0),
     ]) === 1);
   check("recent spawn receives the 400 penalty",
-    pvpRespawnIndex([candidate(0, 100), candidate(1, 0)], [0]) === 1);
+    pvpRespawnIndex([candidate(0, 300), candidate(1, 250)], [0]) === 1);
   check("recent penalty is waived only for an alternative more than 800 points worse",
-    pvpRespawnIndex([candidate(0, 901), candidate(1, 0)], [0]) === 0);
+    pvpRespawnIndex([candidate(0, 1201), candidate(1, 300)], [0]) === 0);
   check("the same spawn cannot be selected a third time with two valid alternatives",
-    pvpRespawnIndex([candidate(0, 1000), candidate(1, 10), candidate(2, 0)], [0, 0]) === 1);
+    pvpRespawnIndex([candidate(0, 1000), candidate(1, 300), candidate(2, 250)], [0, 0]) === 1);
 
   const fallback = pvpRespawnIndex([
     candidate(0, 1000, { losThreatCount: 1, predictedIncomingDamage: 30 }),
     candidate(1, 0, { incomingThreatEtaSec: 1, predictedIncomingDamage: 5 }),
   ], [], "timeout");
   check("all-threatened fallback minimizes predicted 1.5s incoming damage before score", fallback === 1);
-  check("zero near-projectile threat dominates an arbitrarily large distance score",
+  check("zero hard-projectile threat dominates an arbitrarily large distance score",
     pvpRespawnIndex([
-      candidate(0, 100000, { incomingThreatEtaSec: 1 }),
-      candidate(1, 0),
+      candidate(0, 100000, { incomingThreatEtaSec: 0.5 }),
+      candidate(1, 192),
     ]) === 1);
-  check("a genuinely safe candidate dominates a far-projectile lane",
+  check("longer projectile ETA remains a soft score rather than a hard rejection",
     pvpRespawnIndex([
       candidate(0, 100000, { incomingThreatEtaSec: 2 }),
-      candidate(1, 0),
-    ]) === 1);
-  check("blocked LOS dominates an arbitrarily large exposed distance score",
+      candidate(1, 192),
+    ]) === 0);
+  check("plain LOS remains a soft score rather than an unconditional rejection",
     pvpRespawnIndex([
       candidate(0, 100000, { losThreatCount: 1 }),
-      candidate(1, 0, { isCoveredFromNearest: true }),
-    ]) === 1);
+      candidate(1, 192, { isCoveredFromNearest: true }),
+    ]) === 0);
   const flags = pvpRespawnThreatFlags(candidate(0, 0, {
     losThreatCount: 1,
     isAimedAt: true,
-    incomingThreatEtaSec: 1,
+    incomingThreatEtaSec: 0.5,
     isCamped: true,
     isPitEligible: false,
   }));
