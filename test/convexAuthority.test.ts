@@ -71,6 +71,15 @@ const backfillGenerationState = makeFunctionReference<
   { isLegacyWorldsDrained: boolean },
   number
 >("migrations:backfillGenerationState");
+const prepareSignOutGuest = makeFunctionReference<
+  "mutation",
+  { clientId: string; name: string },
+  {
+    playerId: string;
+    isAccount: boolean;
+    guestCapability?: string;
+  }
+>("players:prepareSignOutGuest");
 
 function receipt(
   playerId: string,
@@ -392,6 +401,43 @@ describe("Convex run authority", () => {
       guestCapability: "retained-capability",
       nodeId: "camp_shell",
     })).rejects.toThrow();
+  });
+
+  test("sign-out rotates the browser onto a separate guest capability", async () => {
+    const t = convexTest(schema, modules);
+    const seeded = await t.run(async (ctx) => {
+      const now = Date.now();
+      const userId = await ctx.db.insert("users", { name: "Account" });
+      const accountId = await ctx.db.insert("players", {
+        clientId: "signout-browser",
+        userId,
+        name: "Account",
+        totalKills: 0,
+        deepestFloor: 0,
+        totalCoins: 0,
+        gamesPlayed: 0,
+        unlocks: [],
+        createdAt: now,
+        lastSeen: now,
+      });
+      return { userId, accountId };
+    });
+    const authenticated = t.withIdentity({ subject: `${seeded.userId}|test-session` });
+    const guest = await authenticated.mutation(prepareSignOutGuest, {
+      clientId: "signout-browser",
+      name: "Guest",
+    });
+    expect(guest.isAccount).toBe(false);
+    expect(guest.playerId).not.toBe(seeded.accountId);
+    expect(guest.guestCapability).toMatch(/^[a-f0-9]{64}$/);
+    const refreshed = await t.mutation(ensurePlayer, {
+      clientId: "signout-browser",
+      guestCapability: guest.guestCapability,
+      name: "Guest",
+    });
+    expect(refreshed.playerId).toBe(guest.playerId);
+    const account = await t.run(async (ctx) => await ctx.db.get(seeded.accountId));
+    expect(account?.clientId).toBeUndefined();
   });
 
   test("guest merge is atomic and blocked while room references are active", async () => {
