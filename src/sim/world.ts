@@ -110,6 +110,7 @@ import {
   createBlessingOfferHistory,
   createWeaponOfferHistory,
   recordBlessingOffer,
+  recordWeaponOffer,
   resetBlessingOfferHistory,
   resetWeaponOfferHistory,
   stablePlayerIdHash,
@@ -733,6 +734,13 @@ function stockCurrentShopForPlayer(
   refreshedSlotIds?: ReadonlySet<number>,
 ): void {
   if (!w.shop) return;
+  if (w.shop.viewerStock[p.id] === undefined) {
+    for (const slot of w.shop.slots) {
+      if (slot.isShared && slot.weapon !== null) {
+        recordWeaponOffer(p.weaponOfferHistory, slot.weapon);
+      }
+    }
+  }
   stockShopForViewer(w.shop, w.seed, w.floor, p, refreshedSlotIds);
 }
 
@@ -741,6 +749,19 @@ function refreshPersonalShopStock(w: WorldState, restockedSlotIds: readonly numb
   const refreshed = new Set(restockedSlotIds);
   const players = [...w.players.values()].sort((a, b) => a.id.localeCompare(b.id));
   for (const p of players) stockCurrentShopForPlayer(w, p, refreshed);
+}
+
+function refreshMaxedShopBlessings(w: WorldState, p: PlayerSim): void {
+  if (!w.shop) return;
+  const levels = itemLevelsOf(p.ownedItemIds);
+  const invalid = new Set<number>();
+  for (const slot of w.shop.slots) {
+    if (slot.buyers.includes(p.id)) continue;
+    if (slot.kind !== "blessing" && slot.kind !== "rare_blessing" && slot.kind !== "core_infusion") continue;
+    const item = itemById(shopSlotForViewer(w.shop, slot, p.id).itemId ?? "");
+    if (item && (levels.get(item.id) ?? 0) >= itemMaxLevel(item)) invalid.add(slot.id);
+  }
+  if (invalid.size > 0) stockCurrentShopForPlayer(w, p, invalid);
 }
 
 // Give a freshly-joined pvp player the flat symmetric loadout (fixed HP pool, neutral kit +
@@ -1889,7 +1910,9 @@ function rollBagWeapon(
     for (const id of LEGENDARY_WEAPONS) withGate.add(id);
     gated = withGate;
   }
-  return drawWeaponFromBag(w.weaponBag, gated, tier);
+  const pick = drawWeaponFromBag(w.weaponBag, gated, tier);
+  for (const p of w.players.values()) recordWeaponOffer(p.weaponOfferHistory, pick);
+  return pick;
 }
 
 // Weapons owned by EVERY player — the set a fresh drop would waste (nobody left to
@@ -2477,7 +2500,10 @@ export function swapWeaponInWorld(w: WorldState, pid: PlayerId, pickupId: number
   let mysteryTwist: MysteryTwist | null = null;
   if (pk.isBossChoice) {
     p.hasClaimedBossChoice = true;
-    if (p.ownedWeapons.includes(pk.weapon)) grant = drawWeaponFromBag(w.weaponBag, new Set(p.ownedWeapons));
+    if (p.ownedWeapons.includes(pk.weapon)) {
+      grant = drawWeaponFromBag(w.weaponBag, new Set(p.ownedWeapons));
+      recordWeaponOffer(p.weaponOfferHistory, grant);
+    }
   } else {
     if (pk.isMystery) {
       grant = revealMysteryPickup(w, p, pk, ev);
@@ -2535,6 +2561,7 @@ export function applyItemToWorld(w: WorldState, pid: PlayerId, item: ItemDef): S
     applyMaxHpBonus(p);
     if (p.maxHp > maxHpBefore) p.hp = Math.min(p.maxHp, p.hp + 1);
   }
+  refreshMaxedShopBlessings(w, p);
   return [{ t: "itemPicked", pid, x: p.x, y: p.y, tint: item.tint }];
 }
 
@@ -10844,6 +10871,10 @@ function openChest(w: WorldState, p: PlayerSim, c: Chest, ev: SimEvent[]): void 
     // claims exactly one (see updatePickups); a claim never removes a teammate's options.
     // (Only signature-bearing chests — every real boss drop — carry the choice set.)
     if (c.weapon !== undefined) {
+      recordWeaponOffer(w.weaponBag, c.weapon);
+      for (const member of w.players.values()) {
+        recordWeaponOffer(member.weaponOfferHistory, c.weapon);
+      }
       const choices: WeaponId[] = [c.weapon];
       // Alternates come from the run's shuffled bag, skipping the signature, this set,
       // and guns the whole party already owns — every pedestal is a real option. The
@@ -11067,9 +11098,11 @@ function updatePickups(w: WorldState, dt: number, ev: SimEvent[]): void {
             // damage); the pedestal itself persists for teammates either way.
             if (player.hasClaimedBossChoice) continue;
             player.hasClaimedBossChoice = true;
-            const grant = player.ownedWeapons.includes(p.weapon)
-              ? drawWeaponFromBag(w.weaponBag, new Set(player.ownedWeapons))
-              : p.weapon;
+            let grant = p.weapon;
+            if (player.ownedWeapons.includes(p.weapon)) {
+              grant = drawWeaponFromBag(w.weaponBag, new Set(player.ownedWeapons));
+              recordWeaponOffer(player.weaponOfferHistory, grant);
+            }
             acquireWeapon(player, grant);
             ev.push({ t: "pickup", pid: player.id, kind: "weapon", x: p.x, y: p.y });
             continue;

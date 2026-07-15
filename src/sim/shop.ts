@@ -601,6 +601,11 @@ export function stockShopForViewer(
 
   const presentedBlessings: string[] = [];
   const excludedBlessings = new Set<string>();
+  for (const slot of shop.slots) {
+    if (targetIds.has(slot.id) || !isPersonalBlessingStock(slot)) continue;
+    const itemId = shopSlotForViewer(shop, slot, viewer.id).itemId;
+    if (itemId !== null) excludedBlessings.add(itemId);
+  }
   for (const slot of targets) {
     if (isPersonalWeaponStock(slot)) {
       const rng = personalShopRng(

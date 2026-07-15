@@ -1,6 +1,7 @@
 import type { WeaponId } from "./types.js";
+import { WEAPON_VARIETY } from "./balance.js";
 
-export const RECENT_WEAPON_OFFER_LIMIT = 8;
+export const RECENT_WEAPON_OFFER_LIMIT = WEAPON_VARIETY.recentDrops;
 export const RECENT_BLESSING_OFFER_LIMIT = 4;
 
 export interface WeaponOfferHistory {
