@@ -152,6 +152,20 @@ function makeEl(tag = "div"): any {
         case "closest":
           return () => makeEl();
         case "querySelectorAll":
+          return (selector: string) => {
+            if (selector !== "button:not(:disabled):not([hidden])") return [];
+            const matches = children.slice(0, 0);
+            const queue = [...children];
+            while (queue.length > 0) {
+              const node = queue.shift();
+              if (!node) continue;
+              if (node.tagName === "BUTTON" && node.disabled !== true && node.hidden !== true) {
+                matches.push(node);
+              }
+              if (node.children) queue.push(...node.children);
+            }
+            return matches;
+          };
         case "getElementsByClassName":
         case "getElementsByTagName":
           return () => [];

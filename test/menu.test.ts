@@ -554,10 +554,13 @@ async function main(): Promise<void> {
       textOf(overlay).includes("REVIEW LOADOUT")
       && windowListenerCount("keydown") === baselineKeydownListeners + 1);
 
+    await settle();
+    const focusedBeforeTab = lastFocused();
     fireWindowEvent("keydown", { key: "Tab" });
-    check("Tab reaches exactly one loadout callback",
+    check("Tab invokes one callback and performs one focus action",
       lastWindowDispatchCount() - baselineKeydownListeners === 1
-      && windowListenerCount("keydown") === baselineKeydownListeners + 1);
+      && windowListenerCount("keydown") === baselineKeydownListeners + 1
+      && lastFocused() !== focusedBeforeTab);
     fireWindowEvent("keydown", { key: "Escape" });
     check("one Escape returns REVIEW → PET only",
       textOf(overlay).includes("CHOOSE YOUR PET")
