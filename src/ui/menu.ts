@@ -1259,7 +1259,10 @@ export class Menu {
       const confirm = el("button", "loadout-confirm");
       confirm.type = "button";
       confirm.disabled = !isKitChoiceMade || !isPetChoiceMade || isPersisting;
-      confirm.setAttribute("aria-label", `${opts.destinationLabel} · ${loadoutName()}`);
+      confirm.setAttribute(
+        "aria-label",
+        `${isPersisting ? "CONFIRMING" : opts.destinationLabel} · ${loadoutName()}`,
+      );
       const action = el(
         "span",
         "loadout-confirm-action",
@@ -2989,7 +2992,7 @@ export class Menu {
       const blocker = lobby.status === "lobby" && lobby.isHost
         ? this.lobbyBlockerCopy(players)
         : "";
-      wrap.appendChild(el("p", "muted lobby-blocker", lobbyNote || blocker));
+      wrap.appendChild(el("p", "muted lobby-blocker", blocker || lobbyNote));
       wrap.appendChild(el("p", "hint", CONTROLS));
 
       this.overlay.classList.remove("hidden");
@@ -3007,12 +3010,15 @@ export class Menu {
   }
 
   private lobbyBlockerCopy(players: readonly LobbyPlayer[]): string {
-    for (const player of players) {
-      if (!player.isKitChoiceMade || !player.kitId) return `${player.name} must choose a kit`;
-      if (!player.isPetChoiceMade) return `${player.name} must choose a pet or No Pet`;
-      if (!player.isLoadoutConfirmed) return `${player.name} must confirm loadout`;
-      if (!player.isReady) return `${player.name} is not ready`;
-    }
+    if (players.length === 0) return "Waiting for active players";
+    const kitless = players.find((player) => !player.isKitChoiceMade || !player.kitId);
+    if (kitless) return `${kitless.name} must choose a kit`;
+    const petless = players.find((player) => !player.isPetChoiceMade);
+    if (petless) return `${petless.name} must choose a pet or No Pet`;
+    const unconfirmed = players.find((player) => !player.isLoadoutConfirmed);
+    if (unconfirmed) return `${unconfirmed.name} must confirm loadout`;
+    const unready = players.find((player) => !player.isReady);
+    if (unready) return `${unready.name} is not ready`;
     return "";
   }
 

@@ -51,7 +51,8 @@ check("final CTA action and loadout are separate spans",
 check("responsive shortName rules exist at 560px and 360px",
   css.includes("@media (max-width:560px)")
   && css.includes("content:attr(data-short-name)")
-  && css.includes("@media (max-width:360px)"));
+  && css.includes("@media (max-width:360px)")
+  && css.includes("grid-template-columns:88px minmax(0,1fr)"));
 check("action text never uses truncation",
   css.includes(".loadout-confirm-action{")
   && css.includes("white-space:nowrap")

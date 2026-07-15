@@ -707,6 +707,13 @@ async function main(): Promise<void> {
       textOf(sameSessionMender ?? {}).includes("LAST USED")
       && sameSessionMender?.getAttribute?.("aria-checked") === "false"
       && collect(overlay, (node) => node.tagName === "BUTTON" && textOf(node).includes("NEXT"))[0]?.disabled === true);
+    sameSessionMender?.onclick?.();
+    collect(overlay, (node) => node.tagName === "BUTTON" && textOf(node).includes("NEXT · CHOOSE PET"))[0]?.onclick?.();
+    const sameSessionNoPet = byClass(overlay, "pet-option").find((card) => card.getAttribute?.("data-pet") === "none");
+    check("same Menu reopens with No Pet LAST USED but unselected",
+      textOf(sameSessionNoPet ?? {}).includes("LAST USED")
+      && sameSessionNoPet?.getAttribute?.("aria-checked") === "false"
+      && byClass(overlay, "loadout-review-next")[0]?.disabled === true);
     await menu.showTitle();
     const reload = makeMenu({ isLoadoutPreserved: true });
     await reload.menu.showTitle();
@@ -1907,6 +1914,15 @@ async function main(): Promise<void> {
     check("unconfirmed pair is named exactly", text.includes("CONFIRM LOADOUT"));
     check("confirmed-but-unready is distinct", text.includes("LOADOUT ✓ · NOT READY"));
     check("ready is the final state", text.includes("LOADOUT ✓ · READY ✓"));
+    f.setPlayers([
+      member("player-1", "UnreadyHost"),
+      member("player-2", "KitlessBob", {
+        isKitChoiceMade: false, isPetChoiceMade: false, isLoadoutConfirmed: false,
+      }),
+    ]);
+    menu.showOnlineLobby(f.lobby, PROFILE);
+    check("party-wide ladder prioritizes CHOOSE KIT over an earlier NOT READY row",
+      textOf(overlay).includes("KitlessBob must choose a kit"));
   }
 
   section("private CHANGE LOADOUT uses the same gate and clears ready on final confirmation");
@@ -1957,6 +1973,32 @@ async function main(): Promise<void> {
     check("disabled START sends no mutation", f.startCalls() === 1);
     check("disabled START retains the exact blocker copy", textOf(overlay).includes("Bob is not ready"));
     check("START remains visible instead of offering a partial-launch escape hatch", buttons.some((b) => b.includes("START RUN")));
+    const blockerCases: Array<{ label: string; opts: Partial<LobbyPlayer>; copy: string }> = [
+      {
+        label: "kitless",
+        opts: { isKitChoiceMade: false, isPetChoiceMade: false, isLoadoutConfirmed: false, isReady: false },
+        copy: "Bob must choose a kit",
+      },
+      {
+        label: "petless",
+        opts: { isPetChoiceMade: false, isLoadoutConfirmed: false, isReady: false },
+        copy: "Bob must choose a pet or No Pet",
+      },
+      {
+        label: "unconfirmed",
+        opts: { isLoadoutConfirmed: false, isReady: false },
+        copy: "Bob must confirm loadout",
+      },
+    ];
+    for (const blockerCase of blockerCases) {
+      f.setPlayers([member("player-1", "Ada", { isReady: true }), member("player-2", "Bob", blockerCase.opts)]);
+      menu.showOnlineLobby(f.lobby, PROFILE);
+      const blocked = collect(overlay, (node) => node.tagName === "BUTTON" && textOf(node).includes("START RUN"))[0];
+      blocked?.onclick?.();
+      check(`${blockerCase.label} hard-disables START and sends no mutation`,
+        blocked?.disabled === true && f.startCalls() === 1);
+      check(`${blockerCase.label} keeps the exact blocker copy`, textOf(overlay).includes(blockerCase.copy));
+    }
     check("START ANYWAY is removed", !buttons.some((b) => b.includes("START ANYWAY")));
   }
 
@@ -2022,7 +2064,14 @@ async function main(): Promise<void> {
     check("invite context names INVITE and room code exactly once",
       textOf(byClass(overlay, "loadout-context")[0] ?? {}) === "INVITE · ROOM ABCD");
     check("the URL is not consumed before final confirmation", loc.pathname === "/r/ABCD");
-    reachLoadoutReview(overlay);
+    byClass(overlay, "kit-option").find((card) => card.getAttribute?.("data-kit") === "gunner")?.onclick?.();
+    collect(overlay, (node) => node.tagName === "BUTTON" && textOf(node).includes("NEXT · CHOOSE PET"))[0]?.onclick?.();
+    check("invite PET context includes INVITE and room code once",
+      textOf(byClass(overlay, "loadout-context")[0] ?? {}) === "KIT GUNNER · INVITE · ROOM ABCD");
+    byClass(overlay, "pet-option").find((card) => card.getAttribute?.("data-pet") === "none")?.onclick?.();
+    byClass(overlay, "loadout-review-next")[0]?.onclick?.();
+    check("invite REVIEW context includes INVITE and room code once",
+      textOf(byClass(overlay, "loadout-context")[0] ?? {}) === "INVITE · ROOM ABCD");
     check("invite REVIEW owns the exact combined destination CTA",
       textOf(byClass(overlay, "loadout-confirm")[0]).includes("CONFIRM & JOIN ABCD")
       && !calls.includes("rooms:join"));
