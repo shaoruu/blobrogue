@@ -346,6 +346,20 @@ describe("Convex run authority", () => {
       isAllowed: true,
       code: "ok",
     });
+    await expect(t.query(generationAdmission, {
+      ...args,
+      kitId: "mender",
+    })).resolves.toEqual({
+      isAllowed: false,
+      code: "membership_changed",
+    });
+    await expect(t.query(generationAdmission, {
+      ...args,
+      petId: "doggie",
+    })).resolves.toEqual({
+      isAllowed: false,
+      code: "membership_changed",
+    });
     await t.run(async (ctx) => {
       const rows = await ctx.db.query("presence").collect();
       await ctx.db.patch(rows[0]._id, { isDeparted: true });
