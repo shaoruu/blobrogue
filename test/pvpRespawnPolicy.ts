@@ -114,6 +114,7 @@ interface PlaytestBotState {
   aim: number;
   observedSpawnTick: number;
   shieldEndedTick: number | null;
+  reactionMs: number | null;
 }
 
 function idle(aim = 0): InputCmd {
@@ -172,6 +173,7 @@ function createPlaytestBotState(bot: PlayerSim): PlaytestBotState {
     aim: bot.aimAngle,
     observedSpawnTick: -1,
     shieldEndedTick: null,
+    reactionMs: null,
   };
 }
 
@@ -193,6 +195,7 @@ function playtestBotInput(
   if (spawnTick !== state.observedSpawnTick) {
     state.observedSpawnTick = spawnTick;
     state.shieldEndedTick = null;
+    state.reactionMs = null;
   }
   if (victim.hp <= 0 || victim.respawnT > 0 || victim.spawnShieldT > 0) {
     return idle(state.aim);
@@ -209,12 +212,16 @@ function playtestBotInput(
   const [towardX, towardY] = normalized(dx, dy);
   const strafe = ((world.tick + seed) % 120) < 60 ? 0.35 : -0.35;
   const cadenceTick = reactedTicks - reactionTicks;
+  const firing = cadenceTick % 9 < 5;
+  if (firing && state.reactionMs === null) {
+    state.reactionMs = (reactedTicks + 1) * 1000 * DT;
+  }
   return {
     seq: 0,
     moveX: towardX - towardY * strafe,
     moveY: towardY + towardX * strafe,
     aim: state.aim,
-    firing: cadenceTick % 9 < 5,
+    firing,
     dash: bot.dashCd === 0 && distance > 360 && cadenceTick % 20 === 0,
   };
 }
@@ -361,10 +368,9 @@ export function runRespawnPolicySeed(
       ? conformanceBotInput(world, bot, victim, seed)
       : playtestBotInput(world, bot, victim, seed, playtestState);
     if (profile === "playtestBot"
-      && botCommand.firing
-      && playtestState.shieldEndedTick !== null
+      && playtestState.reactionMs !== null
       && playtestState.observedSpawnTick !== lastReactionSpawnTick) {
-      reactionMs.push((world.tick + 1 - playtestState.shieldEndedTick) * 1000 * DT);
+      reactionMs.push(playtestState.reactionMs);
       lastReactionSpawnTick = playtestState.observedSpawnTick;
     }
     if (botCommand.firing && victim.spawnShieldT > 0) shieldFireAttempts++;
