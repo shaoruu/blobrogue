@@ -1,11 +1,8 @@
 import {
-  mkdirSync,
   readFileSync,
-  renameSync,
-  writeFileSync,
 } from "node:fs";
-import { dirname } from "node:path";
 import { parseGenerationWorldId } from "../../src/net/runReceipt.js";
+import { writeJsonAtomic } from "./durableJson.js";
 
 export const GENERATION_RETIRE_MS = 130_000;
 
@@ -151,9 +148,6 @@ export class GenerationAdmissionStore {
       version: 1,
       entries: [...this.entries.values()],
     };
-    mkdirSync(dirname(this.path), { recursive: true });
-    const temporary = `${this.path}.tmp`;
-    writeFileSync(temporary, JSON.stringify(data), { encoding: "utf8", mode: 0o600 });
-    renameSync(temporary, this.path);
+    writeJsonAtomic(this.path, data);
   }
 }

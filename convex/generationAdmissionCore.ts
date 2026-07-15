@@ -3,7 +3,7 @@ import {
   isGenerationAdmissionPayload,
 } from "../src/net/generationAdmission.js";
 import type { GenerationAdmissionPayload } from "../src/net/generationAdmission.js";
-import { verifyHmacEnvelope } from "./hmacEnvelopeCore";
+import { verifyHmacEnvelope } from "./hmacEnvelopeCore.js";
 
 export async function verifyGenerationAdmissionProof(
   secret: string,

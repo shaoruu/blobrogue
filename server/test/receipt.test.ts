@@ -11,9 +11,11 @@ import {
 import { RunReceiptDispatcher } from "../src/runReceiptDispatcher.js";
 import { createLogger } from "../src/logger.js";
 import { GameWorld } from "../src/world.js";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { createServer } from "node:http";
+import { Bot, idle, startTestServer, waitUntil } from "../harness/lib.js";
 
 let passed = 0;
 let failed = 0;
@@ -130,6 +132,8 @@ try {
     outboxPath,
   );
   firstDispatcher.submit(dispatchPayload);
+  check("pending receipt is discoverable during restart recovery",
+    firstDispatcher.hasDeliverableWorld(dispatchPayload.worldId));
   const recovered: string[] = [];
   const recoveryFetch = (async (_url: string | URL | Request, init?: RequestInit) => {
     const body = JSON.parse(String(init?.body)) as { receipt: string };
@@ -147,8 +151,74 @@ try {
   check("durable outbox redelivers after dispatcher restart", recovered.length === 1);
   check("recovered outbox receipt remains valid",
     verifyRunCompletionReceipt(secret, recovered[0], dispatchNow)?.jti === dispatchPayload.jti);
+
+  const rejectedPayload: RunCompletionPayload = {
+    ...dispatchPayload,
+    jti: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+    runId: `${dispatchPayload.worldId}:rejected`,
+  };
+  const rejectedDispatcher = new RunReceiptDispatcher(
+    "https://example.convex.site/gs/run-completion",
+    secret,
+    createLogger({ test: "receipt-outbox-rejected" }, "error"),
+    (async () => new Response("unauthorized", { status: 401 })) as typeof fetch,
+    outboxPath,
+  );
+  rejectedDispatcher.submit(rejectedPayload);
+  await rejectedDispatcher.flush();
+  const durableEntries = JSON.parse(readFileSync(outboxPath, "utf8")) as Array<{ payload: RunCompletionPayload; failedAt?: number }>;
+  check("permanent delivery failure remains as a bounded durable dead letter",
+    durableEntries.some((entry) => entry.payload.jti === rejectedPayload.jti && entry.failedAt !== undefined));
 } finally {
   rmSync(outboxDirectory, { recursive: true, force: true });
+}
+
+const completionReceipts: string[] = [];
+const receiptSink = createServer(async (request, response) => {
+  const chunks: Buffer[] = [];
+  for await (const chunk of request) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+  const body = JSON.parse(Buffer.concat(chunks).toString("utf8")) as { receipt: string };
+  completionReceipts.push(body.receipt);
+  response.writeHead(200).end("ok");
+});
+await new Promise<void>((resolve) => receiptSink.listen(0, "127.0.0.1", resolve));
+const sinkAddress = receiptSink.address();
+if (!sinkAddress || typeof sinkAddress === "string") throw new Error("receipt sink did not bind");
+const flushDirectory = mkdtempSync(join(tmpdir(), "blobrogue-flush-receipt-"));
+const flushServer = await startTestServer({
+  receiptSecret: secret,
+  receiptEndpoint: `http://127.0.0.1:${sinkAddress.port}/gs/run-completion`,
+  generationStatePath: join(flushDirectory, "admission.json"),
+});
+try {
+  const bot = new Bot({
+    url: flushServer.url,
+    secret: flushServer.secret,
+    playerId: "flush-player",
+    world: "room:FLUS:g1",
+    kit: "gunner",
+    masteryLevel: 1,
+    isPetChoiceMade: true,
+    script: () => idle(),
+  });
+  bot.start();
+  check("flush receipt path begins with a real admitted world",
+    await waitUntil(() => bot.transport.isReady(), 3000));
+  await fetch(`http://127.0.0.1:${flushServer.port}/admin/flush`, { method: "POST" });
+  check("flush posts a signed terminal receipt over HTTP",
+    await waitUntil(() => completionReceipts.length === 1, 3000));
+  const flushed = verifyRunCompletionReceipt(secret, completionReceipts[0]);
+  check("flush attests abandonment only after clearing every authoritative seat",
+    flushed?.status === "abandoned"
+    && flushed.isNoActiveSeat
+    && flushed.participants.length === 0);
+  check("flush durably retires and releases the world",
+    await waitUntil(() => flushServer.server.getWorld("room:FLUS:g1") === undefined, 3000));
+  bot.stop();
+} finally {
+  await flushServer.close();
+  await new Promise<void>((resolve) => receiptSink.close(() => resolve()));
+  rmSync(flushDirectory, { recursive: true, force: true });
 }
 
 process.stdout.write(`\n${passed} checks passed, ${failed} failed\n`);

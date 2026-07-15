@@ -260,6 +260,10 @@ AUTH_SETUP.md      operator steps to enable Google sign-in
 
 ## 7. Authoritative online play (the game server + the room lobby) — THE multiplayer path
 
+The protocol-v33 receipt, admission, migration, secret, and drain order is security-sensitive.
+Follow [`docs/security/run-authority.md`](docs/security/run-authority.md) for every authority-plane
+rollout; do not infer that order from the general provisioning checklist above.
+
 The **authoritative WebSocket server** (`server/`) owns ALL gameplay state online: players,
 enemies, bullets, loot, inventory, blessings, and floor transitions — one simulation,
 identical for every member of a room. The player-facing front door is **PLAY ONLINE** on the

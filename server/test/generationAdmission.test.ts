@@ -31,6 +31,10 @@ try {
   check("retired generation cannot reactivate", isOldRejected);
   restartedStore.markActive("room:ABCD:g2", 2000);
   check("new current generation is accepted", !restartedStore.isRetired("room:ABCD:g2", 2000));
+  check(
+    "superseded tombstone cleanup preserves the generation high-water mark",
+    restartedStore.isRetired("room:ABCD:g1", 2000 + 10 * 60_000),
+  );
 
   const serverPath = join(directory, "server-admission.json");
   const first = await startTestServer({ generationStatePath: serverPath });

@@ -3,7 +3,7 @@ import {
   isRunCompletionPayload,
 } from "../src/net/runReceipt.js";
 import type { RunCompletionPayload } from "../src/net/runReceipt.js";
-import { verifyHmacEnvelope } from "./hmacEnvelopeCore";
+import { verifyHmacEnvelope } from "./hmacEnvelopeCore.js";
 
 export async function verifyRunCompletionReceipt(
   secret: string,

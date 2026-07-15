@@ -327,14 +327,20 @@ function bossOverflowGates(): void {
 
   let ticks = 1;
   let dead = false;
+  let bossKillBy = "";
   while (!dead && ticks < 60 * 10) {
     events = step(w, idle(ticks + 1));
-    if (events.some((e) => e.t === "enemyKill" && e.kind === "boss")) dead = true;
+    const bossKill = events.find((event) => event.t === "enemyKill" && event.kind === "boss");
+    if (bossKill?.t === "enemyKill") {
+      dead = true;
+      bossKillBy = bossKill.by;
+    }
     ticks++;
   }
   const seconds = ticks * DT;
   check("boss dies only after BOTH full roars resolve the queued overflow", dead && seconds >= 2 * BOSS.roarDuration,
     `death at ${seconds.toFixed(2)}s (was ~1 tick pre-reset)`);
+  check("boss defeat records its authoritative player attribution", bossKillBy === LOCAL_ID);
   check("boss death ends danger: all adds despawn and the exit opens", isFloorCleared(w),
     `enemies=${w.enemies.length} pending=${w.pendingSpawns.length}`);
 }

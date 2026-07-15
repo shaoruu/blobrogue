@@ -5,7 +5,7 @@ import schema from "../convex/schema.js";
 import type { RunCompletionPayload } from "../src/net/runReceipt.js";
 import { RUN_RECEIPT_VERSION } from "../src/net/runReceipt.js";
 
-const modules = import.meta.glob("../convex/**/*.ts");
+const modules = import.meta.glob("../convex/**/*.{ts,js}");
 
 const applyReceipt = makeFunctionReference<
   "mutation",

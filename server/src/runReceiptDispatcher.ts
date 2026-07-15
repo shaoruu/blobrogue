@@ -1,8 +1,8 @@
 import type { Logger } from "./logger.js";
 import { mintRunCompletionReceipt } from "./runReceipt.js";
 import type { RunCompletionPayload } from "../../src/net/runReceipt.js";
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
-import { dirname } from "node:path";
+import { readFileSync } from "node:fs";
+import { writeJsonAtomic } from "./durableJson.js";
 
 type Fetcher = typeof fetch;
 
@@ -157,12 +157,6 @@ export class RunReceiptDispatcher {
         this.outbox.delete(jti);
       }
     }
-    mkdirSync(dirname(this.outboxPath), { recursive: true });
-    const temporary = `${this.outboxPath}.tmp`;
-    writeFileSync(temporary, JSON.stringify([...this.outbox.values()]), {
-      encoding: "utf8",
-      mode: 0o600,
-    });
-    renameSync(temporary, this.outboxPath);
+    writeJsonAtomic(this.outboxPath, [...this.outbox.values()]);
   }
 }
