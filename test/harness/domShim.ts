@@ -333,6 +333,7 @@ put("Image", ImageStub);
 put("AudioContext", AudioContextStub);
 put("webkitAudioContext", AudioContextStub);
 put("HTMLElement", class {});
+put("HTMLButtonElement", class {});
 put("HTMLCanvasElement", class {});
 put("HTMLImageElement", ImageStub);
 if (!g.performance) put("performance", { now: () => 0 });
