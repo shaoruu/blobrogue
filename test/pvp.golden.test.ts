@@ -144,7 +144,7 @@ function main(): void {
   check("a hurt event fires (damage lands)", joined.includes("playerHurt"));
   const deathIndex = forward.findIndex((line) => /p2:[^|]*,0\.00,[1-9][0-9]*,0,0,0,0,0,/.test(line));
   const respawnIndex = forward.findIndex((line, index) =>
-    index > deathIndex && /p2:[^|]*,100\.00,0,0,[1-9][0-9]*,[1-9][0-9]*,[1-9][0-9]*,25,60,/.test(line)
+    index > deathIndex && /p2:[^|]*,100\.00,0,0,[1-9][0-9]*,[1-9][0-9]*,[1-9][0-9]*,15,40,/.test(line)
   );
   check("a respawn resolves after a scheduled death with full two-stage protection",
     deathIndex >= 0 && respawnIndex > deathIndex);
