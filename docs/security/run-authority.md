@@ -40,11 +40,12 @@ Convex `rooms.generationState` is the durable lobby authority:
 
 ## Guest capabilities
 
-Pure guests use a random 24-hour capability scoped to profile, room, ticket, and economy writes.
-The capability is rotated on bootstrap/renewal and revoked when the row becomes an account.
-Account rows always require current Convex Auth; a retained `clientId` or guest capability cannot
-write or mint after sign-out. Sign-out first creates a fresh guest row and capability while the
-account JWT is still present, then removes the JWT.
+Pure guests use a random 24-hour access capability scoped to profile, room, ticket, and economy
+writes. A separate random 30-day refresh capability can only rotate the guest session; it cannot
+enter a room, mint a ticket, or spend economy state. Both rotate on renewal and are revoked when
+the row becomes an account. Account rows always require current Convex Auth; a retained
+`clientId` or guest capability cannot write or mint after sign-out. Sign-out first creates a
+fresh guest row and capability pair while the account JWT is still present, then removes the JWT.
 
 When a guest is merged into an existing account, active room references block the merge.
 Inactive host/presence references are rewired transactionally before the guest row is deleted.
