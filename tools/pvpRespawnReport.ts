@@ -33,7 +33,12 @@ const isAccepted = metrics.postRespawnEpisodeCount >= seedCount * 3
   && metrics.maxRespawnOnlyFragsPer20Sec <= 2
   && (metrics.timeToEightMinSec === null || metrics.timeToEightMinSec >= 90)
   && metrics.controlEstablishedRate >= 0.95
-  && (profile !== "playtestBot" || metrics.shieldFireAttempts === 0);
+  && (profile !== "playtestBot"
+    || (metrics.shieldFireAttempts === 0
+      && metrics.playtestReactionMinMs !== null
+      && metrics.playtestReactionMaxMs !== null
+      && metrics.playtestReactionMinMs >= 250
+      && metrics.playtestReactionMaxMs <= 350));
 process.stdout.write([
   "# BlobRogue private PvP respawn fairness report",
   "",
@@ -51,9 +56,12 @@ process.stdout.write([
     : `${metrics.timeToEightMinSec.toFixed(2)}s`}`,
   `- Control established before first damage: ${(metrics.controlEstablishedRate * 100).toFixed(1)}%`,
   `- Wait-safe respawns: ${metrics.waitSafeRespawnCount}`,
-  `- Threatened choices: ${metrics.threatenedSpawnCount}`,
+  `- Choices with any threat flag: ${metrics.threatenedSpawnCount}`,
   `- Repeated indices: ${metrics.repeatedSpawnCount}`,
-  `- Firing attempts into shields: ${metrics.shieldFireAttempts}`,
+  `- Firing command ticks into shields: ${metrics.shieldFireAttempts}`,
+  `- Post-shield first-shot reaction: ${metrics.playtestReactionMinMs === null
+    ? "not measured for this profile"
+    : `${metrics.playtestReactionMinMs.toFixed(0)}–${metrics.playtestReactionMaxMs?.toFixed(0)}ms`}`,
   `- JSON: ${outPath}`,
   `- Acceptance: ${isAccepted ? "PASS" : "FAIL"}`,
   "",

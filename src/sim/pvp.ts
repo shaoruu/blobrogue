@@ -357,6 +357,7 @@ export const PVP_RESPAWN_THREAT = {
 
 export interface PvpRespawnTelemetry {
   spawnTick: number;
+  activeTicks: number;
   threatFlags: number;
   chosenIndex: number;
   safeCount: number;
@@ -450,16 +451,18 @@ export function pvpRespawnValidCandidates(
   return valid;
 }
 
+export type PvpRespawnSelectionMode = "normal" | "timeout";
+
 export function pvpRespawnIndex(
   candidates: readonly PvpRespawnCandidate[],
   recentSpawnIndices: readonly number[] = [],
+  mode: PvpRespawnSelectionMode = "normal",
 ): number {
   if (candidates.length === 0) return 0;
   let valid = pvpRespawnValidCandidates(candidates, recentSpawnIndices);
-  const isEveryCandidateThreatened = valid.every((candidate) =>
-    isPvpRespawnCandidateThreatened(candidate)
-  );
-  if (!isEveryCandidateThreatened) {
+  if (mode === "normal") {
+    const safe = valid.filter(isPvpRespawnCandidateSafe);
+    if (safe.length > 0) valid = safe;
     const noNearProjectile = valid.filter((candidate) =>
       candidate.incomingThreatEtaSec === null
       || candidate.incomingThreatEtaSec > PVP.spawnThreatHorizonSec
@@ -473,10 +476,14 @@ export function pvpRespawnIndex(
   for (let i = 1; i < valid.length; i++) {
     const candidate = valid[i];
     const score = pvpRespawnScore(candidate, valid, recentSpawnIndices);
-    if (isEveryCandidateThreatened) {
+    if (mode === "timeout") {
       if (candidate.predictedIncomingDamage < best.predictedIncomingDamage
         || (candidate.predictedIncomingDamage === best.predictedIncomingDamage
-          && (score > bestScore || (score === bestScore && candidate.index < best.index)))) {
+          && (pvpRespawnProjectilePenalty(candidate) < pvpRespawnProjectilePenalty(best)
+            || (pvpRespawnProjectilePenalty(candidate) === pvpRespawnProjectilePenalty(best)
+              && (candidate.losThreatCount < best.losThreatCount
+                || (candidate.losThreatCount === best.losThreatCount
+                  && (score > bestScore || (score === bestScore && candidate.index < best.index)))))))) {
         best = candidate;
         bestScore = score;
       }

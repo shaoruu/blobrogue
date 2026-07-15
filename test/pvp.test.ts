@@ -508,6 +508,25 @@ section("SPAWNS: symmetric 19x19 arena + pits + spread + break-on-fire protectio
   check("the broken shield stays broken and cannot shatter twice",
     p1.spawnShieldT === 0 && !afterBreakEvents.some((event) => event.t === "pvpShieldBreak"));
 
+  const refusedWorld = pvpWorld(501, ["p1", "p2"]);
+  advanceToLive(refusedWorld);
+  const refused = refusedWorld.players.get("p1")!;
+  refused.x = TILE + 2;
+  refused.y = 216;
+  refused.weapon = "snapwire";
+  refused.ownedWeapons = ["snapwire"];
+  refused.spawnGraceT = 0;
+  refused.spawnShieldT = 60;
+  const refusedEvents = stepCollect(
+    refusedWorld,
+    1,
+    new Map([["p1", inp({ firing: true, aim: Math.PI })]]),
+  );
+  check("a refused deploy is not legal offense and keeps the spawn shield",
+    refused.spawnShieldT > 0
+    && refusedEvents.some((event) => event.t === "wireRefused")
+    && !refusedEvents.some((event) => event.t === "pvpShieldBreak"));
+
   // Spawn protection blocks incoming damage and knockback, then expires without extension.
   const w2 = pvpWorld(6, ["p1", "p2"]);
   advanceToLive(w2);
@@ -985,7 +1004,7 @@ section("frag-limit RESPAWN (death schedules a respawn, never elimination)");
   check("the player respawns at full HP after the delay", victim.hp === PVP.maxHp && victim.respawnT === 0);
   check("respawn arms fresh two-stage spawn protection",
     victim.spawnGraceT > 0 && victim.spawnShieldT > victim.spawnGraceT);
-  check("respawn delay matches the named constant", Math.abs(respawnCd - pvpRespawnDelayTicks()) <= 1);
+  check("respawn delay matches the named constant exactly", respawnCd === pvpRespawnDelayTicks());
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1668,6 +1687,65 @@ section("RESPAWN ENGAGEMENT RESET: cadence, locks, statuses, and owned transient
     && !w.match!.fragChain.has(victim.id));
   check("engagement reset does not alter ult charge or draft progression",
     victim.ultCharge === 321 && victim.pvpDraftOrdinal === 7);
+
+  const staleWorld = pvpWorld(691, ["p1", "p2"]);
+  advanceToLive(staleWorld);
+  const deadOwner = staleWorld.players.get("p1")!;
+  const staleTarget = staleWorld.players.get("p2")!;
+  deadOwner.hp = 0;
+  deadOwner.respawnT = 20;
+  staleWorld.props = [{
+    id: 999,
+    kind: "crate",
+    x: 400,
+    y: 216,
+    radius: 15,
+    hp: 20,
+    dead: false,
+  }];
+  staleWorld.bullets = [{
+    x: 400,
+    y: 216,
+    vx: 0,
+    vy: 0,
+    radius: 5,
+    life: 2,
+    friendly: true,
+    owner: deadOwner.id,
+    damage: 20,
+    color: "#fff",
+    pierce: 0,
+    hitList: null,
+    isCrit: false,
+    paintSpacing: 10,
+    paintDist: 10,
+    paintRadius: 26,
+    paintLife: 3,
+    paintRate: 2,
+    fx: "frostline",
+  }];
+  staleWorld.effects = [{
+    id: 1000,
+    kind: "wire",
+    owner: deadOwner.id,
+    fx: "snapwire",
+    x: staleTarget.x - 30,
+    y: staleTarget.y,
+    x2: staleTarget.x + 30,
+    y2: staleTarget.y,
+    width: 14,
+    arm: 0,
+    life: 5,
+    maxLife: 5,
+    damage: 9,
+  }];
+  const staleHp = staleTarget.hp;
+  stepN(staleWorld, 1, new Map());
+  check("dead-owner entities are inert even if encountered during an active update pass",
+    staleWorld.props[0].hp === 20
+    && staleTarget.hp === staleHp
+    && staleWorld.bullets.every((bullet) => bullet.owner !== deadOwner.id)
+    && staleWorld.effects.every((effect) => effect.owner !== deadOwner.id));
 }
 
 // ---------------------------------------------------------------------------------------------

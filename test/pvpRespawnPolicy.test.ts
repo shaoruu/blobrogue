@@ -25,6 +25,15 @@ check("the policy exercises repeated completed post-death respawns in every seed
   metrics.postRespawnEpisodeCount >= 60
   && report.seeds.every((seed) => seed.episodes.some((episode) => !episode.isInitialSpawn)),
   `episodes=${metrics.episodeCount} postRespawns=${metrics.postRespawnEpisodeCount}`);
+check("initial-life telemetry is anchored to the authoritative live whistle spawn",
+  report.seeds.every((seed) => {
+    const initial = seed.episodes[0];
+    return initial?.isInitialSpawn === true
+      && initial.chosenIndex >= 0
+      && initial.timeToFirstInputMs !== null
+      && initial.shieldBreakMs !== null
+      && initial.firstDamageMs !== null;
+  }));
 check("spawn-to-first-damage P10 is at least 2s",
   metrics.spawnToFirstDamageP10Sec >= 2,
   `p10=${metrics.spawnToFirstDamageP10Sec.toFixed(2)}s`);
@@ -56,6 +65,12 @@ check("playtestBot is separately labeled from adversarial conformance",
   playtestReport.profile === "playtestBot" && playtestReport.policy.includes("250–350ms"));
 check("playtestBot never fires into hard grace or spawn shields",
   playtestMetrics.shieldFireAttempts === 0);
+check("playtestBot authoritative first shots land 250–350ms after shield expiry",
+  playtestMetrics.playtestReactionMinMs !== null
+  && playtestMetrics.playtestReactionMaxMs !== null
+  && playtestMetrics.playtestReactionMinMs >= 250
+  && playtestMetrics.playtestReactionMaxMs <= 350,
+  `range=${playtestMetrics.playtestReactionMinMs}–${playtestMetrics.playtestReactionMaxMs}ms`);
 check("playtestBot report carries authoritative respawn telemetry fields",
   playtestEpisodes.some((episode) =>
     !episode.isInitialSpawn

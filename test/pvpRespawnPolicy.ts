@@ -46,6 +46,7 @@ export interface RespawnPolicySeedReport {
   maxRespawnOnlyFragsPer20Sec: number;
   timeToEightSec: number | null;
   shieldFireAttempts: number;
+  reactionMs: number[];
 }
 
 export interface RespawnPolicyAggregate {
@@ -66,6 +67,8 @@ export interface RespawnPolicyAggregate {
   threatenedSpawnCount: number;
   repeatedSpawnCount: number;
   shieldFireAttempts: number;
+  playtestReactionMinMs: number | null;
+  playtestReactionMaxMs: number | null;
 }
 
 export interface RespawnPolicyReport {
@@ -164,7 +167,7 @@ function playtestBotInput(
     return idle(state.aim);
   }
   if (state.shieldEndedTick === null) state.shieldEndedTick = world.tick;
-  const reactionTicks = 5 + ((seed ^ Math.max(0, spawnTick)) >>> 0) % 3;
+  const reactionTicks = 4 + ((seed ^ Math.max(0, spawnTick)) >>> 0) % 3;
   const reactedTicks = world.tick - state.shieldEndedTick;
   if (reactedTicks < reactionTicks) return idle(state.aim);
   const dx = victim.x - bot.x;
@@ -317,6 +320,9 @@ export function runRespawnPolicySeed(
   let timeToEightSec: number | null = null;
   let shieldFireAttempts = 0;
   const playtestState = createPlaytestBotState(bot);
+  const reactionMs: number[] = [];
+  let previousVictimShieldT = victim.spawnShieldT;
+  let shieldEndedTick: number | null = null;
 
   for (let i = 0; i < MAX_SECONDS / DT; i++) {
     const botCommand = profile === "conformanceBot"
@@ -327,8 +333,18 @@ export function runRespawnPolicySeed(
       [bot.id, botCommand],
       [victim.id, victimInput(world, victim, bot, active)],
     ]);
-    stepWorld(world, inputs, DT);
+    const events = stepWorld(world, inputs, DT);
     const elapsedSec = (world.tick - liveStartTick) * DT;
+    if (previousVictimShieldT > 0 && victim.spawnShieldT === 0 && victim.hp > 0) {
+      shieldEndedTick = world.tick;
+    }
+    if (profile === "playtestBot" && shieldEndedTick !== null
+      && events.some((event) => event.t === "shot" && event.pid === bot.id)) {
+      reactionMs.push((world.tick - shieldEndedTick) * 1000 * DT);
+      shieldEndedTick = null;
+    }
+    if (victim.hp <= 0) shieldEndedTick = null;
+    previousVictimShieldT = victim.spawnShieldT;
 
     if (previousRespawnT > 0 && victim.respawnT === 0 && victim.hp > 0) {
       active = openEpisode(world, seed, victim, world.tick, false);
@@ -359,7 +375,9 @@ export function runRespawnPolicySeed(
       if (victim.respawnT > 0) {
         active.metric.deathSec = (world.tick - active.metric.spawnTick) * DT;
         syncEpisodeTelemetry(active, victim);
-        if (!active.metric.isFiredBeforeDeath) respawnOnlyFragTimesSec.push(elapsedSec);
+        if (!active.metric.isFiredBeforeDeath && active.metric.killerDistance !== null) {
+          respawnOnlyFragTimesSec.push(elapsedSec);
+        }
         episodes.push(active.metric);
         active = null;
       }
@@ -385,6 +403,7 @@ export function runRespawnPolicySeed(
     maxRespawnOnlyFragsPer20Sec: maxEventsInWindow(respawnOnlyFragTimesSec, 20),
     timeToEightSec,
     shieldFireAttempts,
+    reactionMs,
   };
 }
 
@@ -413,6 +432,7 @@ export function runRespawnPolicyReport(
   const timeToEight = seeds.flatMap((seed) =>
     seed.timeToEightSec === null ? [] : [seed.timeToEightSec]
   );
+  const reactionMs = seeds.flatMap((seed) => seed.reactionMs);
   const established = episodes.filter((episode) =>
     episode.isDashedBeforeDamage
     && episode.aimTurnDegBeforeDamage >= 90
@@ -442,6 +462,8 @@ export function runRespawnPolicyReport(
       threatenedSpawnCount: episodes.filter((episode) => episode.threatFlags !== 0).length,
       repeatedSpawnCount: episodes.filter((episode) => episode.isRepeatedIndex).length,
       shieldFireAttempts: seeds.reduce((total, seed) => total + seed.shieldFireAttempts, 0),
+      playtestReactionMinMs: reactionMs.length > 0 ? Math.min(...reactionMs) : null,
+      playtestReactionMaxMs: reactionMs.length > 0 ? Math.max(...reactionMs) : null,
     },
   };
 }

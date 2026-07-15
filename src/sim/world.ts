@@ -53,6 +53,7 @@ import type {
   WorldMode,
   MatchState,
   PvpRespawnCandidate,
+  PvpRespawnSelectionMode,
   PvpRespawnTelemetry,
 } from "./pvp.js";
 import { lowHpFrac, liveDamageMult, liveFireRateMult, gunnerDamageMult, gunnerFireRateMult, expectedBossDps } from "./weaponStats.js";
@@ -85,6 +86,8 @@ import { buildShopState, restockShop, shopSlotStatusFor, shopSlotPriceFor, shopV
 import type { ShopSlot, ShopSlotStatus, ShopState } from "./shop.js";
 import { createWeaponBag, drawWeaponFromBag } from "./weaponBag.js";
 import type { WeaponBag } from "./weaponBag.js";
+
+const HOMING_ACQUIRE_RANGE = 260;
 
 // A live melee swing, resolving hits over its short duration (sim state, per player).
 export interface MeleeSwing {
@@ -700,7 +703,6 @@ function isLivingPvpFoe(source: PlayerSim, candidate: PlayerSim): boolean {
     && !candidate.isDown
     && candidate.hp > 0
     && candidate.respawnT === 0
-    && !isProtected(candidate)
     && arePvpFoes(
       { team: source.team, id: source.id },
       { team: candidate.team, id: candidate.id },
@@ -788,13 +790,15 @@ function predictPvpBulletThreat(
 ): PvpIncomingThreat | null {
   if (!bullet.friendly || bullet.life <= 0 || !isPvpThreatOwner(w, bullet.owner, target)) return null;
   if (bullet.homing !== undefined && bullet.homing > 0) {
+    const centerDistance = Math.hypot(spawn.x - bullet.x, spawn.y - bullet.y);
     const distance = Math.max(
       0,
-      Math.hypot(spawn.x - bullet.x, spawn.y - bullet.y) - target.pr - bullet.radius,
+      centerDistance - target.pr - bullet.radius,
     );
     const speed = Math.hypot(bullet.vx, bullet.vy);
     const etaSec = speed > 0 ? distance / speed : Infinity;
-    if (etaSec <= bullet.life
+    if (centerDistance <= HOMING_ACQUIRE_RANGE + target.pr
+      && etaSec <= bullet.life
       && etaSec <= PVP.spawnThreatOuterHorizonSec
       && isPvpSpawnLineOfSightClear(w, bullet.x, bullet.y, spawn.x, spawn.y)) {
       return {
@@ -1036,37 +1040,48 @@ function rememberPvpSpawn(p: PlayerSim, index: number): void {
   if (p.pvpRecentSpawnIndices.length > 2) p.pvpRecentSpawnIndices.shift();
 }
 
+function beginPvpRespawnTelemetry(
+  w: WorldState,
+  p: PlayerSim,
+  index: number,
+  candidates: readonly PvpRespawnCandidate[],
+  waitSafeTicks: number,
+): void {
+  const chosen = candidates.find((candidate) => candidate.index === index);
+  p.pvpRespawnTelemetry = chosen === undefined
+    ? null
+    : {
+        spawnTick: w.tick,
+        activeTicks: 0,
+        threatFlags: pvpRespawnThreatFlags(chosen),
+        chosenIndex: index,
+        safeCount: candidates.filter(isPvpRespawnCandidateSafe).length,
+        waitSafeMs: Math.round(waitSafeTicks * 1000 / TICKS_PER_SECOND),
+        timeToFirstInputMs: null,
+        shieldBreakMs: null,
+        firstDamageMs: null,
+        isShieldBrokenByAttack: false,
+        isDeathWithin3s: false,
+        isRepeatedIndex: p.pvpRecentSpawnIndices.includes(index),
+        killerDistance: null,
+      };
+}
+
 function pvpPlaceOnSpawn(
   w: WorldState,
   p: PlayerSim,
   isRemembered = true,
   waitSafeTicks = 0,
   assessedCandidates?: readonly PvpRespawnCandidate[],
+  selectionMode: PvpRespawnSelectionMode = "normal",
 ): void {
   const spawns = w.match?.spawns ?? [];
   if (spawns.length > 0) {
     const candidates = assessedCandidates ?? assessPvpRespawn(w, p).candidates;
-    const idx = pvpRespawnIndex(candidates, p.pvpRecentSpawnIndices);
-    const chosen = candidates.find((candidate) => candidate.index === idx);
-    const isRepeatedIndex = p.pvpRecentSpawnIndices.includes(idx);
+    const idx = pvpRespawnIndex(candidates, p.pvpRecentSpawnIndices, selectionMode);
     p.x = spawns[idx].x;
     p.y = spawns[idx].y;
-    p.pvpRespawnTelemetry = chosen === undefined
-      ? null
-      : {
-          spawnTick: w.tick,
-          threatFlags: pvpRespawnThreatFlags(chosen),
-          chosenIndex: idx,
-          safeCount: candidates.filter(isPvpRespawnCandidateSafe).length,
-          waitSafeMs: Math.round(waitSafeTicks * 1000 / TICKS_PER_SECOND),
-          timeToFirstInputMs: null,
-          shieldBreakMs: null,
-          firstDamageMs: null,
-          isShieldBrokenByAttack: false,
-          isDeathWithin3s: false,
-          isRepeatedIndex,
-          killerDistance: null,
-        };
+    beginPvpRespawnTelemetry(w, p, idx, candidates, waitSafeTicks);
     if (isRemembered) rememberPvpSpawn(p, idx);
   }
   pvpFaceInward(w, p);
@@ -3412,7 +3427,7 @@ function breakPvpSpawnShield(w: WorldState, p: PlayerSim, ev: SimEvent[]): void 
   if (p.pvpRespawnTelemetry !== null) {
     p.pvpRespawnTelemetry.shieldBreakMs = Math.max(
       0,
-      Math.round((w.tick - p.pvpRespawnTelemetry.spawnTick) * 1000 / TICKS_PER_SECOND),
+      Math.round(p.pvpRespawnTelemetry.activeTicks * 1000 / TICKS_PER_SECOND),
     );
     p.pvpRespawnTelemetry.isShieldBrokenByAttack = true;
   }
@@ -3437,6 +3452,10 @@ function updateShooting(w: WorldState, p: PlayerSim, input: InputCmd, dt: number
     return;
   }
   if (input.firing && p.fireCd === 0) {
+    if (wep.wire !== undefined && wirePlantLength(w, p, wep) < 24) {
+      plantWire(w, p, wep, ev);
+      return;
+    }
     if (!commitPvpOutgoingAttack(w, p, ev)) return;
     cancelReviveChannelBy(w, p.id); // gate §6: the reviver's attack cancels their channel
     if (wep.melee) {
@@ -3529,14 +3548,23 @@ function updateChargeShooting(w: WorldState, p: PlayerSim, wep: Weapon, input: I
 // The Snapwire: string a wire from the planting spot along aim, wall-clamped. It arms
 // after a beat (planting is never a free point-blank hit) and the OLDEST owned wire
 // gives way past the cap — the pellets mod buys more concurrent wires, never more snap.
+function wirePlantLength(w: WorldState, p: PlayerSim, wep: Weapon): number {
+  const spec = wep.wire!;
+  const dirX = Math.cos(p.aimAngle);
+  const dirY = Math.sin(p.aimAngle);
+  const step = 8;
+  let length = 0;
+  while (length + step <= spec.length
+    && !isWall(w, p.x + dirX * (length + step), p.y + dirY * (length + step))) {
+    length += step;
+  }
+  return length;
+}
+
 function plantWire(w: WorldState, p: PlayerSim, wep: Weapon, ev: SimEvent[]): void {
   const spec = wep.wire!;
   const dirX = Math.cos(p.aimAngle), dirY = Math.sin(p.aimAngle);
-  // Walk the span outward in small steps and clamp at the first wall so a wire can never
-  // thread through geometry (a wire inside a wall would be an invisible trap).
-  const step = 8;
-  let len = 0;
-  while (len + step <= spec.length && !isWall(w, p.x + dirX * (len + step), p.y + dirY * (len + step))) len += step;
+  const len = wirePlantLength(w, p, wep);
   if (len < 24) {
     // Face-planting into a wall refuses the plant — the fail state reads out loud.
     p.fireCd = 0.2;
@@ -3779,6 +3807,13 @@ function isPointInMeleeHit(px: number, py: number, x: number, y: number, radius:
 
 function updateBullets(w: WorldState, dt: number, ev: SimEvent[]): void {
   for (const b of w.bullets) {
+    if (isPvp(w) && b.owner !== null) {
+      const owner = w.players.get(b.owner);
+      if (owner !== undefined && (owner.hp <= 0 || owner.respawnT > 0)) {
+        b.life = 0;
+        continue;
+      }
+    }
     // Anchor this tick's swept-collision segment BEFORE any steering/move. A wall bounce
     // resets the bullet to exactly this point, leaving that tick's segment degenerate —
     // a reflected round never sweeps backward through the wall it hit.
@@ -4036,9 +4071,8 @@ function implodeBullet(w: WorldState, b: Bullet, x: number, y: number, ev: SimEv
 function steerHoming(w: WorldState, b: Bullet, dt: number): void {
   const rate = b.homing;
   if (rate === undefined || rate <= 0) return;
-  const RANGE = 260;
   let bx = 0, by = 0, found = false;
-  let bestD = RANGE * RANGE;
+  let bestD = HOMING_ACQUIRE_RANGE * HOMING_ACQUIRE_RANGE;
   if (isPvp(w)) {
     // pvp: home toward the nearest FOE PLAYER (the enemy-seeker twin), so homing weapons track
     // opponents instead of flying straight in an empty arena.
@@ -4155,6 +4189,13 @@ function updateEffects(w: WorldState, dt: number, ev: SimEvent[]): void {
   }
   for (const e of w.effects) {
     if (e.life <= 0) continue;
+    if (isPvp(w) && e.owner !== null) {
+      const owner = w.players.get(e.owner);
+      if (owner !== undefined && (owner.hp <= 0 || owner.respawnT > 0)) {
+        e.life = 0;
+        continue;
+      }
+    }
     switch (e.kind) {
       case "zone": updateZoneEffect(w, e, dt, ev); break;
       case "wire": updateWireEffect(w, e, dt, ev); break;
@@ -11115,14 +11156,16 @@ function eliminatePvpPlayer(
   const chainEvent = creditedBy === null ? null : awardPvpFrag(w, creditedBy, p.x, p.y);
   const telemetry = p.pvpRespawnTelemetry;
   if (telemetry !== null) {
-    telemetry.isDeathWithin3s = w.tick - telemetry.spawnTick <= pvpSpawnShieldTicks();
+    telemetry.isDeathWithin3s = telemetry.activeTicks <= pvpSpawnShieldTicks();
     const killer = creditedBy === null ? undefined : w.players.get(creditedBy);
     telemetry.killerDistance = killer === undefined
       ? null
       : Math.hypot(killer.x - p.x, killer.y - p.y);
   }
   p.hp = 0;
-  p.respawnT = pvpRespawnDelayTicks();
+  // stepPvpMatch runs later in this same world phase, so seed one extra tick; its immediate
+  // decrement publishes the exact named delay and preserves the full 2.5s future countdown.
+  p.respawnT = pvpRespawnDelayTicks() + 1;
   p.respawnWaitSafeT = 0;
   // Patch 0 B5: the dead body carries NOTHING into respawn — dash (time+velocity), fire/charge,
   // held swing, buffs. resetPvpLifeTransient zeroes the whole transient set (superset of the
@@ -11180,7 +11223,7 @@ function damagePlayerPvp(
   if (p.pvpRespawnTelemetry !== null && p.pvpRespawnTelemetry.firstDamageMs === null) {
     p.pvpRespawnTelemetry.firstDamageMs = Math.max(
       0,
-      Math.round((w.tick - p.pvpRespawnTelemetry.spawnTick) * 1000 / TICKS_PER_SECOND),
+      Math.round(p.pvpRespawnTelemetry.activeTicks * 1000 / TICKS_PER_SECOND),
     );
   }
   p.hp -= amount;
@@ -11437,6 +11480,7 @@ function pvpAssignSpreadSpawns(w: WorldState, isRemembered: boolean): void {
   const m = w.match;
   if (m === null || m.spawns.length === 0) return;
   const placed: Array<{ x: number; y: number }> = [];
+  const assignments: Array<{ player: PlayerSim; index: number }> = [];
   for (const p of pvpPresentPlayers(w)) {
     const idx = farthestSpawnIndex(m.spawns, placed, m.pits);
     p.x = m.spawns[idx].x;
@@ -11447,8 +11491,13 @@ function pvpAssignSpreadSpawns(w: WorldState, isRemembered: boolean): void {
     p.respawnWaitSafeT = 0;
     resetPvpLifeTransient(p);
     armPvpSpawnProtection(p);
-    if (isRemembered) rememberPvpSpawn(p, idx);
+    assignments.push({ player: p, index: idx });
     placed.push({ x: p.x, y: p.y });
+  }
+  for (const assignment of assignments) {
+    const assessment = assessPvpRespawn(w, assignment.player);
+    beginPvpRespawnTelemetry(w, assignment.player, assignment.index, assessment.candidates, 0);
+    if (isRemembered) rememberPvpSpawn(assignment.player, assignment.index);
   }
 }
 
@@ -11459,12 +11508,13 @@ function pvpRespawn(
   p: PlayerSim,
   assessment: PvpRespawnAssessment,
   waitSafeTicks: number,
+  selectionMode: PvpRespawnSelectionMode,
 ): void {
   p.hp = p.maxHp;
   p.respawnT = 0;
   p.respawnWaitSafeT = 0;
   resetPvpLifeTransient(p);
-  pvpPlaceOnSpawn(w, p, true, waitSafeTicks, assessment.candidates);
+  pvpPlaceOnSpawn(w, p, true, waitSafeTicks, assessment.candidates, selectionMode);
 }
 
 // The ONE id-sorted PRESENT-player roster. Every pvp match decision (start, countdown/live
@@ -11484,13 +11534,16 @@ function tickPvpSpawnProtection(w: WorldState): void {
   if (w.match?.phase !== "live" || pvpPresentPlayers(w).length < PVP.minPlayers) return;
   for (const p of w.players.values()) {
     if (p.isAbsent) continue;
+    if (p.hp > 0 && p.respawnT === 0 && p.pvpRespawnTelemetry !== null) {
+      p.pvpRespawnTelemetry.activeTicks++;
+    }
     if (p.spawnGraceT > 0) p.spawnGraceT--;
     if (p.spawnShieldT > 0) {
       p.spawnShieldT--;
       if (p.spawnShieldT === 0 && p.pvpRespawnTelemetry?.shieldBreakMs === null) {
         p.pvpRespawnTelemetry.shieldBreakMs = Math.max(
           0,
-          Math.round((w.tick - p.pvpRespawnTelemetry.spawnTick) * 1000 / TICKS_PER_SECOND),
+        Math.round(p.pvpRespawnTelemetry.activeTicks * 1000 / TICKS_PER_SECOND),
         );
       }
     }
@@ -11581,7 +11634,13 @@ function stepPvpMatch(w: WorldState, ev: SimEvent[]): void {
         if (isPollTick || p.respawnWaitSafeT === 0) {
           const assessment = assessPvpRespawn(w, p);
           if (!assessment.isAllEightThreatened || p.respawnWaitSafeT === 0) {
-            pvpRespawn(w, p, assessment, elapsed);
+            pvpRespawn(
+              w,
+              p,
+              assessment,
+              elapsed,
+              p.respawnWaitSafeT === 0 ? "timeout" : "normal",
+            );
           }
         }
         continue;
@@ -11594,7 +11653,7 @@ function stepPvpMatch(w: WorldState, ev: SimEvent[]): void {
             p.respawnT = 1;
             p.respawnWaitSafeT = pvpRespawnWaitSafeMaxTicks();
           } else {
-            pvpRespawn(w, p, assessment, 0);
+            pvpRespawn(w, p, assessment, 0, "normal");
           }
         }
       }
@@ -11870,7 +11929,11 @@ export function stepPlayerPhase(w: WorldState, p: PlayerSim, input: InputCmd, dt
     return;
   }
   const telemetry = p.pvpRespawnTelemetry;
-  if (isPvp(w) && telemetry !== null && telemetry.timeToFirstInputMs === null && p.hp > 0) {
+  if (isPvp(w)
+    && w.match?.phase === "live"
+    && telemetry !== null
+    && telemetry.timeToFirstInputMs === null
+    && p.hp > 0) {
     const aimDelta = Math.abs(Math.atan2(
       Math.sin(input.aim - p.aimAngle),
       Math.cos(input.aim - p.aimAngle),
@@ -11886,7 +11949,7 @@ export function stepPlayerPhase(w: WorldState, p: PlayerSim, input: InputCmd, dt
     if (isMeaningfulInput) {
       telemetry.timeToFirstInputMs = Math.max(
         0,
-        Math.round((w.tick - telemetry.spawnTick) * 1000 / TICKS_PER_SECOND),
+        Math.round(telemetry.activeTicks * 1000 / TICKS_PER_SECOND),
       );
     }
   }

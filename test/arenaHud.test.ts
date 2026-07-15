@@ -112,6 +112,16 @@ section("countdown, result, and respawn states");
     arenaCenterCopy(shield)?.title === "SPAWN SHIELD"
     && Math.abs(shield.spawnProtectionFill - 20 / 60) < 1e-9
     && !shield.isSpawnProtectionFinalPulse);
+  const pulseAtTen = build(
+    { ph: "live", end: 6080, sc: SCORES, win: null },
+    { spawnShieldTicks: 10 },
+  );
+  const noPulseAtEleven = build(
+    { ph: "live", end: 6080, sc: SCORES, win: null },
+    { spawnShieldTicks: 11 },
+  );
+  check("final pulse starts exactly at the 0.5s boundary",
+    pulseAtTen.isSpawnProtectionFinalPulse && !noPulseAtEleven.isSpawnProtectionFinalPulse);
   const broken = build(
     { ph: "live", end: 6080, sc: SCORES, win: null },
     { spawnGraceTicks: 0, spawnShieldTicks: 0 },

@@ -160,11 +160,16 @@ section("pure scorer: exact penalties, anti-camp memory, and damage fallback");
   const fallback = pvpRespawnIndex([
     candidate(0, 1000, { losThreatCount: 1, predictedIncomingDamage: 30 }),
     candidate(1, 0, { incomingThreatEtaSec: 1, predictedIncomingDamage: 5 }),
-  ]);
+  ], [], "timeout");
   check("all-threatened fallback minimizes predicted 1.5s incoming damage before score", fallback === 1);
   check("zero near-projectile threat dominates an arbitrarily large distance score",
     pvpRespawnIndex([
       candidate(0, 100000, { incomingThreatEtaSec: 1 }),
+      candidate(1, 0),
+    ]) === 1);
+  check("a genuinely safe candidate dominates a far-projectile lane",
+    pvpRespawnIndex([
+      candidate(0, 100000, { incomingThreatEtaSec: 2 }),
       candidate(1, 0),
     ]) === 1);
   check("blocked LOS dominates an arbitrarily large exposed distance score",
@@ -203,7 +208,7 @@ section("all-eight unsafe candidates wait, poll, and time out deterministically"
     opensVictim.hp === 0
     && opensVictim.respawnT === 1
     && opensVictim.respawnWaitSafeT === pvpRespawnWaitSafeMaxTicks());
-  opensOpponent.spawnShieldT = 60;
+  opensOpponent.isDown = true;
   stepWorld(opensWorld, currentInputs(opensWorld), DT);
   stepWorld(opensWorld, currentInputs(opensWorld), DT);
   check("a safe lane opening at the first 0.10s poll respawns immediately",
@@ -390,6 +395,33 @@ section("swept projectile ETA and shipped ranged/trap threats");
   check("off-axis homing acquisition is included in candidate threat prediction",
     forceRespawn(homingWorld, homingVictim) === 1);
 
+  const distantHomingWorld = liveWorld(2502, 2);
+  setRespawnArena(distantHomingWorld, spawns);
+  const distantVictim = distantHomingWorld.players.get("p1")!;
+  const distantOwner = distantHomingWorld.players.get("p2")!;
+  distantOwner.x = 300;
+  distantOwner.y = 600;
+  distantOwner.aimAngle = Math.PI;
+  distantHomingWorld.bullets.push({
+    x: 400,
+    y: 700,
+    vx: -300,
+    vy: 0,
+    radius: 4,
+    life: 2,
+    friendly: true,
+    owner: distantOwner.id,
+    damage: 3,
+    color: "#fff",
+    pierce: 0,
+    hitList: null,
+    isCrit: false,
+    homing: 4,
+    fx: "homing",
+  });
+  check("out-of-range homing moving away does not invent an acquisition threat",
+    forceRespawn(distantHomingWorld, distantVictim) === 0);
+
   const mortarWorld = liveWorld(251, 2);
   setRespawnArena(mortarWorld, spawns);
   const mortarVictim = mortarWorld.players.get("p1")!;
@@ -469,7 +501,7 @@ section("absent, downed, and respawning bodies are not spawn threats");
     forceRespawn(world, victim) === 0);
 }
 
-section("protected players are excluded from spawn targeting and camping");
+section("protected bodies remain respawn occupancy while combat acquisition excludes them");
 {
   const world = liveWorld(325, 2);
   const spawns = [{ x: 300, y: 216 }, { x: 600, y: 216 }];
@@ -480,8 +512,8 @@ section("protected players are excluded from spawn targeting and camping");
   protectedOpponent.y = spawns[0].y;
   protectedOpponent.spawnShieldT = 60;
   victim.pvpRecentSpawnIndices = [];
-  check("a shielded opponent cannot camp, aim, or contribute LOS to respawn selection",
-    forceRespawn(world, victim) === 0);
+  check("a shielded opponent still prevents spawning on top of their occupied lane",
+    forceRespawn(world, victim) === 1);
 }
 
 section("live joins enter the same authoritative spawn-memory policy");
@@ -495,7 +527,7 @@ section("live joins enter the same authoritative spawn-memory policy");
 
 section("2p/4p/6p cross-cover stress is deterministic and never starves");
 {
-  const simultaneousRespawns = (order: string[]): string => {
+  const simultaneousRespawns = (order: string[]): { digest: string; isDistinct: boolean } => {
     const world = createWorld(399, 1, {
       mode: "pvp",
       isShared: true,
@@ -511,13 +543,20 @@ section("2p/4p/6p cross-cover stress is deterministic and never starves");
       clearProtection(player);
     }
     stepWorld(world, currentInputs(world), DT);
-    return ["p1", "p2"].map((id) => {
-      const player = world.players.get(id)!;
-      return `${id}:${player.x},${player.y}:${player.pvpRecentSpawnIndices.join(".")}`;
-    }).join("|");
+    const players = ["p1", "p2"].map((id) => world.players.get(id)!);
+    return {
+      digest: players.map((player) => {
+        return `${player.id}:${player.x},${player.y}:${player.pvpRecentSpawnIndices.join(".")}`;
+      }).join("|"),
+      isDistinct: players[0].x !== players[1].x || players[0].y !== players[1].y,
+    };
   };
+  const simultaneousForward = simultaneousRespawns(["p1", "p2", "p3"]);
+  const simultaneousReversed = simultaneousRespawns(["p3", "p2", "p1"]);
   check("simultaneous respawns are map-order independent",
-    simultaneousRespawns(["p1", "p2", "p3"]) === simultaneousRespawns(["p3", "p2", "p1"]));
+    simultaneousForward.digest === simultaneousReversed.digest);
+  check("simultaneous respawns remain physically distinct",
+    simultaneousForward.isDistinct && simultaneousReversed.isDistinct);
 
   const run = (seed: number, count: number): number[] => {
     const world = liveWorld(seed, count);
@@ -586,6 +625,17 @@ section("reconnect preserves protection and spawn memory exactly");
     memory: player.pvpRecentSpawnIndices,
   });
   check("reserved-seat reconnect freezes and restores respawn state in a live 4p match", before === after);
+
+  const protectedWorld = liveWorld(501, 4);
+  const protectedPlayer = protectedWorld.players.get("p1")!;
+  protectedPlayer.spawnGraceT = 0;
+  protectedPlayer.spawnShieldT = 10;
+  const activeTicks = protectedPlayer.pvpRespawnTelemetry?.activeTicks ?? -1;
+  setPlayerAbsence(protectedWorld, protectedPlayer.id, true);
+  for (let i = 0; i < 10; i++) stepWorld(protectedWorld, currentInputs(protectedWorld), DT);
+  check("absence freezes both protection and active-life telemetry clocks",
+    protectedPlayer.spawnShieldT === 10
+    && protectedPlayer.pvpRespawnTelemetry?.activeTicks === activeTicks);
 }
 
 process.stdout.write(`\n${failed === 0 ? "PASS" : "FAIL"} — ${passed} passed, ${failed} failed\n`);
