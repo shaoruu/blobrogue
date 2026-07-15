@@ -754,7 +754,6 @@ export const confirmLoadout = mutation({
   },
 });
 
-// After a server-attested completion, the host advances exactly one generation.
 export const reopen = mutation({
   args: {
     roomId: v.id("rooms"),
