@@ -21,8 +21,12 @@ import {
   spawnPlayerInWorld,
 } from "../src/sim/world.js";
 import type { PlayerSim, WorldState } from "../src/sim/world.js";
-import { shopSlotForViewer } from "../src/sim/shop.js";
+import {
+  buildShopState,
+  shopSlotForViewer,
+} from "../src/sim/shop.js";
 import type { ShopSlot } from "../src/sim/shop.js";
+import { generateDungeon } from "../src/sim/dungeon.js";
 import { PICKUP_WEAPONS, WEAPONS } from "../src/sim/weapons.js";
 import { Rng } from "../src/sim/rng.js";
 import type { WeaponId } from "../src/sim/types.js";
@@ -152,6 +156,45 @@ section("weapon history serialization");
   const restored = JSON.parse(saved) as WeaponBag;
   const actual = drawWeaponFromBag(restored, new Set(), "rare");
   check("restoring the plain bag/history reproduces the exact next offer", actual === expected);
+}
+
+section("independent weapon source streams");
+{
+  const seed = 0x51de;
+  const room = generateDungeon(seed, 3).rooms.find((candidate) => candidate.kind === "shop")!;
+  const historyA = createWeaponOfferHistory();
+  const historyB = createWeaponOfferHistory();
+  for (const id of PICKUP_WEAPONS.slice(0, 12)) {
+    recordWeaponOffer(historyB, id);
+    if (PICKUP_WEAPONS.indexOf(id) % 2 === 0) recordWeaponOffer(historyB, id);
+  }
+  const dealerA = buildShopState(seed, 3, room, [], 1, historyA);
+  const dealerB = buildShopState(seed, 3, room, [], 1, historyB);
+  const sourceFingerprint = (worldShop: NonNullable<WorldState["shop"]>): string =>
+    JSON.stringify(worldShop.slots.map((slot) => ({
+      kind: slot.kind,
+      price: slot.price,
+      rarity: slot.weapon === null ? null : WEAPONS[slot.weapon].rarity,
+      isMystery: slot.isMystery,
+      twist: slot.twist,
+    })));
+  check("Dealer history changes only identity choice, not cadence, rarity, price, or twist",
+    sourceFingerprint(dealerA) === sourceFingerprint(dealerB));
+
+  const bag = createWeaponBag(seed);
+  const orderBefore = bag.order.join(",");
+  const weightedDrawsBefore = bag.weightedDraws;
+  buildShopState(seed, 3, room, [], 1, bag);
+  check("Dealer consultation never advances the free-bag order or refill RNG ordinal",
+    bag.order.join(",") === orderBefore && bag.weightedDraws === weightedDrawsBefore);
+
+  const premiumWorld = createWorld(seed, 29, { isShared: true, skipLocalPlayer: true });
+  const partyHistoryBefore = JSON.stringify(premiumWorld.weaponBag);
+  const premiumPlayer = spawnPlayerInWorld(premiumWorld, "runtime-pid", "stable-account");
+  check("personal Premium projection advances only personal history and ordinals",
+    JSON.stringify(premiumWorld.weaponBag) === partyHistoryBefore
+    && Object.keys(premiumPlayer.weaponOfferHistory.weaponSeenCounts).length > 0
+    && premiumPlayer.shopWeaponOfferOrdinal > 0);
 }
 
 section("blessing history weights and complete-offer memory");
