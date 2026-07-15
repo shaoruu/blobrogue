@@ -13,7 +13,8 @@
   mutation before applying Amber, Mastery, rescues, unlocks, aggregates, or leaderboard data.
 - Before every production spawn or resume, the game server posts a short-lived signed admission
   proof to `/gs/admission`. Convex rechecks the current generation, membership, Ready state, and
-  exact confirmed kit/pet. Timeout or Convex unavailability rejects the join.
+  exact confirmed kit/pet. The proof uses the same server-to-Convex `GS_RECEIPT_SECRET`; timeout
+  or Convex unavailability rejects the join.
 - Solo runs are client-authoritative and therefore unverified. They do not write Amber,
   Mastery, rescues, unlocks, or leaderboard progress.
 
@@ -86,3 +87,5 @@ copy. They do not retry for the 90-second reconnect window and cannot strand a r
 - A dead-lettered completion leaves the latest generation retired and non-admissible. Resolve the
   Convex rejection or perform an audited operator reconciliation; never delete the generation
   high-water file to make a ticket work.
+- PVP remains disabled. Do not enable it until its server-owned terminal event emits the same
+  generation-completion proof; the co-op reward fold intentionally rejects PVP receipts.

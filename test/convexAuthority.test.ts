@@ -4,6 +4,7 @@ import { describe, expect, test } from "vitest";
 import schema from "../convex/schema.js";
 import type { RunCompletionPayload } from "../src/net/runReceipt.js";
 import { RUN_RECEIPT_VERSION } from "../src/net/runReceipt.js";
+import { mintRunCompletionReceipt } from "../server/src/runReceipt.js";
 
 const modules = import.meta.glob("../convex/**/*.{ts,js}");
 
@@ -193,6 +194,42 @@ describe("Convex run authority", () => {
     expect(state.room?.generationState).toBe("completed");
     expect(state.receipts).toHaveLength(1);
     expect(state.leaderboard).toHaveLength(1);
+  });
+
+  test("HTTP receipt seam rejects tampering and returns replay conflict", async () => {
+    const { t, playerId } = await seedGeneration();
+    const secret = "receipt-http-secret";
+    const previousReceiptSecret = process.env.GS_RECEIPT_SECRET;
+    const previousAuthSecret = process.env.GS_AUTH_SECRET;
+    process.env.GS_RECEIPT_SECRET = secret;
+    process.env.GS_AUTH_SECRET = "different-ticket-secret";
+    try {
+      const signed = mintRunCompletionReceipt(
+        secret,
+        receipt(playerId, "ABCD", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+      );
+      const tampered = `${signed.slice(0, -1)}${signed.endsWith("a") ? "b" : "a"}`;
+      const rejected = await t.fetch("/gs/run-completion", {
+        method: "POST",
+        body: JSON.stringify({ receipt: tampered }),
+      });
+      expect(rejected.status).toBe(401);
+      const accepted = await t.fetch("/gs/run-completion", {
+        method: "POST",
+        body: JSON.stringify({ receipt: signed }),
+      });
+      expect(accepted.status).toBe(200);
+      const replayed = await t.fetch("/gs/run-completion", {
+        method: "POST",
+        body: JSON.stringify({ receipt: signed }),
+      });
+      expect(replayed.status).toBe(409);
+    } finally {
+      if (previousReceiptSecret === undefined) delete process.env.GS_RECEIPT_SECRET;
+      else process.env.GS_RECEIPT_SECRET = previousReceiptSecret;
+      if (previousAuthSecret === undefined) delete process.env.GS_AUTH_SECRET;
+      else process.env.GS_AUTH_SECRET = previousAuthSecret;
+    }
   });
 
   test("rejects wrong generation and wrong membership atomically", async () => {
