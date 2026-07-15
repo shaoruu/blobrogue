@@ -5,8 +5,8 @@ import type { RunResult } from "../game/game.js";
 import { bodyItemForPaletteIndex } from "../game/cosmetics.js";
 import type { CosmeticSlot, CosmeticLoadout } from "../game/cosmetics.js";
 import { generatedBlobName, sanitizeBlobName } from "./blobName.js";
-import { getRememberedPet, getSelectedKit, rememberRunLoadout } from "./kitSelection.js";
-import type { PlayableKitId, RememberedPet, RunLoadout } from "./kitSelection.js";
+import { getRememberedPet, getSelectedKit, getSelectedKitSelection, rememberPet, rememberRunLoadout } from "./kitSelection.js";
+import type { PlayableKitId, RememberedKit, RememberedPet, RunLoadout } from "./kitSelection.js";
 import { isKitId, isKitUnlocked } from "../sim/kits.js";
 
 const CLIENT_ID_KEY = "blobrogue.clientId";
@@ -316,10 +316,27 @@ export class Session {
     return saved && isKitId(saved) && saved !== "none" ? saved : getSelectedKit();
   }
 
+  get rememberedKit(): RememberedKit {
+    const saved = this.profile?.lastKitId;
+    const profileSelection = saved && isKitId(saved) && saved !== "none"
+      ? { isRemembered: true, kitId: saved } as const
+      : null;
+    if (this.profile?.isAccount && profileSelection) return profileSelection;
+    const local = getSelectedKitSelection();
+    if (local.isRemembered) return local;
+    return profileSelection ?? local;
+  }
+
   get rememberedPet(): RememberedPet {
+    if (this.profile?.isAccount && this.profile.lastKitId) {
+      return { isRemembered: true, petId: this.profile.equippedPet ?? null };
+    }
     const local = getRememberedPet();
     if (local.isRemembered) return local;
-    return { isRemembered: true, petId: this.profile?.equippedPet ?? null };
+    return {
+      isRemembered: this.profile?.lastKitId !== null && this.profile?.lastKitId !== undefined,
+      petId: this.profile?.equippedPet ?? null,
+    };
   }
 
   acceptConfirmedRunLoadout(loadout: RunLoadout, profile: ProfileDoc | null = this.profile): void {
@@ -391,7 +408,7 @@ export class Session {
       const res = await this.client.mutation(api.players.equipPet, { clientId: this.clientId, petId });
       if (res) {
         this.profile = res.profile;
-        if (res.ok) rememberRunLoadout({ kitId: this.lastKitId, petId });
+        if (res.ok) rememberPet(petId);
       }
       return res;
     } catch {

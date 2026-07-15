@@ -164,11 +164,10 @@ section("WIRING: every backend + server layer actually invokes the guard, and th
   check("convex rooms.join guards the existing room's mode (no bypass by an old pvp doc)", /assertPvpModeAllowed\(modeOf\(room\)\)/.test(rooms));
   const guardCount = (rooms.match(/assertPvpModeAllowed\(/g) ?? []).length;
   check("convex rooms guards all three entry points (create + quickPlay + join)", guardCount >= 3, `guards=${guardCount}`);
-  // create + quickPlay reject BEFORE any db read/write: the guard is the first statement, right
-  // before the first `await ctx.db.get`. Both handlers share the identical arg signature, so the
-  // adjacency pattern occurs exactly twice.
-  const guardBeforeDbReads = (rooms.match(/assertPvpModeAllowed\(mode\);\s*\n\s*const player = await ctx\.db\.get\(playerId\);/g) ?? []).length;
-  check("create + quickPlay reject BEFORE the first db read (guard is the first statement)", guardBeforeDbReads === 2, `matches=${guardBeforeDbReads}`);
+  // create + quickPlay reject before resolving the authenticated player row.
+  const guardBeforeCallerResolution = (rooms.match(/assertPvpModeAllowed\(mode\);[\s\S]{0,320}?resolveRoomCaller\(/g) ?? []).length;
+  check("create + quickPlay reject before authenticated caller resolution",
+    guardBeforeCallerResolution === 2, `matches=${guardBeforeCallerResolution}`);
   // join rejects the existing pvp doc BEFORE any presence/patch write.
   const joinGuardIdx = rooms.indexOf("assertPvpModeAllowed(modeOf(room))");
   const joinWriteIdx = rooms.indexOf("ensurePresence(ctx, room._id", joinGuardIdx >= 0 ? joinGuardIdx : 0);

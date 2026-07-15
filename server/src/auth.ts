@@ -15,6 +15,8 @@
 //           minter's profile system, so this side gates FORMAT only — a short lowercase
 //           token — never the catalog, keeping server deploys independent of catalog adds).
 // All claims are validated/sanitized here before anything trusts them.
+// The verifier stays backward-compatible; MessageRouter requires the full generation-bound
+// loadout claim set whenever dev auth is disabled.
 //
 // The signature is HMAC-SHA256 over `v1.<payload>`, so the secret never leaves the server<->
 // minter trust boundary and can be rotated without a client change.
@@ -62,6 +64,7 @@ export interface TicketPayload {
   kt?: string;  // chosen kit id
   ml?: number;  // account mastery level
   pt?: string;  // cosmetic companion pet id (visual-only; META spec §3)
+  pc?: boolean; // explicit pet-or-No-Pet choice was validated for this run
 }
 
 // Optional claims for a mint (long-form field names of the wire keys above).
@@ -74,6 +77,7 @@ export interface TicketClaims {
   kit?: string;
   masteryLevel?: number;
   pet?: string;
+  isPetChoiceMade?: boolean;
 }
 
 export interface AuthResult {
@@ -87,6 +91,8 @@ export interface AuthResult {
   kit?: string;         // format-validated chosen kit id (the join gate re-checks the unlock)
   masteryLevel?: number;// account mastery level (drives the server-side kit-unlock gate)
   pet?: string;         // format-validated cosmetic companion pet id (visual-only)
+  isPetChoiceMade?: boolean;
+  isDev?: boolean;
   reason?: string;
 }
 
@@ -117,7 +123,7 @@ function sign(secret: string, body: string): string {
 
 // Mint a signed ticket valid for `ttlSecs`. Used by tests, the harness, and the local
 // dev-ticket endpoint — mirrors what the production Convex minter does, byte-for-byte
-// (payload keys in the FIXED order pid, exp, wld, nm, cl, ht, fc, kt, ml, pt; see convex/gsTicketCore.ts).
+// (payload keys in the FIXED order pid, exp, wld, nm, cl, ht, fc, kt, ml, pt, pc; see convex/gsTicketCore.ts).
 export function mintTicket(secret: string, playerId: string, ttlSecs = 120, nowMs = Date.now(), claims: TicketClaims = {}): string {
   const payload: TicketPayload = { pid: playerId, exp: Math.floor(nowMs / 1000) + ttlSecs };
   if (claims.worldId !== undefined) payload.wld = claims.worldId;
@@ -128,6 +134,7 @@ export function mintTicket(secret: string, playerId: string, ttlSecs = 120, nowM
   if (claims.kit !== undefined) payload.kt = claims.kit;
   if (claims.masteryLevel !== undefined) payload.ml = claims.masteryLevel;
   if (claims.pet !== undefined) payload.pt = claims.pet;
+  if (claims.isPetChoiceMade !== undefined) payload.pc = claims.isPetChoiceMade;
   const body = "v1." + b64url(Buffer.from(JSON.stringify(payload), "utf8"));
   return body + "." + sign(secret, body);
 }
@@ -150,7 +157,7 @@ export function verifyTicket(cfg: AuthConfig, ticket: string, nowMs = Date.now()
     const wld = at < 0 ? null : raw.slice(at + 1);
     if (pid.length < 1 || pid.length > 64) return { ok: false, reason: "bad_dev_id" };
     if (wld !== null && !isValidWorldId(wld)) return { ok: false, reason: "bad_world" };
-    return { ok: true, playerId: "dev:" + pid, ...(wld !== null ? { worldId: wld } : {}) };
+    return { ok: true, playerId: "dev:" + pid, isDev: true, ...(wld !== null ? { worldId: wld } : {}) };
   }
   if (!cfg.secret) return { ok: false, reason: "no_secret" };
 
@@ -214,6 +221,10 @@ export function verifyTicket(cfg: AuthConfig, ticket: string, nowMs = Date.now()
       return { ok: false, reason: "bad_mastery" };
     }
     out.masteryLevel = payload.ml;
+  }
+  if (payload.pc !== undefined) {
+    if (typeof payload.pc !== "boolean") return { ok: false, reason: "bad_pet_choice" };
+    out.isPetChoiceMade = payload.pc;
   }
   return out;
 }

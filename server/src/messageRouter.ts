@@ -22,12 +22,11 @@ import type { KitId } from "../../src/sim/kits.js";
 
 const DEFAULT_WORLD_ID = "arena-1";
 const OFFER_RESENDS = 40;
-const ROOM_WORLD_PREFIX = "room:";
-
 // The room code a world id was minted from (worldIdForRoomCode), or null for non-room worlds
 // (the public default, dev worlds). Log/ops-facing only — binding always uses the full id.
 export function roomCodeOfWorldId(worldId: string): string | null {
-  return worldId.startsWith(ROOM_WORLD_PREFIX) ? worldId.slice(ROOM_WORLD_PREFIX.length) : null;
+  const match = /^(?:pvp:)?room:([^:]+)(?::g\d+)?$/.exec(worldId);
+  return match?.[1] ?? null;
 }
 
 // assertNever makes the dispatch exhaustive: a new ClientMsg variant is a COMPILE error until it
@@ -125,6 +124,14 @@ export class MessageRouter {
     if (msg.protocol !== PROTOCOL_VERSION) { this.ctx.reject(conn, "protocol", `expected ${PROTOCOL_VERSION}`); return; }
     const auth = verifyTicket(this.ctx.config.auth, msg.ticket);
     if (!auth.ok || !auth.playerId) { this.ctx.reject(conn, "auth", auth.reason ?? "unauthorized"); return; }
+    const isGenerationWorld = auth.worldId !== undefined
+      && /^(?:pvp:)?room:[A-Z0-9]+:g\d+$/.test(auth.worldId);
+    const isPlayableKit = auth.kit !== undefined && auth.kit !== "none";
+    if (!this.ctx.config.auth.allowDev
+      && (!isGenerationWorld || !isPlayableKit || auth.masteryLevel === undefined || auth.isPetChoiceMade !== true)) {
+      this.ctx.reject(conn, "loadout_required", "confirmed room loadout required");
+      return;
+    }
     conn.authed = true;
     conn.authName = auth.playerId;
     conn.displayName = auth.name ?? null;
@@ -153,15 +160,21 @@ export class MessageRouter {
     }
     // A join presenting a resume token reclaims the reserved body instead of spawning one.
     if (msg.resume !== undefined) { this.onResume(conn, worldId, msg.resume, auth); return; }
+    if (this.ctx.sessions.isRetired(worldId)) {
+      this.ctx.reject(conn, "run_ended", "this run generation has ended");
+      return;
+    }
 
-    // Plain join by an identity that still holds a seat: the player deliberately started a
-    // NEW session (fresh tab, post-expiry rejoin) — the reserved body is abandoned so the
-    // fresh spawn is never a duplicate. Continuity requires the token; identity alone never
-    // resurrects state (that would make replay rejection meaningless).
     const existingRoom = this.ctx.sessions.room(worldId);
-    if (existingRoom?.discardSeat(auth.playerId)) {
-      this.ctx.metrics.counters.seatsDiscarded++;
-      conn.log.info("reserved seat discarded (plain rejoin without resume token)", { authName: auth.playerId, worldId });
+    const isSeatReserved = existingRoom
+      ? [...existingRoom.seats()].some((seat) => seat.authName === auth.playerId)
+      : false;
+    const isIdentityLive = existingRoom
+      ? [...existingRoom.conns.values()].some((other) => !other.closing && other.authName === auth.playerId)
+      : false;
+    if (isSeatReserved || isIdentityLive) {
+      this.ctx.reject(conn, "resume_required", "resume token required for this active run");
+      return;
     }
 
     conn.playerId = "p" + conn.id; // world-scoped id; auth identity kept for logs

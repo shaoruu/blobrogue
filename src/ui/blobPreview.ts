@@ -3,6 +3,7 @@ import { createAnim, stepAnim, characterXform, CHARACTER_STYLE } from "../game/a
 import { drawLoadoutOverlays, isLoadoutArtSettled } from "../game/cosmeticArt.js";
 import type { CosmeticXform } from "../game/cosmeticSockets.js";
 import { drawPetFrame } from "../game/petRenderer.js";
+import { petSpriteFor } from "../game/pets.js";
 
 // A small live preview of a blob's appearance (tint + cosmetic overlays) for the menu:
 // the closet's mirror, the title's character stage, and the leaderboard profile view.
@@ -136,6 +137,7 @@ export interface LoadoutPreview {
   el: HTMLCanvasElement;
   setLoadout(look: BlobLook, petId: string | null): void;
   setPaused(isPaused: boolean): void;
+  dispose(): void;
 }
 
 export function createBlobPreview(initial: BlobLook, size = 96, opts: BlobPreviewOptions = {}): BlobPreview {
@@ -260,6 +262,7 @@ export function createLoadoutPreview(
   let last = 0;
   let clock = 0;
   let isPaused = false;
+  let isDisposed = false;
   const blobAnim = createAnim();
   const petAnim = createAnim();
   const isReducedMotion = typeof matchMedia === "function"
@@ -294,10 +297,17 @@ export function createLoadoutPreview(
     }
   };
 
-  const isRunnable = () => el.isConnected
+  const isSettled = () => {
+    const petSprite = petId === null ? null : petSpriteFor(petId);
+    return isBlobReady(look)
+      && (petSprite === null || sprites().isSpriteSettled(petSprite));
+  };
+
+  const isRunnable = () => !isDisposed
+    && el.isConnected
     && !isPaused
     && document.hidden !== true
-    && !isReducedMotion;
+    && (!isReducedMotion || !isSettled());
 
   const schedule = () => {
     if (raf === 0 && isRunnable()) raf = requestAnimationFrame(tick);
@@ -308,10 +318,12 @@ export function createLoadoutPreview(
     if (!isRunnable()) { last = 0; return; }
     const dt = Math.min(0.05, last > 0 ? (now - last) / 1000 : 0.016);
     last = now;
-    clock += dt;
-    const isTrotting = clock % 5 < 1.4;
-    stepAnim(blobAnim, dt, false, 0);
-    stepAnim(petAnim, dt, isTrotting, isTrotting ? 0.4 : 0);
+    if (!isReducedMotion) {
+      clock += dt;
+      const isTrotting = clock % 5 < 1.4;
+      stepAnim(blobAnim, dt, false, 0);
+      stepAnim(petAnim, dt, isTrotting, isTrotting ? 0.4 : 0);
+    }
     draw();
     schedule();
   };
@@ -339,6 +351,7 @@ export function createLoadoutPreview(
       look = nextLook;
       petId = nextPetId;
       draw();
+      schedule();
     },
     setPaused(nextIsPaused) {
       isPaused = nextIsPaused;
@@ -349,6 +362,12 @@ export function createLoadoutPreview(
       } else {
         schedule();
       }
+    },
+    dispose() {
+      isDisposed = true;
+      cancelAnimationFrame(raf);
+      raf = 0;
+      document.removeEventListener("visibilitychange", onVisibility);
     },
   };
 }

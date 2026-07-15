@@ -104,13 +104,16 @@ function makeEl(tag = "div"): any {
         case "addEventListener":
         case "removeEventListener":
         case "blur":
-        case "click":
         case "scrollIntoView":
         case "setPointerCapture":
         case "releasePointerCapture":
         case "after":
         case "before":
           return noop;
+        case "click":
+          return () => {
+            if (typeof t.onclick === "function") t.onclick();
+          };
         // Attributes are tracked (not styled) so UI suites can assert accessibility
         // contracts (aria-label/aria-pressed) exactly as written by the real code.
         case "setAttribute":

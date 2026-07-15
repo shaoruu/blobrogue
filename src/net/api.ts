@@ -242,20 +242,19 @@ export const api = {
     // Trusted mint for the authoritative game-server join ticket (HMAC over GS_AUTH_SECRET).
     // With a roomCode, the mint verifies room membership and binds the room's world id into
     // the ticket, so friends sharing a code land in the same isolated server world.
-    mint: makeFunctionReference<"action", { clientId: string; roomCode?: string }, { ticket: string; playerId: string }>("gsTicket:mint"),
+    mint: makeFunctionReference<"action", { clientId: string; roomCode: string }, { ticket: string; playerId: string }>("gsTicket:mint"),
   },
   rooms: {
-    create: makeFunctionReference<"mutation", { playerId: string; kind?: RoomKind; mode?: RoomMode; colorIndex?: number } & RunLoadoutArg, { roomId: string; code: string; seed: number; floor: number; mode?: RoomMode; loadoutGeneration: number; kitId: string; petId: string | null }>("rooms:create"),
-    quickPlay: makeFunctionReference<"mutation", { playerId: string; kind?: RoomKind; mode?: RoomMode; colorIndex?: number } & RunLoadoutArg, { roomId: string; code: string; seed: number; floor: number; status: RoomStatus; mode?: RoomMode; joined?: boolean; loadoutGeneration: number; kitId: string; petId: string | null }>("rooms:quickPlay"),
-    join: makeFunctionReference<"mutation", { code: string; playerId: string; kind?: RoomKind; mode?: RoomMode; colorIndex?: number } & RunLoadoutArg, { roomId: string; code: string; seed: number; floor: number; status: RoomStatus; mode?: RoomMode; loadoutGeneration: number; kitId: string; petId: string | null }>("rooms:join"),
+    create: makeFunctionReference<"mutation", { clientId: string; kind?: RoomKind; mode?: RoomMode; colorIndex?: number } & RunLoadoutArg, { roomId: string; code: string; seed: number; floor: number; mode?: RoomMode; loadoutGeneration: number; kitId: string; petId: string | null }>("rooms:create"),
+    quickPlay: makeFunctionReference<"mutation", { clientId: string; kind?: RoomKind; mode?: RoomMode; colorIndex?: number } & RunLoadoutArg, { roomId: string; code: string; seed: number; floor: number; status: RoomStatus; mode?: RoomMode; joined?: boolean; loadoutGeneration: number; kitId: string; petId: string | null }>("rooms:quickPlay"),
+    join: makeFunctionReference<"mutation", { code: string; clientId: string; kind?: RoomKind; mode?: RoomMode; colorIndex?: number } & RunLoadoutArg, { roomId: string; code: string; seed: number; floor: number; status: RoomStatus; mode?: RoomMode; loadoutGeneration: number; kitId: string; petId: string | null }>("rooms:join"),
     get: makeFunctionReference<"query", { roomId: string }, RoomDoc | null>("rooms:get"),
-    start: makeFunctionReference<"mutation", { roomId: string; playerId: string }, RoomStartResult>("rooms:start"),
-    reopen: makeFunctionReference<"mutation", { roomId: string; playerId: string }, { loadoutGeneration: number }>("rooms:reopen"),
-    confirmLoadout: makeFunctionReference<"mutation", { roomId: string; playerId: string; generation: number } & RunLoadoutArg, RoomLoadoutResult>("rooms:confirmLoadout"),
-    clearLoadoutConfirmation: makeFunctionReference<"mutation", { roomId: string; playerId: string; generation: number }, { ok: boolean }>("rooms:clearLoadoutConfirmation"),
-    heartbeat: makeFunctionReference<"mutation", { roomId: string; playerId: string; name?: string; colorIndex?: number; pingMs?: number }, null>("rooms:heartbeat"),
+    start: makeFunctionReference<"mutation", { roomId: string; clientId: string }, RoomStartResult>("rooms:start"),
+    reopen: makeFunctionReference<"mutation", { roomId: string; clientId: string }, { loadoutGeneration: number; isReopened: boolean }>("rooms:reopen"),
+    confirmLoadout: makeFunctionReference<"mutation", { roomId: string; clientId: string; generation: number } & RunLoadoutArg, RoomLoadoutResult>("rooms:confirmLoadout"),
+    heartbeat: makeFunctionReference<"mutation", { roomId: string; clientId: string; name?: string; colorIndex?: number; pingMs?: number }, null>("rooms:heartbeat"),
     descend: makeFunctionReference<"mutation", { roomId: string; floor: number }, null>("rooms:descend"),
-    leave: makeFunctionReference<"mutation", { roomId: string; playerId: string }, null>("rooms:leave"),
+    leave: makeFunctionReference<"mutation", { roomId: string; clientId: string }, null>("rooms:leave"),
   },
   presence: {
     update: makeFunctionReference<"mutation", PresenceUpdateArgs, null>("presence:update"),
@@ -266,8 +265,8 @@ export const api = {
     revive: makeFunctionReference<"mutation", { roomId: string; targetPlayerId: string }, null>("presence:revive"),
     // Mirror of the authoritative game-server connection state (ONLINE rooms): worldId after
     // a verified world join, null on leaving. Powers the lobby's per-member readiness readout.
-    reportWorld: makeFunctionReference<"mutation", { roomId: string; playerId: string; worldId: string | null }, null>("presence:reportWorld"),
+    reportWorld: makeFunctionReference<"mutation", { roomId: string; clientId: string; worldId: string | null }, null>("presence:reportWorld"),
     // The lobby READY toggle (roster READY/NOT READY; gates the host's START).
-    setReady: makeFunctionReference<"mutation", { roomId: string; playerId: string; isReady: boolean }, ReadyMutationResult>("presence:setReady"),
+    setReady: makeFunctionReference<"mutation", { roomId: string; clientId: string; isReady: boolean }, ReadyMutationResult>("presence:setReady"),
   },
 };

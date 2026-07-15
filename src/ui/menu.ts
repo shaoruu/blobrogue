@@ -19,7 +19,7 @@ import type { CampNodeDef } from "../sim/camp_nodes.js";
 import type { CosmeticSlot, CosmeticDef, CosmeticLoadout } from "../game/cosmetics.js";
 import { hasCosmeticArt } from "../game/cosmeticArt.js";
 import { createBlobPreview, createLoadoutPreview, drawBlob, isBlobReady } from "./blobPreview.js";
-import type { BlobLook, BlobPreview } from "./blobPreview.js";
+import type { BlobLook, BlobPreview, LoadoutPreview } from "./blobPreview.js";
 import { FocusScope, currentFocus } from "./focus.js";
 import { createSettingsControls } from "./settings.js";
 import { shouldShowSigninNudge, recordNudgeShown, recordNudgeDismissed, SIGNIN_BENEFITS } from "./signinNudge.js";
@@ -72,7 +72,7 @@ interface LoadoutGateOptions {
   roomCode?: string;
   lobby?: OnlineLobby;
   onBack: () => void;
-  onConfirm: (loadout: RunLoadout) => Promise<string | null>;
+  onConfirm: (loadout: RunLoadout, isCurrent: () => boolean) => Promise<string | null>;
 }
 
 function el<K extends keyof HTMLElementTagNameMap>(tag: K, className = "", text?: string): HTMLElementTagNameMap[K] {
@@ -114,7 +114,7 @@ function fmtClock(seconds: number): string {
 // destination that opened the screen (screens are rebuilt on return, so restore is by NAME,
 // not by node — deterministic even though the original button no longer exists).
 export interface TitleFocus {
-  dest?: "online" | "leaderboard" | "profile" | "settings" | "camp";
+  dest?: "online" | "solo" | "kit" | "leaderboard" | "profile" | "settings" | "camp";
   lbRow?: number;
 }
 
@@ -201,6 +201,8 @@ export class Menu {
   private onlineCountUnsub: (() => void) | null = null;
   private pendingOnlineLoadout: RunLoadout | null = null;
   private loadoutGateSequence = 0;
+  private activeLoadoutGateSequence: number | null = null;
+  private loadoutPreview: LoadoutPreview | null = null;
 
   constructor(overlay: HTMLElement, session: Session, client: ConvexClient | null, auth: AuthClient | null, host: MenuHost) {
     this.overlay = overlay;
@@ -218,6 +220,9 @@ export class Menu {
   }
 
   hide() {
+    this.activeLoadoutGateSequence = null;
+    this.loadoutPreview?.dispose();
+    this.loadoutPreview = null;
     this.teardownLobby();
     this.teardownOnlineCount();
     // The title (and its idle loop) is fully covered while a run plays — park the rAF.
@@ -230,6 +235,11 @@ export class Menu {
   }
 
   private show(...nodes: HTMLElement[]) {
+    if (!nodes.some((node) => node.className.split(/\s+/).includes("loadout-gate"))) {
+      this.activeLoadoutGateSequence = null;
+      this.loadoutPreview?.dispose();
+      this.loadoutPreview = null;
+    }
     this.teardownLobby();
     this.teardownOnlineCount();
     this.identityMount = null;     // the title re-arms it after its own show()
@@ -362,8 +372,11 @@ export class Menu {
       // the online shell (usually empty; an invite opened in this build lands its honest
       // ONLINE PLAY UNAVAILABLE note here).
       const left = el("div", "home-left");
-      left.appendChild(this.soloButton("\u25be  PLAY"));
-      left.appendChild(this.kitChip());
+      const solo = this.soloButton("\u25be  PLAY");
+      const kit = this.kitChip();
+      focusTargets.set("solo", solo);
+      focusTargets.set("kit", kit);
+      left.append(solo, kit);
       left.appendChild(el("p", "muted", "multiplayer offline \u2014 no server configured for this build"));
       left.appendChild(el("p", "home-status", statusNote));
       // Offline nav: the same uniform .dest stack (no LEADERBOARD — it needs the backend).
@@ -401,8 +414,11 @@ export class Menu {
     // filled button, so the eye lands on it first.
     const solo = this.soloButton("PLAY SOLO");
     solo.classList.add("play-solo", "secondary");
+    focusTargets.set("solo", solo);
     left.appendChild(solo);
-    left.appendChild(this.kitChip());
+    const kit = this.kitChip();
+    focusTargets.set("kit", kit);
+    left.appendChild(kit);
     // The Amber Camp: the between-runs place (WAVE 1). Not a play action and not a nav
     // destination — a quiet secondary door under Play, where earned Amber is spent on pets +
     // convenience. Coins own the in-run HUD; Amber lives here, never both in one surface.
@@ -704,7 +720,7 @@ export class Menu {
 
   private soloButton(label: string): HTMLButtonElement {
     const btn = el("button", "", label);
-    btn.addEventListener("click", () => this.doSolo());
+    btn.onclick = () => this.doSolo();
     return btn;
   }
 
@@ -728,11 +744,12 @@ export class Menu {
       destination: "preselect",
       destinationLabel: "SAVE LOADOUT",
       contextLabel: "PRESELECT FOR NEXT RUN",
-      onBack: () => void this.showTitle(),
-      onConfirm: async (loadout) => {
+      onBack: () => void this.showTitle({ dest: "kit" }),
+      onConfirm: async (loadout, isCurrent) => {
         const error = await this.persistProfileLoadout(loadout, false);
         if (error) return error;
-        await this.showTitle();
+        if (!isCurrent()) return null;
+        await this.showTitle({ dest: "kit" });
         return null;
       },
     });
@@ -743,10 +760,11 @@ export class Menu {
       destination: "solo",
       destinationLabel: "START SOLO",
       contextLabel: "SOLO RUN",
-      onBack: () => void this.showTitle(),
-      onConfirm: async (loadout) => {
+      onBack: () => void this.showTitle({ dest: "solo" }),
+      onConfirm: async (loadout, isCurrent) => {
         const error = await this.persistProfileLoadout(loadout, true);
         if (error) return error;
+        if (!isCurrent()) return null;
         this.host.startSolo(this.session.profile, loadout);
         return null;
       },
@@ -754,8 +772,9 @@ export class Menu {
   }
 
   private async persistProfileLoadout(loadout: RunLoadout, isSolo: boolean): Promise<string | null> {
+    let timeoutId: ReturnType<typeof setTimeout> | null = null;
     const timeout = new Promise<Awaited<ReturnType<Session["confirmRunLoadout"]>>>((resolve) => {
-      setTimeout(() => resolve({
+      timeoutId = setTimeout(() => resolve({
         ok: false,
         reason: "backend_unavailable",
         profile: this.session.profile,
@@ -763,6 +782,7 @@ export class Menu {
       }), HYDRATE_TIMEOUT_MS);
     });
     const result = await Promise.race([this.session.confirmRunLoadout(loadout), timeout]);
+    if (timeoutId !== null) clearTimeout(timeoutId);
     if (result.ok) return null;
     const level = this.session.profile?.masteryLevel ?? 1;
     if (isSolo && loadout.petId === null && isKitUnlocked(loadout.kitId, level)) {
@@ -772,19 +792,29 @@ export class Menu {
     if (result.reason === "kit_locked") return `REACH ACCOUNT LV ${kitUnlockLevel(loadout.kitId)}`;
     if (result.reason === "pet_unowned") return "Rescue that pet before choosing it.";
     if (result.reason === "offline_pet_unavailable") return "Pet save unavailable. Retry or Continue No Pet.";
-    return loadout.petId === null
-      ? "Could not save this loadout. Try again."
-      : "Pet save failed. Retry or Continue No Pet.";
+    return "Could not save this loadout. Try again.";
   }
 
   private showLoadoutGate(opts: LoadoutGateOptions): void {
+    this.loadoutPreview?.dispose();
+    this.loadoutPreview = null;
     const gateSequence = ++this.loadoutGateSequence;
+    this.activeLoadoutGateSequence = gateSequence;
+    const isCurrentGate = () => this.activeLoadoutGateSequence === gateSequence;
     let profile = this.session.profile;
     let level = profile?.masteryLevel ?? 1;
     let unlocks = profile?.unlocks ?? [];
+    const rememberedKit = this.session.rememberedKit;
+    const rememberedPet = this.session.rememberedPet;
+    let isKitRemembered = opts.lobby?.selfLoadout !== null && opts.lobby?.selfLoadout !== undefined
+      ? true
+      : rememberedKit.isRemembered;
+    let isPetRemembered = opts.lobby?.selfLoadout !== null && opts.lobby?.selfLoadout !== undefined
+      ? true
+      : rememberedPet.isRemembered;
     const openingLoadout = opts.lobby?.selfLoadout ?? {
-      kitId: this.session.lastKitId,
-      petId: this.session.rememberedPet.petId,
+      kitId: rememberedKit.kitId,
+      petId: rememberedPet.petId,
     };
     const firstUnlocked = KIT_IDS.find((kit) => isKitUnlocked(kit, level)) ?? "gunner";
     let draftKitId: PlayableKitId = isKitUnlocked(openingLoadout.kitId, level)
@@ -793,10 +823,11 @@ export class Menu {
     let draftPetId = openingLoadout.petId !== null && isPetOwned(openingLoadout.petId, unlocks)
       ? openingLoadout.petId
       : null;
+    if (draftKitId !== openingLoadout.kitId) isKitRemembered = false;
+    if (draftPetId !== openingLoadout.petId) isPetRemembered = false;
     let isKitChoiceMade = false;
     let isPetChoiceMade = false;
     let isPersisting = false;
-    let isRoomConfirmationCleared = false;
     let isProfileLoading = this.client !== null && profile === null;
     let isProfileError = false;
     let step: "kit" | "pet" = "kit";
@@ -814,13 +845,6 @@ export class Menu {
 
     const pairLabel = (): string => `${KIT_META[draftKitId].name.toUpperCase()} + ${petName(draftPetId)}`;
 
-    const clearRoomConfirmationIfChanged = () => {
-      if (!opts.lobby || isRoomConfirmationCleared) return;
-      if (draftKitId === openingLoadout.kitId && draftPetId === openingLoadout.petId) return;
-      isRoomConfirmationCleared = true;
-      opts.lobby.clearLoadoutConfirmation();
-    };
-
     const profileState = (): string => {
       if (isProfileLoading) return "CHECKING UNLOCKS";
       if (isProfileError) return "PROGRESS UNAVAILABLE";
@@ -833,6 +857,7 @@ export class Menu {
       body: HTMLElement;
       footer: HTMLElement;
       status: HTMLElement;
+      fallback: HTMLElement;
       live: HTMLElement;
     } => {
       const root = el("div", "menu loadout-gate kit-gate");
@@ -855,11 +880,12 @@ export class Menu {
       const footer = el("footer", "loadout-footer");
       const status = el("p", "loadout-error", errorMessage);
       status.setAttribute("role", "alert");
+      const fallback = el("div", "loadout-fallback-slot");
       const live = el("p", "loadout-live", announcement);
       live.setAttribute("aria-live", "polite");
       live.setAttribute("aria-atomic", "true");
-      root.append(header, body, footer, status, live);
-      return { root, body, footer, status, live };
+      root.append(header, body, footer, status, fallback, live);
+      return { root, body, footer, status, fallback, live };
     };
 
     const showKit = () => {
@@ -880,7 +906,7 @@ export class Menu {
         const meta = KIT_META[kit];
         const isUnlocked = isKitUnlocked(kit, level);
         const isSelected = isKitChoiceMade && draftKitId === kit;
-        const isLast = !isKitChoiceMade && draftKitId === kit;
+        const isLast = !isKitChoiceMade && isKitRemembered && draftKitId === kit;
         const card = el(
           "button",
           `loadout-card kit-option${isSelected ? " selected" : ""}${isLast ? " last-used" : ""}${isUnlocked ? "" : " locked"}`,
@@ -888,7 +914,11 @@ export class Menu {
         card.type = "button";
         card.setAttribute("role", "radio");
         card.setAttribute("aria-checked", String(isSelected));
-        card.setAttribute("aria-label", `${meta.name}, ${meta.role}, ${WEAPONS[KIT_START_WEAPON[kit]].name}, ultimate ${meta.ult}`);
+        card.tabIndex = isSelected || isLast || (!isKitChoiceMade && draftKitId === kit) ? 0 : -1;
+        card.setAttribute(
+          "aria-label",
+          `${meta.name}, ${meta.role}, ${weaponName(KIT_START_WEAPON[kit])}, ultimate ${meta.ult}${isUnlocked ? "" : `, locked, reach account level ${kitUnlockLevel(kit)}`}`,
+        );
         card.setAttribute("data-kit", kit);
         const icon = document.createElement("img");
         icon.src = `/sprites/ui/${kit}_24.png`;
@@ -901,7 +931,7 @@ export class Menu {
         card.append(
           el("span", "loadout-key", String(index + 1)),
           titleRow,
-          el("span", "kit-role", `${meta.role.toUpperCase()} · ${WEAPONS[KIT_START_WEAPON[kit]].name.toUpperCase()} · ULT ${meta.ult.toUpperCase()}`),
+          el("span", "kit-role", `${meta.role.toUpperCase()} · ${weaponName(KIT_START_WEAPON[kit]).toUpperCase()} · ULT ${meta.ult.toUpperCase()}`),
           el("span", "kit-blurb", meta.blurb),
         );
         const state = el("span", "loadout-card-state");
@@ -923,7 +953,6 @@ export class Menu {
           isKitChoiceMade = true;
           errorMessage = "";
           announcement = `${meta.name} selected`;
-          clearRoomConfirmationIfChanged();
           showKit();
         };
         cards.push(card);
@@ -944,7 +973,7 @@ export class Menu {
       };
       view.footer.append(back, next);
       this.show(view.root);
-      this.bindLoadoutKeys(cards, 2, opts.onBack);
+      this.bindLoadoutKeys(cards, 2, 1, opts.onBack);
       queueMicrotask(() => cards.find((card) => card.getAttribute("data-kit") === draftKitId)?.focus());
     };
 
@@ -953,8 +982,8 @@ export class Menu {
       isPersisting = true;
       errorMessage = "";
       showPet();
-      const error = await opts.onConfirm({ kitId: draftKitId, petId: draftPetId });
-      if (!error) return;
+      const error = await opts.onConfirm({ kitId: draftKitId, petId: draftPetId }, isCurrentGate);
+      if (!isCurrentGate() || !error) return;
       isPersisting = false;
       errorMessage = error;
       showPet();
@@ -975,14 +1004,21 @@ export class Menu {
       const previewBox = el("div", "loadout-preview");
       previewBox.setAttribute("role", "img");
       previewBox.setAttribute("aria-label", `Player blob with ${petName(draftPetId)}`);
-      const preview = createLoadoutPreview(
-        lookOf(this.session.cosmetics, this.session.colorIndex),
-        draftPetId,
-        220,
-        300,
-      );
+      if (!this.loadoutPreview) {
+        this.loadoutPreview = createLoadoutPreview(
+          lookOf(this.session.cosmetics, this.session.colorIndex),
+          draftPetId,
+          220,
+          244,
+        );
+      } else {
+        this.loadoutPreview.setLoadout(
+          lookOf(this.session.cosmetics, this.session.colorIndex),
+          draftPetId,
+        );
+      }
       previewBox.append(
-        preview.el,
+        this.loadoutPreview.el,
         el("span", "loadout-preview-label", "PLAYER BLOB + PET"),
         el("span", "loadout-preview-copy", draftPetId === null ? "Travel alone. No gameplay change." : "COSMETIC COMPANION · No combat effect"),
       );
@@ -997,7 +1033,7 @@ export class Menu {
       for (const [index, option] of options.entries()) {
         const isOwned = option.petId === null || isPetOwned(option.petId, unlocks);
         const isSelected = isPetChoiceMade && draftPetId === option.petId;
-        const isLast = !isPetChoiceMade && draftPetId === option.petId;
+        const isLast = !isPetChoiceMade && isPetRemembered && draftPetId === option.petId;
         const name = option.node?.name.toUpperCase() ?? "NO PET";
         const card = el(
           "button",
@@ -1006,7 +1042,11 @@ export class Menu {
         card.type = "button";
         card.setAttribute("role", "radio");
         card.setAttribute("aria-checked", String(isSelected));
-        card.setAttribute("aria-label", `${name}${isOwned ? "" : ", locked"}`);
+        card.tabIndex = isSelected || isLast || (!isPetChoiceMade && draftPetId === option.petId) ? 0 : -1;
+        card.setAttribute(
+          "aria-label",
+          `${name}${isOwned ? "" : `, locked, reach floor ${option.node?.rescueFloor ?? 0} to rescue`}`,
+        );
         card.setAttribute("data-pet", option.petId ?? "none");
         card.append(
           el("span", "loadout-key", String(index + 1)),
@@ -1028,14 +1068,14 @@ export class Menu {
         } else {
           state.textContent = "RESCUED";
         }
+        if (isPersisting) card.disabled = true;
         card.appendChild(state);
         card.onclick = () => {
-          if (!isOwned) return;
+          if (!isOwned || isPersisting) return;
           draftPetId = option.petId;
           isPetChoiceMade = true;
           errorMessage = "";
           announcement = `${name} selected`;
-          clearRoomConfirmationIfChanged();
           showPet();
         };
         cards.push(card);
@@ -1047,9 +1087,14 @@ export class Menu {
       layout.append(previewBox, grid);
       view.body.appendChild(layout);
 
-      const back = el("button", "secondary loadout-back", "BACK · KIT");
+      const back = el("button", "secondary loadout-back", isPersisting ? "CANCEL" : "BACK · KIT");
       back.type = "button";
       back.onclick = () => {
+        if (isPersisting) {
+          this.activeLoadoutGateSequence = null;
+          opts.onBack();
+          return;
+        }
         errorMessage = "";
         announcement = "";
         showKit();
@@ -1071,31 +1116,36 @@ export class Menu {
       confirm.onclick = () => void confirmDraft();
       view.footer.append(back, confirm);
 
-      const fallbackSlot = el("div", "loadout-fallback-slot");
       const fallback = el("button", "secondary loadout-no-pet", "CONTINUE NO PET");
       fallback.type = "button";
-      fallback.hidden = errorMessage.length === 0 || draftPetId === null;
+      const isPetSaveError = /pet save|rescue that pet|pet.*unavailable/i.test(errorMessage);
+      fallback.hidden = !isPetSaveError || draftPetId === null;
       fallback.onclick = () => {
         draftPetId = null;
         isPetChoiceMade = true;
         errorMessage = "";
         announcement = "No Pet selected";
-        clearRoomConfirmationIfChanged();
         void confirmDraft();
       };
-      fallbackSlot.appendChild(fallback);
-      view.status.after(fallbackSlot);
+      view.fallback.appendChild(fallback);
 
       this.show(view.root);
-      this.bindLoadoutKeys(cards, 2, () => showKit());
-      queueMicrotask(() => cards.find((card) => card.getAttribute("data-pet") === (draftPetId ?? "none"))?.focus());
+      this.bindLoadoutKeys(cards, 3, 2, () => {
+        if (isPersisting) {
+          this.activeLoadoutGateSequence = null;
+          opts.onBack();
+        } else {
+          showKit();
+        }
+      });
+      queueMicrotask(() => {
+        if (isPersisting) back.focus();
+        else cards.find((card) => card.getAttribute("data-pet") === (draftPetId ?? "none"))?.focus();
+      });
     };
 
     showKit();
     if (isProfileLoading) {
-      const isCurrentGate = () => this.overlay.querySelector(
-        `.loadout-gate[data-gate-sequence="${gateSequence}"]`,
-      ) !== null;
       const hydrationTimer = setTimeout(() => {
         if (!isCurrentGate()) return;
         isProfileLoading = false;
@@ -1109,11 +1159,20 @@ export class Menu {
         level = hydrated?.masteryLevel ?? 1;
         unlocks = hydrated?.unlocks ?? [];
         isProfileLoading = false;
-        if (!isKitChoiceMade && !isKitUnlocked(draftKitId, level)) {
-          draftKitId = KIT_IDS.find((kit) => isKitUnlocked(kit, level)) ?? "gunner";
+        if (!isKitChoiceMade) {
+          const nextKit = this.session.rememberedKit;
+          const isRememberedKitValid = nextKit.isRemembered && isKitUnlocked(nextKit.kitId, level);
+          isKitRemembered = isRememberedKitValid;
+          draftKitId = isRememberedKitValid
+            ? nextKit.kitId
+            : KIT_IDS.find((kit) => isKitUnlocked(kit, level)) ?? "gunner";
         }
-        if (!isPetChoiceMade && draftPetId !== null && !isPetOwned(draftPetId, unlocks)) {
-          draftPetId = null;
+        if (!isPetChoiceMade) {
+          const nextPet = this.session.rememberedPet;
+          const isRememberedPetValid = nextPet.isRemembered
+            && (nextPet.petId === null || isPetOwned(nextPet.petId, unlocks));
+          isPetRemembered = isRememberedPetValid;
+          draftPetId = isRememberedPetValid ? nextPet.petId : null;
         }
         if (step === "kit") showKit(); else showPet();
       }).catch(() => {
@@ -1128,39 +1187,55 @@ export class Menu {
 
   private bindLoadoutKeys(
     cards: HTMLButtonElement[],
-    columns: number,
+    desktopColumns: number,
+    mobileColumns: number,
     onBack: () => void,
   ): void {
     const handler = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         event.preventDefault();
-        event.stopImmediatePropagation();
+        event.stopImmediatePropagation?.();
         onBack();
         return;
       }
       const number = Number(event.key);
       if (Number.isInteger(number) && number >= 1 && number <= cards.length) {
         event.preventDefault();
-        event.stopImmediatePropagation();
+        event.stopImmediatePropagation?.();
         cards[number - 1]?.click();
         return;
       }
       const key = event.key.toLowerCase();
-      const direction = key === "arrowleft" || key === "a" ? -1
+      const horizontalDirection = key === "arrowleft" || key === "a" ? -1
         : key === "arrowright" || key === "d" ? 1
-          : key === "arrowup" || key === "w" ? -columns
-            : key === "arrowdown" || key === "s" ? columns
-              : 0;
-      if (direction !== 0) {
+          : 0;
+      const verticalDirection = key === "arrowup" || key === "w" ? -1
+        : key === "arrowdown" || key === "s" ? 1
+          : 0;
+      if (horizontalDirection !== 0 || verticalDirection !== 0) {
         event.preventDefault();
-        event.stopImmediatePropagation();
+        event.stopImmediatePropagation?.();
         const current = document.activeElement instanceof HTMLButtonElement
           ? cards.indexOf(document.activeElement)
           : -1;
+        const columns = typeof matchMedia === "function" && matchMedia("(max-width: 620px)").matches
+          ? mobileColumns
+          : desktopColumns;
         let index = current >= 0 ? current : 0;
+        if (verticalDirection !== 0) {
+          const rows = Math.ceil(cards.length / columns);
+          const row = Math.floor(index / columns);
+          const column = index % columns;
+          const nextRow = (row + verticalDirection + rows) % rows;
+          index = Math.min(nextRow * columns + column, cards.length - 1);
+        }
         for (let attempts = 0; attempts < cards.length; attempts++) {
-          index = (index + direction + cards.length) % cards.length;
+          if (horizontalDirection !== 0 || cards[index].disabled) {
+            const direction = horizontalDirection !== 0 ? horizontalDirection : verticalDirection * columns;
+            index = (index + direction + cards.length) % cards.length;
+          }
           if (!cards[index].disabled) {
+            for (const card of cards) card.tabIndex = card === cards[index] ? 0 : -1;
             cards[index].focus();
             break;
           }
@@ -1168,7 +1243,8 @@ export class Menu {
         return;
       }
       if (event.key === "Tab") {
-        const focusable = [...this.overlay.querySelectorAll<HTMLButtonElement>("button:not(:disabled)")];
+        const focusable = [...this.overlay.querySelectorAll<HTMLButtonElement>("button:not(:disabled):not([hidden])")]
+          .filter((button) => button.tabIndex >= 0);
         if (focusable.length === 0) return;
         const current = document.activeElement instanceof HTMLButtonElement
           ? focusable.indexOf(document.activeElement)
@@ -1177,7 +1253,7 @@ export class Menu {
           ? (current <= 0 ? focusable.length - 1 : current - 1)
           : (current < 0 || current === focusable.length - 1 ? 0 : current + 1);
         event.preventDefault();
-        event.stopImmediatePropagation();
+        event.stopImmediatePropagation?.();
         focusable[next].focus();
       }
     };
@@ -2389,9 +2465,10 @@ export class Menu {
         destinationLabel: "CONTINUE ONLINE",
         contextLabel: "ONLINE RUN",
         onBack: () => void this.showTitle({ dest: "online" }),
-        onConfirm: async (loadout) => {
+        onConfirm: async (loadout, isCurrent) => {
           const error = await this.persistProfileLoadout(loadout, false);
           if (error) return error;
+          if (!isCurrent()) return null;
           this.pendingOnlineLoadout = loadout;
           await this.showOnlineHome(note, { ...opts, isLoadoutConfirmed: true });
           return null;
@@ -2491,13 +2568,17 @@ export class Menu {
       destination: "replay",
       destinationLabel: "FIND ANOTHER",
       contextLabel: "NEW ONLINE RUN",
-      onBack: () => void this.showOnlineHome(),
-      onConfirm: async (loadout) => {
+      onBack: () => void this.showTitle({ dest: "online" }),
+      onConfirm: async (loadout, isCurrent) => {
         try {
           const profile = await this.session.login();
           if (!this.client) return "Online play is unavailable";
           const lobby = new OnlineLobby(this.client, this.session);
           await lobby.quickPlay(mode, loadout);
+          if (!isCurrent()) {
+            lobby.leave();
+            return null;
+          }
           this.launchOnline(lobby, profile, false);
           return null;
         } catch (error) {
@@ -2541,11 +2622,15 @@ export class Menu {
         stripInviteFromLocation();
         void this.showTitle({ dest: "online" });
       },
-      onConfirm: (loadout) => this.joinInviteWithLoadout(roomCode, loadout),
+      onConfirm: (loadout, isCurrent) => this.joinInviteWithLoadout(roomCode, loadout, isCurrent),
     });
   }
 
-  private async joinInviteWithLoadout(code: string, loadout: RunLoadout): Promise<string | null> {
+  private async joinInviteWithLoadout(
+    code: string,
+    loadout: RunLoadout,
+    isCurrent: () => boolean,
+  ): Promise<string | null> {
     const status = el("p");
     let failure: string | null = null;
     let isTimedOut = false;
@@ -2553,7 +2638,7 @@ export class Menu {
     const attempt = this.doJoinOnline(code, status, {
       confirmedLoadout: loadout,
       joiningNote: inviteJoiningNote(code),
-      isStale: () => isTimedOut,
+      isStale: () => isTimedOut || !isCurrent(),
       onSettled: () => {
         if (timer !== null) clearTimeout(timer);
         if (!isTimedOut) stripInviteFromLocation();
@@ -2659,6 +2744,9 @@ export class Menu {
   // authoritative server, not assumed), and the start/waiting/rejoin control. Re-renders on
   // every roster/status change.
   showOnlineLobby(lobby: OnlineLobby, profile: ProfileDoc | null, note = "") {
+    this.activeLoadoutGateSequence = null;
+    this.loadoutPreview?.dispose();
+    this.loadoutPreview = null;
     let lobbyNote = note;
     let prevStatus = lobby.status;
     const render = () => {
@@ -2727,7 +2815,7 @@ export class Menu {
       } else {
         const change = el("button", "secondary change-loadout", lobby.isSelfLoadoutConfirmed ? "CHANGE LOADOUT" : "CONFIRM LOADOUT");
         change.type = "button";
-        change.onclick = () => this.showLobbyLoadoutGate(lobby, profile);
+        change.onclick = () => void this.showLobbyLoadoutGate(lobby, profile);
         row.appendChild(change);
         row.appendChild(this.readyToggleButton(lobby, (message) => {
           lobbyNote = message;
@@ -2763,7 +2851,14 @@ export class Menu {
     return CAMP_NODES.find((node) => node.pet === petId)?.name.toUpperCase() ?? "NO PET";
   }
 
-  private showLobbyLoadoutGate(lobby: OnlineLobby, profile: ProfileDoc | null): void {
+  private async showLobbyLoadoutGate(lobby: OnlineLobby, profile: ProfileDoc | null): Promise<void> {
+    const readyError = await lobby.setReady(false);
+    const isStillInLobby = this.overlay.querySelector(".change-loadout") !== null;
+    if (!isStillInLobby || !lobby.isActive || lobby.status !== "lobby") return;
+    if (readyError) {
+      this.showOnlineLobby(lobby, profile, readyError);
+      return;
+    }
     const generation = lobby.loadoutGeneration;
     this.showLoadoutGate({
       destination: "lobby",
@@ -2772,9 +2867,10 @@ export class Menu {
       roomCode: lobby.code,
       lobby,
       onBack: () => this.showOnlineLobby(lobby, profile),
-      onConfirm: async (loadout) => {
+      onConfirm: async (loadout, isCurrent) => {
         const error = await lobby.confirmLoadout(loadout, generation);
         if (error) return error;
+        if (!isCurrent()) return null;
         this.showOnlineLobby(lobby, this.session.profile ?? profile);
         return null;
       },
@@ -2948,7 +3044,10 @@ export class Menu {
     const online = ctx.online;
     if (online && online.isActive && !online.isQuickPlay) {
       primary = () => {
-        void online.reopen().then(() => this.showLobbyLoadoutGate(online, profile));
+        void online.reopen().then((isReopened) => {
+          if (isReopened) void this.showLobbyLoadoutGate(online, profile);
+          else this.showOnlineLobby(online, profile, "The current run is still active");
+        });
       };
       const backBtn = el("button", "", "back to lobby \u21b5");
       backBtn.addEventListener("click", () => primary());
@@ -3050,13 +3149,17 @@ export class Menu {
       destinationLabel: "PLAY AGAIN",
       contextLabel: "NEW ONLINE RUN",
       onBack,
-      onConfirm: async (loadout) => {
+      onConfirm: async (loadout, isCurrent) => {
         try {
           old.leave();
           const profile = await this.session.login();
           if (!this.client) return "Online play is unavailable";
           const lobby = new OnlineLobby(this.client, this.session);
           await lobby.quickPlay(old.mode, loadout);
+          if (!isCurrent()) {
+            lobby.leave();
+            return null;
+          }
           this.launchOnline(lobby, profile, false);
           return null;
         } catch (error) {

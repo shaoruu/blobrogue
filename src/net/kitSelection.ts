@@ -1,7 +1,5 @@
-// The player's chosen KIT for the next run (KIT/XP spec §5): picked in the Amber Camp lobby,
-// persisted locally, and read at ticket-mint time so it rides the SIGNED join ticket. The
-// Convex mint validates the pick against the account's Mastery unlocks and the game server
-// re-gates it — this module only remembers the intent; it is never authoritative.
+// Local preselection convenience for the mandatory combined gate. These values never
+// authorize a run; online tickets read the generation-bound room confirmation.
 
 import type { KitId } from "../sim/kits.js";
 import { isKitId } from "../sim/kits.js";
@@ -24,21 +22,30 @@ export interface RememberedPet {
   petId: string | null;
 }
 
-export function getSelectedKit(): PlayableKitId {
+export interface RememberedKit {
+  isRemembered: boolean;
+  kitId: PlayableKitId;
+}
+
+export function getSelectedKitSelection(): RememberedKit {
   try {
     const v = localStorage.getItem(KIT_KEY);
-    return isKitId(v) && v !== "none" ? v : DEFAULT_KIT;
+    return isKitId(v) && v !== "none"
+      ? { isRemembered: true, kitId: v }
+      : { isRemembered: false, kitId: DEFAULT_KIT };
   } catch {
-    return DEFAULT_KIT;
+    return { isRemembered: false, kitId: DEFAULT_KIT };
   }
+}
+
+export function getSelectedKit(): PlayableKitId {
+  return getSelectedKitSelection().kitId;
 }
 
 export function setSelectedKit(kit: PlayableKitId): void {
   try {
     localStorage.setItem(KIT_KEY, kit);
-  } catch {
-    /* storage disabled — the mint falls back to the default */
-  }
+  } catch {}
 }
 
 function isKnownPetId(petId: string): boolean {
@@ -58,11 +65,13 @@ export function getRememberedPet(): RememberedPet {
   }
 }
 
+export function rememberPet(petId: string | null): void {
+  try {
+    localStorage.setItem(PET_KEY, petId ?? NO_PET_VALUE);
+  } catch {}
+}
+
 export function rememberRunLoadout(loadout: RunLoadout): void {
   setSelectedKit(loadout.kitId);
-  try {
-    localStorage.setItem(PET_KEY, loadout.petId ?? NO_PET_VALUE);
-  } catch {
-    /* storage disabled — the next gate safely browses No Pet */
-  }
+  rememberPet(loadout.petId);
 }

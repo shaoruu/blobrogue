@@ -180,6 +180,10 @@ export default defineSchema({
     isPetChoiceMade: v.optional(v.boolean()),
     isLoadoutConfirmed: v.optional(v.boolean()),
     loadoutGeneration: v.optional(v.number()),
+    // A deliberate leave during a live generation keeps this row as a loadout tombstone:
+    // rejoining the same run restores the immutable pair, while the row no longer occupies
+    // an active roster/capacity slot.
+    isDeparted: v.optional(v.boolean()),
   })
     .index("by_room", ["roomId"])
     .index("by_room_player", ["roomId", "playerId"]),

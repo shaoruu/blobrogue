@@ -5,17 +5,11 @@
 //
 //   npx convex env set GS_AUTH_SECRET <the game server's GS_AUTH_SECRET>
 //
-// Identity: a signed-in account mints for its players-row id (the same identity the profile
-// system uses); a guest mints for a "guest:<clientId>" id. The player's display name + chosen
-// blob color ride along as verified `nm`/`cl` claims so the game server can label their blob
-// for other players.
+// Identity: accounts and guests both mint for their server-resolved players row. The
+// player's display name + chosen blob color ride as verified `nm`/`cl` claims.
 //
-// Rooms: when a room code is supplied, the mint FIRST verifies the caller actually sits in
-// that online room (rooms.membership), then binds the room's world id into the ticket as the
-// `wld` claim. The game server binds the connection to exactly that world — this chain
-// (lobby membership -> signed claim -> server bind) is what makes rooms real isolation, not a
-// client-asserted string. The ticket only ASSERTS identity/authorization to the game server —
-// all gameplay authority stays in the server simulation.
+// The mint requires a started room, current-generation membership, and a confirmed combined
+// loadout. The generation is part of `wld`, so an old ticket cannot enter a later run.
 
 import { v } from "convex/values";
 import { action } from "./_generated/server";
@@ -28,7 +22,7 @@ import { assertPvpModeAllowed } from "./pvpFlag";
 const TICKET_TTL_SECS = 120;
 
 export const mint = action({
-  args: { clientId: v.string(), roomCode: v.optional(v.string()), kit: v.optional(v.string()) },
+  args: { clientId: v.string(), roomCode: v.string() },
   handler: async (ctx, { clientId, roomCode }): Promise<{ ticket: string; playerId: string }> => {
     const secret = process.env.GS_AUTH_SECRET;
     if (!secret) throw new Error("GS_AUTH_SECRET is not configured on this deployment");
@@ -36,57 +30,36 @@ export const mint = action({
     if (trimmed.length === 0) throw new Error("clientId required");
     // getProfile resolves account-first (authenticated userId), else the guest clientId row.
     const profile = await ctx.runQuery(api.players.getProfile, { clientId: trimmed });
-    const playerId = profile?.playerId ?? "guest:" + trimmed;
+    if (!profile) throw new Error("join the room before requesting a room ticket");
+    const playerId = profile.playerId;
 
     const claims: GsTicketClaims = {};
-    if (profile) {
-      claims.name = profile.name;
-      // The color claim is ALWAYS minted for a known profile: the pick when one exists,
-      // else 0 — the amber default the player's own screen shows. Teammates therefore
-      // always render an authoritative color, never a client-side guess; a wire null is
-      // reserved for genuinely claimless (legacy/dev) tickets, which clients render as an
-      // explicit neutral placeholder.
-      claims.colorIndex = profile.colorIndex ?? 0;
-      // Equipped overlay cosmetics ride as verified claims too (visual-only labels; the
-      // profile system already validated ownership + slot at equip time). Body renders
-      // from the party color at launch and titles stay off the wire, so neither claims.
-      if (profile.cosmetics.hat !== null) claims.hat = profile.cosmetics.hat;
-      if (profile.cosmetics.face !== null) claims.face = profile.cosmetics.face;
-    }
-    const masteryLevel = masteryLevelForXp(profile?.masteryXp ?? 0);
+    claims.name = profile.name;
+    // The color claim is always explicit for a known profile.
+    claims.colorIndex = profile.colorIndex ?? 0;
+    if (profile.cosmetics.hat !== null) claims.hat = profile.cosmetics.hat;
+    if (profile.cosmetics.face !== null) claims.face = profile.cosmetics.face;
+    const masteryLevel = masteryLevelForXp(profile.masteryXp ?? 0);
     claims.masteryLevel = masteryLevel;
-    if (roomCode !== undefined) {
-      if (!profile) throw new Error("join the room before requesting a room ticket");
-      // Profile serializes the players-row id as a string; narrow it back for the query arg.
-      const memberId = profile.playerId as Id<"players">;
-      const membership = await ctx.runQuery(api.rooms.membership, { code: roomCode, playerId: memberId });
-      const { isMember, mode } = membership;
-      if (!isMember) throw new Error("you are not in that room");
-      if (!membership.isLoadoutConfirmed || membership.kitId === null) {
-        throw new Error("confirm KIT + PET before requesting a room ticket");
-      }
-      if (!isKitId(membership.kitId) || membership.kitId === "none" || !isKitUnlocked(membership.kitId, masteryLevel)) {
-        throw new Error("the confirmed room kit is no longer unlocked");
-      }
-      claims.kit = membership.kitId;
-      if (membership.petId !== null) claims.pet = membership.petId;
-      // TEMP kill switch: never mint a pvp-prefixed world id while PVP is disabled. Even if a
-      // pvp room doc survives, the ticket that would authorize its world is refused here. Co-op
-      // tickets are byte-unchanged.
-      assertPvpModeAllowed(mode);
-      // The ROOM's mode selects the authoritative world id: a pvp room binds the pvp-prefixed
-      // world so the game server's factory spins it up in deathmatch mode. Every member of the
-      // same room resolves the same id, so friends land together.
-      claims.worldId = mode === "pvp" ? pvpWorldIdForRoomCode(roomCode) : worldIdForRoomCode(roomCode);
-    } else {
-      const rememberedKit = profile?.lastKitId ?? "gunner";
-      claims.kit = isKitId(rememberedKit) && rememberedKit !== "none" && isKitUnlocked(rememberedKit, masteryLevel)
-        ? rememberedKit
-        : "gunner";
-      if (profile?.equippedPet !== null && profile?.equippedPet !== undefined) {
-        claims.pet = profile.equippedPet;
-      }
+    const memberId = profile.playerId as Id<"players">;
+    const membership = await ctx.runQuery(api.rooms.membership, { code: roomCode, playerId: memberId });
+    const { isMember, mode } = membership;
+    if (!isMember) throw new Error("you are not in that room");
+    if (!membership.isRunLocked) throw new Error("the room has not started");
+    if (!membership.isLoadoutConfirmed || membership.kitId === null) {
+      throw new Error("confirm KIT + PET before requesting a room ticket");
     }
+    if (!isKitId(membership.kitId) || membership.kitId === "none" || !isKitUnlocked(membership.kitId, masteryLevel)) {
+      throw new Error("the confirmed room kit is no longer unlocked");
+    }
+    claims.kit = membership.kitId;
+    if (membership.petId !== null) claims.pet = membership.petId;
+    claims.isPetChoiceMade = true;
+    // TEMP kill switch: never mint a pvp-prefixed world id while PVP is disabled.
+    assertPvpModeAllowed(mode);
+    claims.worldId = mode === "pvp"
+      ? pvpWorldIdForRoomCode(roomCode, membership.loadoutGeneration)
+      : worldIdForRoomCode(roomCode, membership.loadoutGeneration);
 
     const ticket = await mintGsTicket(secret, playerId, TICKET_TTL_SECS, Date.now(), claims);
     return { ticket, playerId };

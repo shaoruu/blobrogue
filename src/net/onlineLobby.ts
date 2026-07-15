@@ -123,7 +123,8 @@ export class OnlineLobby {
     await this.flushIdentity();
     const playerId = this.requirePlayerId();
     const res = await this.client.mutation(api.rooms.create, {
-      playerId, kind: "online", mode, ...this.colorArg(), ...this.loadoutArg(loadout),
+      clientId: this.session.clientId, kind: "online", mode,
+      ...this.colorArg(), ...this.loadoutArg(loadout),
     });
     this.roomId = res.roomId;
     this.code = res.code;
@@ -140,9 +141,9 @@ export class OnlineLobby {
   // "playing" and the caller drops straight in.
   async join(code: string, loadout: RunLoadout): Promise<void> {
     await this.flushIdentity();
-    const playerId = this.requirePlayerId();
+    this.requirePlayerId();
     const res = await this.client.mutation(api.rooms.join, {
-      code: code.trim().toUpperCase(), playerId, kind: "online",
+      code: code.trim().toUpperCase(), clientId: this.session.clientId, kind: "online",
       ...this.colorArg(), ...this.loadoutArg(loadout),
     });
     // TEMP kill switch: the room dictates the mode (the joiner adopts it), so a pvp room is
@@ -165,9 +166,10 @@ export class OnlineLobby {
     // TEMP kill switch: refuse the pvp public pool before any backend call. Co-op untouched.
     assertPvpModeAllowed(mode);
     await this.flushIdentity();
-    const playerId = this.requirePlayerId();
+    this.requirePlayerId();
     const res = await this.client.mutation(api.rooms.quickPlay, {
-      playerId, kind: "online", mode, ...this.colorArg(), ...this.loadoutArg(loadout),
+      clientId: this.session.clientId, kind: "online", mode,
+      ...this.colorArg(), ...this.loadoutArg(loadout),
     });
     this.roomId = res.roomId;
     this.code = res.code;
@@ -209,7 +211,7 @@ export class OnlineLobby {
       if (!this.roomId || !this.selfPlayerId) return;
       const sentAt = Date.now();
       this.client.mutation(api.rooms.heartbeat, {
-        roomId: this.roomId, playerId: this.selfPlayerId,
+        roomId: this.roomId, clientId: this.session.clientId,
         ...(this.session.name ? { name: this.session.name } : {}),
         ...this.colorArg(),
         ...(this.lastPingMs !== null ? { pingMs: this.lastPingMs } : {}),
@@ -266,7 +268,9 @@ export class OnlineLobby {
   // Every NON-HOST member is ready (the host consents by pressing START). Drives the
   // all-ready START vs hold-to-START ANYWAY gate in the lobby UI.
   get isPartyReady(): boolean {
-    return this.players().every((player) => player.isLoadoutConfirmed && player.isReady);
+    const players = this.players();
+    return players.some((player) => player.playerId === this.selfPlayerId)
+      && players.every((player) => player.isLoadoutConfirmed && player.isReady);
   }
 
   // The lobby READY toggle. Optimistically reflected in the local roster so the button
@@ -276,7 +280,7 @@ export class OnlineLobby {
     if (!this.roomId || !playerId) return "You are no longer in this room";
     try {
       const result = await this.client.mutation(api.presence.setReady, {
-        roomId: this.roomId, playerId, isReady,
+        roomId: this.roomId, clientId: this.session.clientId, isReady,
       });
       if (!result.ok) return result.message ?? "Confirm KIT + PET before readying up";
       const row = this.presenceRows.find((candidate) => candidate.playerId === playerId);
@@ -290,7 +294,9 @@ export class OnlineLobby {
   // The one authoritative world this room's members are allowed to play in. Tickets are
   // minted with exactly this claim, and the client asserts every snapshot against it.
   expectedWorldId(): string {
-    return this.mode === "pvp" ? pvpWorldIdForRoomCode(this.code) : worldIdForRoomCode(this.code);
+    return this.mode === "pvp"
+      ? pvpWorldIdForRoomCode(this.code, this.loadoutGeneration)
+      : worldIdForRoomCode(this.code, this.loadoutGeneration);
   }
 
   // Mirror the game server's connection truth onto our presence row (worldId after a
@@ -300,15 +306,17 @@ export class OnlineLobby {
   reportWorld(worldId: string | null): void {
     const playerId = this.selfPlayerId;
     if (!this.roomId || !playerId) return;
-    this.client.mutation(api.presence.reportWorld, { roomId: this.roomId, playerId, worldId }).catch(() => {});
+    this.client.mutation(api.presence.reportWorld, {
+      roomId: this.roomId, clientId: this.session.clientId, worldId,
+    }).catch(() => {});
   }
 
   // Host flips the lobby live; every subscribed member sees status "playing" and connects.
   async start(): Promise<string | null> {
-    const playerId = this.requirePlayerId();
+    this.requirePlayerId();
     try {
       const result = await this.client.mutation(api.rooms.start, {
-        roomId: this.roomId, playerId,
+        roomId: this.roomId, clientId: this.session.clientId,
       });
       return result.ok ? null : result.message ?? "The party cannot start yet";
     } catch {
@@ -321,7 +329,7 @@ export class OnlineLobby {
     try {
       const result = await this.client.mutation(api.rooms.confirmLoadout, {
         roomId: this.roomId,
-        playerId,
+        clientId: this.session.clientId,
         generation,
         ...this.loadoutArg(loadout),
       });
@@ -351,29 +359,15 @@ export class OnlineLobby {
     }
   }
 
-  clearLoadoutConfirmation(generation = this.loadoutGeneration): void {
-    const playerId = this.selfPlayerId;
-    if (!this.roomId || !playerId) return;
-    this.confirmedLoadout = null;
-    const row = this.presenceRows.find((candidate) => candidate.playerId === playerId);
-    if (row) {
-      row.isKitChoiceMade = false;
-      row.isPetChoiceMade = false;
-      row.isLoadoutConfirmed = false;
-      row.isReady = false;
-      this.emit();
-    }
-    void this.client.mutation(api.rooms.clearLoadoutConfirmation, {
-      roomId: this.roomId, playerId, generation,
-    }).catch(() => {});
-  }
-
   // After a wipe the party regroups in the same room: playing -> lobby (idempotent).
-  async reopen(): Promise<void> {
+  async reopen(): Promise<boolean> {
     const playerId = this.selfPlayerId;
-    if (!this.roomId || !playerId) return;
+    if (!this.roomId || !playerId) return false;
     try {
-      const result = await this.client.mutation(api.rooms.reopen, { roomId: this.roomId, playerId });
+      const result = await this.client.mutation(api.rooms.reopen, {
+        roomId: this.roomId, clientId: this.session.clientId,
+      });
+      if (!result.isReopened) return false;
       this.loadoutGeneration = result.loadoutGeneration;
       this.confirmedLoadout = null;
       for (const row of this.presenceRows) {
@@ -384,8 +378,10 @@ export class OnlineLobby {
         row.loadoutGeneration = null;
       }
       this.emit();
+      return true;
     } catch {
       // A failed reopen only means the START button doesn't reappear; the lobby still shows.
+      return false;
     }
   }
 
@@ -404,7 +400,9 @@ export class OnlineLobby {
   leave(): void {
     const playerId = this.selfPlayerId;
     if (this.roomId && playerId) {
-      this.client.mutation(api.rooms.leave, { roomId: this.roomId, playerId }).catch(() => {});
+      this.client.mutation(api.rooms.leave, {
+        roomId: this.roomId, clientId: this.session.clientId,
+      }).catch(() => {});
     }
     this.stopHeartbeat();
     this.unsubRoom?.();

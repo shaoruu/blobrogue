@@ -1,8 +1,19 @@
 import { mutation, query } from "./_generated/server";
 import { v } from "convex/values";
+import type { MutationCtx } from "./_generated/server";
+import type { Doc } from "./_generated/dataModel";
+import { getAuthUserId } from "@convex-dev/auth/server";
+import { pvpWorldIdForRoomCode, worldIdForRoomCode } from "./gsTicketCore";
 
 const STALE_MS = 12000;   // hide players whose client stopped syncing
 const REVIVE_HP = 2;
+
+async function resolveOnlineCaller(ctx: MutationCtx, clientId: string): Promise<Doc<"players"> | null> {
+  const userId = await getAuthUserId(ctx);
+  return userId
+    ? await ctx.db.query("players").withIndex("by_userId", (queryBuilder) => queryBuilder.eq("userId", userId)).unique()
+    : await ctx.db.query("players").withIndex("by_clientId", (queryBuilder) => queryBuilder.eq("clientId", clientId)).unique();
+}
 
 // Throttled live-state sync. The client calls this ~10x/sec while playing.
 export const update = mutation({
@@ -48,7 +59,7 @@ export const list = query({
     const rows = await ctx.db.query("presence").withIndex("by_room", (q) => q.eq("roomId", roomId)).collect();
     const cutoff = Date.now() - STALE_MS;
     return rows
-      .filter((r) => r.updatedAt >= cutoff)
+      .filter((r) => r.updatedAt >= cutoff && r.isDeparted !== true)
       .map((r) => ({
         playerId: r.playerId,
         name: r.name,
@@ -106,18 +117,22 @@ export const onlineCount = query({
 // The lobby READY toggle (roster shows READY/NOT READY per member; the host's START opens
 // when everyone is ready — see the menu's start gate).
 export const setReady = mutation({
-  args: { roomId: v.id("rooms"), playerId: v.id("players"), isReady: v.boolean() },
-  handler: async (ctx, { roomId, playerId, isReady }) => {
+  args: { roomId: v.id("rooms"), clientId: v.string(), isReady: v.boolean() },
+  handler: async (ctx, { roomId, clientId, isReady }) => {
+    const player = await resolveOnlineCaller(ctx, clientId);
+    if (!player) return { ok: false as const, reason: "not_in_room" as const };
     const row = await ctx.db
       .query("presence")
-      .withIndex("by_room_player", (q) => q.eq("roomId", roomId).eq("playerId", playerId))
+      .withIndex("by_room_player", (q) => q.eq("roomId", roomId).eq("playerId", player._id))
       .unique();
     if (!row) return { ok: false as const, reason: "not_in_room" as const };
+    const room = await ctx.db.get(roomId);
+    if (!room || room.status !== "lobby") {
+      return { ok: false as const, reason: "not_in_room" as const };
+    }
     if (isReady) {
-      const room = await ctx.db.get(roomId);
-      const generation = room?.loadoutGeneration ?? 1;
-      const isConfirmed = room?.status === "lobby"
-        && row.isKitChoiceMade === true
+      const generation = room.loadoutGeneration ?? 1;
+      const isConfirmed = row.isKitChoiceMade === true
         && row.isPetChoiceMade === true
         && row.isLoadoutConfirmed === true
         && row.loadoutGeneration === generation
@@ -141,11 +156,20 @@ export const setReady = mutation({
 // snapshot — it powers the lobby's per-member LOBBY / CONNECTING / CONNECTED readout, while
 // in-run readiness always keys on the server's snapshot roster directly.
 export const reportWorld = mutation({
-  args: { roomId: v.id("rooms"), playerId: v.id("players"), worldId: v.union(v.string(), v.null()) },
-  handler: async (ctx, { roomId, playerId, worldId }) => {
+  args: { roomId: v.id("rooms"), clientId: v.string(), worldId: v.union(v.string(), v.null()) },
+  handler: async (ctx, { roomId, clientId, worldId }) => {
+    const player = await resolveOnlineCaller(ctx, clientId);
+    if (!player) return;
+    const room = await ctx.db.get(roomId);
+    if (!room || room.kind !== "online") return;
+    const generation = room.loadoutGeneration ?? 1;
+    const expectedWorldId = room.mode === "pvp"
+      ? pvpWorldIdForRoomCode(room.code, generation)
+      : worldIdForRoomCode(room.code, generation);
+    if (worldId !== null && worldId !== expectedWorldId) return;
     const row = await ctx.db
       .query("presence")
-      .withIndex("by_room_player", (q) => q.eq("roomId", roomId).eq("playerId", playerId))
+      .withIndex("by_room_player", (q) => q.eq("roomId", roomId).eq("playerId", player._id))
       .unique();
     if (!row) return;
     const now = Date.now();

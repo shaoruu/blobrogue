@@ -128,6 +128,7 @@ export interface BlessingOfferRequest {
 export interface SessionStore {
   ensureRoom(id: string): RoomRuntime;
   room(id: string): RoomRuntime | undefined;
+  isRetired(id: string): boolean;
   rooms(): IterableIterator<RoomRuntime>;
   roomCount(): number;
   totalPlayers(): number;

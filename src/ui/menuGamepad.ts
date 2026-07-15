@@ -30,7 +30,11 @@ export function padActions(prev: readonly boolean[], now: readonly boolean[]): P
 
 function focusables(overlay: HTMLElement): HTMLElement[] {
   const nodes = overlay.querySelectorAll<HTMLElement>("button:not(:disabled), input, [tabindex]");
-  return [...nodes].filter((n) => n.offsetParent !== null);
+  return [...nodes].filter((node) => {
+    const isRadio = node.getAttribute("role") === "radio";
+    if (node.offsetParent === null || node.hidden || (node.tabIndex < 0 && !isRadio)) return false;
+    return !(node instanceof HTMLButtonElement) || !node.disabled;
+  });
 }
 
 export interface MenuPadHooks {

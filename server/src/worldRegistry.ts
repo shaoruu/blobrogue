@@ -8,9 +8,11 @@ import type { RoomRuntime, SessionStore } from "./ports.js";
 import type { Conn } from "./connection.js";
 
 export type RoomFactory = (id: string) => RoomRuntime;
+const GENERATION_TOMBSTONE_MS = 130_000;
 
 export class WorldRegistry implements SessionStore {
   private worlds = new Map<string, RoomRuntime>();
+  private retiredWorlds = new Map<string, number>();
 
   constructor(private factory: RoomFactory, private log: Logger) {}
 
@@ -26,6 +28,16 @@ export class WorldRegistry implements SessionStore {
 
   room(id: string): RoomRuntime | undefined {
     return this.worlds.get(id);
+  }
+
+  isRetired(id: string): boolean {
+    const expiresAt = this.retiredWorlds.get(id);
+    if (expiresAt === undefined) return false;
+    if (expiresAt <= Date.now()) {
+      this.retiredWorlds.delete(id);
+      return false;
+    }
+    return true;
   }
 
   rooms(): IterableIterator<RoomRuntime> {
@@ -80,6 +92,9 @@ export class WorldRegistry implements SessionStore {
   // world that emptied because of it. Called every server tick — expiry is tick-precise.
   sweep(nowMs: number): number {
     let expired = 0;
+    for (const [worldId, expiresAt] of this.retiredWorlds) {
+      if (expiresAt <= nowMs) this.retiredWorlds.delete(worldId);
+    }
     for (const room of [...this.worlds.values()]) {
       for (const seat of room.expireSeats(nowMs)) {
         expired++;
@@ -96,6 +111,9 @@ export class WorldRegistry implements SessionStore {
     if (room.playerCount !== 0 || room.conns.size !== 0) return;
     room.resetRun();
     this.worlds.delete(room.id);
+    if (/:g\d+$/.test(room.id)) {
+      this.retiredWorlds.set(room.id, Date.now() + GENERATION_TOMBSTONE_MS);
+    }
     this.log.info("world released (room emptied)", { worldId: room.id });
   }
 }
