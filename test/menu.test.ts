@@ -23,7 +23,12 @@
 // Run: npm run test:menu
 
 import "./harness/domShim.js";
-import { fireWindowEvent, lastFocused } from "./harness/domShim.js";
+import {
+  fireWindowEvent,
+  lastFocused,
+  lastWindowDispatchCount,
+  windowListenerCount,
+} from "./harness/domShim.js";
 import { readFileSync, existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
@@ -513,6 +518,64 @@ async function passLoadoutGate(
 }
 
 async function main(): Promise<void> {
+  section("loadout nodes keep exactly one keyboard handler");
+  {
+    localStorage.removeItem("blobrogue.selectedKit");
+    localStorage.removeItem("blobrogue.lastPetId");
+    const { menu, overlay } = makeMenu();
+    await menu.showTitle();
+    const baselineKeydownListeners = windowListenerCount("keydown");
+    collect(overlay, (node) => node.tagName === "BUTTON" && textOf(node) === "PLAY SOLO")[0]?.onclick?.();
+    await settle();
+    await settle();
+    check("KIT installs one loadout handler",
+      windowListenerCount("keydown") === baselineKeydownListeners + 1);
+
+    fireWindowEvent("keydown", { key: "2" });
+    check("one number key invokes one loadout callback",
+      lastWindowDispatchCount() - baselineKeydownListeners === 1
+      && windowListenerCount("keydown") === baselineKeydownListeners + 1);
+    check("the one number action selects Mender once",
+      byClass(overlay, "kit-option").filter((card) => (
+        card.getAttribute?.("data-kit") === "mender"
+        && (card.className ?? "").includes("selected")
+      )).length === 1);
+
+    collect(overlay, (node) => node.tagName === "BUTTON" && textOf(node).includes("NEXT · CHOOSE PET"))[0]?.onclick?.();
+    check("PET replaces the KIT handler instead of stacking",
+      textOf(overlay).includes("CHOOSE YOUR PET")
+      && windowListenerCount("keydown") === baselineKeydownListeners + 1);
+    fireWindowEvent("keydown", { key: "1" });
+    check("PET number selection still invokes one loadout callback",
+      lastWindowDispatchCount() - baselineKeydownListeners === 1
+      && windowListenerCount("keydown") === baselineKeydownListeners + 1);
+    byClass(overlay, "loadout-review-next")[0]?.onclick?.();
+    check("REVIEW replaces the PET handler instead of stacking",
+      textOf(overlay).includes("REVIEW LOADOUT")
+      && windowListenerCount("keydown") === baselineKeydownListeners + 1);
+
+    fireWindowEvent("keydown", { key: "Tab" });
+    check("Tab reaches exactly one loadout callback",
+      lastWindowDispatchCount() - baselineKeydownListeners === 1
+      && windowListenerCount("keydown") === baselineKeydownListeners + 1);
+    fireWindowEvent("keydown", { key: "Escape" });
+    check("one Escape returns REVIEW → PET only",
+      textOf(overlay).includes("CHOOSE YOUR PET")
+      && windowListenerCount("keydown") === baselineKeydownListeners + 1
+      && lastWindowDispatchCount() - baselineKeydownListeners === 1);
+    fireWindowEvent("keydown", { key: "Escape" });
+    check("one Escape returns PET → KIT only",
+      textOf(overlay).includes("CHOOSE YOUR KIT")
+      && windowListenerCount("keydown") === baselineKeydownListeners + 1
+      && lastWindowDispatchCount() - baselineKeydownListeners === 1);
+    fireWindowEvent("keydown", { key: "Escape" });
+    check("one Escape returns KIT → origin with no orphan",
+      buttonsOf(overlay).some((button) => button.includes("PLAY SOLO"))
+      && !textOf(overlay).includes("CHOOSE YOUR")
+      && windowListenerCount("keydown") === baselineKeydownListeners
+      && lastWindowDispatchCount() - baselineKeydownListeners === 1);
+  }
+
   section("one multiplayer path: the title offers exactly PLAY ONLINE + PLAY SOLO");
   {
     const { menu, overlay } = makeMenu();

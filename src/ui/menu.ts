@@ -1362,6 +1362,10 @@ export class Menu {
     mobileColumns: number,
     onBack: () => void,
   ): void {
+    if (this.menuKeys) {
+      window.removeEventListener("keydown", this.menuKeys);
+      this.menuKeys = null;
+    }
     const handler = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         event.preventDefault();

@@ -15,9 +15,21 @@ const noop = (): void => {};
 // when a test calls fireWindowEvent — game/golden suites just accumulate inert handlers.
 const windowListeners = new Map<string, Set<(ev: unknown) => void>>();
 
+let lastWindowDispatchCountStore = 0;
+
 export function fireWindowEvent(type: string, ev: Record<string, unknown> = {}): void {
   const event = { key: "", preventDefault: noop, stopPropagation: noop, ...ev };
-  for (const fn of [...(windowListeners.get(type) ?? [])]) fn(event);
+  const listeners = [...(windowListeners.get(type) ?? [])];
+  lastWindowDispatchCountStore = listeners.length;
+  for (const fn of listeners) fn(event);
+}
+
+export function windowListenerCount(type: string): number {
+  return windowListeners.get(type)?.size ?? 0;
+}
+
+export function lastWindowDispatchCount(): number {
+  return lastWindowDispatchCountStore;
 }
 
 // The last element that received .focus(), so tests can assert focus restore by NAME.
