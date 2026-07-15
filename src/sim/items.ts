@@ -451,7 +451,9 @@ export function rollItemChoicesWith(
     }
     const outsidePrevious = candidates.filter((item) => !previous.includes(item.id));
     if (outsidePrevious.length > 0) candidates = outsidePrevious;
-    if (history && isUnseenAvailable && upgradeCount >= 1) {
+    const isUnseenRemaining = history !== undefined
+      && remaining.some((item) => blessingSeenCount(history, item.id) === 0);
+    if (history && isUnseenRemaining && upgradeCount >= 1) {
       candidates = candidates.filter((item) => !levels.has(item.id));
     }
     if (candidates.length === 0) break;

@@ -14,6 +14,7 @@ import type { WeaponBag } from "../src/sim/weaponBag.js";
 import { ITEMS, MAX_ITEM_LEVEL, itemMaxLevel, rollItemChoicesWith } from "../src/sim/items.js";
 import {
   createWorld,
+  buyFromShopInWorld,
   loadFloorIntoWorld,
   resetRunInWorld,
   rollBlessingChoicesInWorld,
@@ -226,6 +227,19 @@ section("upgrade cap and max-level exclusion");
   check("at most one upgrade card appears while unseen eligible blessings remain",
     choices.filter((item) => upgradeIds.includes(item.id)).length <= 1);
 
+  const nearSaturation = createBlessingOfferHistory();
+  const normal = ITEMS.filter((item) => item.isPremiumOnly !== true);
+  const lastUnseen = normal[normal.length - 1];
+  for (const item of normal) {
+    if (item !== lastUnseen) nearSaturation.blessingSeenCounts[item.id] = 1;
+  }
+  const nearSaturationOwned = normal.slice(0, 6).map((item) => item.id);
+  const fullOffer = rollItemChoicesWith(3, () => 0.5, nearSaturationOwned, {
+    history: nearSaturation,
+  });
+  check("the final unseen card exhausts pity and the offer still fills all three cards",
+    fullOffer.length === 3 && fullOffer.some((item) => item.id === lastUnseen.id));
+
   const maxed = ITEMS.find((item) => item.isPremiumOnly !== true)!;
   const owned = Array(MAX_ITEM_LEVEL).fill(maxed.id) as string[];
   const withoutMaxed = rollItemChoicesWith(30, () => 0.5, owned, {
@@ -246,6 +260,15 @@ section("per-player offer streams and reconnect state");
   check("teammate iteration order never changes either player's offer",
     abA.join(",") === baA.join(",") && abB.join(",") === baB.join(","));
 
+  const stableA = createWorld(0x0ff3d, 2, { isShared: true, skipLocalPlayer: true });
+  const stableB = createWorld(0x0ff3d, 2, { isShared: true, skipLocalPlayer: true });
+  spawnPlayerInWorld(stableA, "p1", "account-42");
+  spawnPlayerInWorld(stableB, "p99", "account-42");
+  const stableOfferA = rollBlessingChoicesInWorld(stableA, "p1", false).map((item) => item.id);
+  const stableOfferB = rollBlessingChoicesInWorld(stableB, "p99", false).map((item) => item.id);
+  check("stable account identity, not transient runtime pid, keys personal offers",
+    stableOfferA.join(",") === stableOfferB.join(","));
+
   const world = partyWorld(0x0ff3b, 4, ["stable-player"]);
   const player = world.players.get("stable-player")!;
   for (let i = 0; i < 6; i++) rollBlessingChoicesInWorld(world, player.id, false);
@@ -260,13 +283,15 @@ section("per-player offer streams and reconnect state");
   check("restored player history and ordinal reproduce the exact next offer",
     actual.join(",") === expected.join(","));
 
+  player.isBlessingRerollArmed = true;
   resetRunInWorld(world, 0x0ff3c);
   check("a new run clears personal presentation histories and ordinals",
     player.blessingOfferHistory.recentBlessingOffers.length === 0
     && Object.keys(player.blessingOfferHistory.blessingSeenCounts).length === 0
     && player.weaponOfferHistory.recentWeaponOffers.length === 1
     && Object.values(player.weaponOfferHistory.weaponSeenCounts).reduce((sum, count) => sum + count, 0) === 1
-    && player.blessingOfferOrdinal === 0);
+    && player.blessingOfferOrdinal === 0
+    && !player.isBlessingRerollArmed);
 }
 
 section("Dealer and Premium viewer projections");
@@ -283,6 +308,15 @@ section("Dealer and Premium viewer projections");
   }
   check("Dealer blessing projection is stable per viewer regardless of teammate order",
     isOrderStable);
+
+  const stableShopA = createWorld(0xdea1, 3, { isShared: true, skipLocalPlayer: true });
+  const stableShopB = createWorld(0xdea1, 3, { isShared: true, skipLocalPlayer: true });
+  const stablePlayerA = spawnPlayerInWorld(stableShopA, "p1", "account-42");
+  const stablePlayerB = spawnPlayerInWorld(stableShopB, "p99", "account-42");
+  const stableCardA = personalSlot(stableShopA, stablePlayerA, "blessing");
+  const stableCardB = personalSlot(stableShopB, stablePlayerB, "blessing");
+  check("stable account identity also keys viewer-specific shop stock",
+    stableCardA?.itemId === stableCardB?.itemId);
 
   const maxedWorld = createWorld(0xdea2, 3, { isShared: true, skipLocalPlayer: true });
   const maxedPlayer = spawnPlayerInWorld(maxedWorld, "viewer");
@@ -317,6 +351,20 @@ section("Dealer and Premium viewer projections");
   check("boss rare-only pity remains inside its eight-item rare pool",
     bossChoices.length === 3
     && bossChoices.every((item) => item.rarity === "rare" && item.isPremiumOnly !== true));
+
+  const rerollWorld = partyWorld(0xdea3, 3, ["pA", "pB"]);
+  const reroller = rerollWorld.players.get("pA")!;
+  const reroll = rerollWorld.shop!.slots.find((slot) => slot.kind === "reroll")!;
+  reroller.coins = reroll.price;
+  reroller.x = reroll.x;
+  reroller.y = reroll.y;
+  const seenBefore = Object.values(reroller.weaponOfferHistory.weaponSeenCounts)
+    .reduce((sum, count) => sum + count, 0);
+  buyFromShopInWorld(rerollWorld, reroller.id, reroll.id, []);
+  const seenAfter = Object.values(reroller.weaponOfferHistory.weaponSeenCounts)
+    .reduce((sum, count) => sum + count, 0);
+  check("shared Dealer rerolls enter every incumbent viewer's personal presentation memory",
+    seenAfter > seenBefore);
 }
 
 process.stdout.write(`\nsmart variety: ${passed} passed, ${failed} failed\n`);

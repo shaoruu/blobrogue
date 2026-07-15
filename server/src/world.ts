@@ -112,8 +112,8 @@ export class GameWorld implements RoomRuntime {
     return this.state.players.size;
   }
 
-  addPlayer(pid: PlayerId, kit: KitId = "none"): void {
-    spawnPlayerInWorld(this.state, pid);
+  addPlayer(pid: PlayerId, kit: KitId = "none", offerIdentity: string = pid): void {
+    spawnPlayerInWorld(this.state, pid, offerIdentity);
     // Apply the VALIDATED kit (spec §9.5): the stat lean + starting weapon land through the one
     // recompute path. "none" leaves the neutral baseline untouched. In pvp the loadout is FORCED
     // symmetric (spawnPlayerInWorld already set the neutral kit + fixed HP pool), so the chosen

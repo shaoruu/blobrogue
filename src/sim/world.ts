@@ -191,6 +191,7 @@ function freshUltSources(): UltSourceCharge { return { dmg: 0, kill: 0, taken: 0
 
 export interface PlayerSim {
   id: PlayerId;
+  offerIdentity: string;
   x: number; y: number; pr: number;
   hp: number; maxHp: number;
   mods: PlayerMods;
@@ -552,7 +553,7 @@ export interface WorldState {
 
 export function createPlayer(id: PlayerId, x: number, y: number): PlayerSim {
   return {
-    id, x, y, pr: 18,
+    id, offerIdentity: id, x, y, pr: 18,
     hp: PLAYER.baseMaxHp, maxHp: PLAYER.baseMaxHp,
     mods: createMods(),
     invuln: 0, lastDamagedTick: -1, selfHealReadyTick: 0, dashInvuln: 0,
@@ -710,6 +711,7 @@ export function createWorld(seed: number, floor: number, opts: WorldOptions = {}
     // reposition loop in loadFloorIntoWorld ran before this player existed).
     p.invuln = C.PLAYER_SPAWN_GRACE;
     w.players.set(LOCAL_ID, p);
+    recordCurrentSharedWeaponOffers(w, p);
     stockCurrentShopForPlayer(w, p);
   }
   return w;
@@ -717,15 +719,35 @@ export function createWorld(seed: number, floor: number, opts: WorldOptions = {}
 
 // Add a fresh player to a live world at the current dungeon spawn (authoritative server:
 // on join). Returns the created PlayerSim. No-ops to the existing entry if the id is taken.
-export function spawnPlayerInWorld(w: WorldState, id: PlayerId): PlayerSim {
+export function spawnPlayerInWorld(
+  w: WorldState,
+  id: PlayerId,
+  offerIdentity: string = id,
+): PlayerSim {
   const existing = w.players.get(id);
   if (existing) return existing;
   const spawn = w.dungeon.spawn;
   const p = createPlayer(id, spawn.x * TILE + TILE / 2, spawn.y * TILE + TILE / 2);
+  p.offerIdentity = offerIdentity;
   w.players.set(id, p);
   if (isPvp(w)) initPvpPlayer(w, p);
+  recordCurrentSharedWeaponOffers(w, p);
   stockCurrentShopForPlayer(w, p);
   return p;
+}
+
+function recordCurrentSharedWeaponOffers(w: WorldState, p: PlayerSim): void {
+  const current = new Set<WeaponId>();
+  for (const chest of w.chests) {
+    if (!chest.opened && chest.weapon !== undefined) current.add(chest.weapon);
+  }
+  for (const pickup of w.pickups) {
+    if (pickup.kind === "weapon" && pickup.weapon !== null) current.add(pickup.weapon);
+  }
+  for (const slot of w.shop?.slots ?? []) {
+    if (slot.isShared && slot.weapon !== null) current.add(slot.weapon);
+  }
+  for (const id of current) recordWeaponOffer(p.weaponOfferHistory, id);
 }
 
 function stockCurrentShopForPlayer(
@@ -734,14 +756,16 @@ function stockCurrentShopForPlayer(
   refreshedSlotIds?: ReadonlySet<number>,
 ): void {
   if (!w.shop) return;
-  if (w.shop.viewerStock[p.id] === undefined) {
-    for (const slot of w.shop.slots) {
-      if (slot.isShared && slot.weapon !== null) {
-        recordWeaponOffer(p.weaponOfferHistory, slot.weapon);
-      }
-    }
-  }
   stockShopForViewer(w.shop, w.seed, w.floor, p, refreshedSlotIds);
+}
+
+function recordRestockedSharedWeapons(w: WorldState, restockedSlotIds: readonly number[]): void {
+  if (!w.shop) return;
+  const restocked = new Set(restockedSlotIds);
+  for (const slot of w.shop.slots) {
+    if (!restocked.has(slot.id) || !slot.isShared || slot.weapon === null) continue;
+    for (const p of w.players.values()) recordWeaponOffer(p.weaponOfferHistory, slot.weapon);
+  }
 }
 
 function refreshPersonalShopStock(w: WorldState, restockedSlotIds: readonly number[]): void {
@@ -1602,6 +1626,12 @@ export function removePlayerFromWorld(w: WorldState, id: PlayerId): boolean {
   // credit, no lag-comp history, and no scoreboard ghost (and none of these maps grows unbounded
   // across join/leave churn). playerHist stays empty in co-op, so this is inert there.
   w.playerHist.delete(id);
+  if (w.shop) {
+    delete w.shop.viewerStock[id];
+    for (const slot of w.shop.slots) {
+      slot.buyers = slot.buyers.filter((buyer) => buyer !== id);
+    }
+  }
   const m = w.match;
   if (m !== null) {
     m.scores.delete(id);
@@ -1763,7 +1793,14 @@ export function loadFloorIntoWorld(w: WorldState, floor: number, playerCountAtLo
     : null;
   if (w.shop) {
     const players = [...w.players.values()].sort((a, b) => a.id.localeCompare(b.id));
-    for (const p of players) stockCurrentShopForPlayer(w, p);
+    for (const p of players) {
+      for (const slot of w.shop.slots) {
+        if (slot.isShared && slot.weapon !== null) {
+          recordWeaponOffer(p.weaponOfferHistory, slot.weapon);
+        }
+      }
+      stockCurrentShopForPlayer(w, p);
+    }
   }
   w.obstacleRev++;
   const spawns = isBare
@@ -1822,6 +1859,7 @@ export function resetRunInWorld(w: WorldState, seed: number): void {
     p.shopWeaponOfferOrdinal = 0;
     p.shopBlessingOfferOrdinal = 0;
     p.premiumWeaponOfferOrdinal = 0;
+    p.isBlessingRerollArmed = false;
   }
   w.isRunOver = false;
   w.pityStreak = 0;
@@ -2631,7 +2669,7 @@ function premiumMysteryRoll(w: WorldState, slot: ShopSlot, p: PlayerSim): Weapon
     + w.floor * 68041
     + slot.id * 977
     + (w.shop?.rerollsUsed ?? 0) * 31337
-    + stablePlayerIdHash(p.id)
+    + stablePlayerIdHash(p.offerIdentity)
     + p.premiumWeaponOfferOrdinal++ * 0x6a09e667,
   );
   const rolled = rollWeaponRarity(() => rng.next(), w.floor, { isMystery: true, legendaryWeight: premiumMysteryLegendaryWeight(w.floor) });
@@ -2653,7 +2691,7 @@ function weaponUpgradeRoll(w: WorldState, slot: ShopSlot, p: PlayerSim, target: 
     (w.seed ^ 0x46049e5)
     + w.floor * 68041
     + slot.id * 977
-    + stablePlayerIdHash(p.id)
+    + stablePlayerIdHash(p.offerIdentity)
     + p.premiumWeaponOfferOrdinal++ * 0x6a09e667,
   );
   const inTier = PICKUP_WEAPONS.filter((id) => WEAPONS[id].rarity === target);
@@ -2686,7 +2724,7 @@ export function rollBlessingChoicesInWorld(
   const draw = (): ItemDef[] => {
     const rng = new Rng(
       (w.seed ^ 0x0b1e55)
-      + stablePlayerIdHash(pid)
+      + stablePlayerIdHash(p.offerIdentity)
       + p.blessingOfferOrdinal++ * 0x6a09e667,
     );
     return rollItemChoicesWith(
@@ -2768,6 +2806,7 @@ export function buyFromShopInWorld(w: WorldState, pid: PlayerId, slotId: number,
         false,
         w.weaponBag,
       );
+      recordRestockedSharedWeapons(w, restocked);
       refreshPersonalShopStock(w, restocked);
       break;
     }
@@ -2841,6 +2880,7 @@ export function buyFromShopInWorld(w: WorldState, pid: PlayerId, slotId: number,
         true,
         w.weaponBag,
       );
+      recordRestockedSharedWeapons(w, restocked);
       refreshPersonalShopStock(w, restocked);
       p.isBlessingRerollArmed = true;
       break;

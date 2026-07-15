@@ -24,6 +24,7 @@ import { PROP_RADIUS } from "../sim/constants.js";
 import { WEAPONS } from "../sim/weapons.js";
 import { ENEMY_ARCHETYPES, isBossKind } from "../sim/enemies.js";
 import type { SimEvent } from "../sim/events.js";
+import { LOCAL_ID } from "../sim/input.js";
 import type { PlayerId } from "../sim/input.js";
 import type { KitId } from "../sim/kits.js";
 import { isKitId } from "../sim/kits.js";
@@ -1737,7 +1738,7 @@ export function toShopWire(s: ShopState, viewerId?: PlayerId): ShopWire {
     }),
   };
 }
-export function shopFromWire(w: ShopWire): ShopState {
+export function shopFromWire(w: ShopWire, selfServerId?: PlayerId | null): ShopState {
   // Field order mirrors buildShopState so a decoded shop is byte-identical to the sim's
   // on its wire projection (the shop suite locks toShopWire round-trips; a mystery
   // slot's hidden identity/twist are sim secrets and never reconstructable here).
@@ -1747,7 +1748,10 @@ export function shopFromWire(w: ShopWire): ShopState {
     slots: w.slots.map((s): ShopSlot => ({
       id: s.id, kind: s.k, isShared: s.sh,
       weapon: s.wpn, itemId: s.it, price: s.pr,
-      x: s.x, y: s.y, soldTo: s.sold, buyers: s.by.slice(),
+      x: s.x,
+      y: s.y,
+      soldTo: selfServerId != null && s.sold === selfServerId ? LOCAL_ID : s.sold,
+      buyers: s.by.map((pid) => selfServerId != null && pid === selfServerId ? LOCAL_ID : pid),
       isMystery: s.myst, twist: null,
     })),
     viewerStock: {},

@@ -541,6 +541,7 @@ export function buildShopState(
 
 export interface ShopStockViewerSource {
   id: PlayerId;
+  offerIdentity: string;
   ownedWeapons: readonly WeaponId[];
   ownedItemIds: readonly string[];
   weaponOfferHistory: WeaponOfferHistory;
@@ -589,6 +590,7 @@ export function stockShopForViewer(
   shop.viewerStock[viewer.id] = current;
   const targets = shop.slots
     .filter((slot) => isPersonalWeaponStock(slot) || isPersonalBlessingStock(slot))
+    .filter((slot) => !slot.buyers.includes(viewer.id))
     .filter((slot) => refreshedSlotIds?.has(slot.id) ?? current[slot.id] === undefined)
     .sort((a, b) => a.id - b.id);
   const targetIds = new Set(targets.map((slot) => slot.id));
@@ -599,7 +601,6 @@ export function stockShopForViewer(
     if (projected.weapon !== null) takenWeapons.add(projected.weapon);
   }
 
-  const presentedBlessings: string[] = [];
   const excludedBlessings = new Set<string>();
   for (const slot of shop.slots) {
     if (targetIds.has(slot.id) || !isPersonalBlessingStock(slot)) continue;
@@ -613,7 +614,7 @@ export function stockShopForViewer(
         floor,
         shop.rerollsUsed,
         slot.id,
-        viewer.id,
+        viewer.offerIdentity,
         viewer.shopWeaponOfferOrdinal++,
         0x7765706e,
       );
@@ -635,7 +636,7 @@ export function stockShopForViewer(
       floor,
       shop.rerollsUsed,
       slot.id,
-      viewer.id,
+      viewer.offerIdentity,
       viewer.shopBlessingOfferOrdinal++,
       0x626c7373,
     );
@@ -656,11 +657,10 @@ export function stockShopForViewer(
     const itemId = picks[0]?.id ?? null;
     current[slot.id] = { itemId };
     if (itemId !== null) {
-      presentedBlessings.push(itemId);
       excludedBlessings.add(itemId);
+      recordBlessingOffer(viewer.blessingOfferHistory, [itemId]);
     }
   }
-  recordBlessingOffer(viewer.blessingOfferHistory, presentedBlessings);
 }
 
 // A pedestal the reroll may restock: an item pedestal nobody has committed coins to.
@@ -668,17 +668,25 @@ export function stockShopForViewer(
 // purchase, anyone's. The Dealer's cheap reroll post restocks the CLASSIC pedestals only
 // (a premium sink never rerolls for 8 coins); the premium reroll-everything additionally
 // restocks every unbought STOCKED premium slot except the mythic capstone.
-function isRestockable(slot: ShopSlot): boolean {
-  return (slot.kind === "weapon" || slot.kind === "blessing") && slot.soldTo === null && slot.buyers.length === 0;
+function isPersonalStockRestockable(shop: ShopState, slot: ShopSlot): boolean {
+  const viewers = Object.keys(shop.viewerStock);
+  return viewers.length === 0
+    ? slot.buyers.length === 0
+    : viewers.some((pid) => !slot.buyers.includes(pid));
 }
 
-function isPremiumRestockable(slot: ShopSlot): boolean {
-  if (slot.soldTo !== null || slot.buyers.length > 0) return false;
+function isRestockable(shop: ShopState, slot: ShopSlot): boolean {
+  if (slot.kind === "weapon") return slot.soldTo === null;
+  return slot.kind === "blessing" && isPersonalStockRestockable(shop, slot);
+}
+
+function isPremiumRestockable(shop: ShopState, slot: ShopSlot): boolean {
+  if (slot.soldTo !== null || !isPersonalStockRestockable(shop, slot)) return false;
   return slot.kind === "legendary" || slot.kind === "rare_blessing" || slot.kind === "core_infusion";
 }
 
 export function hasRestockableSlots(shop: ShopState): boolean {
-  return shop.slots.some(isRestockable);
+  return shop.slots.some((slot) => isRestockable(shop, slot));
 }
 
 // Reroll the unbought item pedestals in place (rerollsUsed must already be incremented by
@@ -694,10 +702,10 @@ export function restockShop(
   sharedWeaponHistory?: WeaponOfferHistory,
 ): number[] {
   const rng = shopRng(seed, floor, shop.rerollsUsed);
-  const keptWeapons = shop.slots.map((s) => (isRestockable(s) ? null : s.weapon));
+  const keptWeapons = shop.slots.map((slot) => (isRestockable(shop, slot) ? null : slot.weapon));
   const restocked: number[] = [];
   for (const slot of shop.slots) {
-    if (isRestockable(slot)) {
+    if (isRestockable(shop, slot)) {
       restocked.push(slot.id);
       if (slot.kind === "weapon") {
         const isShowcase = dealerHasLegendarySlot(floor) && slot.id === SHOP.weaponPedestals - 1;
@@ -723,7 +731,7 @@ export function restockShop(
       }
       continue;
     }
-    if (isAll && isPremiumRestockable(slot)) {
+    if (isAll && isPremiumRestockable(shop, slot)) {
       restocked.push(slot.id);
       stockPremiumSlot(
         slot,

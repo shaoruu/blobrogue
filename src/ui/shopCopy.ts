@@ -11,7 +11,7 @@
 // PREMIUM_EVENT_KINDS + the client's big-purchase flourish).
 
 import type { ShopSlot, ShopSlotStatus, ShopState, ShopViewer } from "../sim/shop.js";
-import { shopSlotStatusFor, shopSlotPriceFor, isMythicKind, upgradeTargetTier, weaponCapOf, PREMIUM_EVENT_KINDS } from "../sim/shop.js";
+import { shopSlotStatusFor, shopSlotPriceFor, shopSlotForViewer, isMythicKind, upgradeTargetTier, weaponCapOf, PREMIUM_EVENT_KINDS } from "../sim/shop.js";
 import { SHOP, PREMIUM, CAPS, premiumMysteryLegendaryWeight } from "../sim/balance.js";
 import { WEAPONS, WEAPON_RARITY_COLOR } from "../sim/weapons.js";
 import type { WeaponId } from "../sim/types.js";
@@ -54,7 +54,9 @@ export function isResolvedShopStatus(status: ShopSlotStatus): boolean {
 // independently purchasable, and a purchase never closes the stall.
 export function shopFooterCopy(shop: ShopState, viewer: ShopViewer, isJustBought: boolean): string {
   if (isJustBought) return "BOUGHT \u2713 \u00b7 other stations still open";
-  const isAnyAffordable = shop.slots.some((s) => shopSlotStatusFor(shop, s, viewer) === "buy");
+  const isAnyAffordable = shop.slots.some((slot) =>
+    shopSlotStatusFor(shop, shopSlotForViewer(shop, slot, viewer.pid), viewer) === "buy"
+  );
   return isAnyAffordable
     ? "Spend at any station you can afford"
     : "Earn more coins and come back before you descend";
