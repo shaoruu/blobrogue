@@ -252,9 +252,11 @@ export function applySnapshotDelta(base: WireObject, d: SnapshotDelta): WireObje
     if (!DANGEROUS_KEYS.has(k)) out[k] = d.sc[k];
   }
   if (d.self !== undefined) {
-    if ("d" in d.self) out.self = null;
+    if ("d" in d.self && d.self.d === true) out.self = null;
     else if ("f" in d.self) out.self = asWireObject(d.self.f);
-    else out.self = mergeWireObject(isPlainObject(base.self) ? base.self : {}, d.self.p);
+    else if ("p" in d.self) {
+      out.self = mergeWireObject(isPlainObject(base.self) ? base.self : {}, d.self.p);
+    }
   }
   for (const { field, tag } of KEYED_LISTS) {
     out[field] = applyKeyedList((base[field] as WireValue[]) ?? [], d[tag]);

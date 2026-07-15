@@ -84,13 +84,28 @@
       .statpanel{ background:rgba(5,3,11,.62); box-shadow:inset 0 0 0 2px var(--dun-3),0 3px 0 rgba(0,0,0,.4); padding:9px 11px; display:flex; flex-direction:column; gap:7px; }
       .hearts{ display:flex; gap:3px; } .hearts canvas{ image-rendering:pixelated; }
       /* KIT/XP §6: HP numeric readout beside the heart row (mode toggle in settings). */
-      .hprow{ display:flex; align-items:center; gap:8px; }
+      .hprow{ position:relative; display:flex; align-items:center; gap:8px; }
       .hp-num{ font-family:var(--f-num); font-variant-numeric:tabular-nums; font-size:var(--fs-num); line-height:1; color:var(--cream); }
       .arena-hp{ position:relative; width:120px; height:12px; flex:0 0 120px; overflow:hidden;
         background:var(--dun-0); box-shadow:inset 0 0 0 2px var(--dun-3); }
       .arena-hp i{ position:absolute; inset:2px; transform:scaleX(1); transform-origin:left center;
         background:linear-gradient(180deg,#ff7a7a,var(--red)); box-shadow:0 0 6px rgba(255,90,90,.5);
         transition:transform .12s linear; }
+      .arena-spawn-protection{ position:absolute; left:0; top:16px; width:120px; height:10px;
+        display:flex; align-items:center; gap:5px; pointer-events:none; opacity:0; transform:translateY(-2px);
+        transition:opacity .08s linear,transform .08s linear; }
+      .arena-spawn-protection.show{ opacity:1; transform:translateY(0); }
+      .arena-spawn-protection.final{ animation:spawn-protection-pulse .25s steps(2,end) infinite; }
+      .arena-spawn-protection span{ width:68px; color:var(--cream); font-family:var(--f-ui);
+        font-size:7px; line-height:1; letter-spacing:.5px; white-space:nowrap; }
+      .arena-spawn-protection i{ position:relative; width:47px; height:5px; overflow:hidden;
+        background:var(--dun-0); box-shadow:inset 0 0 0 1px var(--dun-3); }
+      .arena-spawn-protection b{ position:absolute; inset:1px; transform:scaleX(var(--spawn-protection,0));
+        transform-origin:left center; background:var(--amber); }
+      .arena-spawn-protection.grace b{ background:repeating-linear-gradient(90deg,
+        var(--amber) 0 9px,transparent 9px 11px); }
+      .arena-spawn-protection.shield b{ opacity:.58; }
+      @keyframes spawn-protection-pulse{ 50%{ opacity:.58; } }
       /* Teammate HP party panel (the Mender dependency): compact nameplate rows. */
       .party{ display:none; flex-direction:column; gap:3px; }
       .party.has-party{ display:flex; }
@@ -578,6 +593,12 @@
       .arena-center.tone-defeat .arena-center-title,.arena-center.tone-respawn .arena-center-title{ color:var(--red);
         text-shadow:0 4px 0 var(--dun-0),0 0 26px rgba(255,90,90,.5); }
       .arena-center.tone-respawn .arena-center-title{ font-size:var(--fs-lg); }
+      .arena-center.tone-spawn-safe .arena-center-title,.arena-center.tone-spawn-shield .arena-center-title{
+        font-size:var(--fs-md); letter-spacing:3px; }
+      .arena-center.tone-spawn-safe .arena-center-title{ color:#7fe9ff;
+        text-shadow:0 2px 0 var(--dun-0),0 0 18px rgba(127,233,255,.5); }
+      .arena-center.tone-spawn-shield .arena-center-title{ color:var(--amber);
+        text-shadow:0 2px 0 var(--dun-0),0 0 16px rgba(255,180,59,.45); }
       .arena-center-action{ width:176px; height:34px; padding:0 18px; pointer-events:auto;
         font-family:var(--f-ui); font-size:var(--fs-xs); letter-spacing:2px; color:var(--dun-0);
         background:var(--amber); border:0; box-shadow:0 3px 0 var(--dun-0),inset 0 0 0 2px var(--amber-hi);

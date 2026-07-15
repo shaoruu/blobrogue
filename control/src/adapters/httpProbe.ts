@@ -73,7 +73,28 @@ import type {
 // v28: the PVP MVP — PlayerWire.tm (FFA team), SelfWire.rsp (respawn countdown), the top-level
 // `match` block, and the reliable pvpKill / pvpMatchOver events (all inert in co-op).
 // v29: PVP Wave 1 reliable presentation events (ring-out, chain-frag, sudden-death).
-export const SYNTHETIC_JOIN_PROTOCOL = 29;
+// v30: distinct authoritative PvP hard-grace and spawn-shield ticks.
+// v31: authoritative PvP shield-break event before its offense.
+// v32: shared spawn protection end ticks and held-offense arming feedback.
+export const SYNTHETIC_JOIN_PROTOCOL = 32;
+
+interface SyntheticSpawnSelf {
+  spo?: number;
+  sge?: number;
+  sse?: number;
+  sgr?: number;
+  ssh?: number;
+  sfl?: boolean;
+}
+
+export function isSyntheticSpawnProtectionSelf(value: object): boolean {
+  const self = value as SyntheticSpawnSelf;
+  const ticks = [self.spo, self.sge, self.sse, self.sgr, self.ssh];
+  if (!ticks.every((tick) => Number.isSafeInteger(tick) && (tick ?? -1) >= 0)) return false;
+  if (typeof self.sfl !== "boolean") return false;
+  return (self.spo ?? 0) === 0
+    || ((self.sge ?? 0) >= (self.spo ?? 0) && (self.sse ?? 0) >= (self.sge ?? 0));
+}
 
 export interface HttpProbeConfig {
   baseUrl: string;
@@ -210,9 +231,12 @@ export class HttpGameServerProbe implements GameServerProbe {
         let msg: unknown;
         try { msg = JSON.parse(text); } catch { return; }
         if (typeof msg !== "object" || msg === null) return;
-        const m = msg as { t?: unknown; self?: unknown };
+        const m = msg as { t?: string; self?: object | null };
         if (secret !== null) {
-          if (m.t === "snap" && m.self !== null && m.self !== undefined) finish(true, "synthetic_join", null);
+          if (m.t === "snap" && m.self !== null && m.self !== undefined) {
+            if (isSyntheticSpawnProtectionSelf(m.self)) finish(true, "synthetic_join", null);
+            else finish(false, "ws_liveness", "join_snap_invalid");
+          }
           else if (m.t === "error") finish(false, "ws_liveness", "join_rejected");
         } else {
           finish(true, "ws_liveness", null);

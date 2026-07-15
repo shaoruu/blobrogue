@@ -63,6 +63,12 @@ export interface AuthoritativePlayerSnapshot {
   // pvp respawn countdown (ticks; 0 = alive). Server-owned + reconciled so client prediction
   // gates movement/shooting on the local player's dead-awaiting-respawn state. Always 0 in co-op.
   respawnT: number;
+  spawnGraceT: number;
+  spawnShieldT: number;
+  spawnProtectionStartedTick: number;
+  spawnHardGraceEndsAtTick: number;
+  spawnShieldEndsAtTick: number;
+  isSpawnOffenseLatched: boolean;
 }
 
 type ServerOwnedField = keyof AuthoritativePlayerSnapshot;
@@ -107,6 +113,9 @@ type ClientOwnedField = "id" | "pr" | "aimAngle" | "shotSeq" | "rewindTicks" | "
 //              bookkeeping, off the wire.
 // - lastPvpHitBy/lastPvpHitTick: authoritative damage attribution bookkeeping.
 // - lastPvpKnockbackBy/lastPvpKnockbackTick: authoritative ring-out credit bookkeeping.
+// - pvpRecentSpawnIndices: authoritative anti-camp memory retained by the server seat.
+// - respawnWaitSafeT/pvpRespawnTelemetry: authoritative respawn selection and report state.
+// - spawnBlockedFeedbackCdT: server-side rate limit for suppressed-offense feedback.
 // - pvpDraft*: authoritative offer cadence, deterministic seed identity, and comeback weighting.
 //              The server sends the validated offer itself; prediction never rolls an online pick.
 type ServerOnlyField =
@@ -122,6 +131,10 @@ type ServerOnlyField =
   | "lastPvpHitTick"
   | "lastPvpKnockbackBy"
   | "lastPvpKnockbackTick"
+  | "pvpRecentSpawnIndices"
+  | "respawnWaitSafeT"
+  | "pvpRespawnTelemetry"
+  | "spawnBlockedFeedbackCdT"
   | "pvpDraftFrags"
   | "pvpNextDraftTick"
   | "pvpDraftOrdinal"
@@ -183,6 +196,12 @@ export function projectPlayer(p: PlayerSim): AuthoritativePlayerSnapshot {
     ultInvuln: p.ultInvuln,
     passiveState: p.passiveState,
     respawnT: p.respawnT,
+    spawnGraceT: p.spawnGraceT,
+    spawnShieldT: p.spawnShieldT,
+    spawnProtectionStartedTick: p.spawnProtectionStartedTick,
+    spawnHardGraceEndsAtTick: p.spawnHardGraceEndsAtTick,
+    spawnShieldEndsAtTick: p.spawnShieldEndsAtTick,
+    isSpawnOffenseLatched: p.isSpawnOffenseLatched,
   };
 }
 
@@ -233,6 +252,12 @@ export function applyPlayerSnapshot(p: PlayerSim, s: AuthoritativePlayerSnapshot
   p.ultInvuln = s.ultInvuln;
   p.passiveState = s.passiveState;
   p.respawnT = s.respawnT;
+  p.spawnGraceT = s.spawnGraceT;
+  p.spawnShieldT = s.spawnShieldT;
+  p.spawnProtectionStartedTick = s.spawnProtectionStartedTick;
+  p.spawnHardGraceEndsAtTick = s.spawnHardGraceEndsAtTick;
+  p.spawnShieldEndsAtTick = s.spawnShieldEndsAtTick;
+  p.isSpawnOffenseLatched = s.isSpawnOffenseLatched;
 }
 
 // Reconstruct a full PlayerMods from a received mods value (a JSON-parse boundary: the input is

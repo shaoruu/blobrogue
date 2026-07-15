@@ -9,7 +9,7 @@
 // the fixed step, so a client can neither buy extra time (no client dt) nor gain advantage by its
 // frame rate (fixed-cadence consumption).
 
-import { createWorld, stepPlayerPhase, stepWorldPhase, spawnPlayerInWorld, removePlayerFromWorld, setPlayerAbsence, setPlayerKit, switchWeaponInWorld, reorderWeaponsInWorld, dropWeaponInWorld, swapWeaponInWorld, buyFromShopInWorld, chooseBlessingInWorld, dismissBlessingOfferInWorld, consumeBlessingReroll, resetRunInWorld, devSpawnEnemy, isPvp } from "../../src/sim/world.js";
+import { beginWorldTick, createWorld, stepPlayerPhase, stepWorldPhase, spawnPlayerInWorld, removePlayerFromWorld, setPlayerAbsence, setPlayerKit, switchWeaponInWorld, reorderWeaponsInWorld, dropWeaponInWorld, swapWeaponInWorld, buyFromShopInWorld, chooseBlessingInWorld, dismissBlessingOfferInWorld, consumeBlessingReroll, resetRunInWorld, devSpawnEnemy, isPvp } from "../../src/sim/world.js";
 import type { KitId } from "../../src/sim/kits.js";
 import { PVP, pvpDraftSeed } from "../../src/sim/pvp.js";
 import type { WorldMode } from "../../src/sim/pvp.js";
@@ -319,6 +319,8 @@ export class GameWorld implements RoomRuntime {
   step(cfg: ServerConfig): void {
     const ev: SimEvent[] = [];
     if (this.injectedEvents.length > 0) { for (const e of this.injectedEvents) ev.push(e); this.injectedEvents.length = 0; }
+    const isPvpWorld = isPvp(this.state);
+    if (isPvpWorld) beginWorldTick(this.state);
 
     const connections = isPvp(this.state)
       ? [...this.conns.values()].sort((a, b) => {
@@ -359,7 +361,7 @@ export class GameWorld implements RoomRuntime {
     }
 
     stepWorldPhase(this.state, FIXED_DT, ev);
-    this.state.tick++;
+    if (!isPvpWorld) this.state.tick++;
     this.commitEvents(ev);
   }
 

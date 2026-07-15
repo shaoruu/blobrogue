@@ -49,7 +49,12 @@ existing twin-stick movement / shooting / authoritative netcode / kits. NOT a fo
 - HARD PER-HIT CAP: PVP.perHitCapFrac = 0.35 — no single hit/trigger removes >35% of maxHP (≤35). Anti-one-shot backstop; keep even after per-weapon tuning.
 - ULTS: PVP.ultsEnabled = false — blanket-disable ALL kit ultimates for MVP (each degenerate in a duel: Mender heal=stalemate, Bulwark shield=flat EHP win, Phantom dash=infinite disengage, Gunner overheat=least bad, re-add FIRST in v2 tuned). Kit passive stat lean stays (symmetric). Blessings off (symmetric kit).
 - Loadout: everyone same symmetric starting kit + weapon (neutral all-rounder). Blessings do not apply.
-- SPAWN PROTECTION: PVP.spawnIframeSec = 2.0 (not 1.5 — 1.5 is only ~37% of a 4s TTK). Ends at 2.0s OR first OUTGOING attack, whichever first (no shoot-from-invuln). Plus max-distance FFA spawn selection (anti-camp beyond iframes).
+- SPAWN PROTECTION: PVP.spawnHardGraceSec = 0.75 suppresses every outgoing attack while move/aim/dash stay live. Normal PVP.spawnShieldSec = 2.0 remains fully invulnerable and breaks on the first legal post-grace attack; only an all-unsafe timeout receives PVP.spawnFallbackShieldSec = 3.0.
+- TIMING / INPUT: hard grace is nested inside the normal total 2.0s shield; both endpoints share one authoritative spawn tick. Held offense during grace is latched and cannot auto-fire at 0.75s — all offense inputs must release, then re-press. Suppression emits one rate-limited arming pulse, never dry-fire/jam feedback.
+- PRESENTATION: local and remote phases derive from the same authoritative origin/end ticks. Hard grace uses a four-segment amber shell, closed live reticle, muzzle arming arc, and `MOVE · AIM · DASH | WEAPON ARMING`; the body materializes inside the already-live shell over 0.25s. Shield-only uses a thinner shell and `SPAWN SHIELD · FIRE TO ENGAGE`; attack shatter precedes its muzzle event.
+- RESPAWN SELECTION: hard-avoid an opponent closer than 192px only while an alternative exists; the authored 6p edge-mid↔diagonal gap is 204px, so 240px is invalid. Avoidable live projectile TTI ≤0.75s is the true projectile hard reject. Aimed LOS inside 480px/35° is a soft ranking penalty and is rejected only when a non-LOS alternative exists. Longer projectile ETA, plain LOS, pit distance, cover, distance, camping, and the last-two spawn memory remain deterministic ranking inputs.
+- RESPAWN_WAIT_SAFE: if all eight candidates are unsafe when the ordinary timer ends, keep the player in RESPawning state and re-evaluate every 0.10s for at most 0.75s. Spawn as soon as one candidate becomes safe; at timeout choose minimum predicted 1.5s incoming damage and arm the fallback 3.0s shield.
+- TARGETING / RESET: protected players cannot be acquired by homing, sentry, or nearest-target helpers. A PvP death clears the victim's movement/cadence/charge/chain state and all victim-owned transient bullets/effects while retaining match score, loadout, ult charge, and draft progression. Crooked Chain has no player-tether implementation in the current PvP weapon table, so there is no shipped tether acquisition path to queue.
 - SHIP GATE (as test assertions): per-weapon 1v1 median TTK 3-5s; ZERO hits >35% HP (assert worst-case point-blank sawnoff clamps to 35); no infinite sustain/disengage (ults off).
 
 ## STAGING (TD)
@@ -65,7 +70,7 @@ existing twin-stick movement / shooting / authoritative netcode / kits. NOT a fo
 ## TESTS (must pass; TD gates)
 - New test/pvp.test.ts: pvp mode enables player-damage (owned round hits non-owner, damagePlayer(by) attribution),
   co-op mode still passes friendly through; match state machine transitions (live→round-over on ≤1 alive,
-  match-over at bo-N); deterministic winner (id-sorted, replay byte-identical); spawn i-frames; arena symmetric.
+  match-over at bo-N); deterministic winner (id-sorted, replay byte-identical); two-stage spawn protection; arena symmetric.
 - New pvp determinism/golden: scripted 2-4p match replayed twice = identical + reconnect-stable.
 - Co-op goldens / determinism / balance / protocol suites UNCHANGED (mode defaults coop).
 - npm test green; tsc clean root/server/control (install server+control deps incl @types/ws first).

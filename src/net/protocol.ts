@@ -283,7 +283,11 @@ export const FIXED_DT = 1 / TICK_HZ; // 50ms authoritative step
 // block (phase / phase-end tick / per-player frags + alive / winner), and the reliable
 // pvpKill / pvpMatchOver events. All inert in co-op (team 0, respawn 0, match null).
 // v29: PVP Wave 1 presentation events — ring-out, chain-frag, and sudden-death crescendo.
-export const PROTOCOL_VERSION = 29;
+// v30: distinct authoritative PvP spawn-grace + spawn-shield tick windows on SelfWire and
+// PlayerWire. The split drives exact attack suppression and unambiguous local/remote safety cues.
+// v31: authoritative PvP shield-break event, ordered before the offense that broke it.
+// v32: shared spawn-origin/end ticks, held-offense latch, and rate-limited arming feedback.
+export const PROTOCOL_VERSION = 32;
 
 // How long the server reserves a disconnected player's body (their seat) before the
 // authoritative leave lifecycle applies. 90s per the studio balance gate's reconnect
@@ -359,6 +363,12 @@ export interface SelfWire {
   uiv: number;                 // Phase invuln seconds (<= 1.2s)
   pst: number;                 // per-kit passive channel (momentum / lifebloom / hardened)
   rsp: number;                 // pvp respawn countdown in ticks (0 = alive); gates local prediction
+  sgr: number;                 // pvp hard-grace ticks (attacks suppressed)
+  ssh: number;                 // pvp spawn-shield ticks (breaks on first legal attack)
+  spo: number;                 // authoritative spawn-protection origin tick
+  sge: number;                 // authoritative hard-grace end tick
+  sse: number;                 // authoritative total-shield end tick
+  sfl: boolean;                // held offense must release before it can fire
 }
 
 // Another player as seen by this client (rendered via interpolation, never predicted).
@@ -385,6 +395,11 @@ export interface PlayerWire {
   ddx: number; ddy: number;
   dnv: number;
   inv: number;
+  sgr: number;
+  ssh: number;
+  spo: number;
+  sge: number;
+  sse: number;
   rv: number;   // authoritative revive-channel progress on a DOWNED body (seconds)
   out: boolean; // past the floor's down limit — teammates stop offering the revive
   bcl: boolean; // has claimed this floor's boss weapon choice (gate §4 personal claim)
@@ -904,6 +919,8 @@ const EVENT_SPECS: Record<SimEvent["t"], EventSpec> = {
   pvpKill: { scope: "pos", fields: { by: "str", victim: "str", x: "num", y: "num" } },
   pvpRingOut: { scope: "pos", fields: { by: "str", victim: "str", x: "num", y: "num" } },
   pvpChainFrag: { scope: "pos", fields: { by: "str", chain: "num", x: "num", y: "num" } },
+  pvpShieldBreak: { scope: "pos", fields: { pid: "str", x: "num", y: "num" } },
+  pvpSpawnAttackBlocked: { scope: "pid", fields: { pid: "str", x: "num", y: "num" } },
   pvpSuddenDeath: { scope: "global", fields: { leader: "str" } },
   pvpMatchOver: { scope: "global", fields: { winner: "str" } },
   // flash/trauma carry no position — rare, tiny, and safe to deliver globally.
@@ -1120,6 +1137,12 @@ function validateSelfWire(v: unknown): SelfWire {
     uiv: num(o, "uiv", 0, 1e4),
     pst: num(o, "pst", 0, 1e4),
     rsp: intOf(o, "rsp", 0, 1e6),
+    sgr: intOf(o, "sgr", 0, 1e6),
+    ssh: intOf(o, "ssh", 0, 1e6),
+    spo: intOf(o, "spo", 0, Number.MAX_SAFE_INTEGER),
+    sge: intOf(o, "sge", 0, Number.MAX_SAFE_INTEGER),
+    sse: intOf(o, "sse", 0, Number.MAX_SAFE_INTEGER),
+    sfl: boolOf(o, "sfl"),
   };
 }
 
@@ -1148,6 +1171,11 @@ function validatePlayerWire(v: unknown): PlayerWire {
     ddx: num(o, "ddx", -8, 8), ddy: num(o, "ddy", -8, 8),
     dnv: num(o, "dnv", 0, 1e4),
     inv: num(o, "inv", 0, 1e4),
+    sgr: intOf(o, "sgr", 0, 1e6),
+    ssh: intOf(o, "ssh", 0, 1e6),
+    spo: intOf(o, "spo", 0, Number.MAX_SAFE_INTEGER),
+    sge: intOf(o, "sge", 0, Number.MAX_SAFE_INTEGER),
+    sse: intOf(o, "sse", 0, Number.MAX_SAFE_INTEGER),
     rv: num(o, "rv", 0, 1e4),
     out: boolOf(o, "out"),
     bcl: boolOf(o, "bcl"),
@@ -1454,10 +1482,22 @@ function validateSnapd(o: Record<string, unknown>): Extract<ServerMsg, { t: "sna
   };
   if (o.self !== undefined) {
     const s = obj(o.self, "snapd.self");
-    if (s.d !== undefined) out.self = { d: true };
-    else if (s.f !== undefined) out.self = { f: validateSelfWire(s.f) };
-    else if (s.p !== undefined) out.self = { p: safeWireObject(s.p) };
-    else throw new ProtocolError("bad snapd.self");
+    const keys = Object.keys(s);
+    if (keys.length !== 1) throw new ProtocolError("bad snapd.self");
+    switch (keys[0]) {
+      case "d":
+        if (s.d !== true) throw new ProtocolError("bad snapd.self");
+        out.self = { d: true };
+        break;
+      case "f":
+        out.self = { f: validateSelfWire(s.f) };
+        break;
+      case "p":
+        out.self = { p: safeWireObject(s.p) };
+        break;
+      default:
+        throw new ProtocolError("bad snapd.self");
+    }
   }
   for (const tag of ["en", "pl", "pr", "pk", "ch", "hz", "ef"] as const) {
     if (o[tag] !== undefined) out[tag] = validateKeyedDelta(o[tag]);
@@ -1525,6 +1565,11 @@ export function selfWireFromSnapshot(s: AuthoritativePlayerSnapshot): SelfWire {
     kit: s.kitId, uc: s.ultCharge, ura: s.ultReadyAtTick, ovt: s.overdriveT,
     ovh: s.overheatT, osh: s.overshield, pra: s.pulseReadyAtTick, phs: s.phaseSpeed,
     uiv: s.ultInvuln, pst: s.passiveState, rsp: s.respawnT,
+    sgr: s.spawnGraceT, ssh: s.spawnShieldT,
+    spo: s.spawnProtectionStartedTick,
+    sge: s.spawnHardGraceEndsAtTick,
+    sse: s.spawnShieldEndsAtTick,
+    sfl: s.isSpawnOffenseLatched,
   };
 }
 
@@ -1541,6 +1586,11 @@ export function snapshotFromSelfWire(w: SelfWire): AuthoritativePlayerSnapshot {
     kitId: w.kit, ultCharge: w.uc, ultReadyAtTick: w.ura, overdriveT: w.ovt,
     overheatT: w.ovh, overshield: w.osh, pulseReadyAtTick: w.pra, phaseSpeed: w.phs,
     ultInvuln: w.uiv, passiveState: w.pst, respawnT: w.rsp,
+    spawnGraceT: w.sgr, spawnShieldT: w.ssh,
+    spawnProtectionStartedTick: w.spo,
+    spawnHardGraceEndsAtTick: w.sge,
+    spawnShieldEndsAtTick: w.sse,
+    isSpawnOffenseLatched: w.sfl,
   };
 }
 
@@ -1576,6 +1626,8 @@ export function toPlayerWire(p: PlayerSim, identity?: PlayerIdentity): PlayerWir
   return {
     id: p.id, x: p.x, y: p.y, hp: p.hp, mhp: p.maxHp, fac: p.facing, aim: p.aimAngle, wpn: p.weapon, down: p.isDown,
     dti: p.dashTime, ddx: p.dashDx, ddy: p.dashDy, dnv: p.dashInvuln, inv: p.invuln,
+    sgr: p.spawnGraceT, ssh: p.spawnShieldT,
+    spo: p.spawnProtectionStartedTick, sge: p.spawnHardGraceEndsAtTick, sse: p.spawnShieldEndsAtTick,
     rv: p.reviveProgress,
     out: isPlayerOut(p),
     bcl: p.hasClaimedBossChoice,

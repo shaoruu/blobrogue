@@ -494,6 +494,9 @@ function arenaHudDomTests(): void {
     tick: 100,
     selfId: "p1",
     respawnTicks: 0,
+    spawnProtectionStartedTick: 0,
+    spawnHardGraceEndsAtTick: 0,
+    spawnShieldEndsAtTick: 0,
     nameOf: (id, isSelf) => isSelf ? "YOU" : id === "p2" ? "RIVAL" : id,
   });
   settings.setHpDisplay("hearts");
@@ -543,11 +546,16 @@ function arenaHudDomTests(): void {
 
   section("arena HUD: countdown, respawn, and result share the fixed center slot");
   const center = root.querySelector<HTMLElement>("[data-arena-center]")!;
+  const spawnProtection = root.querySelector<HTMLElement>("[data-arena-spawn-protection]")!;
+  const spawnProtectionLabel = root.querySelector<HTMLElement>("[data-arena-spawn-protection-label]")!;
   const countdown = buildArenaMatchHud({
     match: { ph: "countdown", end: 160, sc: [{ id: "p1", f: 0, a: true }], win: null },
     tick: 100,
     selfId: "p1",
     respawnTicks: 0,
+    spawnProtectionStartedTick: 0,
+    spawnHardGraceEndsAtTick: 0,
+    spawnShieldEndsAtTick: 0,
     nameOf: () => "YOU",
   });
   hud.update(mkState({ hp: 100, maxHp: 100, isArena: true, arenaMatch: countdown }));
@@ -559,20 +567,65 @@ function arenaHudDomTests(): void {
     tick: 100,
     selfId: "p1",
     respawnTicks: 41,
+    spawnProtectionStartedTick: 0,
+    spawnHardGraceEndsAtTick: 0,
+    spawnShieldEndsAtTick: 0,
     nameOf: () => "YOU",
   });
   hud.update(mkState({ hp: 0, maxHp: 100, isArena: true, arenaMatch: respawning }));
   check("respawn state renders the authoritative self.rsp countdown",
     center.textContent === "YOU WERE FRAGGEDRESPAWNING IN 3");
+  const grace = buildArenaMatchHud({
+    match: { ph: "live", end: 6080, sc: [{ id: "p1", f: 3, a: true }], win: null },
+    tick: 100,
+    selfId: "p1",
+    respawnTicks: 0,
+    spawnProtectionStartedTick: 93,
+    spawnHardGraceEndsAtTick: 108,
+    spawnShieldEndsAtTick: 133,
+    nameOf: () => "YOU",
+  });
+  hud.update(mkState({ hp: 100, maxHp: 100, isArena: true, arenaMatch: grace }));
+  check("hard grace renders in the same fixed center slot with movement instructions",
+    center.classList.contains("tone-spawn-safe")
+    && center.textContent === "SPAWN SAFEMOVE \u00b7 AIM \u00b7 DASH | WEAPON ARMING");
+  check("hard grace shows a fixed-slot SPAWN SAFE pip with final-window pulse",
+    spawnProtection.classList.contains("show")
+    && spawnProtection.classList.contains("grace")
+    && spawnProtection.classList.contains("final")
+    && spawnProtectionLabel.textContent === "SPAWN SAFE");
+  const shield = buildArenaMatchHud({
+    match: { ph: "live", end: 6080, sc: [{ id: "p1", f: 3, a: true }], win: null },
+    tick: 100,
+    selfId: "p1",
+    respawnTicks: 0,
+    spawnProtectionStartedTick: 80,
+    spawnHardGraceEndsAtTick: 95,
+    spawnShieldEndsAtTick: 120,
+    nameOf: () => "YOU",
+  });
+  hud.update(mkState({ hp: 100, maxHp: 100, isArena: true, arenaMatch: shield }));
+  check("remaining shield renders a distinct concise cue",
+    center.classList.contains("tone-spawn-shield")
+    && center.textContent === "SPAWN SHIELD \u00b7 FIRE TO ENGAGE");
+  check("remaining shield switches the fixed pip without moving HUD layout",
+    spawnProtection.classList.contains("show")
+    && spawnProtection.classList.contains("shield")
+    && !spawnProtection.classList.contains("final")
+    && spawnProtectionLabel.textContent === "SPAWN SHIELD");
   const result = buildArenaMatchHud({
     match: { ph: "over", end: 0, sc: [{ id: "p1", f: 8, a: true }], win: "p1" },
     tick: 100,
     selfId: "p1",
     respawnTicks: 0,
+    spawnProtectionStartedTick: 0,
+    spawnHardGraceEndsAtTick: 0,
+    spawnShieldEndsAtTick: 0,
     nameOf: () => "YOU",
   });
   hud.update(mkState({ hp: 100, maxHp: 100, isArena: true, arenaMatch: result }));
   check("result renders from match.win", center.querySelector(".arena-center-title")?.textContent === "VICTORY");
+  check("spawn pip hides after protection ends", !spawnProtection.classList.contains("show"));
   const playAgain = center.querySelector<HTMLButtonElement>(".arena-center-action");
   check("match over exposes one fixed-slot PLAY AGAIN action",
     playAgain?.textContent === "PLAY AGAIN" && center.querySelectorAll(".arena-center-action").length === 1);

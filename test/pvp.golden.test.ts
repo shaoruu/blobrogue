@@ -40,13 +40,14 @@ function inp(over: Partial<InputCmd>): InputCmd {
 }
 
 // A compact, fully-deterministic per-tick digest: phase + winner, then every player's id-sorted
-// state (position, hp, respawn + spawn-iframe + dash timers, frags), then the sorted event-type
+// state (position, hp, respawn + two-stage spawn protection + memory + dash timers, frags), then the sorted event-type
 // multiset emitted this tick. Everything a pvp behavior change would move is captured here.
 function digest(w: WorldState, evs: SimEvent[]): string {
   const parts = [...w.players.keys()].sort().map((id) => {
     const p = w.players.get(id)!;
     const sc = w.match!.scores.get(id) ?? 0;
-    return `${id}:${p.x.toFixed(2)},${p.y.toFixed(2)},${p.hp.toFixed(2)},${p.respawnT},${p.invuln.toFixed(2)},${p.dashTime.toFixed(2)},${sc}`;
+    const telemetry = p.pvpRespawnTelemetry;
+    return `${id}:${p.x.toFixed(2)},${p.y.toFixed(2)},${p.hp.toFixed(2)},${p.respawnT},${p.respawnWaitSafeT},${p.spawnProtectionStartedTick},${p.spawnHardGraceEndsAtTick},${p.spawnShieldEndsAtTick},${p.spawnGraceT},${p.spawnShieldT},${p.isSpawnOffenseLatched ? 1 : 0},${p.pvpRecentSpawnIndices.join(".")},${telemetry?.chosenIndex ?? -1},${telemetry?.waitSafeMs ?? 0},${p.dashTime.toFixed(2)},${sc}`;
   });
   const ev = evs.map((e) => e.t).sort().join(",");
   return `t${w.tick}|${w.match!.phase}|win=${w.match!.winner ?? ""}|${parts.join("|")}|ev[${ev}]`;
@@ -80,7 +81,15 @@ function runScriptedMatch(addOrder: string[]): string[] {
   //    damage, kills, and respawns. Positions/weapons are overridden identically every run.
   const a = w.players.get("p1")!, b = w.players.get("p2")!, c = w.players.get("p3")!;
   a.x = 260; a.y = 216; b.x = 360; b.y = 216; c.x = 460; c.y = 216;
-  a.invuln = 0; b.invuln = 0; c.invuln = 0;
+  for (const player of [a, b, c]) {
+    player.invuln = 0;
+    player.spawnGraceT = 0;
+    player.spawnShieldT = 0;
+    player.spawnProtectionStartedTick = 0;
+    player.spawnHardGraceEndsAtTick = 0;
+    player.spawnShieldEndsAtTick = 0;
+    player.isSpawnOffenseLatched = false;
+  }
   a.weapon = "railgun"; a.ownedWeapons = ["railgun"];
   b.weapon = "smg"; b.ownedWeapons = ["smg"];
   c.weapon = "railgun"; c.ownedWeapons = ["railgun"];
@@ -91,14 +100,27 @@ function runScriptedMatch(addOrder: string[]): string[] {
     if (i === 60) setPlayerAbsence(w, "p2", false);
     trace.push(digest(w, stepWorld(w, presentInputs(), DT)));
   }
+  guard = 0;
+  while (b.respawnT > 0 && guard++ < 100) {
+    trace.push(digest(w, stepWorld(w, presentInputs(), DT)));
+  }
 
   // 4) match-over: seat the leader one frag short, stage a clean duel, and let the next kill end
   //    the match — captured through the "over" transition and one settled tick past it.
   w.match!.scores.set("p1", pvpFragLimit(3) - 1);
   const k1 = w.players.get("p1")!, k2 = w.players.get("p2")!, k3 = w.players.get("p3")!;
-  k1.x = 300; k1.y = 216; k1.invuln = 0; k1.weapon = "railgun"; k1.ownedWeapons = ["railgun"];
-  k2.x = 344; k2.y = 216; k2.invuln = 0; k2.respawnT = 0; k2.hp = k2.maxHp;
-  k3.x = 130; k3.y = 130; k3.invuln = 0; k3.respawnT = 0; k3.hp = k3.maxHp; // parked out of the lane
+  k1.x = 300; k1.y = 216; k1.weapon = "railgun"; k1.ownedWeapons = ["railgun"];
+  k2.x = 344; k2.y = 216; k2.respawnT = 0; k2.hp = k2.maxHp;
+  k3.x = 130; k3.y = 130; k3.respawnT = 0; k3.hp = k3.maxHp; // parked out of the lane
+  for (const player of [k1, k2, k3]) {
+    player.invuln = 0;
+    player.spawnGraceT = 0;
+    player.spawnShieldT = 0;
+    player.spawnProtectionStartedTick = 0;
+    player.spawnHardGraceEndsAtTick = 0;
+    player.spawnShieldEndsAtTick = 0;
+    player.isSpawnOffenseLatched = false;
+  }
   const overInputs = new Map([["p1", inp({ firing: true, aim: 0 })]]);
   guard = 0;
   while (w.match!.phase !== "over" && guard++ < 400) trace.push(digest(w, stepWorld(w, overInputs, DT)));
@@ -120,7 +142,12 @@ function main(): void {
   check("live phase appears in the trace", joined.includes("|live|"));
   check("a kill event fires (fire -> kill)", joined.includes("pvpKill"));
   check("a hurt event fires (damage lands)", joined.includes("playerHurt"));
-  check("a respawn resolves (a body returns to full HP after a scheduled respawnT)", forward.some((l) => /p2:[^|]*,100\.00,0,/.test(l)) || joined.includes("respawnT"));
+  const deathIndex = forward.findIndex((line) => /p2:[^|]*,0\.00,[1-9][0-9]*,0,0,0,0,0,/.test(line));
+  const respawnIndex = forward.findIndex((line, index) =>
+    index > deathIndex && /p2:[^|]*,100\.00,0,0,[1-9][0-9]*,[1-9][0-9]*,[1-9][0-9]*,15,40,/.test(line)
+  );
+  check("a respawn resolves after a scheduled death with full two-stage protection",
+    deathIndex >= 0 && respawnIndex > deathIndex);
   check("the match reaches over with a winner", joined.includes("|over|win=p1|"));
 
   section("invariance: add-order perturbation + replay are byte-identical");

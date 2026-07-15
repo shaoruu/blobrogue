@@ -1,5 +1,6 @@
 import { FIXED_DT, type MatchWire } from "../net/protocol.js";
 import type { PlayerId } from "../sim/input.js";
+import { pvpSpawnHardGraceTicks, pvpSpawnShieldTicks } from "../sim/pvp.js";
 import type { MatchPhase } from "../sim/pvp.js";
 
 export interface ArenaScoreRow {
@@ -18,6 +19,9 @@ export interface ArenaMatchHudState {
   selfFrags: number;
   isSelfWinner: boolean | null;
   respawnSeconds: number;
+  spawnProtection: "grace" | "shield" | null;
+  spawnProtectionFill: number;
+  isSpawnProtectionFinalPulse: boolean;
 }
 
 export interface ArenaMatchHudSource {
@@ -25,13 +29,16 @@ export interface ArenaMatchHudSource {
   tick: number;
   selfId: PlayerId | null;
   respawnTicks: number;
+  spawnProtectionStartedTick: number;
+  spawnHardGraceEndsAtTick: number;
+  spawnShieldEndsAtTick: number;
   nameOf: (id: PlayerId, isSelf: boolean) => string;
 }
 
 export interface ArenaCenterCopy {
   title: string;
   detail: string | null;
-  tone: "countdown" | "victory" | "defeat" | "result" | "respawn";
+  tone: "countdown" | "victory" | "defeat" | "result" | "respawn" | "spawn-safe" | "spawn-shield";
 }
 
 export interface ArenaHpView {
@@ -41,6 +48,15 @@ export interface ArenaHpView {
 
 export function ticksLeftSeconds(args: { endTick: number; tick: number }): number {
   return Math.max(0, Math.ceil((args.endTick - args.tick) * FIXED_DT));
+}
+
+export function pvpMaterializeFraction(args: {
+  startedTick: number;
+  tick: number;
+  shieldEndsAtTick: number;
+}): number {
+  if (args.startedTick <= 0 || args.shieldEndsAtTick <= args.tick) return 1;
+  return Math.max(0, Math.min(1, (args.tick - args.startedTick) / 5));
 }
 
 export function buildArenaMatchHud(source: ArenaMatchHudSource): ArenaMatchHudState {
@@ -65,6 +81,20 @@ export function buildArenaMatchHud(source: ArenaMatchHudSource): ArenaMatchHudSt
   const isResultKnown = source.match.ph === "over"
     && source.selfId !== null
     && source.match.win !== null;
+  const spawnGraceTicks = Math.max(0, source.spawnHardGraceEndsAtTick - source.tick);
+  const spawnShieldTicks = Math.max(0, source.spawnShieldEndsAtTick - source.tick);
+  const spawnProtection = source.match.ph !== "live"
+    ? null
+    : spawnGraceTicks > 0
+      ? "grace"
+      : spawnShieldTicks > 0
+        ? "shield"
+        : null;
+  const protectionTicks = spawnProtection === "grace"
+    ? spawnGraceTicks
+    : spawnProtection === "shield"
+      ? spawnShieldTicks
+      : 0;
 
   return {
     phase: source.match.ph,
@@ -77,6 +107,13 @@ export function buildArenaMatchHud(source: ArenaMatchHudSource): ArenaMatchHudSt
     respawnSeconds: source.match.ph === "live"
       ? Math.max(0, Math.ceil(source.respawnTicks * FIXED_DT))
       : 0,
+    spawnProtection,
+    spawnProtectionFill: spawnProtection === "grace"
+      ? Math.max(0, Math.min(1, protectionTicks / pvpSpawnHardGraceTicks()))
+      : spawnProtection === "shield"
+        ? Math.max(0, Math.min(1, protectionTicks / pvpSpawnShieldTicks()))
+        : 0,
+    isSpawnProtectionFinalPulse: spawnProtection !== null && protectionTicks <= Math.round(0.5 / FIXED_DT),
   };
 }
 
@@ -113,6 +150,20 @@ export function arenaCenterCopy(match: ArenaMatchHudState | null): ArenaCenterCo
       title: "YOU WERE FRAGGED",
       detail: `RESPAWNING IN ${match.respawnSeconds}`,
       tone: "respawn",
+    };
+  }
+  if (match.spawnProtection === "grace") {
+    return {
+      title: "SPAWN SAFE",
+      detail: "MOVE \u00b7 AIM \u00b7 DASH | WEAPON ARMING",
+      tone: "spawn-safe",
+    };
+  }
+  if (match.spawnProtection === "shield") {
+    return {
+      title: "SPAWN SHIELD \u00b7 FIRE TO ENGAGE",
+      detail: null,
+      tone: "spawn-shield",
     };
   }
   return null;
