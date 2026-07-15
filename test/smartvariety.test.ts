@@ -264,7 +264,8 @@ section("per-player offer streams and reconnect state");
   check("a new run clears personal presentation histories and ordinals",
     player.blessingOfferHistory.recentBlessingOffers.length === 0
     && Object.keys(player.blessingOfferHistory.blessingSeenCounts).length === 0
-    && player.weaponOfferHistory.recentWeaponOffers.length === 0
+    && player.weaponOfferHistory.recentWeaponOffers.length === 1
+    && Object.values(player.weaponOfferHistory.weaponSeenCounts).reduce((sum, count) => sum + count, 0) === 1
     && player.blessingOfferOrdinal === 0);
 }
 
