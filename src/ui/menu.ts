@@ -18,9 +18,11 @@ import type { WaveEventId } from "../game/waveSpec.js";
 import type { CampNodeDef } from "../sim/camp_nodes.js";
 import type { CosmeticSlot, CosmeticDef, CosmeticLoadout } from "../game/cosmetics.js";
 import { hasCosmeticArt } from "../game/cosmeticArt.js";
-import { createBlobPreview, createLoadoutPreview, drawBlob, isBlobReady } from "./blobPreview.js";
+import { createBlobPreview, createLoadoutPreview, createPetThumbnail, drawBlob, isBlobReady } from "./blobPreview.js";
 import type { BlobLook, BlobPreview, LoadoutPreview } from "./blobPreview.js";
 import { FocusScope, currentFocus } from "./focus.js";
+import { gridTargetIndex } from "./menuGamepad.js";
+import type { GridDirection } from "./menuGamepad.js";
 import { createSettingsControls } from "./settings.js";
 import { shouldShowSigninNudge, recordNudgeShown, recordNudgeDismissed, SIGNIN_BENEFITS } from "./signinNudge.js";
 import {
@@ -845,6 +847,9 @@ export class Menu {
       return companionNodes.find((node) => node.pet === petId)?.name.toUpperCase() ?? "NO PET";
     };
 
+    const loadoutName = (): string => `${KIT_META[draftKitId].name.toUpperCase()} + ${petName(draftPetId)}`;
+    const shortLoadoutName = (): string => `${KIT_META[draftKitId].name.toUpperCase()} + ${petName(draftPetId).replace(/^BABY /, "")}`;
+
     const profileState = (): string => {
       if (isProfileLoading) return "CHECKING UNLOCKS";
       if (isProfileError) return "PROGRESS UNAVAILABLE";
@@ -902,10 +907,14 @@ export class Menu {
       const grid = el("div", "loadout-kit-grid");
       grid.setAttribute("role", "radiogroup");
       grid.setAttribute("aria-label", "kit for this run");
+      grid.dataset.desktopColumns = "2";
+      grid.dataset.mobileColumns = "1";
       const cards: HTMLButtonElement[] = [];
       for (const [index, kit] of KIT_IDS.entries()) {
         const meta = KIT_META[kit];
         const isUnlocked = isKitUnlocked(kit, level);
+        const neededLevel = kitUnlockLevel(kit);
+        const requirement = `REACH ACCOUNT LV ${neededLevel} · LV ${level}/${neededLevel}`;
         const isSelected = isKitChoiceMade && draftKitId === kit;
         const isLast = !isKitChoiceMade && isKitRemembered && draftKitId === kit;
         const card = el(
@@ -915,10 +924,11 @@ export class Menu {
         card.type = "button";
         card.setAttribute("role", "radio");
         card.setAttribute("aria-checked", String(isSelected));
+        card.setAttribute("aria-disabled", String(!isUnlocked));
         card.tabIndex = isSelected || isLast || (!isKitChoiceMade && draftKitId === kit) ? 0 : -1;
         card.setAttribute(
           "aria-label",
-          `${meta.name}, ${meta.role}, ${weaponName(KIT_START_WEAPON[kit])}, ultimate ${meta.ult}${isUnlocked ? "" : `, locked, reach account level ${kitUnlockLevel(kit)}`}`,
+          `${meta.name}, ${meta.role}, ${weaponName(KIT_START_WEAPON[kit])}, ultimate ${meta.ult}${isUnlocked ? "" : `, locked, ${requirement}`}`,
         );
         card.setAttribute("data-kit", kit);
         const icon = document.createElement("img");
@@ -937,9 +947,7 @@ export class Menu {
         );
         const state = el("span", "loadout-card-state");
         if (!isUnlocked) {
-          const needed = kitUnlockLevel(kit);
-          state.textContent = `REACH ACCOUNT LV ${needed} · LV ${level}/${needed}`;
-          card.disabled = true;
+          state.textContent = requirement;
         } else if (isSelected) {
           state.textContent = "SELECTED ✓";
         } else if (isLast) {
@@ -949,7 +957,11 @@ export class Menu {
         }
         card.appendChild(state);
         card.onclick = () => {
-          if (!isUnlocked) return;
+          if (!isUnlocked) {
+            announcement = requirement;
+            view.live.textContent = requirement;
+            return;
+          }
           draftKitId = kit;
           isKitChoiceMade = true;
           isLoadoutConfirmed = false;
@@ -999,7 +1011,7 @@ export class Menu {
       step = "pet";
       const kitName = KIT_META[draftKitId].name.toUpperCase();
       const context = opts.roomCode
-        ? `KIT ${kitName} · ROOM ${opts.roomCode}`
+        ? `KIT ${kitName} · ${opts.contextLabel} · ROOM ${opts.roomCode}`
         : `KIT ${kitName} · ${opts.contextLabel}`;
       const view = shell(
         "CHOOSE YOUR PET",
@@ -1025,12 +1037,20 @@ export class Menu {
       }
       previewBox.append(
         this.loadoutPreview.el,
-        el("span", "loadout-preview-label", "PLAYER BLOB + PET"),
-        el("span", "loadout-preview-copy", draftPetId === null ? "Travel alone. No gameplay change." : "COSMETIC COMPANION · No combat effect"),
+        el("span", "loadout-preview-label", draftPetId === null ? "PLAYER BLOB" : "PLAYER BLOB + PET"),
+        el(
+          "span",
+          "loadout-preview-copy",
+          draftPetId === null
+            ? "Travel alone · no gameplay change."
+            : "COSMETIC COMPANION · FOLLOWS YOU · NO COMBAT EFFECT",
+        ),
       );
       const grid = el("div", "loadout-pet-grid");
       grid.setAttribute("role", "radiogroup");
       grid.setAttribute("aria-label", "pet for this run");
+      grid.dataset.desktopColumns = "3";
+      grid.dataset.mobileColumns = "2";
       const cards: HTMLButtonElement[] = [];
       const options: Array<{ petId: string | null; node: CampNodeDef | null }> = [
         { petId: null, node: null },
@@ -1038,6 +1058,11 @@ export class Menu {
       ];
       for (const [index, option] of options.entries()) {
         const isOwned = option.petId === null || isPetOwned(option.petId, unlocks);
+        const rescueFloor = option.node?.rescueFloor;
+        const reached = rescueFloor === undefined ? 0 : Math.min(profile?.deepestFloor ?? 0, rescueFloor);
+        const requirement = rescueFloor === undefined
+          ? ""
+          : `REACH FLOOR ${rescueFloor} TO RESCUE · ${reached}/${rescueFloor}`;
         const isSelected = isPetChoiceMade && draftPetId === option.petId;
         const isLast = !isPetChoiceMade && isPetRemembered && draftPetId === option.petId;
         const name = option.node?.name.toUpperCase() ?? "NO PET";
@@ -1048,23 +1073,37 @@ export class Menu {
         card.type = "button";
         card.setAttribute("role", "radio");
         card.setAttribute("aria-checked", String(isSelected));
+        card.setAttribute("aria-disabled", String(!isOwned));
         card.tabIndex = isSelected || isLast || (!isPetChoiceMade && draftPetId === option.petId) ? 0 : -1;
         card.setAttribute(
           "aria-label",
-          `${name}${isOwned ? "" : `, locked, reach floor ${option.node?.rescueFloor ?? 0} to rescue`}`,
+          `${name}${isOwned ? "" : `, locked, ${requirement}`}`,
         );
         card.setAttribute("data-pet", option.petId ?? "none");
-        card.append(
-          el("span", "loadout-key", String(index + 1)),
+        const petMain = el("div", "pet-card-main");
+        if (option.petId === null) {
+          const noPetThumb = el("span", "pet-card-thumb pet-card-none", "—");
+          noPetThumb.setAttribute("aria-hidden", "true");
+          petMain.appendChild(noPetThumb);
+        } else {
+          petMain.appendChild(createPetThumbnail(option.petId, 56));
+        }
+        const petCopy = el("div", "pet-card-copy");
+        petCopy.append(
           el("span", "pet-name", name),
-          el("span", "pet-kind", option.petId === null ? "TRAVEL ALONE" : "COSMETIC COMPANION"),
-          el("span", "pet-effect", option.petId === null ? "No gameplay change." : "No combat effect"),
+          el(
+            "span",
+            "pet-kind",
+            option.petId === null
+              ? "TRAVEL ALONE · NO GAMEPLAY CHANGE"
+              : "COSMETIC COMPANION · FOLLOWS YOU · NO COMBAT EFFECT",
+          ),
         );
+        petMain.appendChild(petCopy);
+        card.append(el("span", "loadout-key", String(index + 1)), petMain);
         const state = el("span", "loadout-card-state");
-        if (!isOwned && option.node?.rescueFloor !== undefined) {
-          const reached = Math.min(profile?.deepestFloor ?? 0, option.node.rescueFloor);
-          state.textContent = `REACH FLOOR ${option.node.rescueFloor} TO RESCUE · ${reached}/${option.node.rescueFloor}`;
-          card.disabled = true;
+        if (!isOwned && rescueFloor !== undefined) {
+          state.textContent = requirement;
         } else if (isSelected) {
           state.textContent = "SELECTED ✓";
         } else if (isLast) {
@@ -1074,10 +1113,14 @@ export class Menu {
         } else {
           state.textContent = "RESCUED";
         }
-        if (isPersisting) card.disabled = true;
         card.appendChild(state);
         card.onclick = () => {
-          if (!isOwned || isPersisting) return;
+          if (!isOwned) {
+            announcement = requirement;
+            view.live.textContent = requirement;
+            return;
+          }
+          if (isPersisting) return;
           draftPetId = option.petId;
           isPetChoiceMade = true;
           isLoadoutConfirmed = false;
@@ -1185,8 +1228,8 @@ export class Menu {
           "span",
           "review-pet-effect",
           draftPetId === null
-            ? "Travel alone · No gameplay change"
-            : "COSMETIC COMPANION — NO COMBAT EFFECT",
+            ? "Travel alone · no gameplay change."
+            : "COSMETIC COMPANION · FOLLOWS YOU · NO COMBAT EFFECT",
         ),
       );
       const editPet = el("button", "secondary review-edit review-edit-pet", "EDIT PET");
@@ -1216,17 +1259,19 @@ export class Menu {
       const confirm = el("button", "loadout-confirm");
       confirm.type = "button";
       confirm.disabled = !isKitChoiceMade || !isPetChoiceMade || isPersisting;
-      const fullLabel = el(
+      confirm.setAttribute("aria-label", `${opts.destinationLabel} · ${loadoutName()}`);
+      const action = el(
         "span",
-        "loadout-confirm-full",
+        "loadout-confirm-action",
         isPersisting ? "CONFIRMING…" : opts.destinationLabel,
       );
-      const compactLabel = el(
+      const selectedLoadout = el(
         "span",
-        "loadout-confirm-compact",
-        isPersisting ? "CONFIRMING…" : opts.destinationLabel,
+        "loadout-confirm-loadout",
+        loadoutName(),
       );
-      confirm.append(fullLabel, compactLabel);
+      selectedLoadout.setAttribute("data-short-name", shortLoadoutName());
+      confirm.append(action, selectedLoadout);
       confirm.onclick = () => void confirmDraft();
       view.footer.append(back, confirm);
 
@@ -1328,13 +1373,12 @@ export class Menu {
         return;
       }
       const key = event.key.toLowerCase();
-      const horizontalDirection = key === "arrowleft" || key === "a" ? -1
-        : key === "arrowright" || key === "d" ? 1
-          : 0;
-      const verticalDirection = key === "arrowup" || key === "w" ? -1
-        : key === "arrowdown" || key === "s" ? 1
-          : 0;
-      if (cards.length > 0 && (horizontalDirection !== 0 || verticalDirection !== 0)) {
+      const direction: GridDirection | null = key === "arrowleft" || key === "a" ? "left"
+        : key === "arrowright" || key === "d" ? "right"
+          : key === "arrowup" || key === "w" ? "up"
+            : key === "arrowdown" || key === "s" ? "down"
+              : null;
+      if (cards.length > 0 && direction !== null) {
         event.preventDefault();
         event.stopImmediatePropagation?.();
         const current = document.activeElement instanceof HTMLButtonElement
@@ -1343,24 +1387,10 @@ export class Menu {
         const columns = typeof matchMedia === "function" && matchMedia("(max-width: 620px)").matches
           ? mobileColumns
           : desktopColumns;
-        let index = current >= 0 ? current : 0;
-        if (verticalDirection !== 0) {
-          const rows = Math.ceil(cards.length / columns);
-          const row = Math.floor(index / columns);
-          const column = index % columns;
-          const nextRow = (row + verticalDirection + rows) % rows;
-          index = Math.min(nextRow * columns + column, cards.length - 1);
-        }
-        for (let attempts = 0; attempts < cards.length; attempts++) {
-          if (horizontalDirection !== 0 || cards[index].disabled) {
-            const direction = horizontalDirection !== 0 ? horizontalDirection : verticalDirection * columns;
-            index = (index + direction + cards.length) % cards.length;
-          }
-          if (!cards[index].disabled) {
-            for (const card of cards) card.tabIndex = card === cards[index] ? 0 : -1;
-            cards[index].focus();
-            break;
-          }
+        const target = gridTargetIndex(current, cards.length, columns, direction);
+        if (target >= 0 && !cards[target].disabled) {
+          for (const card of cards) card.tabIndex = card === cards[target] ? 0 : -1;
+          cards[target].focus();
         }
         return;
       }
@@ -2738,7 +2768,7 @@ export class Menu {
     this.showLoadoutGate({
       destination: "invite",
       destinationLabel: `CONFIRM & JOIN ${roomCode}`,
-      contextLabel: `INVITE · ROOM ${roomCode}`,
+      contextLabel: "INVITE",
       roomCode,
       onBack: () => {
         stripInviteFromLocation();
@@ -2956,7 +2986,10 @@ export class Menu {
       leave.addEventListener("click", () => { lobby.leave(); void this.showTitle(); });
       row.appendChild(leave);
       wrap.appendChild(row);
-      wrap.appendChild(el("p", "muted lobby-blocker", lobbyNote));
+      const blocker = lobby.status === "lobby" && lobby.isHost
+        ? this.lobbyBlockerCopy(players)
+        : "";
+      wrap.appendChild(el("p", "muted lobby-blocker", lobbyNote || blocker));
       wrap.appendChild(el("p", "hint", CONTROLS));
 
       this.overlay.classList.remove("hidden");
@@ -2971,6 +3004,16 @@ export class Menu {
   private petDisplayName(petId: string | null): string {
     if (petId === null) return "NO PET";
     return CAMP_NODES.find((node) => node.pet === petId)?.name.toUpperCase() ?? "NO PET";
+  }
+
+  private lobbyBlockerCopy(players: readonly LobbyPlayer[]): string {
+    for (const player of players) {
+      if (!player.isKitChoiceMade || !player.kitId) return `${player.name} must choose a kit`;
+      if (!player.isPetChoiceMade) return `${player.name} must choose a pet or No Pet`;
+      if (!player.isLoadoutConfirmed) return `${player.name} must confirm loadout`;
+      if (!player.isReady) return `${player.name} is not ready`;
+    }
+    return "";
   }
 
   private async showLobbyLoadoutGate(lobby: OnlineLobby, profile: ProfileDoc | null): Promise<void> {
@@ -3081,11 +3124,13 @@ export class Menu {
     onBlocked: (message: string) => void,
   ): HTMLButtonElement {
     const start = el("button", lobby.isPartyReady ? "" : "secondary", "\u25be  START RUN");
-    start.addEventListener("click", () => {
+    start.disabled = !lobby.isPartyReady;
+    start.onclick = () => {
+      if (!lobby.isPartyReady) return;
       void lobby.start().then((message) => {
         if (message) onBlocked(message);
       });
-    });
+    };
     return start;
   }
 

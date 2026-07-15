@@ -140,6 +140,39 @@ export interface LoadoutPreview {
   dispose(): void;
 }
 
+export function createPetThumbnail(petId: string, size = 60): HTMLCanvasElement {
+  const el = document.createElement("canvas");
+  el.width = size;
+  el.height = size;
+  el.className = "pet-card-thumb";
+  el.setAttribute("aria-hidden", "true");
+  const sprite = petSpriteFor(petId);
+  const draw = () => {
+    const ctx = el.getContext("2d");
+    if (!ctx) return;
+    ctx.clearRect(0, 0, size, size);
+    drawPetFrame(ctx, sprites(), {
+      petId,
+      clip: "idle",
+      cx: size / 2,
+      cy: size / 2,
+      size: Math.round(size * 0.88),
+      facing: 1,
+      xform: { ox: 0, oy: 0, sx: 1, sy: 1, rot: 0 },
+      clock: 0,
+    });
+  };
+  const settle = () => {
+    draw();
+    if (el.isConnected && sprite !== null && !sprites().isSpriteSettled(sprite)) {
+      requestAnimationFrame(settle);
+    }
+  };
+  draw();
+  queueMicrotask(settle);
+  return el;
+}
+
 export function createBlobPreview(initial: BlobLook, size = 96, opts: BlobPreviewOptions = {}): BlobPreview {
   const el = document.createElement("canvas");
   // Canvas dimensions are set BEFORE any render — the box is fixed from first paint.

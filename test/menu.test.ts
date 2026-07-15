@@ -42,7 +42,7 @@ import { itemById } from "../src/sim/items.js";
 import { getSelectedKit, setSelectedKit } from "../src/net/kitSelection.js";
 import type { RunLoadout } from "../src/net/kitSelection.js";
 import { NUDGE_DISMISSED_AT_KEY, NUDGE_SHOWN_AT_KEY } from "../src/ui/signinNudge.js";
-import { padActions } from "../src/ui/menuGamepad.js";
+import { gridTargetIndex, padActions } from "../src/ui/menuGamepad.js";
 import { CHANGELOG, LATEST_VERSION } from "../src/generated/changelog.js";
 import {
   COPY_INVITE_LABEL, INVITE_COPIED_LABEL, INVITE_SHARED_LABEL, INVITE_COPY_FAILED_LABEL,
@@ -362,9 +362,11 @@ function fakeLobby(code: string, selfId = "player-1", isQuickPlay = false): {
   setPlayers: (p: LobbyPlayer[]) => void;
   fireChange: () => void;
   readyCalls: boolean[];
+  startCalls: () => number;
 } {
   let onChange: (() => void) | null = null;
   const readyCalls: boolean[] = [];
+  let startCallCount = 0;
   const state = {
     code,
     status: "lobby" as "lobby" | "playing" | "ended",
@@ -401,7 +403,7 @@ function fakeLobby(code: string, selfId = "player-1", isQuickPlay = false): {
       if (row) row.isReady = isReady;
       return Promise.resolve(null);
     },
-    start: () => Promise.resolve(null),
+    start: () => { startCallCount++; return Promise.resolve(null); },
     beginLoadoutEdit: () => {
       const row = state.rows.find((candidate) => candidate.playerId === selfId);
       if (row) {
@@ -454,6 +456,7 @@ function fakeLobby(code: string, selfId = "player-1", isQuickPlay = false): {
     setPlayers: (p) => { state.rows = p; },
     fireChange: () => onChange?.(),
     readyCalls,
+    startCalls: () => startCallCount,
   };
 }
 
@@ -591,6 +594,15 @@ async function main(): Promise<void> {
     check("locked kit shows exact account requirement and progress",
       byClass(overlay, "kit-option").some((card) => textOf(card).includes("BULWARK")
         && textOf(card).includes("REACH ACCOUNT LV 3 · LV 1/3")));
+    const lockedBulwark = byClass(overlay, "kit-option").find((card) => card.getAttribute?.("data-kit") === "bulwark");
+    check("locked kit remains native-enabled, focusable, and aria-disabled",
+      lockedBulwark?.disabled !== true
+      && lockedBulwark?.getAttribute?.("aria-disabled") === "true"
+      && typeof lockedBulwark?.focus === "function");
+    lockedBulwark?.onclick?.();
+    check("activating a locked kit announces its exact requirement without selecting",
+      textOf(byClass(overlay, "loadout-live")[0] ?? {}) === "REACH ACCOUNT LV 3 · LV 1/3"
+      && next?.disabled === true);
     fireWindowEvent("keydown", { key: "2" });
     check("number-key selection drafts Mender but does not advance", textOf(overlay).includes("MENDER")
       && byClass(overlay, "kit-option").some((card) => card.getAttribute?.("data-kit") === "mender"
@@ -606,8 +618,24 @@ async function main(): Promise<void> {
     check("locked rescue copy uses the CAMP_NODES floor and progress",
       byClass(overlay, "pet-option").some((card) => textOf(card).includes("DOGGIE")
         && textOf(card).includes("REACH FLOOR 3 TO RESCUE · 0/3")));
+    const lockedDoggie = byClass(overlay, "pet-option").find((card) => card.getAttribute?.("data-pet") === "doggie");
+    check("locked pet remains native-enabled, focusable, and aria-disabled",
+      lockedDoggie?.disabled !== true
+      && lockedDoggie?.getAttribute?.("aria-disabled") === "true"
+      && typeof lockedDoggie?.focus === "function");
+    lockedDoggie?.onclick?.();
+    check("activating a locked pet announces its exact rescue progress",
+      textOf(byClass(overlay, "loadout-live")[0] ?? {}) === "REACH FLOOR 3 TO RESCUE · 0/3"
+      && byClass(overlay, "loadout-review-next")[0]?.disabled === true);
     check("pet copy stays honest about cosmetic-only behavior",
-      textOf(overlay).includes("COSMETIC COMPANION") && textOf(overlay).includes("No combat effect"));
+      textOf(overlay).includes("COSMETIC COMPANION · FOLLOWS YOU · NO COMBAT EFFECT")
+      && textOf(overlay).includes("PLAYER BLOB")
+      && textOf(overlay).includes("Travel alone · no gameplay change."));
+    const petThumbs = byClass(overlay, "pet-card-thumb");
+    check("every registry pet card has a fixed 56px shared-render thumbnail",
+      petThumbs.filter((thumb) => thumb.tagName === "CANVAS").length === 4
+      && petThumbs.filter((thumb) => thumb.tagName === "CANVAS")
+        .every((thumb) => thumb.width === 56 && thumb.height === 56));
     const loadoutPreview = byClass(overlay, "loadout-preview-canvas")[0];
     check("preview canvas reserves explicit dimensions before sprite hydration",
       loadoutPreview?.width === 220 && loadoutPreview?.height === 244);
@@ -636,6 +664,12 @@ async function main(): Promise<void> {
     check("only REVIEW owns the combined destination CTA",
       textOf(byClass(overlay, "loadout-confirm")[0]).includes("CONFIRM & START SOLO")
       && byClass(overlay, "loadout-gate")[0]?.getAttribute?.("data-loadout-confirmed") === "false");
+    const finalCta = byClass(overlay, "loadout-confirm")[0];
+    check("final CTA has separate action and loadout spans",
+      textOf(byClass(finalCta ?? {}, "loadout-confirm-action")[0] ?? {}) === "CONFIRM & START SOLO"
+      && textOf(byClass(finalCta ?? {}, "loadout-confirm-loadout")[0] ?? {}) === "MENDER + NO PET");
+    check("final CTA aria-label includes destination, kit, and pet",
+      finalCta?.getAttribute?.("aria-label") === "CONFIRM & START SOLO · MENDER + NO PET");
     collect(overlay, (node) => node.tagName === "BUTTON" && textOf(node) === "BACK · PET")[0]?.onclick?.();
     check("Back Review → Pet preserves the deliberate No Pet draft",
       textOf(overlay).includes("CHOOSE YOUR PET")
@@ -666,6 +700,14 @@ async function main(): Promise<void> {
       && soloLaunches.length === 1
       && soloLaunches[0]?.kitId === "mender"
       && soloLaunches[0]?.petId === null);
+    await menu.showTitle();
+    collect(overlay, (node) => node.tagName === "BUTTON" && textOf(node) === "PLAY SOLO")[0]?.onclick?.();
+    const sameSessionMender = byClass(overlay, "kit-option").find((card) => card.getAttribute?.("data-kit") === "mender");
+    check("same Menu reopens with Mender LAST USED but unselected",
+      textOf(sameSessionMender ?? {}).includes("LAST USED")
+      && sameSessionMender?.getAttribute?.("aria-checked") === "false"
+      && collect(overlay, (node) => node.tagName === "BUTTON" && textOf(node).includes("NEXT"))[0]?.disabled === true);
+    await menu.showTitle();
     const reload = makeMenu({ isLoadoutPreserved: true });
     await reload.menu.showTitle();
     collect(reload.overlay, (node) => node.tagName === "BUTTON" && textOf(node) === "PLAY SOLO")[0]?.onclick?.();
@@ -677,6 +719,26 @@ async function main(): Promise<void> {
     await reload.menu.showTitle();
     localStorage.removeItem("blobrogue.selectedKit");
     localStorage.removeItem("blobrogue.lastPetId");
+  }
+
+  section("long pet names provide a responsive shortName without dropping the action");
+  {
+    const profile = makeProfile({
+      unlocks: ["pet_dragon"],
+      equippedPet: "dragon",
+      lastKitId: "mender",
+      masteryLevel: 1,
+    });
+    const made = makeMenu({ profile });
+    await made.session.login();
+    await made.menu.showTitle();
+    collect(made.overlay, (node) => node.tagName === "BUTTON" && textOf(node) === "PLAY SOLO")[0]?.onclick?.();
+    reachLoadoutReview(made.overlay, "mender", "dragon");
+    const loadout = byClass(made.overlay, "loadout-confirm-loadout")[0];
+    check("full label keeps BABY DRAGON", textOf(loadout ?? {}) === "MENDER + BABY DRAGON");
+    check("responsive data uses MENDER + DRAGON", loadout?.getAttribute?.("data-short-name") === "MENDER + DRAGON");
+    check("action span remains complete", textOf(byClass(made.overlay, "loadout-confirm-action")[0] ?? {}) === "CONFIRM & START SOLO");
+    await made.menu.showTitle();
   }
 
   section("pet persistence failure stays on Review and Use No Pet still requires confirmation");
@@ -1563,7 +1625,10 @@ async function main(): Promise<void> {
     const bDown = idle.slice(); bDown[1] = true;
     check("B maps to back (the same Escape path)", padActions(idle, bDown).join(",") === "back");
     const dpad = idle.slice(); dpad[13] = true;
-    check("D-pad down maps to focusNext", padActions(idle, dpad).join(",") === "focusNext");
+    check("D-pad down preserves its spatial direction", padActions(idle, dpad).join(",") === "focusDown");
+    check("2×2 Kit Down maps Gunner → Bulwark", gridTargetIndex(0, 4, 2, "down") === 2);
+    check("3×2 Pet Down maps No Pet → Baby Dragon", gridTargetIndex(0, 5, 3, "down") === 3);
+    check("Pet's reserved sixth cell never steals focus", gridTargetIndex(2, 5, 3, "down") === 2);
     const lb = idle.slice(); lb[4] = true;
     const rb = idle.slice(); rb[5] = true;
     check("LB/RB map to tab cycling", padActions(idle, lb).join(",") === "tabPrev" && padActions(idle, rb).join(",") === "tabNext");
@@ -1876,12 +1941,22 @@ async function main(): Promise<void> {
     const f = fakeLobby("ABCD");
     f.setPlayers([member("player-1", "Ada", { isReady: true }), member("player-2", "Bob", { isReady: true })]);
     menu.showOnlineLobby(f.lobby, PROFILE);
-    check("everyone ready -> plain START RUN", buttonsOf(overlay).some((b) => b.includes("START RUN")));
+    const enabledStart = collect(overlay, (node) => node.tagName === "BUTTON" && textOf(node).includes("START RUN"))[0];
+    check("everyone ready -> enabled START RUN", enabledStart?.disabled === false);
+    enabledStart?.onclick?.();
+    await settle();
+    check("enabled START reaches the authoritative mutation", f.startCalls() === 1);
 
     f.setPlayers([member("player-1", "Ada", { isReady: true }), member("player-2", "Bob", { isReady: false })]);
     menu.showOnlineLobby(f.lobby, PROFILE);
     const buttons = buttonsOf(overlay);
-    check("START remains server-validated instead of offering a partial-launch escape hatch", buttons.some((b) => b.includes("START RUN")));
+    const disabledStart = collect(overlay, (node) => node.tagName === "BUTTON" && textOf(node).includes("START RUN"))[0];
+    check("incomplete party hard-disables START", disabledStart?.disabled === true);
+    disabledStart?.onclick?.();
+    await settle();
+    check("disabled START sends no mutation", f.startCalls() === 1);
+    check("disabled START retains the exact blocker copy", textOf(overlay).includes("Bob is not ready"));
+    check("START remains visible instead of offering a partial-launch escape hatch", buttons.some((b) => b.includes("START RUN")));
     check("START ANYWAY is removed", !buttons.some((b) => b.includes("START ANYWAY")));
   }
 
@@ -1944,7 +2019,8 @@ async function main(): Promise<void> {
     loc.pathname = "/r/ABCD"; loc.search = ""; loc.href = "http://localhost/r/ABCD";
     await menu.openInvite("ABCD");
     check("the invite renders KIT before any join", textOf(overlay).includes("CHOOSE YOUR KIT") && !calls.includes("rooms:join"));
-    check("the context names the room", textOf(overlay).includes("ROOM ABCD"));
+    check("invite context names INVITE and room code exactly once",
+      textOf(byClass(overlay, "loadout-context")[0] ?? {}) === "INVITE · ROOM ABCD");
     check("the URL is not consumed before final confirmation", loc.pathname === "/r/ABCD");
     reachLoadoutReview(overlay);
     check("invite REVIEW owns the exact combined destination CTA",
