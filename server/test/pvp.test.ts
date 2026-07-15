@@ -264,9 +264,7 @@ async function main(): Promise<void> {
         player.shotSeq === startShotSeq && player.isSpawnOffenseLatched);
 
       const startBreaks = actor.events.filter((event) => event.t === "pvpShieldBreak").length;
-      const startShots = actor.events.filter((event) =>
-        event.t === "shot" && event.pid === actorId
-      ).length;
+      const startShots = actor.events.filter((event) => event.t === "shot").length;
       isHoldingFire = false;
       await sleep(100);
       isHoldingFire = true;
@@ -276,9 +274,7 @@ async function main(): Promise<void> {
       check("release/repress yields one shield break and one attack with no duplicate",
         player.shotSeq === startShotSeq + 1
         && actor.events.filter((event) => event.t === "pvpShieldBreak").length === startBreaks + 1
-        && actor.events.filter((event) =>
-          event.t === "shot" && event.pid === actorId
-        ).length === startShots + 1);
+        && actor.events.filter((event) => event.t === "shot").length === startShots + 1);
 
       actor.stop();
       rival.stop();
