@@ -103,13 +103,13 @@ function addIncomingBullet(
   etaSec: number,
   weapon: WeaponId,
 ): void {
-  const speed = 400;
+  const speed = 300;
   const radius = 4;
   const bullet: Bullet = {
-    x: spawn.x,
-    y: spawn.y - speed * (etaSec + DT) - target.pr - radius,
-    vx: 0,
-    vy: speed,
+    x: spawn.x - speed * (etaSec + DT) - target.pr - radius,
+    y: spawn.y,
+    vx: speed,
+    vy: 0,
     radius,
     life: 4,
     friendly: true,
@@ -166,6 +166,7 @@ section("actual walls and intact props provide cover; broken props do not");
   const wallOpponent = wallWorld.players.get("p2")!;
   wallOpponent.x = 300;
   wallOpponent.y = 600;
+  wallOpponent.aimAngle = 0;
   wallWorld.dungeon.tiles[8 * wallWorld.dungeon.w + 6] = 1;
   wallVictim.pvpRecentSpawnIndices = [];
   check("an actual wall-blocked spawn beats the exposed farther spawn",
@@ -177,6 +178,7 @@ section("actual walls and intact props provide cover; broken props do not");
   const propOpponent = propWorld.players.get("p2")!;
   propOpponent.x = 300;
   propOpponent.y = 600;
+  propOpponent.aimAngle = 0;
   propWorld.props = [{
     id: 900,
     kind: "crate",
@@ -196,6 +198,7 @@ section("actual walls and intact props provide cover; broken props do not");
   const brokenOpponent = brokenWorld.players.get("p2")!;
   brokenOpponent.x = 300;
   brokenOpponent.y = 600;
+  brokenOpponent.aimAngle = 0;
   brokenWorld.props = [{
     id: 901,
     kind: "crate",
@@ -213,15 +216,15 @@ section("actual walls and intact props provide cover; broken props do not");
 
 section("swept projectile ETA and shipped ranged/trap threats");
 {
-  const spawns = [{ x: 300, y: 216 }, { x: 600, y: 216 }];
+  const spawns = [{ x: 840, y: 456 }, { x: 300, y: 216 }];
   for (const etaSec of [0.5, 1, 1.5, 2]) {
     const world = liveWorld(200 + Math.round(etaSec * 10), 2);
     setRespawnArena(world, spawns);
     const victim = world.players.get("p1")!;
     const owner = world.players.get("p2")!;
-    owner.x = 450;
+    owner.x = 300;
     owner.y = 600;
-    owner.aimAngle = Math.PI / 2;
+    owner.aimAngle = Math.PI;
     victim.pvpRecentSpawnIndices = [];
     addIncomingBullet(world, owner, victim, spawns[0], etaSec, "rapid");
     check(`rapid round at ETA ${etaSec}s avoids its swept candidate`,
@@ -232,8 +235,9 @@ section("swept projectile ETA and shipped ranged/trap threats");
   setRespawnArena(beamWorld, spawns);
   const beamVictim = beamWorld.players.get("p1")!;
   const beamOwner = beamWorld.players.get("p2")!;
-  beamOwner.x = 450;
+  beamOwner.x = 300;
   beamOwner.y = 600;
+  beamOwner.aimAngle = Math.PI;
   addIncomingBullet(beamWorld, beamOwner, beamVictim, spawns[0], 1, "beam");
   check("beam trajectory is included in incoming threat prediction",
     forceRespawn(beamWorld, beamVictim) === 1);
@@ -242,14 +246,15 @@ section("swept projectile ETA and shipped ranged/trap threats");
   setRespawnArena(mortarWorld, spawns);
   const mortarVictim = mortarWorld.players.get("p1")!;
   const mortarOwner = mortarWorld.players.get("p2")!;
-  mortarOwner.x = 450;
+  mortarOwner.x = 300;
   mortarOwner.y = 600;
+  mortarOwner.aimAngle = Math.PI;
   const mortarSpeed = 300;
   mortarWorld.bullets.push({
-    x: spawns[0].x,
-    y: spawns[0].y - mortarSpeed * (1 + DT),
-    vx: 0,
-    vy: mortarSpeed,
+    x: spawns[0].x - mortarSpeed * (1 + DT),
+    y: spawns[0].y,
+    vx: mortarSpeed,
+    vy: 0,
     radius: 5,
     life: 1 + DT,
     friendly: true,
@@ -270,17 +275,18 @@ section("swept projectile ETA and shipped ranged/trap threats");
   setRespawnArena(wireWorld, spawns);
   const wireVictim = wireWorld.players.get("p1")!;
   const wireOwner = wireWorld.players.get("p2")!;
-  wireOwner.x = 450;
+  wireOwner.x = 300;
   wireOwner.y = 600;
+  wireOwner.aimAngle = Math.PI;
   const wire: WireEffect = {
     id: 500,
     kind: "wire",
     owner: wireOwner.id,
     fx: "snapwire",
-    x: spawns[0].x - 80,
-    y: spawns[0].y,
-    x2: spawns[0].x + 80,
-    y2: spawns[0].y,
+    x: spawns[0].x,
+    y: spawns[0].y - 80,
+    x2: spawns[0].x,
+    y2: spawns[0].y + 80,
     width: 14,
     arm: 0,
     life: 10,
@@ -322,11 +328,11 @@ section("2p/4p/6p cross-cover stress is deterministic and never starves");
     const target = world.players.get("p1")!;
     const opponents = [...world.players.values()].filter((player) => player !== target);
     const cross = [
-      { x: 456, y: 300 },
-      { x: 612, y: 456 },
-      { x: 456, y: 612 },
-      { x: 300, y: 456 },
-      { x: 552, y: 360 },
+      { x: 456, y: 456 },
+      { x: 466, y: 456 },
+      { x: 456, y: 466 },
+      { x: 446, y: 456 },
+      { x: 456, y: 446 },
     ];
     opponents.forEach((player, index) => {
       player.x = cross[index].x;
