@@ -180,6 +180,7 @@ export default defineSchema({
     isPetChoiceMade: v.optional(v.boolean()),
     isLoadoutConfirmed: v.optional(v.boolean()),
     loadoutGeneration: v.optional(v.number()),
+    loadoutEditRevision: v.optional(v.number()),
     // A deliberate leave during a live generation keeps this row as a loadout tombstone:
     // rejoining the same run restores the immutable pair, while the row no longer occupies
     // an active roster/capacity slot.

@@ -63,6 +63,9 @@ export class OnlineLobby {
   private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
   private lastPingMs: number | null = null;
   private confirmedLoadout: RunLoadout | null = null;
+  private confirmedLoadoutGeneration: number | null = null;
+  private loadoutEditRevision: number | null = null;
+  private loadoutDraftError: string | null = null;
   private pendingLoadoutDraft: Promise<void> = Promise.resolve();
 
   constructor(client: ConvexClient, session: Session) {
@@ -77,13 +80,25 @@ export class OnlineLobby {
   get selfId(): string { return this.selfPlayerId; }
   get isHost(): boolean { return this.hostPlayerId === this.selfPlayerId; }
   get isActive(): boolean { return this.roomId !== "" && this.status !== "ended"; }
-  get selfLoadout(): RunLoadout | null { return this.confirmedLoadout; }
+  get selfLoadout(): RunLoadout | null {
+    const row = this.presenceRows.find((candidate) => candidate.playerId === this.selfPlayerId);
+    if (row?.isLoadoutConfirmed
+      && row.loadoutGeneration === this.loadoutGeneration
+      && row.loadoutKitId
+      && isKitId(row.loadoutKitId)
+      && row.loadoutKitId !== "none") {
+      return { kitId: row.loadoutKitId, petId: row.loadoutPetId };
+    }
+    return this.confirmedLoadoutGeneration === this.loadoutGeneration
+      ? this.confirmedLoadout
+      : null;
+  }
   get selfPreselection(): RunLoadout | null {
     const row = this.presenceRows.find((candidate) => candidate.playerId === this.selfPlayerId);
     if (row?.loadoutKitId && isKitId(row.loadoutKitId) && row.loadoutKitId !== "none") {
       return { kitId: row.loadoutKitId, petId: row.loadoutPetId };
     }
-    return this.confirmedLoadout;
+    return this.selfLoadout;
   }
 
   private requirePlayerId(): string {
@@ -112,6 +127,7 @@ export class OnlineLobby {
   private acceptLoadout(kitId: string, petId: string | null): void {
     if (!isKitId(kitId) || kitId === "none") throw new Error("the server returned an invalid kit");
     this.confirmedLoadout = { kitId, petId };
+    this.confirmedLoadoutGeneration = this.loadoutGeneration;
     this.session.acceptConfirmedRunLoadout(this.confirmedLoadout);
   }
 
@@ -198,7 +214,9 @@ export class OnlineLobby {
       const generation = room.loadoutGeneration ?? 1;
       if (generation !== this.loadoutGeneration) {
         this.confirmedLoadout = null;
-        this.pendingLoadoutDraft = Promise.resolve();
+        this.confirmedLoadoutGeneration = null;
+        this.loadoutEditRevision = null;
+        this.loadoutDraftError = null;
       }
       this.loadoutGeneration = generation;
       this.emit();
@@ -269,7 +287,7 @@ export class OnlineLobby {
 
   get isSelfLoadoutConfirmed(): boolean {
     const row = this.presenceRows.find((candidate) => candidate.playerId === this.selfPlayerId);
-    if (!row) return this.confirmedLoadout !== null;
+    if (!row) return this.selfLoadout !== null;
     return row.isKitChoiceMade === true
       && row.isPetChoiceMade === true
       && row.isLoadoutConfirmed === true
@@ -313,11 +331,14 @@ export class OnlineLobby {
   // verified world join, null on leaving), so the lobby roster's readiness readout works
   // for members who are still ON the lobby screen. Best-effort — readiness inside the run
   // always reads the server's snapshot roster directly.
-  reportWorld(worldId: string | null): void {
+  reportWorld(worldId: string | null, generation = this.loadoutGeneration): void {
     const playerId = this.selfPlayerId;
     if (!this.roomId || !playerId) return;
     this.client.mutation(api.presence.reportWorld, {
-      roomId: this.roomId, clientId: this.session.clientId, worldId,
+      roomId: this.roomId,
+      clientId: this.session.clientId,
+      generation,
+      worldId,
     }).catch(() => {});
   }
 
@@ -337,18 +358,21 @@ export class OnlineLobby {
   async beginLoadoutEdit(generation = this.loadoutGeneration): Promise<string | null> {
     const playerId = this.requirePlayerId();
     try {
+      await this.pendingLoadoutDraft;
+      this.loadoutDraftError = null;
       const result = await this.client.mutation(api.rooms.beginLoadoutEdit, {
         roomId: this.roomId,
         clientId: this.session.clientId,
         generation,
       });
-      if (!result.ok) {
+      if (!result.ok || result.editRevision === undefined) {
         return result.reason === "generation_changed"
           ? "The lobby changed — choose again"
           : "This run already started";
       }
       this.confirmedLoadout = null;
-      this.pendingLoadoutDraft = Promise.resolve();
+      this.confirmedLoadoutGeneration = null;
+      this.loadoutEditRevision = result.editRevision;
       const row = this.presenceRows.find((candidate) => candidate.playerId === playerId);
       if (row) {
         row.isKitChoiceMade = false;
@@ -376,14 +400,22 @@ export class OnlineLobby {
       row.loadoutGeneration = generation;
       this.emit();
     }
+    const editRevision = this.loadoutEditRevision;
+    if (editRevision === null) {
+      this.loadoutDraftError = "Loadout editing expired — reopen it";
+      return;
+    }
+    const roomId = this.roomId;
     this.pendingLoadoutDraft = this.pendingLoadoutDraft.then(async () => {
-      await this.client.mutation(api.rooms.chooseDraftKit, {
-        roomId: this.roomId,
+      const result = await this.client.mutation(api.rooms.chooseDraftKit, {
+        roomId,
         clientId: this.session.clientId,
         generation,
+        editRevision,
         kitId,
       });
-    }).catch(() => {});
+      if (!result.ok) this.loadoutDraftError = "Could not save the kit draft";
+    }).catch(() => { this.loadoutDraftError = "Could not save the kit draft"; });
   }
 
   chooseDraftPet(petId: string | null, generation = this.loadoutGeneration): void {
@@ -398,28 +430,40 @@ export class OnlineLobby {
       row.loadoutGeneration = generation;
       this.emit();
     }
+    const editRevision = this.loadoutEditRevision;
+    if (editRevision === null) {
+      this.loadoutDraftError = "Loadout editing expired — reopen it";
+      return;
+    }
+    const roomId = this.roomId;
     this.pendingLoadoutDraft = this.pendingLoadoutDraft.then(async () => {
-      await this.client.mutation(api.rooms.chooseDraftPet, {
-        roomId: this.roomId,
+      const result = await this.client.mutation(api.rooms.chooseDraftPet, {
+        roomId,
         clientId: this.session.clientId,
         generation,
+        editRevision,
         petId,
       });
-    }).catch(() => {});
+      if (!result.ok) this.loadoutDraftError = "Could not save the pet draft";
+    }).catch(() => { this.loadoutDraftError = "Could not save the pet draft"; });
   }
 
-  async confirmLoadout(loadout: RunLoadout, generation = this.loadoutGeneration): Promise<string | null> {
+  async confirmLoadout(_loadout: RunLoadout, generation = this.loadoutGeneration): Promise<string | null> {
     const playerId = this.requirePlayerId();
     try {
       await this.pendingLoadoutDraft;
+      if (this.loadoutDraftError) return this.loadoutDraftError;
+      const editRevision = this.loadoutEditRevision;
+      if (editRevision === null) return "Loadout editing expired — reopen it";
       const result = await this.client.mutation(api.rooms.confirmLoadout, {
         roomId: this.roomId,
         clientId: this.session.clientId,
         generation,
-        ...this.loadoutArg(loadout),
+        editRevision,
       });
       if (!result.ok || result.kitId === undefined) {
         if (result.reason === "generation_changed") return "The lobby changed — choose again";
+        if (result.reason === "edit_changed") return "Loadout editing changed — review again";
         if (result.reason === "run_locked") return "This run already started";
         if (result.reason === "kit_locked") return "That kit is locked at your account level";
         if (result.reason === "pet_unowned") return "Rescue that pet before choosing it";
@@ -427,6 +471,8 @@ export class OnlineLobby {
       }
       this.loadoutGeneration = result.generation ?? generation;
       this.acceptLoadout(result.kitId, result.petId ?? null);
+      this.loadoutEditRevision = null;
+      this.loadoutDraftError = null;
       const row = this.presenceRows.find((candidate) => candidate.playerId === playerId);
       if (row) {
         row.loadoutKitId = result.kitId;
@@ -450,12 +496,16 @@ export class OnlineLobby {
     if (!this.roomId || !playerId) return false;
     try {
       const result = await this.client.mutation(api.rooms.reopen, {
-        roomId: this.roomId, clientId: this.session.clientId,
+        roomId: this.roomId,
+        clientId: this.session.clientId,
+        generation: this.loadoutGeneration,
       });
       if (!result.isReopened) return false;
       this.loadoutGeneration = result.loadoutGeneration;
       this.confirmedLoadout = null;
-      this.pendingLoadoutDraft = Promise.resolve();
+      this.confirmedLoadoutGeneration = null;
+      this.loadoutEditRevision = null;
+      this.loadoutDraftError = null;
       for (const row of this.presenceRows) {
         row.isKitChoiceMade = false;
         row.isPetChoiceMade = false;

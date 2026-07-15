@@ -125,7 +125,8 @@ export type ReadyMutationResult = {
 
 export type RoomDraftMutationResult = {
   ok: boolean;
-  reason?: "run_locked" | "generation_changed" | "not_in_room" | "unknown_kit" | "kit_locked" | "pet_unowned";
+  reason?: "run_locked" | "generation_changed" | "edit_changed" | "not_in_room" | "unknown_kit" | "kit_locked" | "pet_unowned";
+  editRevision?: number;
 };
 
 // Explicit per-slot loadout picks for ensurePlayer ("none" clears a slot; absent = keep).
@@ -255,11 +256,11 @@ export const api = {
     join: makeFunctionReference<"mutation", { code: string; clientId: string; kind?: RoomKind; mode?: RoomMode; colorIndex?: number } & RunLoadoutArg, { roomId: string; code: string; seed: number; floor: number; status: RoomStatus; mode?: RoomMode; loadoutGeneration: number; kitId: string; petId: string | null }>("rooms:join"),
     get: makeFunctionReference<"query", { roomId: string }, RoomDoc | null>("rooms:get"),
     start: makeFunctionReference<"mutation", { roomId: string; clientId: string }, RoomStartResult>("rooms:start"),
-    reopen: makeFunctionReference<"mutation", { roomId: string; clientId: string }, { loadoutGeneration: number; isReopened: boolean }>("rooms:reopen"),
+    reopen: makeFunctionReference<"mutation", { roomId: string; clientId: string; generation: number }, { loadoutGeneration: number; isReopened: boolean }>("rooms:reopen"),
     beginLoadoutEdit: makeFunctionReference<"mutation", { roomId: string; clientId: string; generation: number }, RoomDraftMutationResult>("rooms:beginLoadoutEdit"),
-    chooseDraftKit: makeFunctionReference<"mutation", { roomId: string; clientId: string; generation: number; kitId: string }, RoomDraftMutationResult>("rooms:chooseDraftKit"),
-    chooseDraftPet: makeFunctionReference<"mutation", { roomId: string; clientId: string; generation: number; petId: string | null }, RoomDraftMutationResult>("rooms:chooseDraftPet"),
-    confirmLoadout: makeFunctionReference<"mutation", { roomId: string; clientId: string; generation: number } & RunLoadoutArg, RoomLoadoutResult>("rooms:confirmLoadout"),
+    chooseDraftKit: makeFunctionReference<"mutation", { roomId: string; clientId: string; generation: number; editRevision: number; kitId: string }, RoomDraftMutationResult>("rooms:chooseDraftKit"),
+    chooseDraftPet: makeFunctionReference<"mutation", { roomId: string; clientId: string; generation: number; editRevision: number; petId: string | null }, RoomDraftMutationResult>("rooms:chooseDraftPet"),
+    confirmLoadout: makeFunctionReference<"mutation", { roomId: string; clientId: string; generation: number; editRevision: number }, RoomLoadoutResult>("rooms:confirmLoadout"),
     heartbeat: makeFunctionReference<"mutation", { roomId: string; clientId: string; name?: string; colorIndex?: number; pingMs?: number }, null>("rooms:heartbeat"),
     descend: makeFunctionReference<"mutation", { roomId: string; floor: number }, null>("rooms:descend"),
     leave: makeFunctionReference<"mutation", { roomId: string; clientId: string }, null>("rooms:leave"),
@@ -273,7 +274,7 @@ export const api = {
     revive: makeFunctionReference<"mutation", { roomId: string; targetPlayerId: string }, null>("presence:revive"),
     // Mirror of the authoritative game-server connection state (ONLINE rooms): worldId after
     // a verified world join, null on leaving. Powers the lobby's per-member readiness readout.
-    reportWorld: makeFunctionReference<"mutation", { roomId: string; clientId: string; worldId: string | null }, null>("presence:reportWorld"),
+    reportWorld: makeFunctionReference<"mutation", { roomId: string; clientId: string; generation: number; worldId: string | null }, null>("presence:reportWorld"),
     // The lobby READY toggle (roster READY/NOT READY; gates the host's START).
     setReady: makeFunctionReference<"mutation", { roomId: string; clientId: string; isReady: boolean }, ReadyMutationResult>("presence:setReady"),
   },

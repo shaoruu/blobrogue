@@ -1152,7 +1152,9 @@ export class Menu {
       );
       const editKit = el("button", "secondary review-edit review-edit-kit", "EDIT KIT");
       editKit.type = "button";
+      editKit.disabled = isPersisting;
       editKit.onclick = () => {
+        if (isPersisting) return;
         isLoadoutConfirmed = false;
         errorMessage = "";
         showKit();
@@ -1189,7 +1191,9 @@ export class Menu {
       );
       const editPet = el("button", "secondary review-edit review-edit-pet", "EDIT PET");
       editPet.type = "button";
+      editPet.disabled = isPersisting;
       editPet.onclick = () => {
+        if (isPersisting) return;
         isLoadoutConfirmed = false;
         errorMessage = "";
         showPet();

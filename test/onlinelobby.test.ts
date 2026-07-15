@@ -44,6 +44,9 @@ interface FakeConvexOpts {
 // A Convex client double that records every call in order and answers with canned rows.
 function fakeConvex(calls: Call[], opts: FakeConvexOpts = {}): ConvexClient {
   const profileColor = opts.profileColor === undefined ? 4 : opts.profileColor;
+  let draftKitId = "gunner";
+  let draftPetId: string | null = null;
+  let editRevision = 0;
   const respond = (fn: string, args: Record<string, unknown>): unknown => {
     switch (fn) {
       case "players:ensurePlayer":
@@ -76,12 +79,17 @@ function fakeConvex(calls: Call[], opts: FakeConvexOpts = {}): ConvexClient {
         return {
           ok: true,
           generation: args.generation,
-          kitId: args.kitId,
-          petId: args.petId,
+          kitId: draftKitId,
+          petId: draftPetId,
         };
       case "rooms:beginLoadoutEdit":
+        editRevision++;
+        return { ok: true, editRevision };
       case "rooms:chooseDraftKit":
+        draftKitId = String(args.kitId);
+        return { ok: true };
       case "rooms:chooseDraftPet":
+        draftPetId = typeof args.petId === "string" ? args.petId : null;
         return { ok: true };
       case "rooms:reopen":
         return { loadoutGeneration: 2, isReopened: true };
@@ -354,18 +362,20 @@ async function main(): Promise<void> {
       draftCalls.length === 2
       && draftCalls[0]?.fn === "rooms:chooseDraftKit"
       && draftCalls[0].args.kitId === "mender"
+      && draftCalls[0].args.editRevision === 1
       && draftCalls[1]?.fn === "rooms:chooseDraftPet"
-      && draftCalls[1].args.petId === null);
+      && draftCalls[1].args.petId === null
+      && draftCalls[1].args.editRevision === 1);
     check("draft writes do not persist profile convenience or mint a ticket",
       calls.every((call) => call.fn !== "players:confirmRunLoadout" && call.fn !== "gsTicket:mint"));
     check("generation-1 combined confirm succeeds", error === null);
     const confirm = calls.find((call) => call.fn === "rooms:confirmLoadout");
-    check("confirm carries generation, explicit null, both choice bits, and caller capability",
+    check("confirm carries only generation, edit revision, and caller capability",
       confirm?.args.generation === 1
-      && confirm.args.petId === null
-      && confirm.args.isKitChoiceMade === true
-      && confirm.args.isPetChoiceMade === true
+      && confirm.args.editRevision === 1
       && confirm.args.clientId === session.clientId
+      && !("kitId" in confirm.args)
+      && !("petId" in confirm.args)
       && !("playerId" in confirm.args),
       JSON.stringify(confirm?.args));
     check("the lobby exposes the exact confirmed pair", lobby.selfLoadout?.kitId === "mender" && lobby.selfLoadout.petId === null);
@@ -388,7 +398,9 @@ async function main(): Promise<void> {
     await Promise.resolve();
     const reports = calls.filter((c) => c.fn === "presence:reportWorld");
     check("join mirror is bound to this browser session", reports[0] !== undefined
-      && reports[0].args.worldId === "room:ABCD" && reports[0].args.clientId === session.clientId,
+      && reports[0].args.worldId === "room:ABCD"
+      && reports[0].args.generation === 1
+      && reports[0].args.clientId === session.clientId,
       JSON.stringify(reports[0]?.args));
     check("leave mirrored with null", reports[1] !== undefined && reports[1].args.worldId === null);
     lobby.leave();

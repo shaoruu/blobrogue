@@ -126,7 +126,7 @@ export const setReady = mutation({
       .query("presence")
       .withIndex("by_room_player", (q) => q.eq("roomId", roomId).eq("playerId", player._id))
       .unique();
-    if (!row) return { ok: false as const, reason: "not_in_room" as const };
+    if (!row || row.isDeparted === true) return { ok: false as const, reason: "not_in_room" as const };
     const room = await ctx.db.get(roomId);
     if (!room || room.status !== "lobby") {
       return { ok: false as const, reason: "not_in_room" as const };
@@ -153,16 +153,22 @@ export const setReady = mutation({
 // snapshot — it powers the lobby's per-member LOBBY / CONNECTING / CONNECTED readout, while
 // in-run readiness always keys on the server's snapshot roster directly.
 export const reportWorld = mutation({
-  args: { roomId: v.id("rooms"), clientId: v.string(), worldId: v.union(v.string(), v.null()) },
-  handler: async (ctx, { roomId, clientId, worldId }) => {
+  args: {
+    roomId: v.id("rooms"),
+    clientId: v.string(),
+    generation: v.number(),
+    worldId: v.union(v.string(), v.null()),
+  },
+  handler: async (ctx, { roomId, clientId, generation, worldId }) => {
     const player = await resolveOnlineCaller(ctx, clientId);
     if (!player) return;
     const room = await ctx.db.get(roomId);
     if (!room || room.kind !== "online") return;
-    const generation = room.loadoutGeneration ?? 1;
+    const currentGeneration = room.loadoutGeneration ?? 1;
+    if (generation !== currentGeneration) return;
     const expectedWorldId = room.mode === "pvp"
-      ? pvpWorldIdForRoomCode(room.code, generation)
-      : worldIdForRoomCode(room.code, generation);
+      ? pvpWorldIdForRoomCode(room.code, currentGeneration)
+      : worldIdForRoomCode(room.code, currentGeneration);
     if (worldId !== null && worldId !== expectedWorldId) return;
     const row = await ctx.db
       .query("presence")

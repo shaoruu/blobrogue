@@ -153,6 +153,7 @@ async function ensurePresence(
       await ctx.db.patch(existing._id, {
         name, colorIndex, floor, updatedAt: now, isDown: false,
         gsWorldId: undefined, gsJoinedAt: undefined, isDeparted: undefined,
+        ...(roomStatus === "playing" ? { isReady: true } : {}),
       });
       return {
         kitId: existing.loadoutKitId as ConfirmedKitId,
@@ -169,6 +170,7 @@ async function ensurePresence(
         isPetChoiceMade: true,
         isLoadoutConfirmed: true,
         loadoutGeneration: generation,
+        ...(roomStatus === "playing" ? { isReady: true } : {}),
       } : {}),
     });
     return loadout;
@@ -186,6 +188,7 @@ async function ensurePresence(
       isPetChoiceMade: true,
       isLoadoutConfirmed: true,
       loadoutGeneration: generation,
+      ...(roomStatus === "playing" ? { isReady: true } : {}),
     } : {}),
   });
   return loadout;
@@ -269,7 +272,7 @@ export const join = mutation({
       // Online rooms enforce the party cap at join (classic co-op keeps its historical
       // quickPlay-only cap, unchanged).
       const members = await ctx.db.query("presence").withIndex("by_room", (q) => q.eq("roomId", room._id)).collect();
-      const isMember = members.some((r) => r.playerId === playerId);
+      const isMember = members.some((member) => member.playerId === playerId && member.isDeparted !== true);
       const activeCount = members.filter((member) => member.isDeparted !== true).length;
       if (!isMember && activeCount >= MAX_PLAYERS) throw new Error("that room is full");
     }
@@ -410,6 +413,9 @@ export const membership = query({
       .withIndex("by_room_player", (q) => q.eq("roomId", room._id).eq("playerId", playerId))
       .unique();
     const generation = room.loadoutGeneration ?? 1;
+    const isMember = row !== null
+      && row.isDeparted !== true
+      && (room.isPublic === true || row.isReady === true);
     const isLoadoutConfirmed = row !== null
       && row.isKitChoiceMade === true
       && row.isPetChoiceMade === true
@@ -417,7 +423,7 @@ export const membership = query({
       && row.loadoutGeneration === generation
       && row.loadoutKitId !== undefined;
     return {
-      isMember: row !== null,
+      isMember,
       mode: modeOf(room),
       isRunLocked: room.status === "playing",
       loadoutGeneration: generation,
@@ -480,17 +486,19 @@ export const beginLoadoutEdit = mutation({
       .query("presence")
       .withIndex("by_room_player", (q) => q.eq("roomId", roomId).eq("playerId", player._id))
       .unique();
-    if (!row) return { ok: false as const, reason: "not_in_room" as const };
+    if (!row || row.isDeparted === true) return { ok: false as const, reason: "not_in_room" as const };
+    const editRevision = (row.loadoutEditRevision ?? 0) + 1;
     await ctx.db.patch(row._id, {
       isKitChoiceMade: undefined,
       isPetChoiceMade: undefined,
       isLoadoutConfirmed: undefined,
       isReady: undefined,
       loadoutGeneration: currentGeneration,
+      loadoutEditRevision: editRevision,
       isDeparted: undefined,
       updatedAt: Date.now(),
     });
-    return { ok: true as const };
+    return { ok: true as const, editRevision };
   },
 });
 
@@ -499,9 +507,10 @@ export const chooseDraftKit = mutation({
     roomId: v.id("rooms"),
     clientId: v.string(),
     generation: v.number(),
+    editRevision: v.number(),
     kitId: v.string(),
   },
-  handler: async (ctx, { roomId, clientId, generation, kitId }) => {
+  handler: async (ctx, { roomId, clientId, generation, editRevision, kitId }) => {
     const room = await ctx.db.get(roomId);
     if (!room || kindOf(room) !== "online" || room.status !== "lobby") {
       return { ok: false as const, reason: "run_locked" as const };
@@ -515,7 +524,10 @@ export const chooseDraftKit = mutation({
       .query("presence")
       .withIndex("by_room_player", (q) => q.eq("roomId", roomId).eq("playerId", player._id))
       .unique();
-    if (!row) return { ok: false as const, reason: "not_in_room" as const };
+    if (!row || row.isDeparted === true) return { ok: false as const, reason: "not_in_room" as const };
+    if (row.loadoutEditRevision !== editRevision) {
+      return { ok: false as const, reason: "edit_changed" as const };
+    }
     const validation = validateKitDraft(player, kitId);
     if (!validation.ok) return { ok: false as const, reason: validation.reason };
     await ctx.db.patch(row._id, {
@@ -536,9 +548,10 @@ export const chooseDraftPet = mutation({
     roomId: v.id("rooms"),
     clientId: v.string(),
     generation: v.number(),
+    editRevision: v.number(),
     petId: v.union(v.string(), v.null()),
   },
-  handler: async (ctx, { roomId, clientId, generation, petId }) => {
+  handler: async (ctx, { roomId, clientId, generation, editRevision, petId }) => {
     const room = await ctx.db.get(roomId);
     if (!room || kindOf(room) !== "online" || room.status !== "lobby") {
       return { ok: false as const, reason: "run_locked" as const };
@@ -552,7 +565,10 @@ export const chooseDraftPet = mutation({
       .query("presence")
       .withIndex("by_room_player", (q) => q.eq("roomId", roomId).eq("playerId", player._id))
       .unique();
-    if (!row) return { ok: false as const, reason: "not_in_room" as const };
+    if (!row || row.isDeparted === true) return { ok: false as const, reason: "not_in_room" as const };
+    if (row.loadoutEditRevision !== editRevision) {
+      return { ok: false as const, reason: "edit_changed" as const };
+    }
     const validation = validatePetDraft(player, petId);
     if (!validation.ok) return { ok: false as const, reason: validation.reason };
     await ctx.db.patch(row._id, {
@@ -573,10 +589,7 @@ export const confirmLoadout = mutation({
     roomId: v.id("rooms"),
     clientId: v.string(),
     generation: v.number(),
-    kitId: v.string(),
-    petId: v.union(v.string(), v.null()),
-    isKitChoiceMade: v.boolean(),
-    isPetChoiceMade: v.boolean(),
+    editRevision: v.number(),
   },
   handler: async (ctx, args) => {
     const room = await ctx.db.get(args.roomId);
@@ -591,8 +604,16 @@ export const confirmLoadout = mutation({
       .query("presence")
       .withIndex("by_room_player", (q) => q.eq("roomId", args.roomId).eq("playerId", player._id))
       .unique();
-    if (!row) return { ok: false as const, reason: "not_in_room" as const };
-    const validation = validateCombinedLoadout(player, args);
+    if (!row || row.isDeparted === true) return { ok: false as const, reason: "not_in_room" as const };
+    if (row.loadoutEditRevision !== args.editRevision) {
+      return { ok: false as const, reason: "edit_changed" as const };
+    }
+    const validation = validateCombinedLoadout(player, {
+      kitId: row.loadoutKitId ?? "",
+      petId: row.loadoutPetId ?? null,
+      isKitChoiceMade: row.isKitChoiceMade === true,
+      isPetChoiceMade: row.isPetChoiceMade === true,
+    });
     if (!validation.ok) return { ok: false as const, reason: validation.reason };
     await ctx.db.patch(row._id, {
       loadoutKitId: validation.kitId,
@@ -601,6 +622,7 @@ export const confirmLoadout = mutation({
       isPetChoiceMade: true,
       isLoadoutConfirmed: true,
       loadoutGeneration: generation,
+      loadoutEditRevision: args.editRevision + 1,
       isReady: undefined,
       isDeparted: undefined,
       updatedAt: Date.now(),
@@ -623,30 +645,35 @@ export const reopen = mutation({
     roomId: v.id("rooms"),
     clientId: v.optional(v.string()),
     playerId: v.optional(v.id("players")),
+    generation: v.optional(v.number()),
   },
-  handler: async (ctx, { roomId, clientId, playerId }) => {
+  handler: async (ctx, { roomId, clientId, playerId, generation }) => {
     const room = await ctx.db.get(roomId);
     if (!room) return { loadoutGeneration: 1, isReopened: false };
+    const currentGeneration = room.loadoutGeneration ?? 1;
+    if (kindOf(room) === "online" && generation !== currentGeneration) {
+      return { loadoutGeneration: currentGeneration, isReopened: false };
+    }
     if (room.status !== "playing") {
-      return { loadoutGeneration: room.loadoutGeneration ?? 1, isReopened: room.status === "lobby" };
+      return { loadoutGeneration: currentGeneration, isReopened: room.status === "lobby" };
     }
     const caller = await resolveRoomCaller(ctx, kindOf(room), clientId, playerId);
     if (kindOf(room) === "online" && room.hostPlayerId !== caller._id) {
-      return { loadoutGeneration: room.loadoutGeneration ?? 1, isReopened: false };
+      return { loadoutGeneration: currentGeneration, isReopened: false };
     }
     const member = await ctx.db
       .query("presence")
       .withIndex("by_room_player", (q) => q.eq("roomId", roomId).eq("playerId", caller._id))
       .unique();
-    if (!member) return { loadoutGeneration: room.loadoutGeneration ?? 1, isReopened: false };
+    if (!member) return { loadoutGeneration: currentGeneration, isReopened: false };
     const rows = await ctx.db.query("presence").withIndex("by_room", (q) => q.eq("roomId", roomId)).collect();
     if (kindOf(room) === "online" && rows.some((row) => row.gsWorldId !== undefined)) {
-      return { loadoutGeneration: room.loadoutGeneration ?? 1, isReopened: false };
+      return { loadoutGeneration: currentGeneration, isReopened: false };
     }
-    const generation = (room.loadoutGeneration ?? 1) + 1;
+    const nextGeneration = currentGeneration + 1;
     await ctx.db.patch(roomId, {
       status: "lobby",
-      loadoutGeneration: generation,
+      loadoutGeneration: nextGeneration,
       lastActivity: Date.now(),
     });
     for (const row of rows) {
@@ -657,7 +684,7 @@ export const reopen = mutation({
         isReady: undefined,
       });
     }
-    return { loadoutGeneration: generation, isReopened: true };
+    return { loadoutGeneration: nextGeneration, isReopened: true };
   },
 });
 

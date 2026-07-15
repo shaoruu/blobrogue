@@ -155,6 +155,7 @@ async function bootNormal() {
       menu.showOnlineLobby(lobby, profile, "Confirm KIT + PET before joining the run");
       return;
     }
+    const loadoutGeneration = lobby.loadoutGeneration;
     if (activeOnline && activeOnline !== lobby) activeOnline.leave();
     activeOnline = lobby;
     launchRun((game) => game.start({
@@ -166,7 +167,7 @@ async function bootNormal() {
         expectedWorldId: lobby.expectedWorldId(),
         selfPlayerId: lobby.selfId || null,
         party: isPartyStart ? () => lobby.players() : null,
-        onWorldPresence: (worldId) => lobby.reportWorld(worldId),
+        onWorldPresence: (worldId) => lobby.reportWorld(worldId, loadoutGeneration),
       },
       profile,
       selfColorIndex: session.colorIndex,

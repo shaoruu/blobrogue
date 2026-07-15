@@ -752,6 +752,9 @@ async function main(): Promise<void> {
     byClass(made.overlay, "loadout-confirm")[0]?.onclick?.();
     await settle();
     check("the save is genuinely pending", made.pendingLoadoutPersists.length === 1);
+    check("pending confirmation disables both Edit actions",
+      byClass(made.overlay, "review-edit-kit")[0]?.disabled === true
+      && byClass(made.overlay, "review-edit-pet")[0]?.disabled === true);
     collect(made.overlay, (node) => node.tagName === "BUTTON" && textOf(node) === "CANCEL")[0]?.onclick?.();
     await settle();
     check("cancel returns to the origin without launching", buttonsOf(made.overlay).some((button) => button.includes("PLAY SOLO"))
