@@ -25,11 +25,15 @@ mkdirSync(dirname(outPath), { recursive: true });
 writeFileSync(outPath, JSON.stringify(report, null, 2) + "\n");
 
 const metrics = report.aggregate;
+const geometry2p = report.geometry.parties.find((party) => party.playerCount === 2)!;
+const geometry4p = report.geometry.parties.find((party) => party.playerCount === 4)!;
+const geometry6p = report.geometry.parties.find((party) => party.playerCount === 6)!;
 const isAccepted = metrics.postRespawnEpisodeCount >= seedCount * 3
   && metrics.spawnToFirstDamageP10Sec >= 2
   && metrics.spawnToFirstDamageMedianSec >= 3
   && metrics.spawnToDeathP10Sec >= 4.5
   && metrics.spawnToDeathMedianSec >= 7
+  && metrics.deathWithin3sRate <= 0.02
   && metrics.maxRespawnOnlyFragsPer20Sec <= 2
   && (metrics.timeToEightMinSec === null || metrics.timeToEightMinSec >= 90)
   && metrics.controlEstablishedRate >= 0.95
@@ -37,6 +41,18 @@ const isAccepted = metrics.postRespawnEpisodeCount >= seedCount * 3
   && metrics.armingFeedbackCoverageRate === 1
   && metrics.armingClarityProxyRate >= 0.9
   && metrics.heldFireAutoFireCount === 0
+  && geometry2p.safeCandidateMedian >= 2
+  && geometry4p.safeCandidateMedian >= 1
+  && geometry6p.safeCandidateP25 >= 1
+  && geometry2p.waitP95Ms <= 300
+  && geometry4p.waitP95Ms <= 300
+  && geometry6p.waitP95Ms <= 750
+  && geometry2p.fallbackRate <= 0.05
+  && geometry4p.fallbackRate <= 0.15
+  && geometry6p.fallbackRate <= 0.30
+  && report.geometry.parties.every((party) =>
+    party.avoidableImmediateProjectileSelections === 0 && party.isNeverTripleIndex
+  )
   && (profile !== "playtestBot"
     || (metrics.shieldFireAttempts === 0
       && metrics.playtestReactionMinMs !== null
@@ -54,6 +70,7 @@ process.stdout.write([
   `- Completed post-death respawns: ${metrics.postRespawnEpisodeCount}`,
   `- Spawn → first damage: P10 ${metrics.spawnToFirstDamageP10Sec.toFixed(2)}s, median ${metrics.spawnToFirstDamageMedianSec.toFixed(2)}s`,
   `- Spawn → death: P10 ${metrics.spawnToDeathP10Sec.toFixed(2)}s, median ${metrics.spawnToDeathMedianSec.toFixed(2)}s`,
+  `- Deaths within 3s: ${(metrics.deathWithin3sRate * 100).toFixed(1)}%`,
   `- Max respawn-only bot frags / 20s: ${metrics.maxRespawnOnlyFragsPer20Sec}`,
   `- Fastest time-to-8: ${metrics.timeToEightMinSec === null
     ? `not reached in ${metrics.seedCount} seeds`
@@ -70,6 +87,10 @@ process.stdout.write([
   `- Post-shield first-shot reaction: ${metrics.playtestReactionMinMs === null
     ? "not measured for this profile"
     : `${metrics.playtestReactionMinMs.toFixed(0)}–${metrics.playtestReactionMaxMs?.toFixed(0)}ms`}`,
+  `- Safe candidates: 2p median ${geometry2p.safeCandidateMedian}, 4p median ${geometry4p.safeCandidateMedian}, 6p P25 ${geometry6p.safeCandidateP25}`,
+  `- Wait-safe P95: 2p ${geometry2p.waitP95Ms}ms, 4p ${geometry4p.waitP95Ms}ms, 6p ${geometry6p.waitP95Ms}ms`,
+  `- Fallback 3s shield rate: 2p ${(geometry2p.fallbackRate * 100).toFixed(1)}%, 4p ${(geometry4p.fallbackRate * 100).toFixed(1)}%, 6p ${(geometry6p.fallbackRate * 100).toFixed(1)}%`,
+  `- Avoidable <=0.75s projectile selections: ${report.geometry.parties.reduce((total, party) => total + party.avoidableImmediateProjectileSelections, 0)}`,
   `- JSON: ${outPath}`,
   `- Acceptance: ${isAccepted ? "PASS" : "FAIL"}`,
   "",

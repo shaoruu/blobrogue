@@ -22,7 +22,8 @@ import {
   pvpRespawnDelayTicks, pvpCountdownTicks, pvpEnvKillCreditWindowTicks, pvpChainWindowTicks,
   pvpDraftEveryTicks, pvpDraftSeed, pvpBlessingBlacklist, pvpComebackTierBump,
   pvpPitEdgeDistance, pvpNearestPitEdgeDistance, pvpSingleDashDistance, pvpRespawnIndex,
-  isPvpPitWarningTile, pvpSpawnHardGraceTicks, pvpSpawnShieldTicks, pvpRespawnWaitSafeMaxTicks,
+  isPvpPitWarningTile, pvpSpawnHardGraceTicks, pvpSpawnShieldTicks, pvpSpawnFallbackShieldTicks,
+  pvpRespawnWaitSafeMaxTicks,
 } from "../src/sim/pvp.js";
 import type { PvpRespawnCandidate } from "../src/sim/pvp.js";
 import type { Vec2, WireEffect } from "../src/sim/types.js";
@@ -126,14 +127,18 @@ section("damage model (balancer numbers)");
   check("global dmgMult = 1.78", PVP.dmgMult === 1.78);
   check("per-hit cap = 35% of maxHp = 35", pvpPerHitCap() === 35);
   check("ults disabled flag", PVP.ultsEnabled === false);
-  check("spawn hard grace = 1.25s", PVP.spawnHardGraceSec === 1.25 && pvpSpawnHardGraceTicks() === 25);
-  check("spawn shield = 3.0s", PVP.spawnShieldSec === 3.0 && pvpSpawnShieldTicks() === 60);
+  check("spawn hard grace = 0.75s", PVP.spawnHardGraceSec === 0.75 && pvpSpawnHardGraceTicks() === 15);
+  check("normal spawn shield = 2.0s", PVP.spawnShieldSec === 2.0 && pvpSpawnShieldTicks() === 40);
+  check("all-unsafe fallback shield = 3.0s",
+    PVP.spawnFallbackShieldSec === 3.0 && pvpSpawnFallbackShieldTicks() === 60);
+  check("6p geometry proximity floor = 192px and LOS/aim range = 480px",
+    PVP.spawnMinOpponentDist === 192 && PVP.spawnLosAimRange === 480);
   const tickZeroWorld = pvpWorld(1001, ["p1"]);
   const tickZeroPlayer = tickZeroWorld.players.get("p1")!;
   stepN(tickZeroWorld, 1, new Map());
-  check("paused tick-zero protection preserves one shared 25/60 origin",
-    tickZeroPlayer.spawnHardGraceEndsAtTick - tickZeroPlayer.spawnProtectionStartedTick === 25
-    && tickZeroPlayer.spawnShieldEndsAtTick - tickZeroPlayer.spawnProtectionStartedTick === 60);
+  check("paused tick-zero protection preserves one shared 15/40 origin",
+    tickZeroPlayer.spawnHardGraceEndsAtTick - tickZeroPlayer.spawnProtectionStartedTick === 15
+    && tickZeroPlayer.spawnShieldEndsAtTick - tickZeroPlayer.spawnProtectionStartedTick === 40);
   check("player knockback constants are exact", PVP.kbScalar === 1.0 && PVP.kbMaxPerHit === 180 && PVP.kbSelfDuringIframe === 0);
   check("pit guardrail constants are exact", PVP.pitEdgeClearance === 200 && PVP.pitWarningBandTiles === 1);
   check("environmental credit window = 2.0s", PVP.envKillCreditWindowSec === 2.0);
@@ -508,10 +513,10 @@ section("SPAWNS: symmetric 19x19 arena + pits + spread + break-on-fire protectio
     ));
   check("suppressed held offense emits one rate-limited arming pulse without dry-fire",
     graceEvents.filter((event) => event.t === "pvpSpawnAttackBlocked").length === 1);
-  check("hard grace lasts exactly 25 authoritative ticks", p1.spawnGraceT === 0 && p1.spawnShieldT === 35);
-  check("hard grace is nested inside one 3.0s shield from the same spawn origin",
-    p1.spawnHardGraceEndsAtTick - p1.spawnProtectionStartedTick === 25
-    && p1.spawnShieldEndsAtTick - p1.spawnProtectionStartedTick === 60);
+  check("hard grace lasts exactly 15 authoritative ticks", p1.spawnGraceT === 0 && p1.spawnShieldT === 25);
+  check("hard grace is nested inside one 2.0s shield from the same spawn origin",
+    p1.spawnHardGraceEndsAtTick - p1.spawnProtectionStartedTick === 15
+    && p1.spawnShieldEndsAtTick - p1.spawnProtectionStartedTick === 40);
   const heldAfterGrace = stepCollect(w, 1, new Map([["p1", inp({ firing: true, aim: 0 })]]));
   check("held fire does not auto-fire when hard grace ends",
     p1.shotSeq === protectedShotSeq
@@ -537,7 +542,7 @@ section("SPAWNS: symmetric 19x19 arena + pits + spread + break-on-fire protectio
   refused.weapon = "snapwire";
   refused.ownedWeapons = ["snapwire"];
   refused.spawnGraceT = 0;
-  refused.spawnShieldT = 60;
+  refused.spawnShieldT = pvpSpawnShieldTicks();
   const refusedEvents = stepCollect(
     refusedWorld,
     1,
@@ -578,7 +583,7 @@ section("SPAWNS: symmetric 19x19 arena + pits + spread + break-on-fire protectio
     fx: "pistol",
   }];
   stepN(w2, 1, new Map([["p1", inp({ firing: true, aim: aim2 })]]));
-  check("natural 3.0s expiry clears before same-tick hit resolution",
+  check("natural 2.0s expiry clears before same-tick hit resolution",
     v2.spawnShieldT === 0 && v2.hp < PVP.maxHp,
     `hp=${v2.hp} shield=${v2.spawnShieldT}`);
 
@@ -1294,7 +1299,7 @@ section("PROTECTED TARGET EXCLUSION: homing and sentry cannot pre-stack on shiel
   const liveTarget = homingWorld.players.get("p3")!;
   owner.x = 300; owner.y = 216; clearPvpProtection(owner);
   protectedTarget.x = 350; protectedTarget.y = 190;
-  protectedTarget.spawnShieldT = 60;
+  protectedTarget.spawnShieldT = pvpSpawnShieldTicks();
   liveTarget.x = 380; liveTarget.y = 260; clearPvpProtection(liveTarget);
   homingWorld.bullets.push({
     x: owner.x,
@@ -1324,7 +1329,7 @@ section("PROTECTED TARGET EXCLUSION: homing and sentry cannot pre-stack on shiel
   sentryOwner.x = 300; sentryOwner.y = 216; clearPvpProtection(sentryOwner);
   sentryOwner.weapon = "sentry"; sentryOwner.ownedWeapons = ["sentry"];
   sentryTarget.x = 470; sentryTarget.y = 216;
-  sentryTarget.spawnShieldT = 60;
+  sentryTarget.spawnShieldT = pvpSpawnShieldTicks();
   const protectedEvents = stepCollect(
     sentryWorld,
     20,
@@ -1419,8 +1424,8 @@ section("P2 WIRE: protocol v32, match block + spawn protection + reliable events
   w.players.get("p2")!.spawnShieldT = 31;
   for (const player of w.players.values()) {
     player.spawnProtectionStartedTick = w.tick;
-    player.spawnHardGraceEndsAtTick = w.tick + 25;
-    player.spawnShieldEndsAtTick = w.tick + 60;
+    player.spawnHardGraceEndsAtTick = w.tick + pvpSpawnHardGraceTicks();
+    player.spawnShieldEndsAtTick = w.tick + pvpSpawnShieldTicks();
   }
   w.players.get("p1")!.isSpawnOffenseLatched = true;
   const raw = jsonCodec.encodeServer(snapOf(w, "p1"));
@@ -1439,16 +1444,16 @@ section("P2 WIRE: protocol v32, match block + spawn protection + reliable events
       dec.self?.sgr === 12 && dec.self.ssh === 42);
     check("local spawn origin and nested endpoints ride SelfWire",
       dec.self !== null
-      && dec.self.sge - dec.self.spo === 25
-      && dec.self.sse - dec.self.spo === 60
+      && dec.self.sge - dec.self.spo === 15
+      && dec.self.sse - dec.self.spo === 40
       && dec.self.sfl);
     const remote = dec.players.find((p) => p.id === "p2");
     check("remote authoritative grace/shield ticks ride PlayerWire",
       remote?.sgr === 7 && remote.ssh === 31);
     check("remote observes the same authoritative nested endpoints",
       remote !== undefined
-      && remote.sge - remote.spo === 25
-      && remote.sse - remote.spo === 60);
+      && remote.sge - remote.spo === 15
+      && remote.sse - remote.spo === 40);
   }
   const waiting = w.players.get("p1")!;
   waiting.hp = 0;

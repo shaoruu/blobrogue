@@ -580,9 +580,9 @@ function arenaHudDomTests(): void {
     tick: 100,
     selfId: "p1",
     respawnTicks: 0,
-    spawnProtectionStartedTick: 83,
+    spawnProtectionStartedTick: 93,
     spawnHardGraceEndsAtTick: 108,
-    spawnShieldEndsAtTick: 143,
+    spawnShieldEndsAtTick: 133,
     nameOf: () => "YOU",
   });
   hud.update(mkState({ hp: 100, maxHp: 100, isArena: true, arenaMatch: grace }));
@@ -599,8 +599,8 @@ function arenaHudDomTests(): void {
     tick: 100,
     selfId: "p1",
     respawnTicks: 0,
-    spawnProtectionStartedTick: 60,
-    spawnHardGraceEndsAtTick: 85,
+    spawnProtectionStartedTick: 80,
+    spawnHardGraceEndsAtTick: 95,
     spawnShieldEndsAtTick: 120,
     nameOf: () => "YOU",
   });

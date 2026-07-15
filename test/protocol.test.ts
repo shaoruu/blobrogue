@@ -50,8 +50,8 @@ function distinctivePlayer(): PlayerSim {
   p.invuln = 0.375; p.dashInvuln = 0.125;
   p.spawnGraceT = 17; p.spawnShieldT = 41;
   p.spawnProtectionStartedTick = 100;
-  p.spawnHardGraceEndsAtTick = 125;
-  p.spawnShieldEndsAtTick = 160;
+  p.spawnHardGraceEndsAtTick = 115;
+  p.spawnShieldEndsAtTick = 140;
   p.isSpawnOffenseLatched = true;
   p.dashCd = 0.5; p.dashTime = 0.0625; p.dashDx = -0.6; p.dashDy = 0.8;
   p.fireCd = 0.11; p.chargeT = 0.42; p.fangCd = 0.85;
@@ -483,15 +483,15 @@ function remoteDashWireTests(): void {
   dasher.dashInvuln = 0.14; dasher.invuln = 0.25;
   dasher.spawnGraceT = 9; dasher.spawnShieldT = 39;
   dasher.spawnProtectionStartedTick = 200;
-  dasher.spawnHardGraceEndsAtTick = 225;
-  dasher.spawnShieldEndsAtTick = 260;
+  dasher.spawnHardGraceEndsAtTick = 215;
+  dasher.spawnShieldEndsAtTick = 240;
   const snap = buildSnapshot(w, "pMe", 0, [], 0, false, { worldId: "w-test" });
   if (snap.t !== "snap") { check("snapshot built", false); return; }
   const seen = snap.players.find((p) => p.id === "pDash");
   check("the dash block rides the observer's wire straight from PlayerSim truth",
     seen !== undefined && seen.dti === 0.12 && seen.ddx === -0.6 && seen.ddy === 0.8
     && seen.dnv === 0.14 && seen.inv === 0.25 && seen.sgr === 9 && seen.ssh === 39
-    && seen.spo === 200 && seen.sge === 225 && seen.sse === 260,
+    && seen.spo === 200 && seen.sge === 215 && seen.sse === 240,
     JSON.stringify(seen && {
       dti: seen.dti, ddx: seen.ddx, ddy: seen.ddy, dnv: seen.dnv, inv: seen.inv,
       sgr: seen.sgr, ssh: seen.ssh, spo: seen.spo, sge: seen.sge, sse: seen.sse,

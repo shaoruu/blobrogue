@@ -45,6 +45,7 @@ import {
   pvpRespawnDelayTicks, pvpCountdownTicks, pvpMatchTimeTicks, pvpFragLimit,
   pvpEnvKillCreditWindowTicks, pvpChainWindowTicks, pvpDraftEveryTicks,
   pvpSuddenDeathFinalTicks, pvpComebackTierBump, pvpSpawnHardGraceTicks, pvpSpawnShieldTicks,
+  pvpSpawnFallbackShieldTicks,
   pvpNearestPitEdgeDistance, pvpSingleDashDistance,
   pvpRespawnWaitSafeIntervalTicks, pvpRespawnWaitSafeMaxTicks,
   isPvpRespawnCandidateSafe, isPvpRespawnCandidateThreatened, pvpRespawnThreatFlags,
@@ -981,15 +982,17 @@ function pvpRespawnCandidates(
         nearest = opponent;
       }
       if (distance <= PVP.respawnCampRadius) isCamped = true;
-      if (isPvpSpawnLineOfSightClear(w, opponent.x, opponent.y, spawn.x, spawn.y)) losThreatCount++;
+      const isLosThreat = distance <= PVP.spawnLosAimRange
+        && isPvpSpawnLineOfSightClear(w, opponent.x, opponent.y, spawn.x, spawn.y);
+      if (isLosThreat) losThreatCount++;
       const bearing = Math.atan2(dy, dx);
       const aimDelta = Math.abs(Math.atan2(
         Math.sin(bearing - opponent.aimAngle),
         Math.cos(bearing - opponent.aimAngle),
       ));
-      if (aimDelta <= aimCone) isAimedAt = true;
+      if (isLosThreat && aimDelta <= aimCone) isAimedAt = true;
     }
-    if (opponents.length === 0) minOpponentDistance = 0;
+    if (opponents.length === 0) minOpponentDistance = PVP.spawnMinOpponentDist;
     const threats = predictPvpEffectThreats(w, player, spawn, opponents);
     for (const bullet of w.bullets) {
       const threat = predictPvpBulletThreat(w, player, spawn, bullet);
@@ -1039,13 +1042,16 @@ function assessPvpRespawn(w: WorldState, player: PlayerSim): PvpRespawnAssessmen
   };
 }
 
-function armPvpSpawnProtection(w: WorldState, p: PlayerSim): void {
+function armPvpSpawnProtection(w: WorldState, p: PlayerSim, isFallbackShield = false): void {
+  const shieldTicks = isFallbackShield
+    ? pvpSpawnFallbackShieldTicks()
+    : pvpSpawnShieldTicks();
   p.invuln = 0;
   p.spawnGraceT = pvpSpawnHardGraceTicks();
-  p.spawnShieldT = pvpSpawnShieldTicks();
+  p.spawnShieldT = shieldTicks;
   p.spawnProtectionStartedTick = w.tick;
   p.spawnHardGraceEndsAtTick = w.tick + pvpSpawnHardGraceTicks();
-  p.spawnShieldEndsAtTick = w.tick + pvpSpawnShieldTicks();
+  p.spawnShieldEndsAtTick = w.tick + shieldTicks;
   p.isSpawnOffenseLatched = false;
   p.spawnBlockedFeedbackCdT = 0;
 }
@@ -1061,6 +1067,7 @@ function beginPvpRespawnTelemetry(
   index: number,
   candidates: readonly PvpRespawnCandidate[],
   waitSafeTicks: number,
+  isFallbackShield: boolean,
 ): void {
   const chosen = candidates.find((candidate) => candidate.index === index);
   p.pvpRespawnTelemetry = chosen === undefined
@@ -1078,6 +1085,7 @@ function beginPvpRespawnTelemetry(
         isShieldBrokenByAttack: false,
         isDeathWithin3s: false,
         isRepeatedIndex: p.pvpRecentSpawnIndices.includes(index),
+        isFallbackShield,
         killerDistance: null,
       };
 }
@@ -1096,11 +1104,18 @@ function pvpPlaceOnSpawn(
     const idx = pvpRespawnIndex(candidates, p.pvpRecentSpawnIndices, selectionMode);
     p.x = spawns[idx].x;
     p.y = spawns[idx].y;
-    beginPvpRespawnTelemetry(w, p, idx, candidates, waitSafeTicks);
+    beginPvpRespawnTelemetry(
+      w,
+      p,
+      idx,
+      candidates,
+      waitSafeTicks,
+      selectionMode === "timeout",
+    );
     if (isRemembered) rememberPvpSpawn(p, idx);
   }
   pvpFaceInward(w, p);
-  armPvpSpawnProtection(w, p);
+  armPvpSpawnProtection(w, p, selectionMode === "timeout");
   p.lastPvpHitBy = null;
   p.lastPvpHitTick = -1;
   p.lastPvpKnockbackBy = null;
@@ -11540,7 +11555,14 @@ function pvpAssignSpreadSpawns(w: WorldState, isRemembered: boolean): void {
   }
   for (const assignment of assignments) {
     const assessment = assessPvpRespawn(w, assignment.player);
-    beginPvpRespawnTelemetry(w, assignment.player, assignment.index, assessment.candidates, 0);
+    beginPvpRespawnTelemetry(
+      w,
+      assignment.player,
+      assignment.index,
+      assessment.candidates,
+      0,
+      false,
+    );
     if (isRemembered) rememberPvpSpawn(assignment.player, assignment.index);
   }
 }

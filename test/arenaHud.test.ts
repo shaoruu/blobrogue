@@ -101,7 +101,7 @@ section("countdown, result, and respawn states");
 
   const grace = build(
     { ph: "live", end: 6080, sc: SCORES, win: null },
-    { spawnGraceTicks: 8, spawnShieldTicks: 43 },
+    { spawnGraceTicks: 8, spawnShieldTicks: 33 },
   );
   const shield = build(
     { ph: "live", end: 6080, sc: SCORES, win: null },
@@ -111,11 +111,11 @@ section("countdown, result, and respawn states");
     arenaCenterCopy(grace)?.title === "SPAWN SAFE"
     && arenaCenterCopy(grace)?.detail === "MOVE \u00b7 AIM \u00b7 DASH | WEAPON ARMING");
   check("hard grace drives the fixed pip fill and final-half-second pulse",
-    Math.abs(grace.spawnProtectionFill - 8 / 25) < 1e-9
+    Math.abs(grace.spawnProtectionFill - 8 / 15) < 1e-9
     && grace.isSpawnProtectionFinalPulse);
   check("remaining protection has a distinct concise shield cue",
     arenaCenterCopy(shield)?.title === "SPAWN SHIELD \u00b7 FIRE TO ENGAGE"
-    && Math.abs(shield.spawnProtectionFill - 20 / 60) < 1e-9
+    && Math.abs(shield.spawnProtectionFill - 20 / 40) < 1e-9
     && !shield.isSpawnProtectionFinalPulse);
   const pulseAtTen = build(
     { ph: "live", end: 6080, sc: SCORES, win: null },
@@ -133,8 +133,8 @@ section("countdown, result, and respawn states");
   );
   check("spawn cue disappears on authoritative break or expiry", arenaCenterCopy(broken) === null);
   const originTick = 100;
-  const graceEndsAtTick = 125;
-  const shieldEndsAtTick = 160;
+  const graceEndsAtTick = 115;
+  const shieldEndsAtTick = 140;
   const nested = buildArenaMatchHud({
     match: { ph: "live", end: 6080, sc: SCORES, win: null },
     tick: originTick,
@@ -145,11 +145,11 @@ section("countdown, result, and respawn states");
     spawnShieldEndsAtTick: shieldEndsAtTick,
     nameOf: (id, isSelf) => isSelf ? "YOU" : id,
   });
-  check("hard grace and shield share one origin and total shield remains 3.0s",
+  check("hard grace and normal shield share one origin and total shield remains 2.0s",
     nested.spawnProtection === "grace"
     && nested.spawnProtectionFill === 1
-    && graceEndsAtTick - originTick === 25
-    && shieldEndsAtTick - originTick === 60);
+    && graceEndsAtTick - originTick === 15
+    && shieldEndsAtTick - originTick === 40);
   check("body materialization ramps transparently to full over exactly 0.25s",
     pvpMaterializeFraction({
       startedTick: originTick,

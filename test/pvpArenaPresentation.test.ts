@@ -239,10 +239,10 @@ async function main(): Promise<void> {
   world.match.scores.set("p2", 1);
   for (const player of [self, rival]) {
     player.spawnProtectionStartedTick = world.tick;
-    player.spawnHardGraceEndsAtTick = world.tick + 25;
-    player.spawnShieldEndsAtTick = world.tick + 60;
-    player.spawnGraceT = 25;
-    player.spawnShieldT = 60;
+    player.spawnHardGraceEndsAtTick = world.tick + 15;
+    player.spawnShieldEndsAtTick = world.tick + 40;
+    player.spawnGraceT = 15;
+    player.spawnShieldT = 40;
   }
   const exitX = world.dungeon.exit.x * 48 + 24;
   const exitY = world.dungeon.exit.y * 48 + 24;
@@ -293,8 +293,8 @@ async function main(): Promise<void> {
   rival.spawnShieldT = 20;
   world.tick++;
   for (const player of [self, rival]) {
-    player.spawnProtectionStartedTick = world.tick - 40;
-    player.spawnHardGraceEndsAtTick = world.tick - 15;
+    player.spawnProtectionStartedTick = world.tick - 20;
+    player.spawnHardGraceEndsAtTick = world.tick - 5;
     player.spawnShieldEndsAtTick = world.tick + 20;
   }
   socket.deliver(buildSnapshot(world, "p1", 0, [], 0, true, {
@@ -319,8 +319,8 @@ async function main(): Promise<void> {
   rival.spawnShieldT = 8;
   world.tick++;
   for (const player of [self, rival]) {
-    player.spawnProtectionStartedTick = world.tick - 52;
-    player.spawnHardGraceEndsAtTick = world.tick - 27;
+    player.spawnProtectionStartedTick = world.tick - 32;
+    player.spawnHardGraceEndsAtTick = world.tick - 17;
     player.spawnShieldEndsAtTick = world.tick + 8;
   }
   socket.deliver(buildSnapshot(world, "p1", 0, [], 0, true, {

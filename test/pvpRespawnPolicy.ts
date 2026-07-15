@@ -4,7 +4,7 @@ import {
   stepWorld,
 } from "../src/sim/world.js";
 import type { PlayerSim, WorldState } from "../src/sim/world.js";
-import { PVP } from "../src/sim/pvp.js";
+import { PVP, PVP_RESPAWN_THREAT, pvpRespawnWaitSafeMaxTicks } from "../src/sim/pvp.js";
 import { TILE } from "../src/sim/types.js";
 import type { InputCmd } from "../src/sim/input.js";
 
@@ -29,6 +29,7 @@ export interface RespawnPolicyEpisode {
   isShieldBrokenByAttack: boolean;
   isDeathWithin3s: boolean;
   isRepeatedIndex: boolean;
+  isFallbackShield: boolean;
   killerDistance: number | null;
   isDashedBeforeDamage: boolean;
   aimTurnDegBeforeDamage: number;
@@ -55,6 +56,7 @@ export interface RespawnPolicyAggregate {
   postRespawnEpisodeCount: number;
   damagedEpisodeCount: number;
   deathEpisodeCount: number;
+  deathWithin3sRate: number;
   spawnToFirstDamageP10Sec: number;
   spawnToFirstDamageMedianSec: number;
   spawnToDeathP10Sec: number;
@@ -80,6 +82,23 @@ export interface RespawnPolicyReport {
   policy: string;
   seeds: RespawnPolicySeedReport[];
   aggregate: RespawnPolicyAggregate;
+  geometry: RespawnGeometryReport;
+}
+
+export interface RespawnGeometryPartyReport {
+  playerCount: 2 | 4 | 6;
+  respawnCount: number;
+  safeCandidateMedian: number;
+  safeCandidateP25: number;
+  waitP95Ms: number;
+  fallbackRate: number;
+  immediateProjectileChallengeCount: number;
+  avoidableImmediateProjectileSelections: number;
+  isNeverTripleIndex: boolean;
+}
+
+export interface RespawnGeometryReport {
+  parties: RespawnGeometryPartyReport[];
 }
 
 interface ActiveEpisode {
@@ -266,6 +285,7 @@ function openEpisode(
       isShieldBrokenByAttack: telemetry?.isShieldBrokenByAttack ?? false,
       isDeathWithin3s: telemetry?.isDeathWithin3s ?? false,
       isRepeatedIndex: telemetry?.isRepeatedIndex ?? false,
+      isFallbackShield: telemetry?.isFallbackShield ?? false,
       killerDistance: telemetry?.killerDistance ?? null,
       isDashedBeforeDamage: false,
       aimTurnDegBeforeDamage: 0,
@@ -293,6 +313,7 @@ function syncEpisodeTelemetry(active: ActiveEpisode, victim: PlayerSim): void {
   active.metric.isShieldBrokenByAttack = telemetry.isShieldBrokenByAttack;
   active.metric.isDeathWithin3s = telemetry.isDeathWithin3s;
   active.metric.isRepeatedIndex = telemetry.isRepeatedIndex;
+  active.metric.isFallbackShield = telemetry.isFallbackShield;
   active.metric.killerDistance = telemetry.killerDistance;
 }
 
@@ -490,6 +511,121 @@ function runArmingUxProbe(seedCount: number): {
   };
 }
 
+export function runRespawnGeometryReport(
+  seedCount = 20,
+  respawnsPerSeed = 8,
+): RespawnGeometryReport {
+  const parties: RespawnGeometryPartyReport[] = [];
+  for (const playerCount of [2, 4, 6] as const) {
+    const safeCounts: number[] = [];
+    const waitTimes: number[] = [];
+    const fallbackFlags: boolean[] = [];
+    let isNeverTripleIndex = true;
+    let immediateProjectileChallengeCount = 0;
+    let avoidableImmediateProjectileSelections = 0;
+    for (let seed = 0; seed < seedCount; seed++) {
+      const world = createWorld(0x67656f00 + playerCount * 100 + seed, 1, {
+        mode: "pvp",
+        isShared: true,
+        skipLocalPlayer: true,
+      });
+      for (let i = 0; i < playerCount; i++) spawnPlayerInWorld(world, `p${i + 1}`);
+      advanceToLive(world);
+      const target = world.players.get("p1")!;
+      const opponents = [...world.players.values()].filter((player) => player !== target);
+      const spawns = world.match?.spawns ?? [];
+      const seedChosenIndices: number[] = [];
+      for (let respawn = 0; respawn < respawnsPerSeed; respawn++) {
+        opponents.forEach((opponent, index) => {
+          const spawn = spawns[(seed + respawn * 3 + index * 2) % spawns.length];
+          opponent.x = spawn.x;
+          opponent.y = spawn.y;
+          opponent.hp = opponent.maxHp;
+          opponent.respawnT = 0;
+          clearProtection(opponent);
+          opponent.aimAngle = Math.atan2(
+            world.dungeon.spawn.y * TILE + TILE / 2 - opponent.y,
+            world.dungeon.spawn.x * TILE + TILE / 2 - opponent.x,
+          );
+        });
+        world.bullets = [];
+        world.effects = [];
+        if (respawn % 4 === 0 && opponents[0] !== undefined) {
+          const threatenedSpawn = spawns[(seed + respawn) % spawns.length];
+          const centerX = world.dungeon.spawn.x * TILE + TILE / 2;
+          const centerY = world.dungeon.spawn.y * TILE + TILE / 2;
+          const dx = threatenedSpawn.x - centerX;
+          const dy = threatenedSpawn.y - centerY;
+          const magnitude = Math.hypot(dx, dy) || 1;
+          const ux = dx / magnitude;
+          const uy = dy / magnitude;
+          const speed = 300;
+          const radius = 4;
+          const travel = speed * (0.5 + DT) + target.pr + radius;
+          world.bullets.push({
+            x: threatenedSpawn.x - ux * travel,
+            y: threatenedSpawn.y - uy * travel,
+            vx: ux * speed,
+            vy: uy * speed,
+            radius,
+            life: 2,
+            friendly: true,
+            owner: opponents[0].id,
+            damage: 5,
+            color: "#fff",
+            pierce: 0,
+            hitList: null,
+            isCrit: false,
+            fx: "rapid",
+          });
+          immediateProjectileChallengeCount++;
+        }
+        target.hp = 0;
+        target.respawnT = 1;
+        target.respawnWaitSafeT = 0;
+        clearProtection(target);
+        let guard = 0;
+        while (target.hp <= 0 && guard++ < pvpRespawnWaitSafeMaxTicks() + 3) {
+          stepWorld(world, new Map(
+            [...world.players.values()].map((player) => [player.id, idle(player.aimAngle)]),
+          ), DT);
+        }
+        const telemetry = target.pvpRespawnTelemetry;
+        if (telemetry === null) continue;
+        safeCounts.push(telemetry.safeCount);
+        waitTimes.push(telemetry.waitSafeMs);
+        fallbackFlags.push(telemetry.isFallbackShield);
+        seedChosenIndices.push(telemetry.chosenIndex);
+        if (telemetry.safeCount > 0
+          && (telemetry.threatFlags & PVP_RESPAWN_THREAT.projectileNear) !== 0) {
+          avoidableImmediateProjectileSelections++;
+        }
+      }
+      if (seedChosenIndices.some((index, position) =>
+        position >= 2
+        && index === seedChosenIndices[position - 1]
+        && index === seedChosenIndices[position - 2]
+      )) {
+        isNeverTripleIndex = false;
+      }
+    }
+    parties.push({
+      playerCount,
+      respawnCount: safeCounts.length,
+      safeCandidateMedian: percentile(safeCounts, 0.5),
+      safeCandidateP25: percentile(safeCounts, 0.25),
+      waitP95Ms: percentile(waitTimes, 0.95),
+      fallbackRate: fallbackFlags.length > 0
+        ? fallbackFlags.filter(Boolean).length / fallbackFlags.length
+        : 0,
+      immediateProjectileChallengeCount,
+      avoidableImmediateProjectileSelections,
+      isNeverTripleIndex,
+    });
+  }
+  return { parties };
+}
+
 export function runRespawnPolicyReport(
   seedCount = 20,
   profile: RespawnBotProfile = "conformanceBot",
@@ -527,6 +663,9 @@ export function runRespawnPolicyReport(
       postRespawnEpisodeCount: postRespawns.length,
       damagedEpisodeCount: firstDamage.length,
       deathEpisodeCount: deaths.length,
+      deathWithin3sRate: episodes.length > 0
+        ? episodes.filter((episode) => episode.isDeathWithin3s).length / episodes.length
+        : 0,
       spawnToFirstDamageP10Sec: percentile(firstDamage, 0.1),
       spawnToFirstDamageMedianSec: percentile(firstDamage, 0.5),
       spawnToDeathP10Sec: percentile(deaths, 0.1),
@@ -543,5 +682,6 @@ export function runRespawnPolicyReport(
       playtestReactionMaxMs: reactionMs.length > 0 ? Math.max(...reactionMs) : null,
       ...armingUx,
     },
+    geometry: runRespawnGeometryReport(seedCount),
   };
 }

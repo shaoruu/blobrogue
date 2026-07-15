@@ -46,6 +46,9 @@ check("spawn-to-death P10 is at least 4.5s",
 check("spawn-to-death median is at least 7s",
   metrics.spawnToDeathMedianSec >= 7,
   `median=${metrics.spawnToDeathMedianSec.toFixed(2)}s`);
+check("no more than 2% of respawns die within 3s",
+  metrics.deathWithin3sRate <= 0.02,
+  `rate=${(metrics.deathWithin3sRate * 100).toFixed(1)}%`);
 check("rapid bot earns no more than two respawn-only frags in any 20s window",
   metrics.maxRespawnOnlyFragsPer20Sec <= 2,
   `max=${metrics.maxRespawnOnlyFragsPer20Sec}`);
@@ -65,6 +68,30 @@ check("arming UX probe gives clear blocked-input feedback and never auto-fires h
   && metrics.armingClarityProxyRate >= 0.9
   && metrics.heldFireAutoFireCount === 0,
   `feedback=${(metrics.armingFeedbackCoverageRate * 100).toFixed(0)}% clarity=${(metrics.armingClarityProxyRate * 100).toFixed(0)}% auto=${metrics.heldFireAutoFireCount}`);
+const geometry2p = report.geometry.parties.find((party) => party.playerCount === 2)!;
+const geometry4p = report.geometry.parties.find((party) => party.playerCount === 4)!;
+const geometry6p = report.geometry.parties.find((party) => party.playerCount === 6)!;
+check("actual-coordinate safe-candidate gates hold at 2p/4p/6p",
+  geometry2p.safeCandidateMedian >= 2
+  && geometry4p.safeCandidateMedian >= 1
+  && geometry6p.safeCandidateP25 >= 1,
+  `2p-median=${geometry2p.safeCandidateMedian} 4p-median=${geometry4p.safeCandidateMedian} 6p-p25=${geometry6p.safeCandidateP25}`);
+check("wait-safe P95 gates hold at 2p/4p/6p",
+  geometry2p.waitP95Ms <= 300
+  && geometry4p.waitP95Ms <= 300
+  && geometry6p.waitP95Ms <= 750,
+  `2p=${geometry2p.waitP95Ms}ms 4p=${geometry4p.waitP95Ms}ms 6p=${geometry6p.waitP95Ms}ms`);
+check("fallback 3s shield rates stay below party-size overrejection caps",
+  geometry2p.fallbackRate <= 0.05
+  && geometry4p.fallbackRate <= 0.15
+  && geometry6p.fallbackRate <= 0.30,
+  `2p=${(geometry2p.fallbackRate * 100).toFixed(1)}% 4p=${(geometry4p.fallbackRate * 100).toFixed(1)}% 6p=${(geometry6p.fallbackRate * 100).toFixed(1)}%`);
+check("projectile challenges never choose avoidable TTI <=0.75s and no index repeats 3x",
+  report.geometry.parties.every((party) =>
+    party.immediateProjectileChallengeCount > 0
+    && party.avoidableImmediateProjectileSelections === 0
+    && party.isNeverTripleIndex
+  ));
 
 const playtestReport = runRespawnPolicyReport(8, "playtestBot");
 const playtestMetrics = playtestReport.aggregate;
@@ -79,6 +106,11 @@ check("playtestBot authoritative first shots land 250–350ms after shield expir
   && playtestMetrics.playtestReactionMinMs >= 250
   && playtestMetrics.playtestReactionMaxMs <= 350,
   `range=${playtestMetrics.playtestReactionMinMs}–${playtestMetrics.playtestReactionMaxMs}ms`);
+check("playtestBot life, spawn-frag, and time-to-8 gates hold",
+  playtestMetrics.spawnToDeathMedianSec >= 7
+  && playtestMetrics.maxRespawnOnlyFragsPer20Sec <= 2
+  && (playtestMetrics.timeToEightMinSec === null || playtestMetrics.timeToEightMinSec >= 90),
+  `life=${playtestMetrics.spawnToDeathMedianSec.toFixed(2)}s spawnFrags=${playtestMetrics.maxRespawnOnlyFragsPer20Sec} timeTo8=${playtestMetrics.timeToEightMinSec}`);
 check("playtestBot report carries authoritative respawn telemetry fields",
   playtestEpisodes.some((episode) =>
     !episode.isInitialSpawn

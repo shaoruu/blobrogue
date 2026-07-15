@@ -70,7 +70,7 @@ import type { WaveFramePlayer } from "./waveAudio.js";
 import { EXPEDITION_BAND_ENTRY_EVENT, WAVE_HAZARDS, WEAPON_AUDIO, STATUS_AUDIO } from "./waveSpec.js";
 import { pvpKillCue, pvpMatchOverCue, pvpFragStreakRate, pvpCountTickRate } from "./waveSpec.js";
 import type { WaveEventId } from "./waveSpec.js";
-import { PVP, pvpDraftSeed } from "../sim/pvp.js";
+import { PVP, pvpDraftSeed, pvpSpawnHardGraceTicks } from "../sim/pvp.js";
 import type { MatchPhase } from "../sim/pvp.js";
 import { ShockwaveField, ScreenFlash, AmbienceField } from "./vfx.js";
 import { LightingRenderer } from "./lighting.js";
@@ -8642,7 +8642,7 @@ export class Game {
     ctx.lineWidth = isRemote ? (isGrace ? 2 : 1) : isGrace ? 4 : 3;
     ctx.setLineDash([]);
     if (isGrace) {
-      const remaining = Math.max(0, Math.min(1, graceTicks / 25)) * 4;
+      const remaining = Math.max(0, Math.min(1, graceTicks / pvpSpawnHardGraceTicks())) * 4;
       for (let segment = 0; segment < 4; segment++) {
         const fill = Math.max(0, Math.min(1, remaining - segment));
         const start = -Math.PI / 2 + segment * Math.PI / 2 + 0.08;
@@ -8682,7 +8682,7 @@ export class Game {
   ): void {
     const graceTicks = Math.max(0, graceEndsAtTick - tick);
     if (!this.isArena || graceTicks <= 0) return;
-    const progress = 1 - Math.max(0, Math.min(1, graceTicks / 25));
+    const progress = 1 - Math.max(0, Math.min(1, graceTicks / pvpSpawnHardGraceTicks()));
     const mx = sx + Math.cos(aim) * 18;
     const my = sy + Math.sin(aim) * 18;
     const { ctx } = this;

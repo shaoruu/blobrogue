@@ -11,6 +11,8 @@ import {
   pvpRespawnIndex,
   pvpRespawnThreatFlags,
   pvpRespawnWaitSafeMaxTicks,
+  pvpSpawnHardGraceTicks,
+  pvpSpawnShieldTicks,
   PVP_RESPAWN_THREAT,
 } from "../src/sim/pvp.js";
 import type { PvpRespawnCandidate } from "../src/sim/pvp.js";
@@ -194,6 +196,34 @@ section("pure scorer: exact penalties, anti-camp memory, and damage fallback");
     && (flags & PVP_RESPAWN_THREAT.projectileNear) !== 0
     && (flags & PVP_RESPAWN_THREAT.camp) !== 0
     && (flags & PVP_RESPAWN_THREAT.pit) !== 0);
+  check("opponent proximity hard-rejects below 192px only when an alternative exists",
+    pvpRespawnIndex([
+      candidate(0, 0, { minOpponentDistance: 191, pitDistance: 10000 }),
+      candidate(1, 0, { minOpponentDistance: 192 }),
+    ]) === 1);
+  check("all-close geometry remains rankable instead of starving the candidate set",
+    pvpRespawnIndex([
+      candidate(0, 0, { minOpponentDistance: 191, pitDistance: 10000 }),
+      candidate(1, 0, { minOpponentDistance: 190 }),
+    ]) === 0);
+  check("aimed LOS rejects only when a non-LOS alternative exists",
+    pvpRespawnIndex([
+      candidate(0, 10000, { losThreatCount: 1, isAimedAt: true }),
+      candidate(1, 192),
+    ]) === 1
+    && pvpRespawnIndex([
+      candidate(0, 10000, { losThreatCount: 1, isAimedAt: true }),
+      candidate(1, 192, { losThreatCount: 1, isAimedAt: true }),
+    ]) === 0);
+  check("projectile TTI at 0.75s is hard while 0.80s remains a soft ranking input",
+    pvpRespawnIndex([
+      candidate(0, 10000, { incomingThreatEtaSec: 0.75 }),
+      candidate(1, 192),
+    ]) === 1
+    && pvpRespawnIndex([
+      candidate(0, 10000, { incomingThreatEtaSec: 0.80 }),
+      candidate(1, 192),
+    ]) === 0);
 }
 
 section("all-eight unsafe candidates wait, poll, and time out deterministically");
@@ -218,7 +248,9 @@ section("all-eight unsafe candidates wait, poll, and time out deterministically"
   check("a safe lane opening at the first 0.10s poll respawns immediately",
     opensVictim.hp === PVP.maxHp
     && opensVictim.respawnWaitSafeT === 0
-    && opensVictim.pvpRespawnTelemetry?.waitSafeMs === 100);
+    && opensVictim.spawnShieldT === pvpSpawnShieldTicks()
+    && opensVictim.pvpRespawnTelemetry?.waitSafeMs === 100
+    && !opensVictim.pvpRespawnTelemetry.isFallbackShield);
 
   const timeoutWorld = liveWorld(41, 2);
   timeoutWorld.props = [];
@@ -237,7 +269,8 @@ section("all-eight unsafe candidates wait, poll, and time out deterministically"
     timeoutVictim.hp === PVP.maxHp
     && timeoutVictim.spawnShieldT === 60
     && timeoutVictim.pvpRespawnTelemetry?.safeCount === 0
-    && timeoutVictim.pvpRespawnTelemetry.waitSafeMs === 750);
+    && timeoutVictim.pvpRespawnTelemetry.waitSafeMs === 750
+    && timeoutVictim.pvpRespawnTelemetry.isFallbackShield);
 }
 
 section("hard grace suppresses every shipped outgoing attack family");
@@ -257,8 +290,8 @@ section("hard grace suppresses every shipped outgoing attack family");
     const actor = world.players.get("p1")!;
     actor.weapon = weapon;
     actor.ownedWeapons = [weapon];
-    actor.spawnGraceT = 25;
-    actor.spawnShieldT = 60;
+    actor.spawnGraceT = pvpSpawnHardGraceTicks();
+    actor.spawnShieldT = pvpSpawnShieldTicks();
     const shotSeq = actor.shotSeq;
     const events = stepWorld(world, new Map([
       [actor.id, {
@@ -515,7 +548,7 @@ section("protected bodies remain respawn occupancy while combat acquisition excl
   const protectedOpponent = world.players.get("p2")!;
   protectedOpponent.x = spawns[0].x;
   protectedOpponent.y = spawns[0].y;
-  protectedOpponent.spawnShieldT = 60;
+  protectedOpponent.spawnShieldT = pvpSpawnShieldTicks();
   victim.pvpRecentSpawnIndices = [];
   check("a shielded opponent still prevents spawning on top of their occupied lane",
     forceRespawn(world, victim) === 1);
