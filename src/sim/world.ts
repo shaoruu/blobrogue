@@ -11054,7 +11054,7 @@ function eliminatePvpPlayer(
 // The pvp branch of the ONE damage funnel: fixed-HP model, anti-one-shot cap, frag credit +
 // respawn scheduling. Damage lands only during the LIVE phase (countdown/lobby/over are safe).
 // No post-hit iframe is granted (the PvE 0.8s window would swamp the balancer's ~4s TTK); the
-// only pvp protections are earned spawn-iframes + dash-iframes, honoured at the hit-test site.
+// only pvp protections are the two-stage spawn window and dash iframes.
 function damagePlayerPvp(
   w: WorldState,
   p: PlayerSim,
@@ -11301,7 +11301,7 @@ function pvpEndMatch(w: WorldState, winner: PlayerId | null, ev: SimEvent[]): vo
 // across a (re)spawn — the ONE place the deathmatch wipes a body clean, called on death, at the
 // match-start spawn, and on every respawn. It zeroes the active dash (so a player killed mid-dash
 // never respawns sliding), all cooldowns/held charge/mid-swing, every protection channel (the
-// caller re-arms spawn i-frames after), and every in-match buff/combo/no-snowball accumulator so
+// caller re-arms two-stage spawn protection after), and every in-match buff/combo/no-snowball accumulator so
 // nothing carries across a life. It touches ONLY transients — never hp, position, respawnT, team,
 // or score, which the caller owns.
 function resetPvpLifeTransient(p: PlayerSim): void {

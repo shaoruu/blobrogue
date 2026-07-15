@@ -49,7 +49,8 @@ existing twin-stick movement / shooting / authoritative netcode / kits. NOT a fo
 - HARD PER-HIT CAP: PVP.perHitCapFrac = 0.35 — no single hit/trigger removes >35% of maxHP (≤35). Anti-one-shot backstop; keep even after per-weapon tuning.
 - ULTS: PVP.ultsEnabled = false — blanket-disable ALL kit ultimates for MVP (each degenerate in a duel: Mender heal=stalemate, Bulwark shield=flat EHP win, Phantom dash=infinite disengage, Gunner overheat=least bad, re-add FIRST in v2 tuned). Kit passive stat lean stays (symmetric). Blessings off (symmetric kit).
 - Loadout: everyone same symmetric starting kit + weapon (neutral all-rounder). Blessings do not apply.
-- SPAWN PROTECTION: PVP.spawnIframeSec = 2.0 (not 1.5 — 1.5 is only ~37% of a 4s TTK). Ends at 2.0s OR first OUTGOING attack, whichever first (no shoot-from-invuln). Plus max-distance FFA spawn selection (anti-camp beyond iframes).
+- SPAWN PROTECTION: PVP.spawnHardGraceSec = 1.25 suppresses every outgoing attack while move/aim/dash stay live. PVP.spawnShieldSec = 3.0 remains fully invulnerable and breaks on the first legal post-grace attack.
+- RESPAWN SELECTION: server-only scoring combines live-foe distance, pit clearance, actual wall/intact-cover LOS, authoritative aim, swept projectile/effect ETA, predicted damage, camping exclusion, and each player's last two spawn indices. Ties use the lowest candidate index.
 - SHIP GATE (as test assertions): per-weapon 1v1 median TTK 3-5s; ZERO hits >35% HP (assert worst-case point-blank sawnoff clamps to 35); no infinite sustain/disengage (ults off).
 
 ## STAGING (TD)
@@ -65,7 +66,7 @@ existing twin-stick movement / shooting / authoritative netcode / kits. NOT a fo
 ## TESTS (must pass; TD gates)
 - New test/pvp.test.ts: pvp mode enables player-damage (owned round hits non-owner, damagePlayer(by) attribution),
   co-op mode still passes friendly through; match state machine transitions (live→round-over on ≤1 alive,
-  match-over at bo-N); deterministic winner (id-sorted, replay byte-identical); spawn i-frames; arena symmetric.
+  match-over at bo-N); deterministic winner (id-sorted, replay byte-identical); two-stage spawn protection; arena symmetric.
 - New pvp determinism/golden: scripted 2-4p match replayed twice = identical + reconnect-stable.
 - Co-op goldens / determinism / balance / protocol suites UNCHANGED (mode defaults coop).
 - npm test green; tsc clean root/server/control (install server+control deps incl @types/ws first).
