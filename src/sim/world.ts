@@ -701,7 +701,7 @@ function isPvpThreatOwner(w: WorldState, ownerId: PlayerId | null, target: Playe
     && owner.spawnGraceT === 0;
 }
 
-function hasPvpSpawnLineOfSight(w: WorldState, x0: number, y0: number, x1: number, y1: number): boolean {
+function isPvpSpawnLineOfSightClear(w: WorldState, x0: number, y0: number, x1: number, y1: number): boolean {
   return hasLineOfSight(w, x0, y0, x1, y1)
     && !propOnSegment(w, x0, y0, x1, y1, 0);
 }
@@ -902,7 +902,7 @@ function predictPvpEffectThreats(
     }
     if (effect.kind === "sentry") {
       const distance = Math.hypot(spawn.x - effect.x, spawn.y - effect.y);
-      if (distance > effect.range || !hasPvpSpawnLineOfSight(w, effect.x, effect.y, spawn.x, spawn.y)) continue;
+      if (distance > effect.range || !isPvpSpawnLineOfSightClear(w, effect.x, effect.y, spawn.x, spawn.y)) continue;
       const etaSec = Math.max(0, effect.fireCd) + distance / effect.boltSpeed;
       if (etaSec <= effect.life && etaSec <= PVP.spawnThreatOuterHorizonSec) {
         threats.push({ etaSec, damage: pvpHitDamage(effect.fx, effect.boltDamage) });
@@ -937,7 +937,7 @@ function pvpRespawnCandidates(
         nearest = opponent;
       }
       if (distance <= PVP.respawnCampRadius) isCamped = true;
-      if (hasPvpSpawnLineOfSight(w, opponent.x, opponent.y, spawn.x, spawn.y)) losThreatCount++;
+      if (isPvpSpawnLineOfSightClear(w, opponent.x, opponent.y, spawn.x, spawn.y)) losThreatCount++;
       const bearing = Math.atan2(dy, dx);
       const aimDelta = Math.abs(Math.atan2(
         Math.sin(bearing - opponent.aimAngle),
@@ -969,7 +969,7 @@ function pvpRespawnCandidates(
       incomingThreatEtaSec,
       predictedIncomingDamage,
       isCoveredFromNearest: nearest !== null
-        && !hasPvpSpawnLineOfSight(w, nearest.x, nearest.y, spawn.x, spawn.y),
+        && !isPvpSpawnLineOfSightClear(w, nearest.x, nearest.y, spawn.x, spawn.y),
       isInwardExitWalkable: isPvpInwardExitWalkable(w, spawn, player.pr),
       isCamped,
       isPitEligible: pits.length === 0 || pitDistance > pvpSingleDashDistance(),
