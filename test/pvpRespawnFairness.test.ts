@@ -158,6 +158,51 @@ section("pure scorer: exact penalties, anti-camp memory, and damage fallback");
   check("all-threatened fallback minimizes predicted 1.5s incoming damage before score", fallback === 1);
 }
 
+section("hard grace suppresses every shipped outgoing attack family");
+{
+  const weapons: WeaponId[] = [
+    "pistol",
+    "spear",
+    "mortar",
+    "frostline",
+    "snapwire",
+    "halo",
+    "sentry",
+    "crook",
+  ];
+  for (const weapon of weapons) {
+    const world = liveWorld(50 + weapons.indexOf(weapon), 2);
+    const actor = world.players.get("p1")!;
+    actor.weapon = weapon;
+    actor.ownedWeapons = [weapon];
+    actor.spawnGraceT = 25;
+    actor.spawnShieldT = 60;
+    const shotSeq = actor.shotSeq;
+    const events = stepWorld(world, new Map([
+      [actor.id, {
+        ...input(actor.aimAngle),
+        firing: true,
+        ult: true,
+        pulse: true,
+      }],
+    ]), DT);
+    check(`${weapon} creates no combat entity, damage, or attack event during hard grace`,
+      actor.shotSeq === shotSeq
+      && actor.meleeSwing === null
+      && world.bullets.every((bullet) => bullet.owner !== actor.id)
+      && world.effects.every((effect) => effect.owner !== actor.id)
+      && !actor.isUltRequested
+      && !actor.isPulseRequested
+      && !events.some((event) =>
+        event.t === "shot"
+        || event.t === "wirePlanted"
+        || event.t === "haloFlare"
+        || event.t === "sentryPlaced"
+        || event.t === "tetherLatch"
+      ));
+  }
+}
+
 section("actual walls and intact props provide cover; broken props do not");
 {
   const spawns = [{ x: 300, y: 216 }, { x: 600, y: 216 }];
