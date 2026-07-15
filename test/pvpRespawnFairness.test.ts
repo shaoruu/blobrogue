@@ -227,8 +227,10 @@ section("swept projectile ETA and shipped ranged/trap threats");
     owner.aimAngle = Math.PI;
     victim.pvpRecentSpawnIndices = [];
     addIncomingBullet(world, owner, victim, spawns[0], etaSec, "rapid");
+    const selected = forceRespawn(world, victim);
     check(`rapid round at ETA ${etaSec}s avoids its swept candidate`,
-      forceRespawn(world, victim) === 1);
+      selected === 1,
+      `selected=${selected} bullet=${world.bullets.map((bullet) => `${bullet.x.toFixed(1)},${bullet.y.toFixed(1)},${bullet.life.toFixed(2)}`).join("|")}`);
   }
 
   const beamWorld = liveWorld(250, 2);
