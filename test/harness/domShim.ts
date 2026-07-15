@@ -78,6 +78,7 @@ let documentStub: any;
 
 function makeEl(tag = "div"): any {
   const store: any = { tagName: (tag || "div").toUpperCase(), nodeType: 1, tag };
+  if (store.tagName === "BUTTON") store.tabIndex = 0;
   const style = makeStyle();
   const classList = makeClassList();
   // Real child/text tracking so UI tests (menu) can assert on the rendered tree; the game
