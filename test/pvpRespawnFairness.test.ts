@@ -93,6 +93,7 @@ function setRespawnArena(world: WorldState, spawns: Vec2[]): void {
   world.match.pits = [];
   world.bullets = [];
   world.effects = [];
+  world.props = [];
 }
 
 function addIncomingBullet(
