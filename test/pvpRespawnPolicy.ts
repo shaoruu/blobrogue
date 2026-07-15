@@ -189,8 +189,14 @@ function playtestBotInput(
   seed: number,
   state: PlaytestBotState,
 ): InputCmd {
-  if (bot.hp <= 0 || bot.respawnT > 0) return idle(state.aim);
-  if (bot.spawnGraceT > 0 || bot.isSpawnOffenseLatched) return idle(state.aim);
+  if (bot.hp <= 0
+    || bot.respawnT > 0
+    || bot.spawnGraceT > 0
+    || bot.isSpawnOffenseLatched) {
+    state.shieldEndedTick = null;
+    state.reactionMs = null;
+    return idle(state.aim);
+  }
   const spawnTick = victim.pvpRespawnTelemetry?.spawnTick ?? -1;
   if (spawnTick !== state.observedSpawnTick) {
     state.observedSpawnTick = spawnTick;
