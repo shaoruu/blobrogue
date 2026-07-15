@@ -729,7 +729,7 @@ function powerBudgetGates(): void {
       const offer = evs.find((e) => e.t === "offerBlessing");
       check("boss chest offer is the Rare pick", offer !== undefined && offer.t === "offerBlessing" && offer.rare);
       const rng = new Rng(7);
-      const rares = rollItemChoicesWith(3, () => rng.next(), [], { rareOnly: true });
+      const rares = rollItemChoicesWith(3, () => rng.next(), [], { isRareOnly: true });
       check("rare pool rolls only rare blessings", rares.length > 0 && rares.every((it) => it.rarity === "rare"));
     }
   }

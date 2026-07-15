@@ -455,7 +455,7 @@ export function bossWeaponChoices(players: number): number {
 export const WEAPON_VARIETY = {
   // Dealt-weapon history a freshly refilled bag avoids re-dealing immediately, so the
   // last gun of one pass never opens the next.
-  recentDrops: 3,
+  recentDrops: 8,
   // Minimum boss-chest choice count (see bossWeaponChoices).
   bossChoiceMin: 3,
 } as const;

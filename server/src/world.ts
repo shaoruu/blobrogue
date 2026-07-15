@@ -9,7 +9,7 @@
 // the fixed step, so a client can neither buy extra time (no client dt) nor gain advantage by its
 // frame rate (fixed-cadence consumption).
 
-import { beginWorldTick, createWorld, stepPlayerPhase, stepWorldPhase, spawnPlayerInWorld, removePlayerFromWorld, setPlayerAbsence, setPlayerKit, switchWeaponInWorld, reorderWeaponsInWorld, dropWeaponInWorld, swapWeaponInWorld, buyFromShopInWorld, chooseBlessingInWorld, dismissBlessingOfferInWorld, consumeBlessingReroll, resetRunInWorld, devSpawnEnemy, isPvp } from "../../src/sim/world.js";
+import { beginWorldTick, createWorld, stepPlayerPhase, stepWorldPhase, spawnPlayerInWorld, removePlayerFromWorld, setPlayerAbsence, setPlayerKit, switchWeaponInWorld, reorderWeaponsInWorld, dropWeaponInWorld, swapWeaponInWorld, buyFromShopInWorld, chooseBlessingInWorld, dismissBlessingOfferInWorld, rollBlessingChoicesInWorld, resetRunInWorld, devSpawnEnemy, isPvp } from "../../src/sim/world.js";
 import type { KitId } from "../../src/sim/kits.js";
 import { PVP, pvpDraftSeed } from "../../src/sim/pvp.js";
 import type { WorldMode } from "../../src/sim/pvp.js";
@@ -18,7 +18,7 @@ import type { SimEvent } from "../../src/sim/events.js";
 import type { InputCmd, PlayerId } from "../../src/sim/input.js";
 import { TILE, type WeaponId } from "../../src/sim/types.js";
 import { Rng, randomSeed } from "../../src/sim/rng.js";
-import { rollItemChoicesWith, rollPvpDraftChoicesWith, itemById, isPvpBlessingId } from "../../src/sim/items.js";
+import { rollPvpDraftChoicesWith, itemById, isPvpBlessingId } from "../../src/sim/items.js";
 import { LAGCOMP_MAX_TICKS } from "../../src/sim/constants.js";
 import { FIXED_DT, TICK_HZ, INTERP_BASE_DELAY_MS, type WireEvent } from "../../src/net/protocol.js";
 import { resumeTokensEqual } from "./auth.js";
@@ -75,9 +75,6 @@ export class GameWorld implements RoomRuntime {
   // Offers whose TTL expired this tick (already resolved on BOTH sides here) — surfaced for
   // the server's logging/metrics.
   private expiredOffersThisTick: PlayerId[] = [];
-  // Dedicated RNG for blessing offers, kept OUT of the sim RNG stream (deterministic, no perturb).
-  private offerRng: Rng;
-
   constructor(id: string, seed: number = randomSeed(), arena = false, mode: WorldMode = "coop") {
     this.id = id;
     // Production: a REAL generated dungeon (isShared) with a FRESH random run seed — the server
@@ -87,7 +84,6 @@ export class GameWorld implements RoomRuntime {
     // PVP (mode="pvp"): the fixed symmetric deathmatch arena + the frag-limit respawn match (no
     // waves, no descend); the sim owns arena/spawns/win-rule, the server just runs the same tick.
     this.state = createWorld(seed, 1, { isShared: true, skipLocalPlayer: true, isSandbox: arena, mode });
-    this.offerRng = new Rng(seed ^ 0x0ffe4);
     if (arena) this.seedArenaEnemies();
   }
 
@@ -97,7 +93,6 @@ export class GameWorld implements RoomRuntime {
   resetRun(): void {
     const seed = randomSeed();
     resetRunInWorld(this.state, seed);
-    this.offerRng = new Rng(seed ^ 0x0ffe4);
     this.injectedEvents.length = 0;
     this.gameOverThisTick = [];
     this.offerThisTick = [];
@@ -255,12 +250,12 @@ export class GameWorld implements RoomRuntime {
         { tierBump: p.pvpDraftTierBump },
       ).map((item) => item.id);
     }
-    // A reroll-everything purchase armed one offer reroll for this player: burn a full
-    // choice-set draw first (the solo client performs the identical burn locally).
-    if (consumeBlessingReroll(this.state, pid)) {
-      rollItemChoicesWith(BLESSING_CHOICES, () => this.offerRng.next(), owned, { rareOnly: rare });
-    }
-    return rollItemChoicesWith(BLESSING_CHOICES, () => this.offerRng.next(), owned, { rareOnly: rare }).map((it) => it.id);
+    return rollBlessingChoicesInWorld(
+      this.state,
+      pid,
+      rare,
+      BLESSING_CHOICES,
+    ).map((item) => item.id);
   }
 
   applyBlessing(pid: PlayerId, itemId: string): boolean {

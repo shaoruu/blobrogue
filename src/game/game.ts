@@ -9,7 +9,7 @@ import type { SpriteName, SheetClip, TileName, FxName, PropSpriteName } from "./
 import { ENEMY_ARCHETYPES, isBossFloor, isBossKind, isGauntletFloor, eliteAffixOf, bossDisplayName } from "../sim/enemies.js";
 import { WEAPONS, WEAPON_RARITY_COLOR, MYSTERY_COLOR } from "../sim/weapons.js";
 import { weaponDisplayStats, lowHpFrac } from "../sim/weaponStats.js";
-import { rollItemChoicesWith, rollPvpDraftChoicesWith, itemById, itemDesc, itemLevelsOf, isPvpBlessingId, MAX_ITEM_LEVEL } from "../sim/items.js";
+import { rollPvpDraftChoicesWith, itemById, itemDesc, itemLevelsOf, isPvpBlessingId, MAX_ITEM_LEVEL } from "../sim/items.js";
 import type { PlayerMods, ItemDef } from "../sim/items.js";
 import { PLAYER, REVIVE, BOSS, MARROW, WEAVER, GILDED, GORGE, TIERS, ELITE_BULWARK, MARSHAL, ROLL_AFFIX, RESONANCE_FAMILIES, RESONANCE_TELEGRAPH_COLOR } from "../sim/balance.js";
 import { petSpriteFor } from "./pets.js";
@@ -19,7 +19,14 @@ import {
 import type { PetFollow } from "./petFollow.js";
 import { DOGGIE_PET_ID, CAT_PET_ID, DRAGON_PET_ID, SLIME_PET_ID } from "../sim/camp_nodes.js";
 import type { EnemyTier, EliteAffix, ResonanceFamily } from "../sim/balance.js";
-import { shopViewerOf, shopSlotStatusFor, shopSlotPriceFor, PREMIUM_EVENT_KINDS, SHOP_FOCUS_RANGE } from "../sim/shop.js";
+import {
+  shopViewerOf,
+  shopSlotStatusFor,
+  shopSlotPriceFor,
+  shopSlotForViewer,
+  PREMIUM_EVENT_KINDS,
+  SHOP_FOCUS_RANGE,
+} from "../sim/shop.js";
 import type { ShopSlot, ShopSlotKind, ShopState, ShopViewer } from "../sim/shop.js";
 import { shopPanelView, shopChipCopy, shopSlotName } from "../ui/shopCopy.js";
 import { ShopPanel } from "../ui/shopPanel.js";
@@ -35,7 +42,7 @@ import { PartyGate } from "../net/partyGate.js";
 import type { ExpectedMember, PartyGateView } from "../net/partyGate.js";
 import { onlineHudLabel, netDetailsLine, reconnectOverlayCopy, BACK_ONLINE_TOAST, CONNECT_CANCEL_HINT, OFFER_EXPIRED_TOAST } from "../ui/onlineCopy.js";
 import type { OnlineExitReason, OnlinePhase } from "../ui/onlineCopy.js";
-import { applyItemToWorld, chooseBlessingInWorld, dismissBlessingOfferInWorld, applyMaxHpBonus, loadFloorIntoWorld, descend, devSpawnEnemy, devSpawnProp, devSpawnChest, acquireWeaponInWorld, isFloorCleared, isPvp, navDebugField, workerBuildSites, nearestShopSlot, isPlayerInCombat, consumeBlessingReroll, setPlayerKit } from "../sim/world.js";
+import { applyItemToWorld, chooseBlessingInWorld, dismissBlessingOfferInWorld, applyMaxHpBonus, loadFloorIntoWorld, descend, devSpawnEnemy, devSpawnProp, devSpawnChest, acquireWeaponInWorld, isFloorCleared, isPvp, navDebugField, workerBuildSites, nearestShopSlot, isPlayerInCombat, rollBlessingChoicesInWorld, setPlayerKit } from "../sim/world.js";
 import type { WorldState, PlayerSim, MeleeSwing, RemoteTarget } from "../sim/world.js";
 import { ULT, isRealKit, canCastUlt, KIT_META, MOMENTUM, OVERSHIELD, HEAL_PULSE, LIFEBLOOM } from "../sim/kits.js";
 import type { KitId } from "../sim/kits.js";
@@ -762,10 +769,6 @@ export class Game {
   // Short-fuse scheduled cues (the sentry's place -> unfold beat).
   private pendingCues: Array<{ t: number; name: string; x: number; y: number }> = [];
   private seed = 0;
-  // Seeded stream for solo/co-op blessing choice rolls (the sim never rolls choices; online
-  // the server decides). Keeps the whole client Math.random-free on the choice path.
-  private blessingRng = new Rng(0);
-
   private comboFreeze = false; // dev/sandbox: hold the chain at a set value so the HUD can be gated
 
   // player (client-only cosmetics)
@@ -1226,7 +1229,6 @@ export class Game {
     // assignment via the verified ticket, and the local pre-join world is a throwaway placeholder.
     if (this.mode !== "online" && opts.kit) setPlayerKit(this.world, LOCAL_ID, opts.kit);
     this.inputSeq = 0;
-    this.blessingRng = new Rng(this.seed ^ 0x0b1e55);
     this.ownedItemDefs = [];
     this.remoteShotSeen.clear();
     this.remoteDownSeen.clear();
@@ -3228,10 +3230,7 @@ export class Game {
       this.showLocalBlessingChoices(choices);
       return;
     }
-    // A reroll-everything purchase armed one offer reroll: burn a full choice-set draw
-    // from the offer stream first (the server does the identical burn online).
-    if (consumeBlessingReroll(this.world, LOCAL_ID)) rollItemChoicesWith(3, () => this.blessingRng.next(), owned, { rareOnly: rare });
-    const choices = rollItemChoicesWith(3, () => this.blessingRng.next(), owned, { rareOnly: rare });
+    const choices = rollBlessingChoicesInWorld(this.world, LOCAL_ID, rare);
     if (choices.length === 0) { dismissBlessingOfferInWorld(this.world, LOCAL_ID); return; }
     this.showLocalBlessingChoices(choices);
   }
@@ -4056,7 +4055,10 @@ export class Game {
     }
     if (!this.shopPanel.isOpen) {
       const slot = this.focusedShopSlot();
-      if (slot !== null) return { action: "shop", label: shopSlotName(slot).toUpperCase(), x: slot.x, y: slot.y };
+      if (slot !== null) {
+        const stockedSlot = shopSlotForViewer(this.world.shop!, slot, this.p.id);
+        return { action: "shop", label: shopSlotName(stockedSlot).toUpperCase(), x: slot.x, y: slot.y };
+      }
     }
     return null;
   }
@@ -4120,7 +4122,15 @@ export class Game {
   }
 
   private shopPanelViewFor(slot: ShopSlot) {
-    return shopPanelView(this.world.shop!, slot, this.shopViewer(), this.mods, this.floor, this.shopBoughtT > 0);
+    const shop = this.world.shop!;
+    return shopPanelView(
+      shop,
+      shopSlotForViewer(shop, slot, this.p.id),
+      this.shopViewer(),
+      this.mods,
+      this.floor,
+      this.shopBoughtT > 0,
+    );
   }
 
   // The local player's shop viewer with the client-side combat read (the authoritative
@@ -5428,7 +5438,12 @@ export class Game {
     const focused = this.focusedShopSlot();
     for (const slot of shop.slots) {
       if (!this.isNearCamera(slot.x, slot.y, TILE * 2)) continue;
-      this.drawShopStation(shop, slot, viewer, focused !== null && focused.id === slot.id);
+      this.drawShopStation(
+        shop,
+        shopSlotForViewer(shop, slot, this.p.id),
+        viewer,
+        focused !== null && focused.id === slot.id,
+      );
     }
   }
 

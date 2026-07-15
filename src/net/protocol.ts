@@ -12,6 +12,7 @@
 
 import type { PlayerSim, WorldState } from "../sim/world.js";
 import { isFloorCleared, playersAtExit, isPlayerOut } from "../sim/world.js";
+import { shopSlotForViewer } from "../sim/shop.js";
 import type { ShopSlot, ShopSlotKind, ShopState } from "../sim/shop.js";
 import type {
   Enemy, Bullet, Prop, Pickup, Chest, Hazard, HazardKind, EnemyKind, WeaponId, AttackPhase,
@@ -1720,17 +1721,20 @@ export function enemyFromWire(w: EnemyWire, x: number, y: number): Enemy {
 export function toPropWire(p: Prop): PropWire {
   return { id: p.id, kind: p.kind, x: p.x, y: p.y, brk: p.breakT ?? -1 };
 }
-export function toShopWire(s: ShopState): ShopWire {
+export function toShopWire(s: ShopState, viewerId?: PlayerId): ShopWire {
   return {
     md: s.mode, kx: s.keeperX, ky: s.keeperY, ru: s.rerollsUsed,
-    slots: s.slots.map((slot): ShopSlotWire => ({
-      id: slot.id, k: slot.kind, sh: slot.isShared,
-      // A mystery pedestal's identity NEVER rides the wire (a tampered client must not
-      // be able to peek the gamble); the buy flips isMystery false, revealing it.
-      wpn: slot.isMystery ? null : slot.weapon, it: slot.itemId, pr: slot.price,
-      x: slot.x, y: slot.y, sold: slot.soldTo, by: slot.buyers.slice(),
-      myst: slot.isMystery,
-    })),
+    slots: s.slots.map((baseSlot): ShopSlotWire => {
+      const slot = viewerId === undefined ? baseSlot : shopSlotForViewer(s, baseSlot, viewerId);
+      return {
+        id: slot.id, k: slot.kind, sh: slot.isShared,
+        // A mystery pedestal's identity NEVER rides the wire (a tampered client must not
+        // be able to peek the gamble); the buy flips isMystery false, revealing it.
+        wpn: slot.isMystery ? null : slot.weapon, it: slot.itemId, pr: slot.price,
+        x: slot.x, y: slot.y, sold: slot.soldTo, by: slot.buyers.slice(),
+        myst: slot.isMystery,
+      };
+    }),
   };
 }
 export function shopFromWire(w: ShopWire): ShopState {
@@ -1746,6 +1750,7 @@ export function shopFromWire(w: ShopWire): ShopState {
       x: s.x, y: s.y, soldTo: s.sold, buyers: s.by.slice(),
       isMystery: s.myst, twist: null,
     })),
+    viewerStock: {},
     rerollsUsed: w.ru,
   };
 }
@@ -2023,7 +2028,7 @@ export function buildSnapshot(
     hzds: w.hazards.map(toHazardWire),
     // Unfiltered too: the stall is a shared objective (≤5 slots, shop floors only) whose
     // SOLD/claim state every client must agree on regardless of where they stand.
-    shop: w.shop ? toShopWire(w.shop) : null,
+    shop: w.shop ? toShopWire(w.shop, selfPid) : null,
     // Effects share the hazard rule: hard sim caps per family, so the list stays small.
     effs: w.effects.map(toEffectWire),
     // pvp match block (one small object; null in co-op).

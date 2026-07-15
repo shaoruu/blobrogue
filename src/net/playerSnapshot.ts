@@ -139,7 +139,13 @@ type ServerOnlyField =
   | "pvpNextDraftTick"
   | "pvpDraftOrdinal"
   | "pvpDraftTick"
-  | "pvpDraftTierBump";
+  | "pvpDraftTierBump"
+  | "weaponOfferHistory"
+  | "blessingOfferHistory"
+  | "blessingOfferOrdinal"
+  | "shopWeaponOfferOrdinal"
+  | "shopBlessingOfferOrdinal"
+  | "premiumWeaponOfferOrdinal";
 
 // Compile-time exhaustiveness: every PlayerSim key must be classified exactly once. The
 // MustBeNever constraint fails to instantiate for any non-empty type, so adding a PlayerSim
