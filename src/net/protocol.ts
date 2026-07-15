@@ -1482,10 +1482,22 @@ function validateSnapd(o: Record<string, unknown>): Extract<ServerMsg, { t: "sna
   };
   if (o.self !== undefined) {
     const s = obj(o.self, "snapd.self");
-    if (s.d !== undefined) out.self = { d: true };
-    else if (s.f !== undefined) out.self = { f: validateSelfWire(s.f) };
-    else if (s.p !== undefined) out.self = { p: safeWireObject(s.p) };
-    else throw new ProtocolError("bad snapd.self");
+    const keys = Object.keys(s);
+    if (keys.length !== 1) throw new ProtocolError("bad snapd.self");
+    switch (keys[0]) {
+      case "d":
+        if (s.d !== true) throw new ProtocolError("bad snapd.self");
+        out.self = { d: true };
+        break;
+      case "f":
+        out.self = { f: validateSelfWire(s.f) };
+        break;
+      case "p":
+        out.self = { p: safeWireObject(s.p) };
+        break;
+      default:
+        throw new ProtocolError("bad snapd.self");
+    }
   }
   for (const tag of ["en", "pl", "pr", "pk", "ch", "hz", "ef"] as const) {
     if (o[tag] !== undefined) out[tag] = validateKeyedDelta(o[tag]);

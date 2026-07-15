@@ -15,6 +15,7 @@ import { createWorld, spawnPlayerInWorld, devSpawnEnemy } from "../src/sim/world
 import type { WorldState } from "../src/sim/world.js";
 import type { WorldMode } from "../src/sim/pvp.js";
 import { generateDungeon } from "../src/sim/dungeon.js";
+import { WEAPONS } from "../src/sim/weapons.js";
 
 let passed = 0, failed = 0;
 const failures: string[] = [];
@@ -279,6 +280,99 @@ async function pvpWorldModeTests(): Promise<void> {
   coop.transport.stop();
 }
 
+async function pvpOffenseLatchPredictionTests(): Promise<void> {
+  section("H5: client prediction mirrors authoritative spawn latch and dedupes confirmation");
+  const rig = await makeRig(0x5155, "pvp");
+  const serverPlayer = rig.world.players.get(rig.pid)!;
+  rig.world.match!.phase = "live";
+  rig.world.tick = 100;
+  serverPlayer.spawnProtectionStartedTick = 90;
+  serverPlayer.spawnHardGraceEndsAtTick = 105;
+  serverPlayer.spawnShieldEndsAtTick = 130;
+  serverPlayer.spawnGraceT = 5;
+  serverPlayer.spawnShieldT = 30;
+  serverPlayer.isSpawnOffenseLatched = false;
+  serverPlayer.fireCd = 0;
+  rig.sock.deliver(rig.snap({ full: true, worldId: "pvp:room:H5" }));
+
+  const advanceFire = (isFiring: boolean) => {
+    rig.transport.sendInput({
+      seq: 0,
+      moveX: 0,
+      moveY: 0,
+      aim: 0,
+      firing: isFiring,
+      dash: false,
+    });
+    rig.tickNow(50);
+    rig.transport.advance(0.05);
+    return rig.transport.poll();
+  };
+
+  const grace = advanceFire(true);
+  const gracePlayer = grace.state.players.get("local")!;
+  check("held offense during grace is locally latched and cooldown stays ready",
+    gracePlayer.isSpawnOffenseLatched && gracePlayer.fireCd === 0);
+
+  rig.world.tick = 105;
+  serverPlayer.spawnGraceT = 0;
+  serverPlayer.spawnShieldT = 25;
+  serverPlayer.isSpawnOffenseLatched = true;
+  rig.sock.deliver(rig.snap({ ackSeq: 1, worldId: "pvp:room:H5" }));
+  const held = advanceFire(true);
+  check("grace end with held offense remains suppressed in prediction",
+    held.state.players.get("local")!.fireCd === 0
+    && held.state.players.get("local")!.isSpawnOffenseLatched);
+
+  const released = advanceFire(false);
+  check("release clears the predicted latch without firing",
+    !released.state.players.get("local")!.isSpawnOffenseLatched
+    && released.state.players.get("local")!.fireCd === 0);
+  const repressed = advanceFire(true);
+  const predictedEvents = repressed.events.filter((event) =>
+    event.t === "pvpShieldBreak" || event.t === "shot"
+  );
+  check("repress gives immediate local shield-break, shot/recoil event, and cooldown",
+    repressed.state.players.get("local")!.fireCd > 0
+    && predictedEvents.map((event) => event.t).join(",") === "pvpShieldBreak,shot");
+
+  rig.world.tick = 106;
+  serverPlayer.spawnShieldT = 0;
+  serverPlayer.spawnShieldEndsAtTick = 106;
+  serverPlayer.isSpawnOffenseLatched = false;
+  serverPlayer.fireCd = WEAPONS.pistol.fireCd;
+  const authoritativeEvents: WireEvent[] = [
+    { id: 1, e: { t: "pvpShieldBreak", pid: rig.pid, x: serverPlayer.x, y: serverPlayer.y } },
+    {
+      id: 2,
+      e: {
+        t: "shot",
+        pid: rig.pid,
+        weapon: "pistol",
+        x: serverPlayer.x + 18,
+        y: serverPlayer.y,
+        aim: 0,
+        px: serverPlayer.x,
+        py: serverPlayer.y,
+        chg: 0,
+      },
+    },
+  ];
+  rig.sock.deliver(rig.snap({
+    ackSeq: 4,
+    events: authoritativeEvents,
+    evTo: 2,
+    worldId: "pvp:room:H5",
+  }));
+  const confirmed = rig.transport.poll();
+  check("authoritative confirmation reconciles cooldown without double-playing events",
+    Math.abs(confirmed.state.players.get("local")!.fireCd - WEAPONS.pistol.fireCd) < 1e-9
+    && confirmed.events.filter((event) =>
+      event.t === "pvpShieldBreak" || event.t === "shot"
+    ).length === 0);
+  rig.transport.stop();
+}
+
 // v14: a NETWORKED player's combat events reach every nearby client's event queue (not only
 // the actor), so a teammate's shot/hurt is audible + visible; the local player's own copies
 // still arrive exactly once; and non-audible player-scoped events for OTHERS stay gated out.
@@ -374,6 +468,29 @@ async function deltaReconstructTests(): Promise<void> {
   check("delta reconstructed the full enemy set (nothing dropped)", got.enemies.length === full2.enemies.length);
   check("delta reconstructed self position", Math.abs(got.self!.x - full2.self!.x) < 1e-9);
   check("delta applied advances the client tick", got.tick === 12);
+  rig.transport.stop();
+}
+
+async function malformedSelfDeltaTests(): Promise<void> {
+  section("H4: malformed self discriminators cannot delete the retained local player");
+  const rig = await makeRig();
+  const base = keyframe(rig, 1, { full: true });
+  rig.sock.deliver(base);
+  const before = rig.transport.getLatestSnapshot()!;
+  rig.sock.deliverRaw(JSON.stringify({
+    t: "snapd",
+    q: 2,
+    b: 1,
+    sc: { tick: before.tick + 1 },
+    self: { d: false },
+    ev: [],
+    et: 0,
+  }));
+  const after = rig.transport.getLatestSnapshot()!;
+  check("d:false frame is dropped and cannot null or advance self state",
+    after.self !== null
+    && after.sseq === before.sseq
+    && after.tick === before.tick);
   rig.transport.stop();
 }
 
@@ -505,7 +622,9 @@ async function main(): Promise<void> {
   await firstSpawnPlacementTests();
   await worldRebuildTests();
   await pvpWorldModeTests();
+  await pvpOffenseLatchPredictionTests();
   await deltaReconstructTests();
+  await malformedSelfDeltaTests();
   await deltaOrderingTests();
   await deltaMissedBaselineTests();
   await deltaDropKeyframeRecoveryTests();

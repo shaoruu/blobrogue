@@ -221,10 +221,45 @@ function safetyTests(): void {
     try { jsonCodec.decodeServer(raw); } catch (err) { rejected = err instanceof Error; }
     check(`${label} rejected`, rejected);
   }
+  const base = makeBaseSnap();
+  const selfFrame = (self: object): string => JSON.stringify({
+    t: "snapd",
+    q: 2,
+    b: 1,
+    sc: { tick: base.tick + 1 },
+    self,
+    ev: [],
+    et: 0,
+  });
+  const malformedSelf: Array<[string, object]> = [
+    ["H4 d:false", { d: false }],
+    ["H4 d:true plus f", { d: true, f: base.self }],
+    ["H4 f plus p", { f: base.self, p: { coins: 2 } }],
+    ["H4 unknown discriminator", { x: 1 }],
+    ["H4 extra key", { d: true, extra: 1 }],
+    ["H4 missing discriminator", {}],
+  ];
+  for (const [label, self] of malformedSelf) {
+    let rejected = false;
+    try { jsonCodec.decodeServer(selfFrame(self)); } catch (err) { rejected = err instanceof Error; }
+    check(`${label} rejected without deleting baseline self`, rejected && base.self !== null);
+  }
+  const validSelf: Array<[string, object, "d" | "f" | "p"]> = [
+    ["delete", { d: true }, "d"],
+    ["full", { f: base.self }, "f"],
+    ["patch", { p: { coins: (base.self?.coins ?? 0) + 1 } }, "p"],
+  ];
+  for (const [label, self, discriminator] of validSelf) {
+    const decoded = jsonCodec.decodeServer(selfFrame(self));
+    check(`H4 valid ${label} discriminator passes exactly`,
+      decoded.t === "snapd"
+      && decoded.self !== undefined
+      && discriminator in decoded.self
+      && Object.keys(decoded.self).length === 1);
+  }
   // A well-formed delta whose baseline the receiver never had is a client-side DROP: the pure
   // apply is deliberately dumb (it trusts the caller's baseline match), so the guard lives at
   // the client. Here we simply prove the delta advertises its baseline so the client CAN detect.
-  const base = makeBaseSnap();
   const next = cloneSnap(base); next.sseq = 7; next.tick = base.tick + 1;
   const d = diffSnapshot(snapshotToWire(base), snapshotToWire(next), next.sseq, fullWorld(next));
   check("a delta advertises its baseline sseq so a client can refuse a gap", d.b === base.sseq && d.q === 7);

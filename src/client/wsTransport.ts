@@ -120,6 +120,11 @@ interface PendingInput {
   sentAt: number;  // local time the command was sent (for RTT = ack time - sentAt)
 }
 
+interface PredictedPvpEvent {
+  seq: number;
+  type: "shot" | "meleeSwing" | "pvpShieldBreak";
+}
+
 // Cap fixed steps simulated in one frame so a long stall (tab backgrounded) can't spiral.
 const MAX_STEPS_PER_FRAME = 5;
 
@@ -204,6 +209,7 @@ export class WSTransport implements Transport {
 
   private interp = new RemoteInterp();
   private events: SimEvent[] = [];
+  private predictedPvpEvents: PredictedPvpEvent[] = [];
   private smoothX = 0;
   private smoothY = 0;
   private lastStatAt = 0;
@@ -286,6 +292,7 @@ export class WSTransport implements Transport {
     this.lastSnapSseq = -1;
     this.selfServerId = null;
     this.events = [];
+    this.predictedPvpEvents = [];
     this.smoothX = 0;
     this.smoothY = 0;
     this.rttMs = 0;
@@ -470,6 +477,7 @@ export class WSTransport implements Transport {
     // counting), and preserved offers will be resent with ids that must re-prompt.
     this.isSnapSeenOnSocket = false;
     this.pending = [];
+    this.predictedPvpEvents = [];
     this.lastOfferId = 0;
     // A fresh server-side connection restarts its snapshot sequence at 1, so drop every retained
     // delta baseline from the previous connection — the next keyframe re-anchors the set, and no
@@ -630,6 +638,10 @@ export class WSTransport implements Transport {
     // The world MODE rides the authoritative world id (isPvpWorldId(wid)) — the SAME predicate
     // the server's room factory keys off — so the client rebuilds the matching arena/dungeon.
     this.maybeRebuildWorld(snap.seed, snap.floor, snap.pcl, isPvpWorldId(snap.wid) ? "pvp" : "coop");
+    if (this.predState.match !== null && snap.match !== null) {
+      this.predState.match.phase = snap.match.ph;
+      this.predState.match.phaseEndTick = snap.match.end;
+    }
     this.latestSnap = snap;
     this.isEverReady = true;
     this.isSnapSeenOnSocket = true;
@@ -705,6 +717,13 @@ export class WSTransport implements Transport {
       this.lastEventId = w.id;
       const e = w.e;
       const pid = pidOf(e);
+      const predictedIndex = pid === this.selfServerId
+        ? this.predictedPvpEvents.findIndex((predicted) => predicted.type === e.t)
+        : -1;
+      if (predictedIndex >= 0) {
+        this.predictedPvpEvents.splice(predictedIndex, 1);
+        continue;
+      }
       // Keep global/world events, this client's OWN player events, and the shared moments
       // that everyone standing at them must replay: revive, plus a NETWORKED player's combat
       // FX (shot/meleeSwing/playerHurt/heal/pickup — v14). Those now ride "pos" scope, so the
@@ -712,6 +731,9 @@ export class WSTransport implements Transport {
       // POSITIONALLY (handleSimEvent branches self vs remote), so a friend is audible to all.
       if (pid === undefined || pid === this.selfServerId || e.t === "revive" || REMOTE_AUDIBLE_EVENTS.has(e.t)) this.events.push(e);
     }
+    this.predictedPvpEvents = this.predictedPvpEvents.filter((predicted) =>
+      predicted.seq > snap.ackSeq
+    );
     if (snap.evTo > this.lastEventId) this.lastEventId = snap.evTo;
   }
 
@@ -759,6 +781,18 @@ export class WSTransport implements Transport {
     }
   }
 
+  private capturePredictedPvpEvents(seq: number, events: readonly SimEvent[]): void {
+    if (this.predState.mode !== "pvp") return;
+    for (const event of events) {
+      if (event.t !== "shot" && event.t !== "meleeSwing" && event.t !== "pvpShieldBreak") continue;
+      this.predictedPvpEvents.push({ seq, type: event.t });
+      this.events.push(event);
+    }
+    if (this.predictedPvpEvents.length > 64) {
+      this.predictedPvpEvents.splice(0, this.predictedPvpEvents.length - 64);
+    }
+  }
+
   sendInput(cmd: InputCmd): void {
     this.nextInput = cmd;
   }
@@ -795,6 +829,7 @@ export class WSTransport implements Transport {
         while (this.pending.length > MAX_PENDING) this.pending.shift();
         this.sendMsg({ t: "input", seq, mx: cmd.moveX, my: cmd.moveY, aim: cmd.aim, fire: cmd.firing, dash: cmd.dash, act: cmd.interact === true, ult: cmd.ult === true, pulse: cmd.pulse === true, ackEv: this.lastEventId, ackSnap: Math.max(0, this.lastSnapSseq) });
         stepPlayerPhase(this.predState, p, stamped, FIXED_DT, scratch);
+        this.capturePredictedPvpEvents(seq, scratch);
       } else {
         // Pre-join / mid-resume: predict locally for instant feel; don't send before the
         // (re)join is acknowledged by an authoritative snapshot.

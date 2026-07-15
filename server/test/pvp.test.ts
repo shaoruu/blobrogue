@@ -183,6 +183,110 @@ async function main(): Promise<void> {
     }
   });
 
+  await test("H5 real-socket resume preserves grace endpoints and held-offense latch", async () => {
+    const s = await startTestServer({
+      pvpPublicEnabled: true,
+      resumeGraceMs: 4000,
+    });
+    try {
+      const world = "pvp:room:H5";
+      let isHoldingFire = true;
+      const actor = new Bot({
+        url: s.url,
+        secret: s.secret,
+        playerId: "h5-actor",
+        world,
+        name: "h5",
+        colorIndex: 1,
+        script: () => ({
+          seq: 0,
+          moveX: 0,
+          moveY: 0,
+          aim: 0,
+          firing: isHoldingFire,
+          dash: false,
+        }),
+        reconnect: { baseDelayMs: 80, maxDelayMs: 250, graceMs: 4000 },
+      });
+      const rival = new Bot({
+        url: s.url,
+        secret: s.secret,
+        playerId: "h5-rival",
+        world,
+        name: "rival",
+        colorIndex: 2,
+        script: () => idle(),
+      });
+      actor.start();
+      rival.start();
+      await waitUntil(() => actor.transport.isReady() && rival.transport.isReady(), 4000);
+      const gw = s.server.getWorld(world)!;
+      await waitUntil(() => gw.state.match?.phase === "live", 6000);
+      const actorId = actor.transport.getSelfServerId()!;
+      const player = gw.state.players.get(actorId)!;
+      player.spawnProtectionStartedTick = gw.state.tick;
+      player.spawnHardGraceEndsAtTick = gw.state.tick + pvpSpawnHardGraceTicks();
+      player.spawnShieldEndsAtTick = gw.state.tick + pvpSpawnShieldTicks();
+      player.spawnGraceT = pvpSpawnHardGraceTicks();
+      player.spawnShieldT = pvpSpawnShieldTicks();
+      player.isSpawnOffenseLatched = false;
+      player.fireCd = 0;
+      const isLatchedInGrace = await waitUntil(
+        () => player.isSpawnOffenseLatched && player.spawnGraceT > 0,
+        1000,
+      );
+      check("held offense latches before the grace disconnect", isLatchedInGrace);
+      const graceRemaining = player.spawnHardGraceEndsAtTick - gw.state.tick;
+      const shieldRemaining = player.spawnShieldEndsAtTick - gw.state.tick;
+      const startShotSeq = player.shotSeq;
+
+      actor.dropConnection(true);
+      await waitUntil(() => player.isAbsent, 2000);
+      await sleep(300);
+      check("absence freezes endpoint remainders and offense latch",
+        player.spawnHardGraceEndsAtTick - gw.state.tick === graceRemaining
+        && player.spawnShieldEndsAtTick - gw.state.tick === shieldRemaining
+        && player.isSpawnOffenseLatched);
+
+      actor.restoreNetwork();
+      await waitUntil(() => !player.isAbsent && actor.transport.isReady(), 5000);
+      const resumed = actor.transport.getLatestSnapshot()?.self;
+      check("resume wire restores absolute endpoints and sfl exactly",
+        resumed?.sge === player.spawnHardGraceEndsAtTick
+        && resumed.sse === player.spawnShieldEndsAtTick
+        && resumed.sfl
+        && resumed.sge - resumed.spo === pvpSpawnHardGraceTicks()
+        && resumed.sse - resumed.spo === pvpSpawnShieldTicks());
+
+      await waitUntil(() => player.spawnGraceT === 0, 2000);
+      await sleep(150);
+      check("held fire still cannot auto-fire after resumed grace ends",
+        player.shotSeq === startShotSeq && player.isSpawnOffenseLatched);
+
+      const startBreaks = actor.events.filter((event) => event.t === "pvpShieldBreak").length;
+      const startShots = actor.events.filter((event) =>
+        event.t === "shot" && event.pid === actorId
+      ).length;
+      isHoldingFire = false;
+      await sleep(100);
+      isHoldingFire = true;
+      await waitUntil(() => player.shotSeq === startShotSeq + 1, 1000);
+      isHoldingFire = false;
+      await sleep(300);
+      check("release/repress yields one shield break and one attack with no duplicate",
+        player.shotSeq === startShotSeq + 1
+        && actor.events.filter((event) => event.t === "pvpShieldBreak").length === startBreaks + 1
+        && actor.events.filter((event) =>
+          event.t === "shot" && event.pid === actorId
+        ).length === startShots + 1);
+
+      actor.stop();
+      rival.stop();
+    } finally {
+      await s.close();
+    }
+  });
+
   await test("adversarial E2E: two real sockets through damage -> exact-once pvpKill -> respawn -> match-over", async () => {
     const s = await startTestServer({ pvpPublicEnabled: true });
     try {
