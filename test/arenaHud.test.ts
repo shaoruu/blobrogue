@@ -109,7 +109,7 @@ section("countdown, result, and respawn states");
   );
   check("hard grace cue names available controls without implying a broken weapon",
     arenaCenterCopy(grace)?.title === "SPAWN SAFE"
-    && arenaCenterCopy(grace)?.detail === "MOVE \u00b7 AIM \u00b7 DASH  |  WEAPON ARMING");
+    && arenaCenterCopy(grace)?.detail === "MOVE \u00b7 AIM \u00b7 DASH | WEAPON ARMING");
   check("hard grace drives the fixed pip fill and final-half-second pulse",
     Math.abs(grace.spawnProtectionFill - 8 / 25) < 1e-9
     && grace.isSpawnProtectionFinalPulse);

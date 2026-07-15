@@ -128,6 +128,12 @@ section("damage model (balancer numbers)");
   check("ults disabled flag", PVP.ultsEnabled === false);
   check("spawn hard grace = 1.25s", PVP.spawnHardGraceSec === 1.25 && pvpSpawnHardGraceTicks() === 25);
   check("spawn shield = 3.0s", PVP.spawnShieldSec === 3.0 && pvpSpawnShieldTicks() === 60);
+  const tickZeroWorld = pvpWorld(1001, ["p1"]);
+  const tickZeroPlayer = tickZeroWorld.players.get("p1")!;
+  stepN(tickZeroWorld, 1, new Map());
+  check("paused tick-zero protection preserves one shared 25/60 origin",
+    tickZeroPlayer.spawnHardGraceEndsAtTick - tickZeroPlayer.spawnProtectionStartedTick === 25
+    && tickZeroPlayer.spawnShieldEndsAtTick - tickZeroPlayer.spawnProtectionStartedTick === 60);
   check("player knockback constants are exact", PVP.kbScalar === 1.0 && PVP.kbMaxPerHit === 180 && PVP.kbSelfDuringIframe === 0);
   check("pit guardrail constants are exact", PVP.pitEdgeClearance === 200 && PVP.pitWarningBandTiles === 1);
   check("environmental credit window = 2.0s", PVP.envKillCreditWindowSec === 2.0);
@@ -1416,6 +1422,7 @@ section("P2 WIRE: protocol v32, match block + spawn protection + reliable events
     player.spawnHardGraceEndsAtTick = w.tick + 25;
     player.spawnShieldEndsAtTick = w.tick + 60;
   }
+  w.players.get("p1")!.isSpawnOffenseLatched = true;
   const raw = jsonCodec.encodeServer(snapOf(w, "p1"));
   const dec = jsonCodec.decodeServer(raw);
   if (dec.t !== "snap") { check("snapshot decodes as a snap", false); }
@@ -1433,7 +1440,8 @@ section("P2 WIRE: protocol v32, match block + spawn protection + reliable events
     check("local spawn origin and nested endpoints ride SelfWire",
       dec.self !== null
       && dec.self.sge - dec.self.spo === 25
-      && dec.self.sse - dec.self.spo === 60);
+      && dec.self.sse - dec.self.spo === 60
+      && dec.self.sfl);
     const remote = dec.players.find((p) => p.id === "p2");
     check("remote authoritative grace/shield ticks ride PlayerWire",
       remote?.sgr === 7 && remote.ssh === 31);
@@ -1599,11 +1607,18 @@ section("B4: nothing can be pre-deployed before (or lobbed after) the live phase
   const s = w.players.get("p1")!;
   s.weapon = "sentry"; s.ownedWeapons = ["sentry"];
   const startX = s.x; const startY = s.y;
-  stepN(w, 4, new Map([["p1", inp({ firing: true, aim: 0, moveX: 1, moveY: 0, dash: true })]]));
+  const countdownEvents = stepCollect(
+    w,
+    4,
+    new Map([["p1", inp({ firing: true, aim: 0, moveX: 1, moveY: 0, dash: true })]]),
+  );
   check("B4: no round spawns during the countdown freeze", w.bullets.length === 0);
   check("B4: no sentry/effect deploys during the countdown freeze", w.effects.length === 0);
   check("B4: the player cannot move during the countdown freeze", s.x === startX && s.y === startY);
   check("B4: no charge builds during the countdown freeze", s.chargeT === 0);
+  check("B4: countdown input emits no premature arming feedback or latch",
+    !s.isSpawnOffenseLatched
+    && !countdownEvents.some((event) => event.t === "pvpSpawnAttackBlocked"));
 
   // Whistle-clear: even if owned entities somehow exist, the countdown->live whistle wipes them.
   const w2 = pvpWorld(68, ["p1", "p2"]);

@@ -35,6 +35,7 @@ const isAccepted = metrics.postRespawnEpisodeCount >= seedCount * 3
   && metrics.controlEstablishedRate >= 0.95
   && metrics.intentionalFireWithin500msRate >= 0.9
   && metrics.armingFeedbackCoverageRate === 1
+  && metrics.armingClarityProxyRate >= 0.9
   && metrics.heldFireAutoFireCount === 0
   && (profile !== "playtestBot"
     || (metrics.shieldFireAttempts === 0
@@ -60,6 +61,7 @@ process.stdout.write([
   `- Control established before first damage: ${(metrics.controlEstablishedRate * 100).toFixed(1)}%`,
   `- Intentional fire within 0.5s of grace end: ${(metrics.intentionalFireWithin500msRate * 100).toFixed(1)}%`,
   `- Arming feedback coverage: ${(metrics.armingFeedbackCoverageRate * 100).toFixed(1)}%`,
+  `- Arming clarity proxy (feedback + successful re-press): ${(metrics.armingClarityProxyRate * 100).toFixed(1)}%`,
   `- Held-fire auto-shots: ${metrics.heldFireAutoFireCount}`,
   `- Wait-safe respawns: ${metrics.waitSafeRespawnCount}`,
   `- Choices with any threat flag: ${metrics.threatenedSpawnCount}`,

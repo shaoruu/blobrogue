@@ -155,7 +155,7 @@ export function arenaCenterCopy(match: ArenaMatchHudState | null): ArenaCenterCo
   if (match.spawnProtection === "grace") {
     return {
       title: "SPAWN SAFE",
-      detail: "MOVE \u00b7 AIM \u00b7 DASH  |  WEAPON ARMING",
+      detail: "MOVE \u00b7 AIM \u00b7 DASH | WEAPON ARMING",
       tone: "spawn-safe",
     };
   }

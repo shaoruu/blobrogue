@@ -3442,7 +3442,7 @@ function updatePvpSpawnOffenseLatch(
   input: InputCmd,
   ev: SimEvent[],
 ): void {
-  if (!isPvp(w)) return;
+  if (!isPvp(w) || w.match?.phase !== "live") return;
   const isOffenseHeld = input.firing || input.ult === true || input.pulse === true;
   if (p.spawnGraceT > 0) {
     if (isOffenseHeld) {
@@ -11585,7 +11585,7 @@ function syncPvpSpawnProtection(w: WorldState): void {
       p.spawnShieldEndsAtTick = previousTick + p.spawnShieldT;
     }
     if (!isAdvancing || p.isAbsent) {
-      if (p.spawnProtectionStartedTick > 0) p.spawnProtectionStartedTick++;
+      if (p.spawnShieldEndsAtTick > 0) p.spawnProtectionStartedTick++;
       if (p.spawnHardGraceEndsAtTick > 0) p.spawnHardGraceEndsAtTick++;
       if (p.spawnShieldEndsAtTick > 0) p.spawnShieldEndsAtTick++;
       continue;
@@ -12120,7 +12120,9 @@ export function stepWorld(w: WorldState, inputs: Map<PlayerId, InputCmd>, dt: nu
   if (isPvp(w)) {
     for (const id of [...w.players.keys()].sort()) {
       const p = w.players.get(id);
-      if (p !== undefined) stepPlayerPhase(w, p, inputs.get(p.id) ?? IDLE_INPUT, dt, ev);
+      if (p !== undefined && !p.isAbsent) {
+        stepPlayerPhase(w, p, inputs.get(p.id) ?? IDLE_INPUT, dt, ev);
+      }
     }
   } else {
     for (const p of w.players.values()) {

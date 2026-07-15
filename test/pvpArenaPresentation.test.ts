@@ -20,6 +20,7 @@ interface CanvasLog {
   spawnSafeStrokeCalls: number;
   spawnShieldStrokeCalls: number;
   spawnShellFillCalls: number;
+  remoteSoftStrokeCalls: number;
 }
 
 interface ArenaGameAccess {
@@ -86,6 +87,7 @@ function recordingCanvas(log: CanvasLog): HTMLCanvasElement {
         return () => {
           if (strokeStyle === "#ffd27a" && lineWidth === 4) log.spawnSafeStrokeCalls++;
           else if (strokeStyle === "#ffd27a") log.spawnShieldStrokeCalls++;
+          if (strokeStyle === "#ffd27a" && lineWidth === 1) log.remoteSoftStrokeCalls++;
         };
       }
       if (property === "fill") {
@@ -191,6 +193,7 @@ async function main(): Promise<void> {
     spawnSafeStrokeCalls: 0,
     spawnShieldStrokeCalls: 0,
     spawnShellFillCalls: 0,
+    remoteSoftStrokeCalls: 0,
   };
   const gameInstance = new Game(
     recordingCanvas(canvasLog),
@@ -275,7 +278,7 @@ async function main(): Promise<void> {
   check("arena reveal emitted no floor banner",
     banners.every((banner) => !/FLOOR|CLEAR|GO DOWN/.test(banner)), banners.join("|"));
   check("authoritative hard grace draws visible local and remote world shields",
-    canvasLog.spawnSafeStrokeCalls === 4 && canvasLog.spawnShieldStrokeCalls >= 4,
+    canvasLog.spawnSafeStrokeCalls >= 8 && canvasLog.spawnShieldStrokeCalls >= 4,
     `safeStrokes=${canvasLog.spawnSafeStrokeCalls}`);
   check("local protection is a full-body shell while the opponent cue stays simplified",
     canvasLog.spawnShellFillCalls === 1,
@@ -307,6 +310,9 @@ async function main(): Promise<void> {
   check("shield-only state keeps one local full-body shell",
     canvasLog.spawnShellFillCalls === 1,
     `shellFills=${canvasLog.spawnShellFillCalls}`);
+  check("opponent shield-only shell is thinner than its hard-grace phase shell",
+    canvasLog.remoteSoftStrokeCalls >= 1,
+    `remoteSoft=${canvasLog.remoteSoftStrokeCalls}`);
 
   canvasLog.spawnShieldStrokeCalls = 0;
   self.spawnShieldT = 8;

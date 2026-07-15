@@ -2967,8 +2967,8 @@ export class Game {
       }
       case "pvpSpawnAttackBlocked":
         if (this.isSelfPid(e.pid)) {
-          const mx = e.x + Math.cos(this.aimAngle) * 22;
-          const my = e.y + Math.sin(this.aimAngle) * 22;
+          const mx = e.x + Math.cos(this.aimAngle) * 18;
+          const my = e.y + Math.sin(this.aimAngle) * 18;
           this.shockwaves.spawn(mx, my, 5, 13, 0.14, "#ffd27a", 2);
           sfx("uiClick", { gain: 0.08, rate: 0.75 });
         }
@@ -8388,7 +8388,7 @@ export class Game {
       // happens in place. Never a guessed color that pops to the real one later.
       if (r.colorIndex === null) {
         const status = r.isDown ? "DOWN" : isArenaRespawning ? "RESPAWNING" : null;
-        this.renderUnresolvedRemote(sx, sy, status);
+        this.renderUnresolvedRemote(sx, sy, status, materialize);
         continue;
       }
       const color = playerColor(r.colorIndex);
@@ -8567,12 +8567,12 @@ export class Game {
   // The neutral stand-in for a teammate whose identity color has not resolved: a grey ring
   // at the body position and a grey "…" at the name-label baseline — the same geometry the
   // real render uses, so the resolve swaps in place with zero shift.
-  private renderUnresolvedRemote(sx: number, sy: number, status: string | null) {
+  private renderUnresolvedRemote(sx: number, sy: number, status: string | null, alpha = 1) {
     const { ctx } = this;
     ctx.save();
     ctx.strokeStyle = NEUTRAL_PLAYER_COLOR;
     ctx.lineWidth = 2;
-    ctx.globalAlpha = status === null ? 0.8 : 0.35;
+    ctx.globalAlpha = (status === null ? 0.8 : 0.35) * alpha;
     ctx.beginPath();
     ctx.arc(sx, sy, this.pr, 0, 6.28);
     ctx.stroke();
@@ -8639,17 +8639,22 @@ export class Game {
     }
     ctx.globalAlpha = (isRemote ? 0.55 : 0.88) * pulse;
     ctx.strokeStyle = color;
-    ctx.lineWidth = isRemote ? 2 : isGrace ? 4 : 3;
+    ctx.lineWidth = isRemote ? (isGrace ? 2 : 1) : isGrace ? 4 : 3;
     ctx.setLineDash([]);
     if (isGrace) {
       const remaining = Math.max(0, Math.min(1, graceTicks / 25)) * 4;
       for (let segment = 0; segment < 4; segment++) {
         const fill = Math.max(0, Math.min(1, remaining - segment));
-        if (fill <= 0) continue;
         const start = -Math.PI / 2 + segment * Math.PI / 2 + 0.08;
-        const end = start + (Math.PI / 2 - 0.16) * fill;
+        const segmentArc = Math.PI / 2 - 0.16;
+        ctx.globalAlpha = (isRemote ? 0.16 : 0.22) * pulse;
         ctx.beginPath();
-        ctx.arc(sx, sy, radius, start, end);
+        ctx.arc(sx, sy, radius, start, start + segmentArc);
+        ctx.stroke();
+        if (fill <= 0) continue;
+        ctx.globalAlpha = (isRemote ? 0.55 : 0.88) * pulse;
+        ctx.beginPath();
+        ctx.arc(sx, sy, radius, start, start + segmentArc * fill);
         ctx.stroke();
       }
     } else {
@@ -8678,12 +8683,16 @@ export class Game {
     const graceTicks = Math.max(0, graceEndsAtTick - tick);
     if (!this.isArena || graceTicks <= 0) return;
     const progress = 1 - Math.max(0, Math.min(1, graceTicks / 25));
-    const mx = sx + Math.cos(aim) * 22;
-    const my = sy + Math.sin(aim) * 22;
+    const mx = sx + Math.cos(aim) * 18;
+    const my = sy + Math.sin(aim) * 18;
     const { ctx } = this;
     ctx.save();
     ctx.strokeStyle = "#ffd27a";
     ctx.lineWidth = 2;
+    ctx.globalAlpha = 0.18;
+    ctx.beginPath();
+    ctx.arc(mx, my, 7, 0, Math.PI * 2);
+    ctx.stroke();
     ctx.globalAlpha = 0.65;
     ctx.beginPath();
     ctx.arc(mx, my, 7, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * progress);
@@ -8766,8 +8775,8 @@ export class Game {
       if (WEAPONS[this.weapon].melee) this.renderHeldMelee(bx, by, this.aimAngle, this.weapon, alpha, this.meleeSwing);
       else this.renderHeldWeapon(bx, by, this.aimAngle, this.weapon, alpha, this.playerAnim.recoil);
       this.renderPvpWeaponArming(
-        bx,
-        by,
+        psx,
+        psy,
         this.aimAngle,
         protection.graceEndsAtTick,
         protection.tick,

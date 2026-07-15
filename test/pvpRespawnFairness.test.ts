@@ -611,12 +611,17 @@ section("reconnect preserves protection and spawn memory exactly");
   player.respawnWaitSafeT = 7;
   player.spawnGraceT = 13;
   player.spawnShieldT = 43;
+  player.spawnProtectionStartedTick = world.tick;
+  player.spawnHardGraceEndsAtTick = world.tick + 13;
+  player.spawnShieldEndsAtTick = world.tick + 43;
+  player.isSpawnOffenseLatched = true;
   player.pvpRecentSpawnIndices = [2, 5];
   const before = JSON.stringify({
     respawnT: player.respawnT,
     respawnWaitSafeT: player.respawnWaitSafeT,
     spawnGraceT: player.spawnGraceT,
     spawnShieldT: player.spawnShieldT,
+    isSpawnOffenseLatched: player.isSpawnOffenseLatched,
     memory: player.pvpRecentSpawnIndices,
   });
   setPlayerAbsence(world, player.id, true);
@@ -627,6 +632,7 @@ section("reconnect preserves protection and spawn memory exactly");
     respawnWaitSafeT: player.respawnWaitSafeT,
     spawnGraceT: player.spawnGraceT,
     spawnShieldT: player.spawnShieldT,
+    isSpawnOffenseLatched: player.isSpawnOffenseLatched,
     memory: player.pvpRecentSpawnIndices,
   });
   check("reserved-seat reconnect freezes and restores respawn state in a live 4p match", before === after);

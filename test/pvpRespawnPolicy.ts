@@ -71,6 +71,7 @@ export interface RespawnPolicyAggregate {
   playtestReactionMaxMs: number | null;
   intentionalFireWithin500msRate: number;
   armingFeedbackCoverageRate: number;
+  armingClarityProxyRate: number;
   heldFireAutoFireCount: number;
 }
 
@@ -428,10 +429,12 @@ function percentile(values: readonly number[], percentileValue: number): number 
 function runArmingUxProbe(seedCount: number): {
   intentionalFireWithin500msRate: number;
   armingFeedbackCoverageRate: number;
+  armingClarityProxyRate: number;
   heldFireAutoFireCount: number;
 } {
   let within500 = 0;
-  let feedback = 0;
+  let feedbackSeeds = 0;
+  let claritySeeds = 0;
   let heldFireAutoFireCount = 0;
   for (let seed = 0; seed < seedCount; seed++) {
     const world = createWorld(0x61726d00 + seed, 1, {
@@ -447,6 +450,8 @@ function runArmingUxProbe(seedCount: number): {
     const repressAtTick = graceEndsAtTick + 1 + seed % 8;
     let isReleaseSent = false;
     let isShotObserved = false;
+    let isFeedbackObserved = false;
+    let autoFireCount = 0;
     for (let guard = 0; guard < 50 && !isShotObserved; guard++) {
       let isFiring = true;
       if (actor.spawnGraceT === 0) {
@@ -463,18 +468,24 @@ function runArmingUxProbe(seedCount: number): {
           firing: isFiring,
         }],
       ]), DT);
-      feedback += events.filter((event) => event.t === "pvpSpawnAttackBlocked").length;
+      if (events.some((event) => event.t === "pvpSpawnAttackBlocked")) isFeedbackObserved = true;
       const isShot = events.some((event) => event.t === "shot" && event.pid === actor.id);
-      if (isShot && (!isReleaseSent || world.tick < repressAtTick)) heldFireAutoFireCount++;
+      if (isShot && (!isReleaseSent || world.tick < repressAtTick)) {
+        heldFireAutoFireCount++;
+        autoFireCount++;
+      }
       if (isShot) {
         isShotObserved = true;
         if ((world.tick - graceEndsAtTick) * 1000 * DT <= 500) within500++;
       }
     }
+    if (isFeedbackObserved) feedbackSeeds++;
+    if (isFeedbackObserved && isShotObserved && autoFireCount === 0) claritySeeds++;
   }
   return {
     intentionalFireWithin500msRate: seedCount > 0 ? within500 / seedCount : 0,
-    armingFeedbackCoverageRate: seedCount > 0 ? Math.min(seedCount, feedback) / seedCount : 0,
+    armingFeedbackCoverageRate: seedCount > 0 ? feedbackSeeds / seedCount : 0,
+    armingClarityProxyRate: seedCount > 0 ? claritySeeds / seedCount : 0,
     heldFireAutoFireCount,
   };
 }

@@ -588,7 +588,7 @@ function arenaHudDomTests(): void {
   hud.update(mkState({ hp: 100, maxHp: 100, isArena: true, arenaMatch: grace }));
   check("hard grace renders in the same fixed center slot with movement instructions",
     center.classList.contains("tone-spawn-safe")
-    && center.textContent === "SPAWN SAFEMOVE \u00b7 AIM \u00b7 DASH  |  WEAPON ARMING");
+    && center.textContent === "SPAWN SAFEMOVE \u00b7 AIM \u00b7 DASH | WEAPON ARMING");
   check("hard grace shows a fixed-slot SPAWN SAFE pip with final-window pulse",
     spawnProtection.classList.contains("show")
     && spawnProtection.classList.contains("grace")

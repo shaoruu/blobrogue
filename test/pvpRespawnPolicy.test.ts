@@ -61,8 +61,10 @@ check("arming UX probe lets at least 90% intentionally fire within 0.5s of grace
   metrics.intentionalFireWithin500msRate >= 0.9,
   `rate=${(metrics.intentionalFireWithin500msRate * 100).toFixed(1)}%`);
 check("arming UX probe gives clear blocked-input feedback and never auto-fires held input",
-  metrics.armingFeedbackCoverageRate === 1 && metrics.heldFireAutoFireCount === 0,
-  `feedback=${(metrics.armingFeedbackCoverageRate * 100).toFixed(0)}% auto=${metrics.heldFireAutoFireCount}`);
+  metrics.armingFeedbackCoverageRate === 1
+  && metrics.armingClarityProxyRate >= 0.9
+  && metrics.heldFireAutoFireCount === 0,
+  `feedback=${(metrics.armingFeedbackCoverageRate * 100).toFixed(0)}% clarity=${(metrics.armingClarityProxyRate * 100).toFixed(0)}% auto=${metrics.heldFireAutoFireCount}`);
 
 const playtestReport = runRespawnPolicyReport(8, "playtestBot");
 const playtestMetrics = playtestReport.aggregate;
