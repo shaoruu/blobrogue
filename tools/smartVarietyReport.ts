@@ -30,6 +30,8 @@ interface Report {
     lastEightRepeatRate: number;
     requestedRarity: Record<WeaponRarity, number>;
     selectedRarity: Record<WeaponRarity, number>;
+    refillRequestedRarity: Record<WeaponRarity, number>;
+    refillSelectedRarity: Record<WeaponRarity, number>;
   };
   blessing: {
     offers: number;
@@ -70,6 +72,8 @@ const report: Report = {
     lastEightRepeatRate: 0,
     requestedRarity: rarityCounts(),
     selectedRarity: rarityCounts(),
+    refillRequestedRarity: rarityCounts(),
+    refillSelectedRarity: rarityCounts(),
   },
   blessing: {
     offers: 0,
@@ -98,6 +102,10 @@ for (let seedIndex = 0; seedIndex < seeds; seedIndex++) {
     report.weapon.offers++;
     report.weapon.requestedRarity[requested]++;
     report.weapon.selectedRarity[WEAPONS[selected].rarity]++;
+    if (floor > PICKUP_WEAPONS.length) {
+      report.weapon.refillRequestedRarity[requested]++;
+      report.weapon.refillSelectedRarity[WEAPONS[selected].rarity]++;
+    }
     if (weaponSeen.size < PICKUP_WEAPONS.length) {
       unseenWeaponOpportunities++;
       if (!weaponSeen.has(selected)) unseenWeaponHits++;
@@ -170,6 +178,9 @@ const isPassing =
   report.weapon.unseenBeforeExhaustionRate >= 0.85
   && report.weapon.avoidableLastEightRepeats === 0
   && report.weapon.lastEightRepeatRate < 0.15
+  && (["common", "rare", "legendary"] as const).every((rarity) =>
+    report.weapon.refillRequestedRarity[rarity] === report.weapon.refillSelectedRarity[rarity]
+  )
   && report.blessing.unseenGuaranteeViolations === 0
   && report.blessing.consecutiveViolations === 0
   && report.blessing.upgradeCapViolations === 0
