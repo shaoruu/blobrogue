@@ -19,6 +19,7 @@ interface CanvasLog {
   warningFillCalls: number;
   spawnSafeStrokeCalls: number;
   spawnShieldStrokeCalls: number;
+  spawnShellFillCalls: number;
 }
 
 interface ArenaGameAccess {
@@ -82,8 +83,13 @@ function recordingCanvas(log: CanvasLog): HTMLCanvasElement {
       }
       if (property === "stroke") {
         return () => {
-          if (strokeStyle === "#7fe9ff") log.spawnSafeStrokeCalls++;
+          if (strokeStyle === "#f5e6c8") log.spawnSafeStrokeCalls++;
           if (strokeStyle === "#ffd27a") log.spawnShieldStrokeCalls++;
+        };
+      }
+      if (property === "fill") {
+        return () => {
+          if (fillStyle === "#f5e6c8" || fillStyle === "#ffd27a") log.spawnShellFillCalls++;
         };
       }
       if (property === "fillRect") {
@@ -182,6 +188,7 @@ async function main(): Promise<void> {
     warningFillCalls: 0,
     spawnSafeStrokeCalls: 0,
     spawnShieldStrokeCalls: 0,
+    spawnShellFillCalls: 0,
   };
   const gameInstance = new Game(
     recordingCanvas(canvasLog),
@@ -261,9 +268,13 @@ async function main(): Promise<void> {
   check("authoritative hard grace draws visible local and remote world shields",
     canvasLog.spawnSafeStrokeCalls >= 2,
     `safeStrokes=${canvasLog.spawnSafeStrokeCalls}`);
+  check("local protection is a full-body shell while the opponent cue stays simplified",
+    canvasLog.spawnShellFillCalls === 1,
+    `shellFills=${canvasLog.spawnShellFillCalls}`);
 
   canvasLog.spawnSafeStrokeCalls = 0;
   canvasLog.spawnShieldStrokeCalls = 0;
+  canvasLog.spawnShellFillCalls = 0;
   self.spawnGraceT = 0;
   self.spawnShieldT = 20;
   rival.spawnGraceT = 0;
@@ -279,6 +290,24 @@ async function main(): Promise<void> {
   check("remaining shield draws a distinct local and remote world cue",
     canvasLog.spawnSafeStrokeCalls === 0 && canvasLog.spawnShieldStrokeCalls >= 2,
     `safe=${canvasLog.spawnSafeStrokeCalls} shield=${canvasLog.spawnShieldStrokeCalls}`);
+  check("shield-only state keeps one local full-body shell",
+    canvasLog.spawnShellFillCalls === 1,
+    `shellFills=${canvasLog.spawnShellFillCalls}`);
+
+  canvasLog.spawnShieldStrokeCalls = 0;
+  self.spawnShieldT = 8;
+  rival.spawnShieldT = 8;
+  world.tick++;
+  socket.deliver(buildSnapshot(world, "p1", 0, [], 0, true, {
+    worldId: "pvp:room:ABCD",
+    roster,
+  }));
+  game.tick(FIXED_DT);
+  game.renderPlayer();
+  game.renderRemotePlayers();
+  check("the final 0.5s adds a local warning pulse without masking the arena",
+    canvasLog.spawnShieldStrokeCalls >= 3,
+    `shieldStrokes=${canvasLog.spawnShieldStrokeCalls}`);
 
   canvasLog.spawnShieldStrokeCalls = 0;
   self.spawnShieldT = 0;

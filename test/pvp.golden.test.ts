@@ -46,7 +46,8 @@ function digest(w: WorldState, evs: SimEvent[]): string {
   const parts = [...w.players.keys()].sort().map((id) => {
     const p = w.players.get(id)!;
     const sc = w.match!.scores.get(id) ?? 0;
-    return `${id}:${p.x.toFixed(2)},${p.y.toFixed(2)},${p.hp.toFixed(2)},${p.respawnT},${p.spawnGraceT},${p.spawnShieldT},${p.pvpRecentSpawnIndices.join(".")},${p.dashTime.toFixed(2)},${sc}`;
+    const telemetry = p.pvpRespawnTelemetry;
+    return `${id}:${p.x.toFixed(2)},${p.y.toFixed(2)},${p.hp.toFixed(2)},${p.respawnT},${p.respawnWaitSafeT},${p.spawnGraceT},${p.spawnShieldT},${p.pvpRecentSpawnIndices.join(".")},${telemetry?.chosenIndex ?? -1},${telemetry?.waitSafeMs ?? 0},${p.dashTime.toFixed(2)},${sc}`;
   });
   const ev = evs.map((e) => e.t).sort().join(",");
   return `t${w.tick}|${w.match!.phase}|win=${w.match!.winner ?? ""}|${parts.join("|")}|ev[${ev}]`;
@@ -133,9 +134,9 @@ function main(): void {
   check("live phase appears in the trace", joined.includes("|live|"));
   check("a kill event fires (fire -> kill)", joined.includes("pvpKill"));
   check("a hurt event fires (damage lands)", joined.includes("playerHurt"));
-  const deathIndex = forward.findIndex((line) => /p2:[^|]*,0\.00,[1-9][0-9]*,0,0,/.test(line));
+  const deathIndex = forward.findIndex((line) => /p2:[^|]*,0\.00,[1-9][0-9]*,0,0,0,/.test(line));
   const respawnIndex = forward.findIndex((line, index) =>
-    index > deathIndex && /p2:[^|]*,100\.00,0,25,60,/.test(line)
+    index > deathIndex && /p2:[^|]*,100\.00,0,0,25,60,/.test(line)
   );
   check("a respawn resolves after a scheduled death with full two-stage protection",
     deathIndex >= 0 && respawnIndex > deathIndex);

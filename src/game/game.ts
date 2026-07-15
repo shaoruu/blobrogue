@@ -1950,7 +1950,12 @@ export class Game {
 
     const rsp = snap.self?.rsp ?? null;
     if (rsp !== null) {
-      if (this.pvpPrevRespawnT !== null && this.pvpPrevRespawnT > 0 && rsp === 0) waveAudio.play("pvp.respawnIn");
+      if (this.pvpPrevRespawnT !== null
+        && this.pvpPrevRespawnT > 0
+        && rsp === 0
+        && (snap.self?.hp ?? 0) > 0) {
+        waveAudio.play("pvp.respawnIn");
+      }
       this.pvpPrevRespawnT = rsp;
     }
   }
@@ -2952,6 +2957,13 @@ export class Game {
       case "gameOver":
         this.gameOver();
         break;
+      case "pvpShieldBreak": {
+        const isSelf = this.isSelfPid(e.pid);
+        this.spawnParticles(e.x, e.y, isSelf ? 14 : 8, "#f5e6c8");
+        this.shockwaves.spawn(e.x, e.y, 22, isSelf ? 38 : 32, 0.22, "#ffd27a", isSelf ? 3 : 2);
+        if (isSelf) this.addTrauma(0.08);
+        break;
+      }
       case "pvpKill":
         // Fires to EVERY client — branch on the LOCAL player id (never "play frag on every
         // kill"): your kill = FRAG, your death = DEATH (both non-spatial), any other = a quiet
@@ -8346,7 +8358,7 @@ export class Game {
       const sx = r.x - cam.x, sy = r.y - cam.y;
       const isArenaRespawning = this.isArena && r.hp <= 0;
       if (!r.isAbsent && !isArenaRespawning) {
-        this.renderPvpSpawnProtection(sx, sy, r.spawnGraceT, r.spawnShieldT);
+        this.renderPvpSpawnProtection(sx, sy, r.spawnGraceT, r.spawnShieldT, true);
       }
       // Identity still unresolved (no verified color claim yet): an explicit NEUTRAL
       // placeholder at the exact body/label geometry the real render uses, so the resolve
@@ -8548,25 +8560,45 @@ export class Game {
     ctx.textAlign = "left";
   }
 
-  private renderPvpSpawnProtection(sx: number, sy: number, graceTicks: number, shieldTicks: number): void {
+  private renderPvpSpawnProtection(
+    sx: number,
+    sy: number,
+    graceTicks: number,
+    shieldTicks: number,
+    isRemote: boolean,
+  ): void {
     if (!this.isArena || shieldTicks <= 0) return;
     const isGrace = graceTicks > 0;
-    const pulse = 0.78 + 0.12 * Math.sin(this.animClock * (isGrace ? 8 : 5));
-    const radius = this.pr + (isGrace ? 10 : 7);
+    const remainingTicks = isGrace ? graceTicks : shieldTicks;
+    const isFinalPulse = remainingTicks <= 10;
+    const pulseRate = isFinalPulse ? 16 : isGrace ? 8 : 5;
+    const pulseDepth = isFinalPulse ? 0.24 : 0.10;
+    const pulse = 0.76 + pulseDepth * Math.sin(this.animClock * pulseRate);
+    const color = isGrace ? "#f5e6c8" : "#ffd27a";
+    const radius = this.pr + (isRemote ? 6 : isGrace ? 10 : 8);
     const { ctx } = this;
     ctx.save();
-    ctx.globalAlpha = pulse;
-    ctx.strokeStyle = isGrace ? "#7fe9ff" : "#ffd27a";
-    ctx.lineWidth = isGrace ? 3 : 2;
-    ctx.setLineDash(isGrace ? [5, 3] : []);
+    if (!isRemote) {
+      ctx.globalAlpha = (isGrace ? 0.20 : 0.14) * pulse;
+      ctx.fillStyle = color;
+      ctx.beginPath();
+      ctx.arc(sx, sy, this.pr + 5, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.globalAlpha = (isRemote ? 0.55 : 0.88) * pulse;
+    ctx.strokeStyle = color;
+    ctx.lineWidth = isRemote ? 2 : isGrace ? 4 : 3;
+    ctx.setLineDash(isRemote ? [5, 4] : []);
     ctx.beginPath();
     ctx.arc(sx, sy, radius, 0, Math.PI * 2);
     ctx.stroke();
-    ctx.globalAlpha = isGrace ? 0.16 : 0.09;
-    ctx.fillStyle = isGrace ? "#7fe9ff" : "#ffd27a";
-    ctx.beginPath();
-    ctx.arc(sx, sy, radius - 2, 0, Math.PI * 2);
-    ctx.fill();
+    if (!isRemote && isFinalPulse) {
+      ctx.globalAlpha = 0.42 * pulse;
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(sx, sy, radius + 5, 0, Math.PI * 2);
+      ctx.stroke();
+    }
     ctx.restore();
   }
 
@@ -8579,7 +8611,7 @@ export class Game {
     const ipy = this.renderPrevY + (this.py - this.renderPrevY) * a;
     const psx = ipx - cam.x, psy = ipy - cam.y;
     if (!isArenaRespawning && !this.isDown) {
-      this.renderPvpSpawnProtection(psx, psy, this.p.spawnGraceT, this.p.spawnShieldT);
+      this.renderPvpSpawnProtection(psx, psy, this.p.spawnGraceT, this.p.spawnShieldT, false);
     }
     // GUNNER OVERHEAT (Wave 2): a building heat glow on the body as Momentum ramps, FLARING on the
     // boil-over burst — the visible "charge" the HUD pip row mirrors. Local read off authoritative

@@ -19,7 +19,8 @@ const report = runRespawnPolicyReport(20);
 const metrics = report.aggregate;
 process.stdout.write(`${report.policy}\n`);
 
-check("20 deterministic adversarial seeds are reported", metrics.seedCount === 20);
+check("20 deterministic conformanceBot seeds are reported",
+  report.profile === "conformanceBot" && metrics.seedCount === 20);
 check("the policy exercises repeated completed post-death respawns in every seed",
   metrics.postRespawnEpisodeCount >= 60
   && report.seeds.every((seed) => seed.episodes.some((episode) => !episode.isInitialSpawn)),
@@ -47,6 +48,26 @@ check("fastest time-to-eight is at least 90s",
 check("at least 95% establish dash, 90-degree aim, and two-tile movement before first damage",
   metrics.controlEstablishedRate >= 0.95,
   `rate=${(metrics.controlEstablishedRate * 100).toFixed(1)}%`);
+
+const playtestReport = runRespawnPolicyReport(8, "playtestBot");
+const playtestMetrics = playtestReport.aggregate;
+const playtestEpisodes = playtestReport.seeds.flatMap((seed) => seed.episodes);
+check("playtestBot is separately labeled from adversarial conformance",
+  playtestReport.profile === "playtestBot" && playtestReport.policy.includes("250–350ms"));
+check("playtestBot never fires into hard grace or spawn shields",
+  playtestMetrics.shieldFireAttempts === 0);
+check("playtestBot report carries authoritative respawn telemetry fields",
+  playtestEpisodes.some((episode) =>
+    !episode.isInitialSpawn
+    && episode.chosenIndex >= 0
+    && episode.safeCount >= 0
+    && episode.timeToFirstInputMs !== null
+    && episode.shieldBreakMs !== null
+    && episode.firstDamageMs !== null
+    && typeof episode.isDeathWithin3s === "boolean"
+    && typeof episode.isRepeatedIndex === "boolean"
+    && episode.killerDistance !== null
+  ));
 
 process.stdout.write(`\n${JSON.stringify(metrics, null, 2)}\n`);
 process.stdout.write(`\n${failed === 0 ? "PASS" : "FAIL"} — ${passed} passed, ${failed} failed\n`);

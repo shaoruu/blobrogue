@@ -450,7 +450,7 @@ export function buildMoreChip(hiddenCount: number): HTMLElement {
 //   BC  hotbar (weapons + blessing summary)
 const HUD_MARKUP = `
   <div class="hud-corner tl"><div class="statpanel">
-    <div class="hprow"><div class="hearts" data-hearts></div><span class="oshield" data-oshield hidden></span><span class="arena-hp hidden" data-arena-hp><i data-arena-hp-fill></i></span><span class="hp-num" data-hpnum>0/0</span></div>
+    <div class="hprow"><div class="hearts" data-hearts></div><span class="oshield" data-oshield hidden></span><span class="arena-hp hidden" data-arena-hp><i data-arena-hp-fill></i></span><span class="arena-spawn-protection" data-arena-spawn-protection><span data-arena-spawn-protection-label></span><i><b></b></i></span><span class="hp-num" data-hpnum>0/0</span></div>
     <div class="party" data-party></div>
     <div class="statrow" data-statrow>
       <span class="chip kills"><span class="ic" data-ic="skull"></span><span class="v" data-kills>0</span></span>
@@ -551,6 +551,8 @@ export class Hud {
   private hpNumEl!: HTMLElement;
   private arenaHpEl!: HTMLElement;
   private arenaHpFillEl!: HTMLElement;
+  private arenaSpawnProtectionEl!: HTMLElement;
+  private arenaSpawnProtectionLabelEl!: HTMLElement;
   private arenaBoardEl!: HTMLElement;
   private arenaCenterEl!: HTMLElement;
   private partyEl!: HTMLElement;
@@ -653,6 +655,7 @@ export class Hud {
   private isPrevArena: boolean | null = null;
   private prevArenaBoardKey = "";
   private prevArenaCenterKey = "";
+  private prevArenaSpawnProtectionKey = "";
   private prevPartyKey = "";
   private prevUltKey = "";
   private arenaRematchAction: (() => void) | null = null;
@@ -669,6 +672,8 @@ export class Hud {
     this.hpNumEl = hud.querySelector("[data-hpnum]")!;
     this.arenaHpEl = hud.querySelector("[data-arena-hp]")!;
     this.arenaHpFillEl = hud.querySelector("[data-arena-hp-fill]")!;
+    this.arenaSpawnProtectionEl = hud.querySelector("[data-arena-spawn-protection]")!;
+    this.arenaSpawnProtectionLabelEl = hud.querySelector("[data-arena-spawn-protection-label]")!;
     this.arenaBoardEl = hud.querySelector("[data-arena-board]")!;
     this.arenaCenterEl = hud.querySelector("[data-arena-center]")!;
     this.partyEl = hud.querySelector("[data-party]")!;
@@ -1507,6 +1512,7 @@ export class Hud {
     this.renderParty(s.isArena ? [] : (s.party ?? []));
     this.renderUlt(s.ult ?? null);
     this.renderSig(s.sig ?? null);
+    this.renderArenaSpawnProtection(s.isArena ? s.arenaMatch : null);
     this.killsEl.textContent = String(s.kills);
     this.coinsEl.textContent = String(s.coins);
     this.statRowEl.classList.toggle("hidden", s.isArena);
@@ -1716,6 +1722,27 @@ export class Hud {
       row.append(name, frags);
       this.arenaBoardEl.appendChild(row);
     }
+  }
+
+  private renderArenaSpawnProtection(match: ArenaMatchHudState | null): void {
+    const mode = match?.spawnProtection ?? null;
+    const fill = match?.spawnProtectionFill ?? 0;
+    const isFinal = match?.isSpawnProtectionFinalPulse ?? false;
+    const key = `${mode ?? "off"}:${fill.toFixed(3)}:${isFinal ? 1 : 0}`;
+    if (key === this.prevArenaSpawnProtectionKey) return;
+    this.prevArenaSpawnProtectionKey = key;
+    this.arenaSpawnProtectionEl.className = "arena-spawn-protection"
+      + (mode === null ? "" : ` show ${mode}`)
+      + (isFinal ? " final" : "");
+    this.arenaSpawnProtectionEl.style.setProperty(
+      "--spawn-protection",
+      String(Math.max(0, Math.min(1, fill))),
+    );
+    this.arenaSpawnProtectionLabelEl.textContent = mode === "grace"
+      ? "SPAWN SAFE"
+      : mode === "shield"
+        ? "SPAWN SHIELD"
+        : "";
   }
 
   private renderArenaCenter(isArena: boolean, match: ArenaMatchHudState | null): void {
@@ -1946,6 +1973,9 @@ export class Hud {
     this.expeditionObjectiveEl.classList.remove("show");
     this.prevExpeditionObjective = null;
     this.arenaHpEl.classList.add("hidden");
+    this.arenaSpawnProtectionEl.className = "arena-spawn-protection";
+    this.arenaSpawnProtectionLabelEl.textContent = "";
+    this.prevArenaSpawnProtectionKey = "";
     this.arenaBoardEl.classList.add("hidden");
     this.arenaBoardEl.replaceChildren();
     this.arenaCenterEl.className = "arena-center hidden";

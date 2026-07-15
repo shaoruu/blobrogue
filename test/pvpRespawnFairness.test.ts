@@ -9,6 +9,9 @@ import {
   PVP,
   pvpRespawnBaseScore,
   pvpRespawnIndex,
+  pvpRespawnThreatFlags,
+  pvpRespawnWaitSafeMaxTicks,
+  PVP_RESPAWN_THREAT,
 } from "../src/sim/pvp.js";
 import type { PvpRespawnCandidate } from "../src/sim/pvp.js";
 import type { Bullet, Vec2, WeaponId, WireEffect } from "../src/sim/types.js";
@@ -65,7 +68,10 @@ function forceRespawn(world: WorldState, player: PlayerSim): number {
   player.hp = 0;
   player.respawnT = 1;
   clearProtection(player);
-  stepWorld(world, currentInputs(world), DT);
+  let guard = 0;
+  while (player.hp <= 0 && guard++ < pvpRespawnWaitSafeMaxTicks() + 3) {
+    stepWorld(world, currentInputs(world), DT);
+  }
   const spawns = world.match?.spawns ?? [];
   return spawns.findIndex((spawn) => spawn.x === player.x && spawn.y === player.y);
 }
@@ -156,6 +162,73 @@ section("pure scorer: exact penalties, anti-camp memory, and damage fallback");
     candidate(1, 0, { incomingThreatEtaSec: 1, predictedIncomingDamage: 5 }),
   ]);
   check("all-threatened fallback minimizes predicted 1.5s incoming damage before score", fallback === 1);
+  check("zero near-projectile threat dominates an arbitrarily large distance score",
+    pvpRespawnIndex([
+      candidate(0, 100000, { incomingThreatEtaSec: 1 }),
+      candidate(1, 0),
+    ]) === 1);
+  check("blocked LOS dominates an arbitrarily large exposed distance score",
+    pvpRespawnIndex([
+      candidate(0, 100000, { losThreatCount: 1 }),
+      candidate(1, 0, { isCoveredFromNearest: true }),
+    ]) === 1);
+  const flags = pvpRespawnThreatFlags(candidate(0, 0, {
+    losThreatCount: 1,
+    isAimedAt: true,
+    incomingThreatEtaSec: 1,
+    isCamped: true,
+    isPitEligible: false,
+  }));
+  check("threat telemetry flags LOS, aim, near projectile, camp, and pit independently",
+    (flags & PVP_RESPAWN_THREAT.los) !== 0
+    && (flags & PVP_RESPAWN_THREAT.aim) !== 0
+    && (flags & PVP_RESPAWN_THREAT.projectileNear) !== 0
+    && (flags & PVP_RESPAWN_THREAT.camp) !== 0
+    && (flags & PVP_RESPAWN_THREAT.pit) !== 0);
+}
+
+section("all-eight unsafe candidates wait, poll, and time out deterministically");
+{
+  const opensWorld = liveWorld(40, 2);
+  opensWorld.props = [];
+  const opensVictim = opensWorld.players.get("p1")!;
+  const opensOpponent = opensWorld.players.get("p2")!;
+  opensOpponent.x = 456;
+  opensOpponent.y = 456;
+  clearProtection(opensOpponent);
+  opensVictim.hp = 0;
+  opensVictim.respawnT = 1;
+  stepWorld(opensWorld, currentInputs(opensWorld), DT);
+  check("all eight threatened candidates enter RESPAWN_WAIT_SAFE with UI respawn state intact",
+    opensVictim.hp === 0
+    && opensVictim.respawnT === 1
+    && opensVictim.respawnWaitSafeT === pvpRespawnWaitSafeMaxTicks());
+  opensOpponent.spawnShieldT = 60;
+  stepWorld(opensWorld, currentInputs(opensWorld), DT);
+  stepWorld(opensWorld, currentInputs(opensWorld), DT);
+  check("a safe lane opening at the first 0.10s poll respawns immediately",
+    opensVictim.hp === PVP.maxHp
+    && opensVictim.respawnWaitSafeT === 0
+    && opensVictim.pvpRespawnTelemetry?.waitSafeMs === 100);
+
+  const timeoutWorld = liveWorld(41, 2);
+  timeoutWorld.props = [];
+  const timeoutVictim = timeoutWorld.players.get("p1")!;
+  const timeoutOpponent = timeoutWorld.players.get("p2")!;
+  timeoutOpponent.x = 456;
+  timeoutOpponent.y = 456;
+  clearProtection(timeoutOpponent);
+  timeoutVictim.hp = 0;
+  timeoutVictim.respawnT = 1;
+  stepWorld(timeoutWorld, currentInputs(timeoutWorld), DT);
+  for (let i = 0; i < pvpRespawnWaitSafeMaxTicks(); i++) {
+    stepWorld(timeoutWorld, currentInputs(timeoutWorld), DT);
+  }
+  check("an arena that stays all-unsafe times out at exactly 0.75s with the full shield",
+    timeoutVictim.hp === PVP.maxHp
+    && timeoutVictim.spawnShieldT === 60
+    && timeoutVictim.pvpRespawnTelemetry?.safeCount === 0
+    && timeoutVictim.pvpRespawnTelemetry.waitSafeMs === 750);
 }
 
 section("hard grace suppresses every shipped outgoing attack family");
@@ -290,6 +363,33 @@ section("swept projectile ETA and shipped ranged/trap threats");
   check("beam trajectory is included in incoming threat prediction",
     forceRespawn(beamWorld, beamVictim) === 1);
 
+  const homingWorld = liveWorld(2501, 2);
+  setRespawnArena(homingWorld, spawns);
+  const homingVictim = homingWorld.players.get("p1")!;
+  const homingOwner = homingWorld.players.get("p2")!;
+  homingOwner.x = 300;
+  homingOwner.y = 600;
+  homingOwner.aimAngle = Math.PI;
+  homingWorld.bullets.push({
+    x: spawns[0].x - 120,
+    y: spawns[0].y - 100,
+    vx: 300,
+    vy: 0,
+    radius: 4,
+    life: 2,
+    friendly: true,
+    owner: homingOwner.id,
+    damage: 3,
+    color: "#fff",
+    pierce: 0,
+    hitList: null,
+    isCrit: false,
+    homing: 4,
+    fx: "homing",
+  });
+  check("off-axis homing acquisition is included in candidate threat prediction",
+    forceRespawn(homingWorld, homingVictim) === 1);
+
   const mortarWorld = liveWorld(251, 2);
   setRespawnArena(mortarWorld, spawns);
   const mortarVictim = mortarWorld.players.get("p1")!;
@@ -366,6 +466,21 @@ section("absent, downed, and respawning bodies are not spawn threats");
   respawning.respawnT = 20;
   victim.pvpRecentSpawnIndices = [];
   check("non-live bodies cannot camp, aim, or contribute LOS",
+    forceRespawn(world, victim) === 0);
+}
+
+section("protected players are excluded from spawn targeting and camping");
+{
+  const world = liveWorld(325, 2);
+  const spawns = [{ x: 300, y: 216 }, { x: 600, y: 216 }];
+  setRespawnArena(world, spawns);
+  const victim = world.players.get("p1")!;
+  const protectedOpponent = world.players.get("p2")!;
+  protectedOpponent.x = spawns[0].x;
+  protectedOpponent.y = spawns[0].y;
+  protectedOpponent.spawnShieldT = 60;
+  victim.pvpRecentSpawnIndices = [];
+  check("a shielded opponent cannot camp, aim, or contribute LOS to respawn selection",
     forceRespawn(world, victim) === 0);
 }
 
@@ -448,12 +563,14 @@ section("reconnect preserves protection and spawn memory exactly");
 {
   const world = liveWorld(500, 4);
   const player = world.players.get("p1")!;
-  player.respawnT = 17;
+  player.respawnT = 1;
+  player.respawnWaitSafeT = 7;
   player.spawnGraceT = 13;
   player.spawnShieldT = 43;
   player.pvpRecentSpawnIndices = [2, 5];
   const before = JSON.stringify({
     respawnT: player.respawnT,
+    respawnWaitSafeT: player.respawnWaitSafeT,
     spawnGraceT: player.spawnGraceT,
     spawnShieldT: player.spawnShieldT,
     memory: player.pvpRecentSpawnIndices,
@@ -463,6 +580,7 @@ section("reconnect preserves protection and spawn memory exactly");
   setPlayerAbsence(world, player.id, false);
   const after = JSON.stringify({
     respawnT: player.respawnT,
+    respawnWaitSafeT: player.respawnWaitSafeT,
     spawnGraceT: player.spawnGraceT,
     spawnShieldT: player.spawnShieldT,
     memory: player.pvpRecentSpawnIndices,

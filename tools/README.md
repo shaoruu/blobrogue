@@ -66,6 +66,10 @@ after `source /workspace/.secrets/env.sh` (loads FAL_KEY etc.).
   dims). RUN BEFORE EVERY ART SHIP. Exit 1 on any flag. Catches the "squashed slime" class of bug.
 - **`/workspace/qa/capture-gameplay.sh [secs] [out.mp4]`** — record live gameplay on display :1
   for videoReview (motion/feel QA that screenshots can't do).
+- **`npm run pvp:respawn-report -- --profile conformanceBot|playtestBot --out <path>`** — runs
+  deterministic private PvP respawn reports. `conformanceBot` keeps continuous adversarial
+  pressure; `playtestBot` uses bounded aim error, human burst cadence, a 250–350ms post-shield
+  reaction, and never pre-aims pending spawns or fires into protection.
 
 ## Golden rules (learned the hard way)
 1. AD "committed to the repo" ≠ in git — always `git status public/sprites` and commit untracked

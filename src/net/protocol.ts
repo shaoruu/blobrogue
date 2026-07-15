@@ -285,7 +285,8 @@ export const FIXED_DT = 1 / TICK_HZ; // 50ms authoritative step
 // v29: PVP Wave 1 presentation events — ring-out, chain-frag, and sudden-death crescendo.
 // v30: distinct authoritative PvP spawn-grace + spawn-shield tick windows on SelfWire and
 // PlayerWire. The split drives exact attack suppression and unambiguous local/remote safety cues.
-export const PROTOCOL_VERSION = 30;
+// v31: authoritative PvP shield-break event, ordered before the offense that broke it.
+export const PROTOCOL_VERSION = 31;
 
 // How long the server reserves a disconnected player's body (their seat) before the
 // authoritative leave lifecycle applies. 90s per the studio balance gate's reconnect
@@ -910,6 +911,7 @@ const EVENT_SPECS: Record<SimEvent["t"], EventSpec> = {
   pvpKill: { scope: "pos", fields: { by: "str", victim: "str", x: "num", y: "num" } },
   pvpRingOut: { scope: "pos", fields: { by: "str", victim: "str", x: "num", y: "num" } },
   pvpChainFrag: { scope: "pos", fields: { by: "str", chain: "num", x: "num", y: "num" } },
+  pvpShieldBreak: { scope: "pos", fields: { pid: "str", x: "num", y: "num" } },
   pvpSuddenDeath: { scope: "global", fields: { leader: "str" } },
   pvpMatchOver: { scope: "global", fields: { winner: "str" } },
   // flash/trauma carry no position — rare, tiny, and safe to deliver globally.

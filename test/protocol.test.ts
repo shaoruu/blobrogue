@@ -270,7 +270,7 @@ function serverRoundTripTests(): void {
 // who is actually there (the Sev-0 readout).
 function worldBindingWireTests(): void {
   section("v4: authoritative world id + roster are required, strict, and round-trip");
-  check("protocol version covers distinct PvP spawn protection (v30)", PROTOCOL_VERSION === 30, `v=${PROTOCOL_VERSION}`);
+  check("protocol version covers authoritative PvP shield break (v31)", PROTOCOL_VERSION === 31, `v=${PROTOCOL_VERSION}`);
   check("room code maps to its world id", worldIdForRoomCode(" abcd ") === "room:ABCD");
   check("room world ids pass the shared charset gate", isValidWorldId(worldIdForRoomCode("ZZZZ")) && isValidWorldId("arena-1"));
   check("junk world ids fail the shared charset gate", !isValidWorldId("room:../../etc") && !isValidWorldId(""));
@@ -525,6 +525,7 @@ function eventScopeTests(): void {
     [{ t: "heal", pid: "p7", x: 1, y: 2 }, "pos"],
     [{ t: "pickup", pid: "p7", kind: "coin", x: 1, y: 2 }, "pos"],
     [{ t: "friendlyNudge", shooterId: "p7", targetId: "p8", x: 1, y: 2, dirX: 1, dirY: 0 }, "pos"],
+    [{ t: "pvpShieldBreak", pid: "p7", x: 1, y: 2 }, "pos"],
     // Deliberately pid: remote dash FX ride PlayerWire dash STATE (v9), so broadcasting
     // these would double-play the dasher's juice.
     [{ t: "dashStart", pid: "p7", x: 1, y: 2 }, "pid"],

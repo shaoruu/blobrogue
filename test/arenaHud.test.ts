@@ -105,8 +105,13 @@ section("countdown, result, and respawn states");
   check("hard grace cue names available controls without implying a broken weapon",
     arenaCenterCopy(grace)?.title === "SPAWN SAFE"
     && arenaCenterCopy(grace)?.detail === "MOVE / AIM / DASH");
+  check("hard grace drives the fixed pip fill and final-half-second pulse",
+    Math.abs(grace.spawnProtectionFill - 8 / 25) < 1e-9
+    && grace.isSpawnProtectionFinalPulse);
   check("remaining protection has a distinct concise shield cue",
-    arenaCenterCopy(shield)?.title === "SPAWN SHIELD");
+    arenaCenterCopy(shield)?.title === "SPAWN SHIELD"
+    && Math.abs(shield.spawnProtectionFill - 20 / 60) < 1e-9
+    && !shield.isSpawnProtectionFinalPulse);
   const broken = build(
     { ph: "live", end: 6080, sc: SCORES, win: null },
     { spawnGraceTicks: 0, spawnShieldTicks: 0 },

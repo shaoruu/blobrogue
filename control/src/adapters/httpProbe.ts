@@ -74,7 +74,8 @@ import type {
 // `match` block, and the reliable pvpKill / pvpMatchOver events (all inert in co-op).
 // v29: PVP Wave 1 reliable presentation events (ring-out, chain-frag, sudden-death).
 // v30: distinct authoritative PvP hard-grace and spawn-shield ticks.
-export const SYNTHETIC_JOIN_PROTOCOL = 30;
+// v31: authoritative PvP shield-break event before its offense.
+export const SYNTHETIC_JOIN_PROTOCOL = 31;
 
 export interface HttpProbeConfig {
   baseUrl: string;

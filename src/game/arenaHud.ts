@@ -1,5 +1,6 @@
 import { FIXED_DT, type MatchWire } from "../net/protocol.js";
 import type { PlayerId } from "../sim/input.js";
+import { pvpSpawnHardGraceTicks, pvpSpawnShieldTicks } from "../sim/pvp.js";
 import type { MatchPhase } from "../sim/pvp.js";
 
 export interface ArenaScoreRow {
@@ -19,6 +20,8 @@ export interface ArenaMatchHudState {
   isSelfWinner: boolean | null;
   respawnSeconds: number;
   spawnProtection: "grace" | "shield" | null;
+  spawnProtectionFill: number;
+  isSpawnProtectionFinalPulse: boolean;
 }
 
 export interface ArenaMatchHudSource {
@@ -68,6 +71,18 @@ export function buildArenaMatchHud(source: ArenaMatchHudSource): ArenaMatchHudSt
   const isResultKnown = source.match.ph === "over"
     && source.selfId !== null
     && source.match.win !== null;
+  const spawnProtection = source.match.ph !== "live"
+    ? null
+    : source.spawnGraceTicks > 0
+      ? "grace"
+      : source.spawnShieldTicks > 0
+        ? "shield"
+        : null;
+  const protectionTicks = spawnProtection === "grace"
+    ? source.spawnGraceTicks
+    : spawnProtection === "shield"
+      ? source.spawnShieldTicks
+      : 0;
 
   return {
     phase: source.match.ph,
@@ -80,13 +95,13 @@ export function buildArenaMatchHud(source: ArenaMatchHudSource): ArenaMatchHudSt
     respawnSeconds: source.match.ph === "live"
       ? Math.max(0, Math.ceil(source.respawnTicks * FIXED_DT))
       : 0,
-    spawnProtection: source.match.ph !== "live"
-      ? null
-      : source.spawnGraceTicks > 0
-        ? "grace"
-        : source.spawnShieldTicks > 0
-          ? "shield"
-          : null,
+    spawnProtection,
+    spawnProtectionFill: spawnProtection === "grace"
+      ? Math.max(0, Math.min(1, protectionTicks / pvpSpawnHardGraceTicks()))
+      : spawnProtection === "shield"
+        ? Math.max(0, Math.min(1, protectionTicks / pvpSpawnShieldTicks()))
+        : 0,
+    isSpawnProtectionFinalPulse: spawnProtection !== null && protectionTicks <= Math.round(0.5 / FIXED_DT),
   };
 }
 

@@ -150,7 +150,7 @@ function pidOf(e: SimEvent): PlayerId | undefined {
 // a remote's, never with the local player's camera juice). Enemy/world events carry no pid
 // and pass anyway; the local player's own copies still play exactly once (deduped by id).
 const REMOTE_AUDIBLE_EVENTS: ReadonlySet<SimEvent["t"]> = new Set<SimEvent["t"]>([
-  "shot", "meleeSwing", "playerHurt", "heal", "pickup",
+  "shot", "meleeSwing", "playerHurt", "heal", "pickup", "pvpShieldBreak",
 ]);
 
 export class WSTransport implements Transport {

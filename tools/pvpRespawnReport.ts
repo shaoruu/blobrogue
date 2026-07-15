@@ -2,6 +2,7 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 
 import { runRespawnPolicyReport } from "../test/pvpRespawnPolicy.js";
+import type { RespawnBotProfile } from "../test/pvpRespawnPolicy.js";
 
 function argumentValue(name: string): string | null {
   const index = process.argv.indexOf(name);
@@ -10,11 +11,16 @@ function argumentValue(name: string): string | null {
 
 const outPath = resolve(argumentValue("--out") ?? "artifacts/pvp-respawn-report.json");
 const seedCount = Number(argumentValue("--seeds") ?? "20");
+const profileArg = argumentValue("--profile") ?? "conformanceBot";
+if (profileArg !== "conformanceBot" && profileArg !== "playtestBot") {
+  throw new Error("--profile must be conformanceBot or playtestBot");
+}
+const profile: RespawnBotProfile = profileArg;
 if (!Number.isInteger(seedCount) || seedCount < 1 || seedCount > 200) {
   throw new Error("--seeds must be an integer from 1 to 200");
 }
 
-const report = runRespawnPolicyReport(seedCount);
+const report = runRespawnPolicyReport(seedCount, profile);
 mkdirSync(dirname(outPath), { recursive: true });
 writeFileSync(outPath, JSON.stringify(report, null, 2) + "\n");
 
@@ -26,12 +32,14 @@ const isAccepted = metrics.postRespawnEpisodeCount >= seedCount * 3
   && metrics.spawnToDeathMedianSec >= 7
   && metrics.maxRespawnOnlyFragsPer20Sec <= 2
   && (metrics.timeToEightMinSec === null || metrics.timeToEightMinSec >= 90)
-  && metrics.controlEstablishedRate >= 0.95;
+  && metrics.controlEstablishedRate >= 0.95
+  && (profile !== "playtestBot" || metrics.shieldFireAttempts === 0);
 process.stdout.write([
   "# BlobRogue private PvP respawn fairness report",
   "",
   report.policy,
   "",
+  `- Profile: ${report.profile}`,
   `- Seeds: ${metrics.seedCount}`,
   `- Completed respawn episodes: ${metrics.episodeCount}`,
   `- Completed post-death respawns: ${metrics.postRespawnEpisodeCount}`,
@@ -42,6 +50,10 @@ process.stdout.write([
     ? `not reached in ${metrics.seedCount} seeds`
     : `${metrics.timeToEightMinSec.toFixed(2)}s`}`,
   `- Control established before first damage: ${(metrics.controlEstablishedRate * 100).toFixed(1)}%`,
+  `- Wait-safe respawns: ${metrics.waitSafeRespawnCount}`,
+  `- Threatened choices: ${metrics.threatenedSpawnCount}`,
+  `- Repeated indices: ${metrics.repeatedSpawnCount}`,
+  `- Firing attempts into shields: ${metrics.shieldFireAttempts}`,
   `- JSON: ${outPath}`,
   `- Acceptance: ${isAccepted ? "PASS" : "FAIL"}`,
   "",

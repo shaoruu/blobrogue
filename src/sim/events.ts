@@ -152,6 +152,8 @@ export type SimEvent =
   | { t: "pvpRingOut"; by: PlayerId; victim: PlayerId; x: number; y: number }
   // PVP presentation-only chain-frag event. It grants no stat or power reward.
   | { t: "pvpChainFrag"; by: PlayerId; chain: number; x: number; y: number }
+  // A protected player committed their first legal offense. Emitted before its attack event.
+  | { t: "pvpShieldBreak"; pid: PlayerId; x: number; y: number }
   // PVP presentation-only match-point/final-clock crescendo.
   | { t: "pvpSuddenDeath"; leader: PlayerId }
   // PVP: the match resolved — `winner` is the frag leader (id-sorted tiebreak; "" = no winner).

@@ -110,6 +110,7 @@ type ClientOwnedField = "id" | "pr" | "aimAngle" | "shotSeq" | "rewindTicks" | "
 // - lastPvpHitBy/lastPvpHitTick: authoritative damage attribution bookkeeping.
 // - lastPvpKnockbackBy/lastPvpKnockbackTick: authoritative ring-out credit bookkeeping.
 // - pvpRecentSpawnIndices: authoritative anti-camp memory retained by the server seat.
+// - respawnWaitSafeT/pvpRespawnTelemetry: authoritative respawn selection and report state.
 // - pvpDraft*: authoritative offer cadence, deterministic seed identity, and comeback weighting.
 //              The server sends the validated offer itself; prediction never rolls an online pick.
 type ServerOnlyField =
@@ -126,6 +127,8 @@ type ServerOnlyField =
   | "lastPvpKnockbackBy"
   | "lastPvpKnockbackTick"
   | "pvpRecentSpawnIndices"
+  | "respawnWaitSafeT"
+  | "pvpRespawnTelemetry"
   | "pvpDraftFrags"
   | "pvpNextDraftTick"
   | "pvpDraftOrdinal"

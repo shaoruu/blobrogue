@@ -140,6 +140,7 @@ async function main(): Promise<void> {
       gw.state.effects = gw.state.effects.filter((effect) => effect.owner !== actorId);
       const startX = player.x;
       const startShotSeq = player.shotSeq;
+      const startShieldBreaks = actor.events.filter((event) => event.t === "pvpShieldBreak").length;
 
       await sleep(800);
       check("move, aim, and dash inputs change authoritative state during hard grace",
@@ -160,6 +161,12 @@ async function main(): Promise<void> {
         1000,
       );
       check("the authoritative break is visible on the client wire", isWireUpdated);
+      await waitUntil(
+        () => actor.events.filter((event) => event.t === "pvpShieldBreak").length > startShieldBreaks,
+        1000,
+      );
+      check("the authoritative shield-break event arrives exactly once",
+        actor.events.filter((event) => event.t === "pvpShieldBreak").length === startShieldBreaks + 1);
 
       actor.stop();
       rival.stop();

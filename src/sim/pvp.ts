@@ -130,6 +130,8 @@ export const PVP = {
   respawnRecentPenalty: 400,
   respawnRecentOverride: 800,
   respawnCampRadius: 180,
+  respawnWaitSafeIntervalSec: 0.10,
+  respawnWaitSafeMaxSec: 0.75,
   // Respawn delay after death (frag-limit deathmatch: dead players respawn, never eliminate).
   respawnDelaySec: 2.5,
   // Pre-match countdown after enough players are present.
@@ -153,6 +155,12 @@ export const PVP = {
 export function pvpRespawnDelayTicks(): number { return Math.round(PVP.respawnDelaySec * TICKS_PER_SECOND); }
 export function pvpSpawnHardGraceTicks(): number { return Math.round(PVP.spawnHardGraceSec * TICKS_PER_SECOND); }
 export function pvpSpawnShieldTicks(): number { return Math.round(PVP.spawnShieldSec * TICKS_PER_SECOND); }
+export function pvpRespawnWaitSafeIntervalTicks(): number {
+  return Math.round(PVP.respawnWaitSafeIntervalSec * TICKS_PER_SECOND);
+}
+export function pvpRespawnWaitSafeMaxTicks(): number {
+  return Math.round(PVP.respawnWaitSafeMaxSec * TICKS_PER_SECOND);
+}
 export function pvpCountdownTicks(): number { return Math.round(PVP.countdownSec * TICKS_PER_SECOND); }
 export function pvpMatchTimeTicks(): number { return Math.round(PVP.matchTimeSec * TICKS_PER_SECOND); }
 export function pvpEnvKillCreditWindowTicks(): number { return Math.round(PVP.envKillCreditWindowSec * TICKS_PER_SECOND); }
@@ -338,12 +346,56 @@ export interface PvpRespawnCandidate {
   isPitEligible: boolean;
 }
 
+export const PVP_RESPAWN_THREAT = {
+  los: 1 << 0,
+  aim: 1 << 1,
+  projectileNear: 1 << 2,
+  projectileFar: 1 << 3,
+  camp: 1 << 4,
+  pit: 1 << 5,
+} as const;
+
+export interface PvpRespawnTelemetry {
+  spawnTick: number;
+  threatFlags: number;
+  chosenIndex: number;
+  safeCount: number;
+  waitSafeMs: number;
+  timeToFirstInputMs: number | null;
+  shieldBreakMs: number | null;
+  firstDamageMs: number | null;
+  isShieldBrokenByAttack: boolean;
+  isDeathWithin3s: boolean;
+  isRepeatedIndex: boolean;
+  killerDistance: number | null;
+}
+
 export function pvpRespawnProjectilePenalty(candidate: PvpRespawnCandidate): number {
   const eta = candidate.incomingThreatEtaSec;
   if (eta === null) return 0;
   if (eta <= PVP.spawnThreatHorizonSec) return PVP.respawnProjectileNearPenalty;
   if (eta <= PVP.spawnThreatOuterHorizonSec) return PVP.respawnProjectileFarPenalty;
   return 0;
+}
+
+export function isPvpRespawnCandidateSafe(candidate: PvpRespawnCandidate): boolean {
+  return candidate.losThreatCount === 0 && pvpRespawnProjectilePenalty(candidate) === 0;
+}
+
+export function isPvpRespawnCandidateThreatened(candidate: PvpRespawnCandidate): boolean {
+  return !isPvpRespawnCandidateSafe(candidate);
+}
+
+export function pvpRespawnThreatFlags(candidate: PvpRespawnCandidate): number {
+  let flags = 0;
+  if (candidate.losThreatCount > 0) flags |= PVP_RESPAWN_THREAT.los;
+  if (candidate.isAimedAt) flags |= PVP_RESPAWN_THREAT.aim;
+  const eta = candidate.incomingThreatEtaSec;
+  if (eta !== null && eta <= PVP.spawnThreatHorizonSec) flags |= PVP_RESPAWN_THREAT.projectileNear;
+  else if (eta !== null && eta <= PVP.spawnThreatOuterHorizonSec) flags |= PVP_RESPAWN_THREAT.projectileFar;
+  if (candidate.isCamped) flags |= PVP_RESPAWN_THREAT.camp;
+  if (!candidate.isPitEligible) flags |= PVP_RESPAWN_THREAT.pit;
+  return flags;
 }
 
 export function pvpRespawnBaseScore(candidate: PvpRespawnCandidate): number {
@@ -380,26 +432,42 @@ function pvpRespawnScore(
   return score;
 }
 
-export function pvpRespawnIndex(
+export function pvpRespawnValidCandidates(
   candidates: readonly PvpRespawnCandidate[],
   recentSpawnIndices: readonly number[] = [],
-): number {
-  if (candidates.length === 0) return 0;
+): PvpRespawnCandidate[] {
+  if (candidates.length === 0) return [];
   const pitEligible = candidates.filter((candidate) => candidate.isPitEligible);
   let valid = pitEligible.length > 0 ? pitEligible : candidates.slice();
   const nonCamped = valid.filter((candidate) => !candidate.isCamped);
   if (nonCamped.length > 0) valid = nonCamped;
-
   const last = recentSpawnIndices.at(-1);
   const previous = recentSpawnIndices.at(-2);
   if (last !== undefined && last === previous) {
     const alternatives = valid.filter((candidate) => candidate.index !== last);
     if (alternatives.length >= 2) valid = alternatives;
   }
+  return valid;
+}
 
+export function pvpRespawnIndex(
+  candidates: readonly PvpRespawnCandidate[],
+  recentSpawnIndices: readonly number[] = [],
+): number {
+  if (candidates.length === 0) return 0;
+  let valid = pvpRespawnValidCandidates(candidates, recentSpawnIndices);
   const isEveryCandidateThreatened = valid.every((candidate) =>
-    candidate.losThreatCount > 0 || pvpRespawnProjectilePenalty(candidate) > 0
+    isPvpRespawnCandidateThreatened(candidate)
   );
+  if (!isEveryCandidateThreatened) {
+    const noNearProjectile = valid.filter((candidate) =>
+      candidate.incomingThreatEtaSec === null
+      || candidate.incomingThreatEtaSec > PVP.spawnThreatHorizonSec
+    );
+    if (noNearProjectile.length > 0) valid = noNearProjectile;
+    const blockedLos = valid.filter((candidate) => candidate.losThreatCount === 0);
+    if (blockedLos.length > 0) valid = blockedLos;
+  }
   let best = valid[0];
   let bestScore = pvpRespawnScore(best, valid, recentSpawnIndices);
   for (let i = 1; i < valid.length; i++) {
