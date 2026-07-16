@@ -10001,12 +10001,22 @@ export class Game {
   }
 
   devSetupPaleCapture(players = 1, phase = 1): void {
-    this.devLoadRealFloor(75);
+    this.isSandbox = true;
+    this.world.isSandbox = true;
+    if (!this.isGodMode) this.devToggleGod();
+    loadFloorIntoWorld(this.world, 75, Math.max(1, Math.min(4, players)));
+    this.loadFloorClient();
     this.isDevPaleCapture = true;
     this.isDevBossNameHidden = true;
-    this.world.enemies = this.world.enemies.filter((enemy) => enemy.kind === "pale");
-    const boss = this.world.enemies[0];
-    if (boss === undefined || boss.boss === null) return;
+    this.world.enemies.length = 0;
+    this.world.props.length = 0;
+    this.world.hazards.length = 0;
+    const room = this.world.dungeon.rooms[this.world.dungeon.rooms.length - 1];
+    const boss = devSpawnEnemy(this.world, "pale", (room.cx + 0.5) * TILE, (room.cy + 0.5) * TILE);
+    if (boss.boss === null) return;
+    for (const id of [...this.world.players.keys()]) {
+      if (id !== LOCAL_ID) this.world.players.delete(id);
+    }
     while (this.world.players.size < Math.max(1, Math.min(4, players))) {
       spawnPlayerInWorld(this.world, `pale-qa-${this.world.players.size}`);
     }
