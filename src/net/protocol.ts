@@ -858,6 +858,10 @@ const ATTACK_MOVES: Record<AttackMove, true> = {
   tracer: true, beam: true, spew: true, hurl: true, rip: true,
 };
 const ENEMY_TIERS: Record<EnemyTier, true> = { swarm: true, standard: true, brute: true, elite: true };
+const SLUICE_MODES: Record<SluiceMode, true> = { flood: true, drain: true };
+const ODDSMAKER_OUTCOMES: Record<OddsmakerOutcome, true> = {
+  ricochet: true, seeker: true, blast: true, pierce: true,
+};
 function inSet<T extends string>(set: Record<T, true>, v: unknown, what: string): T {
   if (typeof v !== "string" || !Object.prototype.hasOwnProperty.call(set, v)) throw new ProtocolError(`bad ${what}`);
   return v as T;
@@ -1287,10 +1291,10 @@ function validateBulletWire(v: unknown): BulletWire {
   const o = obj(v, "bullet");
   const fx = o.fx;
   if (fx !== null && !isWeaponId(fx)) throw new ProtocolError("bad bullet.fx");
-  const sm = o.sm === null ? null : inSet(["flood", "drain"] as const, o.sm, "bullet.sm");
+  const sm = o.sm === null ? null : inSet(SLUICE_MODES, o.sm, "bullet.sm");
   const go = o.go === null
     ? null
-    : inSet(["ricochet", "seeker", "blast", "pierce"] as const, o.go, "bullet.go");
+    : inSet(ODDSMAKER_OUTCOMES, o.go, "bullet.go");
   return {
     x: num(o, "x", -POS_LIMIT, POS_LIMIT), y: num(o, "y", -POS_LIMIT, POS_LIMIT),
     vx: num(o, "vx", -1e6, 1e6), vy: num(o, "vy", -1e6, 1e6),
