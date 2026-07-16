@@ -316,6 +316,10 @@ const SHOOT_SFX: Record<WeaponId, SfxName> = {
   firebomb: "cannon",
   tracker: "homing",
   singularity: "cannon",
+  mooring_nail: "cannon",
+  sluicegate: "shootShotgun",
+  oddsmaker: "ricochet",
+  pathmaker: "shootRapid",
 };
 // Per-shot pitch/gain trims where a shared sample needs to read as a different gun
 // (the railgun borrows the cannon boom, pitched up into a sharp crack).
@@ -394,6 +398,7 @@ const FIRE_TRAUMA: Record<WeaponId, number> = {
   reaper: 0.22, swarm: 0.32, midas: 0.1, phase: 0.28, vortex: 0.4,
   cleaver: 0.35, scrapper: 0.07, skipper: 0.4, arcbolt: 0.18,
   cryobolt: 0.05, firebomb: 0.42, tracker: 0.14, singularity: 0.4,
+  mooring_nail: 0.18, sluicegate: 0.3, oddsmaker: 0.22, pathmaker: 0.04,
 };
 // Per-weapon feel: recoil punch (sprite scale kick), camera kick (px, back along aim),
 // and knockback (px the weapon shoves the player). The hand cannon is the beefy end.
@@ -408,6 +413,7 @@ const FIRE_RECOIL: Record<WeaponId, number> = {
   reaper: 1.1, swarm: 1.3, midas: 0.8, phase: 1.2, vortex: 1.4,
   cleaver: 1.3, scrapper: 0.5, skipper: 1.4, arcbolt: 0.8,
   cryobolt: 0.4, firebomb: 1.4, tracker: 0.6, singularity: 1.4,
+  mooring_nail: 0.9, sluicegate: 1.1, oddsmaker: 1, pathmaker: 0.35,
 };
 const FIRE_KICK: Record<WeaponId, number> = {
   pistol: 3, shotgun: 8, rapid: 1.2,
@@ -420,6 +426,7 @@ const FIRE_KICK: Record<WeaponId, number> = {
   reaper: 4, swarm: 5, midas: 2, phase: 5, vortex: 6,
   cleaver: 6, scrapper: 1, skipper: 7, arcbolt: 2,
   cryobolt: 1, firebomb: 7, tracker: 1.5, singularity: 6,
+  mooring_nail: 3, sluicegate: 5, oddsmaker: 4, pathmaker: 0.8,
 };
 const KICK_DECAY = 20; // how fast the camera kick eases back to center
 const TRAUMA_HURT = 0.4;
@@ -6500,26 +6507,29 @@ export class Game {
       }
       if (e.kind === "zone") {
         const sx = e.x - cam.x, sy = e.y - cam.y;
+        const isPaved = e.isPaved;
+        const tint = isPaved ? "#a8d7a0" : "#9fd8ff";
         // Quick fade-in as the bead paints it, long fade-out as it thaws.
         const fade = Math.min(1, (e.maxLife - e.life) * 8, (e.life / Math.max(0.001, e.maxLife)) * 2.5);
         if (isRemote) {
           // Remote zones: a thin rim only — the lane reads, nothing glows.
           ctx.globalAlpha = 0.22 * fade;
-          ctx.strokeStyle = "#9fd8ff";
+          ctx.strokeStyle = tint;
           ctx.lineWidth = 1;
           ctx.beginPath(); ctx.arc(sx, sy, e.radius * 0.92, 0, 6.28); ctx.stroke();
           continue;
         }
-        const mask = this.sprites.fxTinted("frost_zone", "#9fd8ff");
+        const mask = this.sprites.fxTinted(isPaved ? "pave_zone" : "frost_zone", tint)
+          ?? (isPaved ? this.sprites.fxTinted("frost_zone", tint) : null);
         if (mask) {
           ctx.globalAlpha = 0.5 * fade;
           ctx.drawImage(mask, sx - e.radius, sy - e.radius, e.radius * 2, e.radius * 2);
         } else {
           ctx.globalAlpha = 0.16 * fade;
-          ctx.fillStyle = "#9fd8ff";
+          ctx.fillStyle = tint;
           ctx.beginPath(); ctx.arc(sx, sy, e.radius, 0, 6.28); ctx.fill();
           ctx.globalAlpha = 0.4 * fade;
-          ctx.strokeStyle = "#cdeaff";
+          ctx.strokeStyle = isPaved ? "#dff2d8" : "#cdeaff";
           ctx.lineWidth = 1.5;
           ctx.beginPath(); ctx.arc(sx, sy, e.radius * 0.92, 0, 6.28); ctx.stroke();
         }

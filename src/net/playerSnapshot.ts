@@ -10,6 +10,7 @@ import type { PlayerSim } from "../sim/world.js";
 import type { PlayerMods } from "../sim/items.js";
 import { createMods } from "../sim/items.js";
 import type { WeaponId } from "../sim/types.js";
+import type { WeaponCycles } from "../sim/weapons.js";
 import type { KitId } from "../sim/kits.js";
 
 // The authoritative (server-owned) slice of a player: everything the server simulates and the
@@ -32,6 +33,8 @@ export interface AuthoritativePlayerSnapshot {
   facing: number;
   weapon: WeaponId;
   ownedWeapons: WeaponId[];
+  weaponCycles: WeaponCycles;
+  isMuddyRefundSpent: boolean;
   ownedItemIds: string[];
   mods: PlayerMods;
   isDown: boolean;
@@ -175,6 +178,8 @@ export function projectPlayer(p: PlayerSim): AuthoritativePlayerSnapshot {
     facing: p.facing,
     weapon: p.weapon,
     ownedWeapons: p.ownedWeapons.slice(),
+    weaponCycles: { ...p.weaponCycles },
+    isMuddyRefundSpent: p.isMuddyRefundSpent,
     ownedItemIds: p.ownedItemIds.slice(),
     mods: { ...p.mods },
     isDown: p.isDown,
@@ -231,6 +236,8 @@ export function applyPlayerSnapshot(p: PlayerSim, s: AuthoritativePlayerSnapshot
   p.facing = s.facing;
   p.weapon = s.weapon;
   p.ownedWeapons = s.ownedWeapons.slice();
+  p.weaponCycles = { ...s.weaponCycles };
+  p.isMuddyRefundSpent = s.isMuddyRefundSpent;
   p.ownedItemIds = s.ownedItemIds.slice();
   Object.assign(p.mods, s.mods);
   p.isDown = s.isDown;

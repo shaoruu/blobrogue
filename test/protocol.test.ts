@@ -172,7 +172,7 @@ function serverRoundTripTests(): void {
   w.bullets.push({ x: me.x + 10, y: me.y + 5, vx: 250, vy: -40, radius: 5, life: 1, friendly: true, owner: "pMe", damage: 2, color: "#fff", pierce: 0, hitList: null, isCrit: false, fx: "pistol" });
   // One live weapon effect of every kind (the v8 effs list) + the effect events.
   w.effects.push(
-    { id: 0, kind: "zone", owner: "pMe", fx: "frostline", x: 100, y: 110, life: 2.5, maxLife: 3.5, radius: 26, chillRate: 2.4 },
+    { id: 0, kind: "zone", owner: "pMe", fx: "frostline", x: 100, y: 110, life: 2.5, maxLife: 3.5, radius: 26, chillRate: 2.4, isPaved: false },
     { id: 1, kind: "wire", owner: "pMe", fx: "snapwire", x: 50, y: 60, x2: 170, y2: 60, width: 14, arm: 0.4, life: 11, maxLife: 12.7, damage: 9 },
     { id: 2, kind: "orbit", owner: "pMe", fx: "halo", x: 300, y: 300, life: 1, maxLife: 1, angle: 1.2, ring: 46, blades: 4, bladeRadius: 12, speed: 3.6, flare: 0.2, damage: 1.5, rehit: new Map() },
     { id: 3, kind: "sentry", owner: "pMe", fx: "sentry", x: 400, y: 380, life: 9, maxLife: 12, radius: 13, hp: 7, maxHp: 12, fireCd: 0.2, range: 240, boltSpeed: 520, boltRadius: 4, boltDamage: 2.4, boltPierce: 0, contactCd: 0, targetEid: -1 },
@@ -274,7 +274,7 @@ function serverRoundTripTests(): void {
 // who is actually there (the Sev-0 readout).
 function worldBindingWireTests(): void {
   section("v4: authoritative world id + roster are required, strict, and round-trip");
-  check("protocol version covers Batch0 encounter wire (v34)", PROTOCOL_VERSION === 34, `v=${PROTOCOL_VERSION}`);
+  check("protocol version covers Wave A + Batch0 enc (v35)", PROTOCOL_VERSION === 35, `v=${PROTOCOL_VERSION}`);
   check("room code maps to its world id", worldIdForRoomCode(" abcd ") === "room:ABCD");
   check("room world ids pass the shared charset gate", isValidWorldId(worldIdForRoomCode("ZZZZ")) && isValidWorldId("arena-1"));
   check("junk world ids fail the shared charset gate", !isValidWorldId("room:../../etc") && !isValidWorldId(""));

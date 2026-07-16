@@ -89,6 +89,7 @@ export const WEAPON_KB: Record<WeaponId, number> = {
   // carry their own impulse.
   cleaver: 10, scrapper: 2, skipper: 4, arcbolt: 5, cryobolt: 3, firebomb: 6, tracker: 3,
   singularity: 20,
+  mooring_nail: 6, sluicegate: 5, oddsmaker: 6, pathmaker: 1,
 };
 export const KB_LAMBDA = 16;
 export const KB_MAX_SPEED = 520;
@@ -119,6 +120,7 @@ export const FIRE_KNOCKBACK: Record<WeaponId, number> = {
   // the rest are light.
   cleaver: 4, scrapper: 0, skipper: 6, arcbolt: 2, cryobolt: 0, firebomb: 6, tracker: 0,
   singularity: 4,
+  mooring_nail: 0, sluicegate: 4, oddsmaker: 3, pathmaker: 0,
 };
 
 // ---- legendary gimmick tuning ----

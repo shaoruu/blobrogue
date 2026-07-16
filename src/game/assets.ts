@@ -246,7 +246,7 @@ export type FxName =
   // Effect-wave masks (frost zone disc, snapwire post, halo blade, sentry body, chain
   // link). Authored by the AD via the locked fal recipe; until the PNGs land fxTinted
   // returns null and each renderer keeps its readable primitive fallback.
-  | "frost_zone" | "wire_post" | "halo_blade" | "sentry_core" | "chain_link";
+  | "frost_zone" | "pave_zone" | "wire_post" | "halo_blade" | "sentry_core" | "chain_link";
 
 const FX_SOURCES: Record<FxName, string> = {
   glow_round: "/sprites/fx/glow_round.png",
@@ -256,6 +256,7 @@ const FX_SOURCES: Record<FxName, string> = {
   spark: "/sprites/fx/spark.png",
   comet_trail: "/sprites/fx/comet_trail.png",
   frost_zone: "/sprites/fx/frost_zone.png",
+  pave_zone: "/sprites/fx/pave_zone.png",
   wire_post: "/sprites/fx/wire_post.png",
   halo_blade: "/sprites/fx/halo_blade.png",
   sentry_core: "/sprites/fx/sentry_core.png",
@@ -451,6 +452,10 @@ const HELD_SOURCES: Partial<Record<WeaponId, string>> = {
   firebomb: "/sprites/held_firebomb.png",
   tracker: "/sprites/held_tracker.png",
   singularity: "/sprites/held_singularity.png",
+  mooring_nail: "/sprites/held_mooring_nail.png",
+  sluicegate: "/sprites/held_sluicegate.png",
+  oddsmaker: "/sprites/held_oddsmaker.png",
+  pathmaker: "/sprites/held_pathmaker.png",
 };
 
 // Floor-pickup art (64px side-profile) per weapon. Mirrors HELD_SOURCES: a weapon
@@ -501,6 +506,10 @@ const PICKUP_SOURCES: Partial<Record<WeaponId, string>> = {
   firebomb: "/sprites/weapon_firebomb.png",
   tracker: "/sprites/weapon_tracker.png",
   singularity: "/sprites/weapon_singularity.png",
+  mooring_nail: "/sprites/weapon_mooring_nail.png",
+  sluicegate: "/sprites/weapon_sluicegate.png",
+  oddsmaker: "/sprites/weapon_oddsmaker.png",
+  pathmaker: "/sprites/weapon_pathmaker.png",
 };
 
 // The weapon's icon art for DOM HUD surfaces (the hotbar): its pickup side profile.

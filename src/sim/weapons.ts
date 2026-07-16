@@ -45,6 +45,7 @@ export interface PaintSpec {
   radius: number;     // zone radius; bulletSizeMult scales it
   life: number;       // zone seconds; bulletLifeMult scales it
   chillRate: number;  // seconds of chill per second standing inside
+  isPaving?: boolean;
 }
 
 // Orbiting blades (the Razor Halo).
@@ -80,6 +81,36 @@ export interface TetherSpec {
   hold: number;        // sweep window seconds; bulletLifeMult scales it
   reach: number;       // sweep radius around the owner; bulletSizeMult scales it
   playerPullTime: number; // seconds the INVERTED pull may drag the owner (heavy targets)
+}
+
+export interface GrappleSpec {
+  pull: number;
+}
+
+export interface ModeShiftSpec {
+  alternate: {
+    damage: number;
+    pellets: number;
+    spread: number;
+    speed: number;
+    life: number;
+    bulletRadius: number;
+    basePierce: number;
+  };
+}
+
+export type GambleOutcome = "ricochet" | "seeker" | "blast" | "pierce";
+
+export interface GambleSpec {
+  outcomes: readonly GambleOutcome[];
+}
+
+export const WEAPON_CYCLE_IDS = ["sluicegate", "oddsmaker"] as const;
+export type WeaponCycleId = typeof WEAPON_CYCLE_IDS[number];
+export type WeaponCycles = Record<WeaponCycleId, number>;
+
+export function createWeaponCycles(): WeaponCycles {
+  return { sluicegate: 0, oddsmaker: 0 };
 }
 
 export interface Weapon {
@@ -121,6 +152,9 @@ export interface Weapon {
   orbit?: OrbitSpec;
   sentry?: SentrySpec;
   tether?: TetherSpec;
+  grapple?: GrappleSpec;
+  modeShift?: ModeShiftSpec;
+  gamble?: GambleSpec;
   // Legendary signature mechanics — one per legendary, never shared, never a stat reskin.
   // Each stamps one field onto its bullets (or gates the trigger pull, for the Midas) and
   // switches an isolated branch in the update loop, exactly like the Tier B fields above.
@@ -449,6 +483,36 @@ export const WEAPONS: Record<WeaponId, Weapon> = {
     implode: 116, nova: 78,
     special: "Shots collapse the pack onto one point, then a nova detonates on the clump.",
   },
+  mooring_nail: {
+    id: "mooring_nail", name: "MOORING NAIL", rarity: "common", fireCd: 0.42, speed: 760, life: 1.2,
+    damage: 2, pellets: 1, spread: 0, bulletRadius: 5, color: "#d6c7a1", muzzle: 2,
+    basePierce: 4,
+    grapple: { pull: 150 },
+    special: "ANCHOR / GRAPPLE — a nail biting a wall yanks you toward its anchor point.",
+  },
+  sluicegate: {
+    id: "sluicegate", name: "SLUICEGATE", rarity: "rare", fireCd: 0.58, speed: 430, life: 0.45,
+    damage: 1.1, pellets: 5, spread: 0.76, bulletRadius: 5, color: "#78cbd1", muzzle: 5,
+    modeShift: {
+      alternate: {
+        damage: 7, pellets: 1, spread: 0, speed: 900, life: 1.1,
+        bulletRadius: 5, basePierce: 2,
+      },
+    },
+    special: "MODESHIFT — alternates a wide FLOOD fan with a long, piercing DRAIN lance.",
+  },
+  oddsmaker: {
+    id: "oddsmaker", name: "ODDSMAKER", rarity: "legendary", fireCd: 0.4, speed: 600, life: 1.1,
+    damage: 3.3, pellets: 1, spread: 0, bulletRadius: 6, color: "#efb85f", muzzle: 3,
+    gamble: { outcomes: ["ricochet", "seeker", "blast", "pierce"] },
+    special: "GAMBLE — every shot independently rolls a ricochet, seeker, blast, or piercing payload.",
+  },
+  pathmaker: {
+    id: "pathmaker", name: "PATHMAKER", rarity: "rare", fireCd: 0.18, speed: 340, life: 1.15,
+    damage: 0.9, pellets: 1, spread: 0.03, bulletRadius: 6, color: "#a8d7a0", muzzle: 1,
+    paint: { spacing: 28, radius: 27, life: 3.2, chillRate: 0, isPaving: true },
+    special: "CLEANSE / PAVE — beads erase hostile ground and leave a safe route across floor hazards.",
+  },
 };
 
 export const DEFAULT_WEAPON: WeaponId = "pistol";
@@ -462,6 +526,7 @@ export const PICKUP_WEAPONS: readonly WeaponId[] = [
   "reaper", "swarm", "midas", "phase", "vortex",
   "cleaver", "scrapper", "skipper", "arcbolt", "cryobolt", "firebomb", "tracker",
   "singularity",
+  "mooring_nail", "sluicegate", "oddsmaker", "pathmaker",
 ];
 
 // The legendary tier of the pickup pool (derived once — gates and premium rolls read it).
@@ -572,6 +637,9 @@ export interface ShotSpec {
   paintRadius?: number;
   paintLife?: number;
   paintRate?: number;
+  isPaving?: boolean;
+  grapplePull?: number;
+  reclaimedBounceDamage?: number;
 }
 
 const CRIT_COLOR = "#fff3c4";
@@ -644,6 +712,9 @@ export function fire(spec: ShotSpec, x: number, y: number, aim: number, rng: Rng
       paintLife: spec.paintLife,
       paintRate: spec.paintRate,
       paintDist: spec.paintSpacing !== undefined ? 0 : undefined,
+      isPaving: spec.isPaving,
+      grapplePull: spec.grapplePull,
+      reclaimedBounceDamage: spec.reclaimedBounceDamage,
     });
   }
   return shots;
