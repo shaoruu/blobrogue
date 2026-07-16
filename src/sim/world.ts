@@ -4453,7 +4453,9 @@ function admitPaintZone(w: WorldState, owner: PlayerId | null, isPaved: boolean)
   );
   const sameFamily = zones.filter((zone) => zone.isPaved === isPaved);
   if (!isPaved) {
-    if (zones.length < C.MAX_ZONE_EFFECTS) return true;
+    if (sameFamily.length < C.MAX_CHILL_ZONE_EFFECTS && zones.length < C.MAX_ZONE_EFFECTS) {
+      return true;
+    }
     const evicted = oldestZone(sameFamily);
     if (evicted === null) return false;
     evicted.life = 0;
