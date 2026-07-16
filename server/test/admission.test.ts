@@ -249,7 +249,7 @@ try {
   let index = 0;
   for (const [label, status, body] of malformedCases) {
     strictResponse = { status, body };
-    const code = `M${String(index++).padStart(3, "0")}`;
+    const code = `M${String.fromCharCode(65 + index++)}AA`;
     const worldId = `room:${code}:g1`;
     const bot = new Bot({
       url: strictGameServer.url,
