@@ -274,7 +274,8 @@ export class MessageRouter {
       this.ctx.reject(conn, "resume_required", "resume token required for this active run");
       return;
     }
-    if (existingRoom && existingRoom.playerCount >= PVP_POLICY_MAX_PLAYERS) {
+    if (existingRoom && pvpPolicy !== null
+      && existingRoom.playerCount >= PVP_POLICY_MAX_PLAYERS) {
       this.rejectPolicy(conn, "room_full", "that room is full", auth, worldId);
       return;
     }
