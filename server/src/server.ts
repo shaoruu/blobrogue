@@ -21,6 +21,29 @@ import { WsSnapshotPublisher } from "./snapshotPublisher.js";
 import { MessageRouter, DEFAULT_WORLD_ID, OFFER_RESENDS } from "./messageRouter.js";
 import { createHttpHandler, type WorldReport } from "./httpEndpoints.js";
 import type { SessionStore, SnapshotPublisher, RoomRuntime } from "./ports.js";
+import { RunReceiptDispatcher } from "./runReceiptDispatcher.js";
+import { GenerationAdmissionStore } from "./generationAdmissionStore.js";
+import {
+  GENERATION_ADMISSION_TTL_MS,
+  GENERATION_ADMISSION_VERSION,
+} from "../../src/net/generationAdmission.js";
+import type { GenerationAdmissionDecision } from "../../src/net/generationAdmission.js";
+import {
+  GenerationAdmissionClient,
+  newGenerationAdmissionJti,
+} from "./generationAdmissionClient.js";
+import type { AuthResult } from "./auth.js";
+import {
+  RUN_RECEIPT_TTL_MS,
+  RUN_RECEIPT_VERSION,
+  parseGenerationWorldId,
+} from "../../src/net/runReceipt.js";
+import type {
+  RunCompletionPayload,
+  RunCompletionStatus,
+  RunReceiptParticipant,
+} from "../../src/net/runReceipt.js";
+import { newRunReceiptJti } from "./runReceipt.js";
 
 const TICK_MS = 1000 / TICK_HZ;
 // Catch-up bound for the drift-corrected pump: if the event loop stalls, run up to this many
@@ -31,7 +54,18 @@ const MAX_CATCHUP = 20;
 const MAX_MALFORMED = 3;
 // Close codes that are part of the deliberate lifecycle — never grounds for a reconnect seat:
 // join rejects, game over, superseded connections, and explicit client leaves.
-const SEATLESS_CLOSE_CODES: ReadonlySet<number> = new Set([4001, 4008, 4009, 4010]);
+const SEATLESS_CLOSE_CODES: ReadonlySet<number> = new Set([4001, 4008, 4009, 4010, 4011]);
+
+interface PendingCompletion {
+  runId: string;
+  participants: RunReceiptParticipant[];
+}
+
+function isWorldSeatless(room: RoomRuntime): boolean {
+  return room.playerCount === 0
+    && room.conns.size === 0
+    && [...room.seats()].length === 0;
+}
 
 // Optional dependency overrides (DI) for tests / alternative backends. Anything omitted uses the
 // production default.
@@ -40,6 +74,9 @@ export interface ServerDeps {
   clock?: Clock;
   sessions?: SessionStore;
   publisher?: SnapshotPublisher;
+  receiptDispatcher?: RunReceiptDispatcher;
+  generationAdmissions?: GenerationAdmissionStore;
+  admissionClient?: GenerationAdmissionClient;
 }
 
 export class GameServer {
@@ -53,6 +90,11 @@ export class GameServer {
   private publisher: SnapshotPublisher;
   private router: MessageRouter;
   private metrics = new Metrics();
+  private receiptDispatcher: RunReceiptDispatcher;
+  private admissionClient: GenerationAdmissionClient;
+  private completedWorlds = new Set<string>();
+  private pendingCompletions = new Map<string, PendingCompletion>();
+  private isAcceptingJoins = true;
 
   private conns = new Map<number, Conn>();
   private connsPerIp = new Map<string, number>();
@@ -69,10 +111,32 @@ export class GameServer {
     this.log = deps.logger ?? createLogger({ app: "blobrogue-gs" });
     this.clock = deps.clock ?? systemClock;
     this.trustedProxies = parseCidrList(cfg.trustedProxies);
+    this.receiptDispatcher = deps.receiptDispatcher ?? new RunReceiptDispatcher(
+      cfg.receiptEndpoint,
+      cfg.receiptSecret,
+      this.log,
+      fetch,
+      cfg.generationStatePath ? `${cfg.generationStatePath}.receipts` : null,
+    );
+    this.admissionClient = deps.admissionClient ?? new GenerationAdmissionClient(
+      cfg.admissionEndpoint,
+      cfg.receiptSecret,
+      this.log,
+    );
     // The room factory picks the world MODE from the world IDENTITY: a pvp world id (minted only
     // for a pvp room) spins up a deathmatch world, everything else stays co-op. The mode is part
     // of the id, so every joiner of the same room lands in the same kind of world.
-    this.sessions = deps.sessions ?? new WorldRegistry((id) => new GameWorld(id, undefined, cfg.arena, isPvpWorldId(id) ? "pvp" : "coop"), this.log);
+    this.sessions = deps.sessions ?? new WorldRegistry(
+      (id) => new GameWorld(id, undefined, cfg.arena, isPvpWorldId(id) ? "pvp" : "coop"),
+      this.log,
+      deps.generationAdmissions ?? new GenerationAdmissionStore(cfg.generationStatePath),
+      (room) => this.onWorldReleased(room),
+    );
+    for (const worldId of this.sessions.recoveredGenerationWorldIds?.() ?? []) {
+      if (!this.receiptDispatcher.hasDeliverableWorld(worldId)) {
+        this.submitCompletion(worldId, `${worldId}:restart`, "server_restart", [], true);
+      }
+    }
     this.publisher = deps.publisher ?? new WsSnapshotPublisher({
       config: cfg,
       metrics: this.metrics,
@@ -82,11 +146,18 @@ export class GameServer {
     this.router = new MessageRouter({
       config: cfg, clock: this.clock, metrics: this.metrics,
       sessions: this.sessions, publisher: this.publisher, codec: jsonCodec,
+      isAcceptingJoins: () => this.isAcceptingJoins,
+      authorizeJoin: (auth) => this.authorizeJoin(auth),
       reject: (conn, code, reason) => this.rejectJoin(conn, code, reason),
       close: (conn, code, reason) => this.closeConn(conn, code, reason),
     });
 
-    this.http = createServer(createHttpHandler({ config: cfg, health: () => this.health(), worlds: () => this.worldReports() }));
+    this.http = createServer(createHttpHandler({
+      config: cfg,
+      health: () => this.health(),
+      worlds: () => this.worldReports(),
+      lifecycle: (action) => this.applyLifecycle(action),
+    }));
     this.wss = new WebSocketServer({ server: this.http, path: cfg.wsPath, maxPayload: 8 * 1024 });
     this.wss.on("connection", (ws, req) => this.onConnection(ws, req));
   }
@@ -117,7 +188,39 @@ export class GameServer {
     }
     await new Promise<void>((resolve) => this.wss.close(() => resolve()));
     await new Promise<void>((resolve) => this.http.close(() => resolve()));
+    await this.receiptDispatcher.flush();
     this.log.info("closed");
+  }
+
+  private applyLifecycle(action: "drain" | "flush" | "resume"): void {
+    if (action === "drain") {
+      this.isAcceptingJoins = false;
+      return;
+    }
+    if (action === "resume") {
+      this.isAcceptingJoins = true;
+      return;
+    }
+    this.isAcceptingJoins = false;
+    for (const room of [...this.sessions.rooms()]) {
+      this.completedWorlds.add(room.id);
+      const pending = this.pendingCompletions.get(room.id);
+      this.pendingCompletions.delete(room.id);
+      const runId = pending?.runId ?? room.runReceiptId();
+      for (const conn of [...room.conns.values()]) {
+        if (!conn.closing) this.closeConn(conn, 4011, "server update");
+      }
+      room.clearSeats();
+      const isNoActiveSeat = isWorldSeatless(room);
+      this.submitCompletion(
+        room.id,
+        runId,
+        pending ? "completed" : "abandoned",
+        pending?.participants ?? [],
+        isNoActiveSeat,
+      );
+    }
+    this.sessions.sweep(this.clock.now());
   }
 
   // ---- fixed tick loop (drift-corrected accumulator on the monotonic clock) ----
@@ -207,10 +310,98 @@ export class GameServer {
   // Deterministic leave on game over: the final snapshot (carrying the gameOver event) has just
   // been sent, so close the socket now — no lingering post-run connection.
   private handleGameOver(room: RoomRuntime): void {
-    for (const pid of room.gameOverPlayers()) {
+    const gameOverPlayers = room.gameOverPlayers();
+    if (gameOverPlayers.length === 0) return;
+    const participants = room.runReceiptParticipants();
+    this.pendingCompletions.set(room.id, {
+      runId: room.runReceiptId(),
+      participants,
+    });
+    for (const pid of gameOverPlayers) {
       const conn = this.connForPlayer(room, pid);
       if (conn && !conn.closing) { conn.gameOver = true; this.closeConn(conn, 4008, "game over"); }
     }
+    if (isWorldSeatless(room)) {
+      const pending = this.pendingCompletions.get(room.id);
+      if (pending) {
+        this.pendingCompletions.delete(room.id);
+        this.completedWorlds.add(room.id);
+        this.submitCompletion(room.id, pending.runId, "completed", pending.participants, true);
+        this.sessions.sweep(this.clock.now());
+      }
+    }
+  }
+
+  private onWorldReleased(room: RoomRuntime): void {
+    const pending = this.pendingCompletions.get(room.id);
+    if (pending) {
+      this.pendingCompletions.delete(room.id);
+      this.submitCompletion(room.id, pending.runId, "completed", pending.participants, true);
+      return;
+    }
+    if (this.completedWorlds.delete(room.id)) return;
+    this.submitCompletion(room.id, room.runReceiptId(), "abandoned", [], true);
+  }
+
+  private submitCompletion(
+    worldId: string,
+    runId: string,
+    status: RunCompletionStatus,
+    participants: RunReceiptParticipant[],
+    isNoActiveSeat: boolean,
+  ): void {
+    const world = parseGenerationWorldId(worldId);
+    if (!world || world.isPvp) return;
+    if (!isNoActiveSeat) {
+      this.log.error("run completion withheld while an authoritative seat remains", {
+        worldId,
+        status,
+      });
+      return;
+    }
+    const issuedAt = this.clock.now();
+    const payload: RunCompletionPayload = {
+      version: RUN_RECEIPT_VERSION,
+      jti: newRunReceiptJti(),
+      runId,
+      worldId,
+      roomCode: world.roomCode,
+      generation: world.generation,
+      status,
+      issuedAt,
+      expiresAt: issuedAt + RUN_RECEIPT_TTL_MS,
+      isNoActiveSeat,
+      participants,
+    };
+    this.receiptDispatcher.submit(payload);
+  }
+
+  private authorizeJoin(auth: AuthResult): Promise<GenerationAdmissionDecision> {
+    const world = auth.worldId ? parseGenerationWorldId(auth.worldId) : null;
+    if (!world) return Promise.resolve({ isAllowed: true, code: "not_generation_bound" });
+    if (!this.cfg.admissionEndpoint && !this.cfg.isProd) {
+      return Promise.resolve({ isAllowed: true, code: "development_bypass" });
+    }
+    if (!auth.playerId
+      || !auth.worldId
+      || !auth.kit
+      || auth.isPetChoiceMade !== true) {
+      return Promise.resolve({ isAllowed: false, code: "loadout_required" });
+    }
+    const issuedAt = this.clock.now();
+    return this.admissionClient.check({
+      version: GENERATION_ADMISSION_VERSION,
+      jti: newGenerationAdmissionJti(),
+      playerId: auth.playerId,
+      worldId: auth.worldId,
+      roomCode: world.roomCode,
+      generation: world.generation,
+      kitId: auth.kit,
+      petId: auth.pet ?? null,
+      isPetChoiceMade: true,
+      issuedAt,
+      expiresAt: issuedAt + GENERATION_ADMISSION_TTL_MS,
+    });
   }
 
   private connForPlayer(room: RoomRuntime, pid: string): Conn | undefined {

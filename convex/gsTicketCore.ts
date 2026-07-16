@@ -6,7 +6,7 @@
 //   payload = { pid, exp } plus OPTIONAL identity/room claims appended in a FIXED order:
 //             wld (authorized world id), nm (display name), cl (party color index),
 //             ht (cosmetic hat id), fc (cosmetic face id), kt (chosen kit id),
-//             ml (account mastery level).
+//             ml (account mastery level), pt (pet id), pc (explicit pet choice).
 //             JSON.stringify preserves insertion order, so both mints build the object in
 //             exactly this order — that is what keeps the two implementations byte-identical.
 //   sig     = HMAC-SHA256(secret, "v1." + b64url(payload))     (signed over the BODY string)
@@ -32,6 +32,8 @@ export interface GsTicketPayload {
   kt?: string;  // chosen KIT id (validated at mint against the account's Mastery unlocks)
   ml?: number;  // account MASTERY level (the game server re-gates kt against it)
   pt?: string;  // cosmetic companion pet id (visual-only; see src/sim/camp_nodes.ts)
+  pc?: boolean; // explicit pet-or-No-Pet choice was validated for this run
+  sv?: boolean; // loopback control-plane synthetic verification ticket
 }
 
 // Optional identity/room claims for a mint. Field names are the long-form of the wire keys.
@@ -44,19 +46,26 @@ export interface GsTicketClaims {
   kit?: string;
   masteryLevel?: number;
   pet?: string;
+  isPetChoiceMade?: boolean;
+  isSyntheticVerify?: boolean;
 }
 
 // The single room-code -> authoritative-world-id mapping. Convex mints with it; the game
 // server just binds whatever verified world id the ticket carries. (Mirror of src/net/worldId.ts,
 // kept import-free so this module bundles cleanly into the Convex runtime.)
-export function worldIdForRoomCode(code: string): string {
-  return "room:" + code.trim().toUpperCase();
+function generationSuffix(generation: number | undefined): string {
+  if (generation === undefined) return "";
+  return `:g${Math.max(1, Math.floor(generation))}`;
+}
+
+export function worldIdForRoomCode(code: string, generation?: number): string {
+  return "room:" + code.trim().toUpperCase() + generationSuffix(generation);
 }
 
 // The PVP variant: a pvp room's world id carries the "pvp:" prefix so the game server's room
 // factory spins the world up in deathmatch mode. Byte-agreement with src/net/worldId.ts.
-export function pvpWorldIdForRoomCode(code: string): string {
-  return "pvp:room:" + code.trim().toUpperCase();
+export function pvpWorldIdForRoomCode(code: string, generation?: number): string {
+  return "pvp:room:" + code.trim().toUpperCase() + generationSuffix(generation);
 }
 
 const B64_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
@@ -79,7 +88,7 @@ function b64urlFromBytes(bytes: Uint8Array): string {
 
 // Mint a signed ticket valid for ttlSecs. Deterministic w.r.t. nowMs so the agreement test can
 // assert byte equality against the server's Node-crypto mint. Claims append in the FIXED key
-// order pid, exp, wld, nm, cl, ht, fc, kt, ml, pt — the byte contract with server/src/auth.ts mintTicket.
+// order pid, exp, wld, nm, cl, ht, fc, kt, ml, pt, pc — the byte contract with server/src/auth.ts mintTicket.
 export async function mintGsTicket(
   secret: string,
   playerId: string,
@@ -96,6 +105,8 @@ export async function mintGsTicket(
   if (claims.kit !== undefined) payload.kt = claims.kit;
   if (claims.masteryLevel !== undefined) payload.ml = claims.masteryLevel;
   if (claims.pet !== undefined) payload.pt = claims.pet;
+  if (claims.isPetChoiceMade !== undefined) payload.pc = claims.isPetChoiceMade;
+  if (claims.isSyntheticVerify !== undefined) payload.sv = claims.isSyntheticVerify;
   const enc = new TextEncoder();
   const body = "v1." + b64urlFromBytes(enc.encode(JSON.stringify(payload)));
   const key = await crypto.subtle.importKey("raw", enc.encode(secret), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);

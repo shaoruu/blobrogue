@@ -5,7 +5,7 @@
 // the control/game credential boundary holds. When gs does not implement a lifecycle endpoint,
 // drain/flush/resume degrade to `deferred_to_reload` rather than failing a deploy.
 
-import { createHmac } from "node:crypto";
+import { createHmac, randomBytes } from "node:crypto";
 import { WebSocket } from "ws";
 
 
@@ -76,7 +76,8 @@ import type {
 // v30: distinct authoritative PvP hard-grace and spawn-shield ticks.
 // v31: authoritative PvP shield-break event before its offense.
 // v32: shared spawn protection end ticks and held-offense arming feedback.
-export const SYNTHETIC_JOIN_PROTOCOL = 32;
+// v33: authority-plane receipt/capability/generation admission hard cut.
+export const SYNTHETIC_JOIN_PROTOCOL = 33;
 
 interface SyntheticSpawnSelf {
   spo?: number;
@@ -322,7 +323,16 @@ function parseLogLine(line: string): RawLog | null {
 // server's own ticket format (the documented wire contract); the integration test boots the real
 // gs and joins with a ticket minted here, which fails loudly if the format ever drifts.
 function mintGsTicket(secret: string, playerId: string, ttlSec: number, nowMs = Date.now()): string {
-  const payload = { pid: playerId, exp: Math.floor(nowMs / 1000) + ttlSec };
+  const syntheticWorldId = `verify:${randomBytes(8).toString("hex")}`;
+  const payload = {
+    pid: playerId,
+    exp: Math.floor(nowMs / 1000) + ttlSec,
+    wld: syntheticWorldId,
+    kt: "gunner",
+    ml: 1,
+    pc: true,
+    sv: true,
+  };
   const b64 = (buf: Buffer): string => buf.toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
   const body = "v1." + b64(Buffer.from(JSON.stringify(payload), "utf8"));
   const sig = b64(createHmac("sha256", secret).update(body).digest());

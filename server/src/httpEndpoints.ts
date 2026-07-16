@@ -24,11 +24,20 @@ export interface HttpDeps {
   config: ServerConfig;
   health: () => HealthReport;
   worlds: () => WorldReport[];
+  lifecycle: (action: "drain" | "flush" | "resume") => void;
 }
 
 export function createHttpHandler(deps: HttpDeps): (req: IncomingMessage, res: ServerResponse) => void {
   return (req, res) => {
     const url = new URL(req.url ?? "/", "http://localhost");
+    if (req.method === "POST") {
+      const match = /^\/admin\/(drain|flush|resume)$/.exec(url.pathname);
+      if (match) {
+        deps.lifecycle(match[1] as "drain" | "flush" | "resume");
+        res.writeHead(204).end();
+        return;
+      }
+    }
     if (req.method !== "GET") { res.writeHead(405).end(); return; }
 
     if (url.pathname === "/healthz") {

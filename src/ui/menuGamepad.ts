@@ -10,7 +10,8 @@
 // edges (a held button fires once). The mapping is a pure function so the contract is
 // testable headless.
 
-export type PadAction = "focusPrev" | "focusNext" | "activate" | "back" | "tabPrev" | "tabNext";
+export type GridDirection = "up" | "down" | "left" | "right";
+export type PadAction = "focusUp" | "focusDown" | "focusLeft" | "focusRight" | "activate" | "back" | "tabPrev" | "tabNext";
 
 const BTN_A = 0, BTN_B = 1, BTN_LB = 4, BTN_RB = 5;
 const DPAD_UP = 12, DPAD_DOWN = 13, DPAD_LEFT = 14, DPAD_RIGHT = 15;
@@ -19,8 +20,10 @@ const DPAD_UP = 12, DPAD_DOWN = 13, DPAD_LEFT = 14, DPAD_RIGHT = 15;
 export function padActions(prev: readonly boolean[], now: readonly boolean[]): PadAction[] {
   const pressed = (i: number) => now[i] === true && prev[i] !== true;
   const out: PadAction[] = [];
-  if (pressed(DPAD_UP) || pressed(DPAD_LEFT)) out.push("focusPrev");
-  if (pressed(DPAD_DOWN) || pressed(DPAD_RIGHT)) out.push("focusNext");
+  if (pressed(DPAD_UP)) out.push("focusUp");
+  if (pressed(DPAD_DOWN)) out.push("focusDown");
+  if (pressed(DPAD_LEFT)) out.push("focusLeft");
+  if (pressed(DPAD_RIGHT)) out.push("focusRight");
   if (pressed(BTN_A)) out.push("activate");
   if (pressed(BTN_B)) out.push("back");
   if (pressed(BTN_LB)) out.push("tabPrev");
@@ -28,9 +31,30 @@ export function padActions(prev: readonly boolean[], now: readonly boolean[]): P
   return out;
 }
 
+export function gridTargetIndex(
+  current: number,
+  length: number,
+  columns: number,
+  direction: GridDirection,
+): number {
+  if (length <= 0) return -1;
+  const index = current >= 0 && current < length ? current : 0;
+  const row = Math.floor(index / columns);
+  const column = index % columns;
+  if (direction === "left") return column > 0 ? index - 1 : index;
+  if (direction === "right") return column + 1 < columns && index + 1 < length ? index + 1 : index;
+  if (direction === "up") return row > 0 ? index - columns : index;
+  const below = index + columns;
+  return below < length ? below : index;
+}
+
 function focusables(overlay: HTMLElement): HTMLElement[] {
   const nodes = overlay.querySelectorAll<HTMLElement>("button:not(:disabled), input, [tabindex]");
-  return [...nodes].filter((n) => n.offsetParent !== null);
+  return [...nodes].filter((node) => {
+    const isRadio = node.getAttribute("role") === "radio";
+    if (node.offsetParent === null || node.hidden || (node.tabIndex < 0 && !isRadio)) return false;
+    return !(node instanceof HTMLButtonElement) || !node.disabled;
+  });
 }
 
 export interface MenuPadHooks {
@@ -39,13 +63,35 @@ export interface MenuPadHooks {
 
 export function applyPadAction(action: PadAction, overlay: HTMLElement, hooks: MenuPadHooks): void {
   switch (action) {
-    case "focusPrev":
-    case "focusNext": {
+    case "focusUp":
+    case "focusDown":
+    case "focusLeft":
+    case "focusRight": {
+      const direction: GridDirection = action === "focusUp" ? "up"
+        : action === "focusDown" ? "down"
+          : action === "focusLeft" ? "left"
+            : "right";
+      const active = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+      const grid = active?.closest<HTMLElement>('[role="radiogroup"]')
+        ?? overlay.querySelector<HTMLElement>('[role="radiogroup"]');
+      if (grid) {
+        const radios = [...grid.querySelectorAll<HTMLElement>('[role="radio"]')];
+        if (radios.length > 0) {
+          const columns = typeof matchMedia === "function" && matchMedia("(max-width: 620px)").matches
+            ? Number(grid.dataset.mobileColumns ?? 1)
+            : Number(grid.dataset.desktopColumns ?? 1);
+          const target = gridTargetIndex(active ? radios.indexOf(active) : -1, radios.length, columns, direction);
+          if (target >= 0) {
+            radios.forEach((radio, index) => { radio.tabIndex = index === target ? 0 : -1; });
+            radios[target].focus();
+          }
+          return;
+        }
+      }
       const items = focusables(overlay);
       if (items.length === 0) return;
-      const active = document.activeElement instanceof HTMLElement ? document.activeElement : null;
       const idx = active ? items.indexOf(active) : -1;
-      const step = action === "focusNext" ? 1 : -1;
+      const step = direction === "down" || direction === "right" ? 1 : -1;
       const next = idx === -1 ? (step === 1 ? 0 : items.length - 1) : (idx + step + items.length) % items.length;
       items[next].focus();
       return;

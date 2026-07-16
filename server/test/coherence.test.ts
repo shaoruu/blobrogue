@@ -13,8 +13,7 @@
 //      joins, the gate opens and both share one world
 //   3. world-binding assertion: a client expecting room A that gets bound to room B closes
 //      the socket and never becomes ready (never plays in the wrong world)
-//   4. duplicate identity (second tab): the newer connection supersedes the older one in the
-//      same world — never two blobs of one member — and the room's run is NOT reset
+//   4. duplicate identity (second tab): a plain join cannot replace an active run body
 //   5. interest filtering (explicitly enabled) stays COHERENT: co-located clients see
 //      identical entity sets; separated clients differ only by distance; seed/floor/rev/wid/
 //      cleared and the roster stay identical regardless — the criteria gate for re-enabling
@@ -202,7 +201,7 @@ async function main(): Promise<void> {
     } finally { await s.close(); }
   });
 
-  await test("duplicate identity (second tab): newest connection supersedes; the run is not reset", async () => {
+  await test("duplicate identity (second tab): plain join is rejected without the resume capability", async () => {
     const s = await startTestServer();
     try {
       const tabOne = new Bot({ url: s.url, secret: s.secret, playerId: "dup-id", world: "room:TABS", name: "TabOne", script: () => idle() });
@@ -213,16 +212,15 @@ async function main(): Promise<void> {
 
       const tabTwo = new Bot({ url: s.url, secret: s.secret, playerId: "dup-id", world: "room:TABS", name: "TabTwo", script: () => idle() });
       tabTwo.start();
-      await waitUntil(() => tabTwo.transport.isReady() && (s.server.getWorld("room:TABS")?.playerCount ?? 0) === 1, 3000);
+      await waitUntil(() => (tabTwo.transport.lastError ?? "").includes("resume_required"), 3000);
 
       check("exactly ONE player remains for the identity (no ghost blob)", s.server.getWorld("room:TABS")?.playerCount === 1, `players=${s.server.getWorld("room:TABS")?.playerCount}`);
-      await waitUntil(() => tabTwo.transport.getWorldRoster().length === 1, 2000); // next broadcast reflects the kick
-      const roster = tabTwo.transport.getWorldRoster();
-      check("roster holds the identity once, as the newest tab", roster.length === 1 && roster[0].aid === "dup-id" && roster[0].nm === "TabTwo", JSON.stringify(roster));
-      check("older tab went terminal as SUPERSEDED (explicit, no reconnect loop)",
-        await waitUntil(() => tabOne.transport.getCloseKind() === "superseded", 2000), `kind=${tabOne.transport.getCloseKind()}`);
-      check("the takeover is counted (duplicateIdentityKicks)", s.server.health().counters.duplicateIdentityKicks === 1);
-      check("the room's run survived the takeover (same seed — bind before kick)", s.server.getWorld("room:TABS")?.state.seed === seedBefore);
+      const roster = tabOne.transport.getWorldRoster();
+      check("the active session keeps its identity", roster.length === 1 && roster[0].aid === "dup-id" && roster[0].nm === "TabOne", JSON.stringify(roster));
+      check("the second tab receives the explicit resume-required refusal",
+        (tabTwo.transport.lastError ?? "").includes("resume_required"), tabTwo.transport.lastError ?? "");
+      check("the active tab remains ready and was not superseded", tabOne.transport.isReady() && tabOne.transport.getCloseKind() === null);
+      check("the room's run survives unchanged", s.server.getWorld("room:TABS")?.state.seed === seedBefore);
 
       tabOne.stop(); tabTwo.stop();
     } finally { await s.close(); }

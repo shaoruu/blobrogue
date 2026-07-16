@@ -13,6 +13,10 @@ export interface ServerConfig {
   port: number;
   wsPath: string;
   auth: AuthConfig;
+  receiptSecret: string | null;
+  receiptEndpoint: string | null;
+  admissionEndpoint: string | null;
+  generationStatePath: string | null;
   isProd: boolean;
   // Trusted reverse-proxy CIDRs. Only when the immediate peer matches one of these do we read the
   // real client IP from X-Forwarded-For / X-Real-IP (P0-4). Behind nginx this is loopback;
@@ -79,6 +83,18 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     port: intEnv(env, "PORT", 8090, 0, 65535),
     wsPath: env.GS_WS_PATH ?? "/ws",
     auth: authConfigFromEnv(env),
+    receiptSecret: env.GS_RECEIPT_SECRET && env.GS_RECEIPT_SECRET.length > 0
+      ? env.GS_RECEIPT_SECRET
+      : null,
+    receiptEndpoint: env.GS_CONVEX_RECEIPT_URL && env.GS_CONVEX_RECEIPT_URL.length > 0
+      ? env.GS_CONVEX_RECEIPT_URL
+      : null,
+    admissionEndpoint: env.GS_CONVEX_ADMISSION_URL && env.GS_CONVEX_ADMISSION_URL.length > 0
+      ? env.GS_CONVEX_ADMISSION_URL
+      : null,
+    generationStatePath: env.GS_GENERATION_STATE_PATH && env.GS_GENERATION_STATE_PATH.length > 0
+      ? env.GS_GENERATION_STATE_PATH
+      : null,
     isProd: env.NODE_ENV === "production",
     trustedProxies: (env.GS_TRUSTED_PROXIES ?? "127.0.0.1/32,::1/128").split(",").map((s) => s.trim()).filter((s) => s.length > 0),
     maxConnsPerIp: intEnv(env, "GS_MAX_CONNS_PER_IP", 16, 1, 10000),

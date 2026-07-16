@@ -3263,7 +3263,7 @@ function damageEnemy(w: WorldState, by: PlayerId | null, e: Enemy, dmg: number, 
     }
   }
   e.hp -= dmg;
-  checkBossTransition(w, e, ev);
+  checkBossTransition(w, e, ev, by);
 }
 
 // Crossing a phase threshold starts the transition beat immediately (mid-attack included):
@@ -3272,7 +3272,7 @@ function damageEnemy(w: WorldState, by: PlayerId | null, e: Enemy, dmg: number, 
 // lands on the floor and its excess waits out the beat — a boss can never be deleted
 // through a threshold. King: 70%/35% → floors 62%/27%, fixed 1.2s roars. MARROW: 65%/30%
 // → floors 57%/22%, a shield that holds up to 2.6s but BREAKS EARLY once both husks die.
-function checkBossTransition(w: WorldState, e: Enemy, ev: SimEvent[]): void {
+function checkBossTransition(w: WorldState, e: Enemy, ev: SimEvent[], by: PlayerId | null): void {
   const boss = e.boss;
   if (!boss || boss.roar) return;
   const def = bossBeatOf(e);
@@ -3297,7 +3297,7 @@ function checkBossTransition(w: WorldState, e: Enemy, ev: SimEvent[]): void {
   if (boss.enrage === 1) {
     ev.push({ t: "cue", name: "bossSpawn", x: e.x, y: e.y, rate: 0.7, gain: 0.8, trauma: 0.08 });
   }
-  boss.roar = { floorHp, queued, queuedBy: null };
+  boss.roar = { floorHp, queued, queuedBy: by };
   beginWindup(e, def.move);
   // The beat's shockwave dissipates every projectile near the boss — a readable reset.
   for (const b of w.bullets) {
@@ -3447,7 +3447,16 @@ function killEnemy(w: WorldState, p: PlayerSim | null, e: Enemy, ev: SimEvent[])
     accrueUlt(p, "kill", ultChargeFromKill());
   }
   const big = isBossKind(e.kind);
-  ev.push({ t: "enemyKill", eid: e.id, kind: e.kind, tier: e.tier, x: e.x, y: e.y, combo: p ? p.combo : 0 });
+  ev.push({
+    t: "enemyKill",
+    eid: e.id,
+    kind: e.kind,
+    tier: e.tier,
+    x: e.x,
+    y: e.y,
+    combo: p ? p.combo : 0,
+    by: p?.id ?? "",
+  });
   if (big) endBossDanger(w, e, ev);
   // The Weaver's earned-window mechanic bodies: a SHOT knot collapses its lane (P1:
   // the exposure; always loose debris). Sacs need no hook — the climb loop polls the
@@ -9845,7 +9854,7 @@ function quorumDamageHusk(w: WorldState, by: PlayerId | null, husk: Enemy, dmg: 
     else core.hp = target;
   } else {
     core.hp -= eff;
-    checkBossTransition(w, core, ev);
+    checkBossTransition(w, core, ev, by);
   }
   // The husk's break meter (independent of the pool): focus it to end its role.
   husk.affixState -= eff;

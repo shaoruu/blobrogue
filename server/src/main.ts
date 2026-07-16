@@ -14,6 +14,17 @@ async function main(): Promise<void> {
     log.error("refusing to start: GS_AUTH_SECRET is required in production");
     process.exit(1);
   }
+  if (cfg.isProd && (!cfg.receiptSecret
+    || !cfg.receiptEndpoint
+    || !cfg.admissionEndpoint
+    || !cfg.generationStatePath)) {
+    log.error("refusing to start: GS receipt/admission endpoints, secret, and durable generation state path are required");
+    process.exit(1);
+  }
+  if (cfg.isProd && cfg.receiptSecret === cfg.auth.secret) {
+    log.error("refusing to start: GS_RECEIPT_SECRET must be distinct from GS_AUTH_SECRET");
+    process.exit(1);
+  }
   if (cfg.auth.allowDev) log.warn("DEV AUTH BYPASS ENABLED (local only) — accepting dev:<id> tickets");
 
   const server = new GameServer(cfg, { logger: log });

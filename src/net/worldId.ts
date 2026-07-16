@@ -15,8 +15,13 @@ export function isValidWorldId(id: string): boolean {
 // The single room-code -> authoritative-world-id mapping the CLIENT and SERVER share. The
 // Convex minter keeps its own copy (convex/gsTicketCore.ts must stay import-free of app
 // code for bundling); server/test/ticket.test.ts locks the two to byte agreement.
-export function worldIdForRoomCode(code: string): string {
-  return "room:" + code.trim().toUpperCase();
+function generationSuffix(generation: number | undefined): string {
+  if (generation === undefined) return "";
+  return `:g${Math.max(1, Math.floor(generation))}`;
+}
+
+export function worldIdForRoomCode(code: string, generation?: number): string {
+  return "room:" + code.trim().toUpperCase() + generationSuffix(generation);
 }
 
 // The PVP world-id prefix. A pvp world id (public arena or a room) carries this marker so the
@@ -27,8 +32,8 @@ export const PVP_WORLD_PREFIX = "pvp:";
 
 // The pvp room-code -> world-id mapping (reuses the room-code path; distinct id space so a code
 // can host a coop world and a pvp world independently). Client + Convex minter must agree.
-export function pvpWorldIdForRoomCode(code: string): string {
-  return PVP_WORLD_PREFIX + "room:" + code.trim().toUpperCase();
+export function pvpWorldIdForRoomCode(code: string, generation?: number): string {
+  return PVP_WORLD_PREFIX + "room:" + code.trim().toUpperCase() + generationSuffix(generation);
 }
 
 // Whether a world id names a PVP world (the server factory branches on this).

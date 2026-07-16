@@ -11,6 +11,7 @@ import type { WeaponId } from "../../src/sim/types.js";
 import type { PlayerId } from "../../src/sim/input.js";
 import type { KitId } from "../../src/sim/kits.js";
 import type { WireEvent } from "../../src/net/protocol.js";
+import type { RunReceiptParticipant } from "../../src/net/runReceipt.js";
 import type { Conn, InputIntent } from "./connection.js";
 import type { ServerConfig } from "./config.js";
 
@@ -34,6 +35,7 @@ export interface Seat {
   hat: string | null;
   face: string | null;
   pet: string | null;
+  kitId: KitId;
   lastAppliedSeq: number;
   lastCseq: number;
   pendingOffer: string[] | null;
@@ -73,6 +75,7 @@ export interface RoomRuntime {
   // Remove every seat past its deadline (authoritative leave lifecycle) and return them.
   expireSeats(nowMs: number): Seat[];
   seats(): IterableIterator<Seat>;
+  clearSeats(): void;
 
   // Reset to a fresh run (new seed, floor 1). The session store calls this when the room
   // empties, so runs are party-scoped: the next group never inherits a half-played dungeon.
@@ -110,6 +113,8 @@ export interface RoomRuntime {
 
   // Player ids whose run ended this tick (full wipe) — the server drives the leave lifecycle.
   gameOverPlayers(): PlayerId[];
+  runReceiptParticipants(): RunReceiptParticipant[];
+  runReceiptId(): string;
   // Blessing offers raised this tick — the server turns each into a validated offer.
   offerPlayers(): BlessingOfferRequest[];
   // Offers whose TTL expired this tick (already resolved on both sides) — logging/metrics.
@@ -127,6 +132,8 @@ export interface BlessingOfferRequest {
 export interface SessionStore {
   ensureRoom(id: string): RoomRuntime;
   room(id: string): RoomRuntime | undefined;
+  isRetired(id: string): boolean;
+  recoveredGenerationWorldIds?(): string[];
   rooms(): IterableIterator<RoomRuntime>;
   roomCount(): number;
   totalPlayers(): number;

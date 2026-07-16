@@ -136,8 +136,9 @@ async function main(): Promise<void> {
     const menuSrc = readFileSync(join(ROOT, "src/ui/menu.ts"), "utf8");
     check("the URL is consumed when the ATTEMPT RESOLVES (menu strips; unjoinable invites strip in main)",
       menuSrc.includes("stripInviteFromLocation()") && mainSrc.includes("stripInviteFromLocation()"));
-    check("the invite join IS the manual join (openInvite routes through doJoinOnline)",
-      menuSrc.includes("await this.doJoinOnline(code, status,"));
+    check("the invite final CTA uses the same validated manual join with its confirmed pair",
+      menuSrc.includes("this.doJoinOnline(code, status, {")
+      && menuSrc.includes("confirmedLoadout: loadout"));
   }
 
   section("the deploy serves the clean path (SPA rewrite for /r/<CODE>)");

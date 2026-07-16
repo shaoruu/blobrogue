@@ -5,8 +5,8 @@ import type { MutationCtx, QueryCtx } from "./_generated/server";
 import type { Doc } from "./_generated/dataModel";
 
 // Global best-run leaderboard. One row per player (their deepest run; kills break ties),
-// written ONLY by players.recordRun through foldBestRun below — the same trust boundary as
-// the all-time stats. Reads return name/appearance/run data only: the entry shape is the
+// written only by the verified run-receipt fold below — the same trust boundary as the
+// all-time stats. Reads return name/appearance/run data only: the entry shape is the
 // public profile, so a leaderboard click can render a player page without any extra query
 // (and without any way to reach account fields).
 
@@ -123,62 +123,6 @@ export async function foldBestRun(
   } else if (existing.name !== player.name) {
     await ctx.db.patch(existing._id, { name: player.name });
   }
-}
-
-// Fold a still-in-progress run's DEEPEST FLOOR into the leaderboard row (called from
-// players.recordFloorProgress on each descend). Depth-only by design: the run's kills/
-// coins/build are not final yet, so a strictly-deeper floor resets those to placeholder
-// zeros (the eventual game-over recordRun fold, at the real floor with real kills, then
-// wins the kills tie-break and overwrites them) and refreshes the worn-now appearance
-// snapshot. This is what banks a player's depth even when the run later disconnects or is
-// abandoned instead of ending in a clean party wipe. Never charts floor 0, never regresses.
-export async function foldFloorProgress(
-  ctx: MutationCtx,
-  player: Doc<"players">,
-  floor: number,
-): Promise<void> {
-  if (floor < 1) return;
-  const identity = {
-    name: player.name,
-    colorIndex: player.colorIndex,
-    hat: player.cosmeticLoadout?.hat,
-    face: player.cosmeticLoadout?.face,
-    body: player.cosmeticLoadout?.body,
-    title: player.cosmeticLoadout?.title,
-  };
-  const existing = await ctx.db
-    .query("leaderboard")
-    .withIndex("by_player", (q) => q.eq("playerId", player._id))
-    .unique();
-  if (!existing) {
-    await ctx.db.insert("leaderboard", {
-      playerId: player._id,
-      ...identity,
-      floor,
-      kills: 0,
-      coins: 0,
-      durationMs: 0,
-      weapons: [],
-      items: [],
-      achievedAt: Date.now(),
-    });
-    return;
-  }
-  if (floor <= existing.floor) {
-    // Not deeper: only keep the display name current (mirrors foldBestRun's non-better path).
-    if (existing.name !== player.name) await ctx.db.patch(existing._id, { name: player.name });
-    return;
-  }
-  await ctx.db.patch(existing._id, {
-    ...identity,
-    floor,
-    kills: 0,
-    coins: 0,
-    durationMs: 0,
-    weapons: [],
-    items: [],
-    achievedAt: Date.now(),
-  });
 }
 
 // Keep the public row's display NAME in step when the player renames (called from

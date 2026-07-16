@@ -1,15 +1,24 @@
 import { mutation, query } from "./_generated/server";
-import { v } from "convex/values";
+import { ConvexError, v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
 import type { Doc, Id } from "./_generated/dataModel";
 import { sanitizeEquip, earnedCosmeticsFor, COSMETIC_SLOTS } from "./cosmeticsCore";
 import type { CosmeticLoadout } from "./cosmeticsCore";
-import { foldBestRun, foldFloorProgress, mergeBestRun, syncIdentity, cleanBuild } from "./leaderboard";
+import { foldBestRun, mergeBestRun, syncIdentity } from "./leaderboard";
 import type { RunBuild } from "./leaderboard";
 import { masteryXpForReachedFloor, masteryLevelForXp } from "./masteryCore";
 import { bankedRunAmber, firstBossAmber, isBossKindId } from "../src/sim/balance.js";
 import { canBuyNode, isPetOwned, CAMP_SHELL_ID, rescueNodesForRun } from "../src/sim/camp_nodes.js";
+import { validateCombinedLoadout } from "./loadoutCore";
+import {
+  activeGuestSession,
+  mintGuestSession,
+  refreshGuestSession,
+  resolveAuthorizedPlayer,
+  revokePlayerGuestSessions,
+} from "./guestAuth";
+import type { GuestScope, GuestSessionCredentials } from "./guestAuth";
 
 export interface Profile {
   playerId: string;
@@ -28,6 +37,8 @@ export interface Profile {
   unlocks: string[];
   // The equipped cosmetic companion pet id (WAVE 1), or null for none. Visual-only.
   equippedPet: string | null;
+  // Convenience only: the last combined-gate kit, used to preselect the next gate.
+  lastKitId: string | null;
   // Account MASTERY (KIT/XP spec §4): the persistent ACCESS track. masteryXp is the lifetime
   // total; masteryLevel is the derived level the lobby reads to gate kit selection. Never a
   // currency, never spendable.
@@ -37,9 +48,16 @@ export interface Profile {
   image?: string;
   // True when this stats row is account-backed rather than guest-only.
   isAccount: boolean;
+  // Returned only when a new/rotated guest session is issued.
+  guestCapability?: string;
+  guestRefreshCapability?: string;
 }
 
-function toProfile(doc: Doc<"players">, user?: Doc<"users"> | null): Profile {
+function toProfile(
+  doc: Doc<"players">,
+  user?: Doc<"users"> | null,
+  guestCredentials?: GuestSessionCredentials,
+): Profile {
   return {
     playerId: doc._id,
     name: doc.name,
@@ -57,10 +75,12 @@ function toProfile(doc: Doc<"players">, user?: Doc<"users"> | null): Profile {
     amber: doc.amber ?? 0,
     unlocks: doc.unlocks,
     equippedPet: doc.equippedPet ?? null,
+    lastKitId: doc.lastKitId ?? null,
     masteryXp: doc.masteryXp ?? 0,
     masteryLevel: masteryLevelForXp(doc.masteryXp ?? 0),
     image: user?.image,
     isAccount: doc.userId !== undefined,
+    ...(guestCredentials ?? {}),
   };
 }
 
@@ -124,12 +144,16 @@ async function findByUserId(ctx: QueryCtx, userId: Id<"users">): Promise<Doc<"pl
 async function resolveRow(
   ctx: QueryCtx,
   clientId: string,
+  guestCapability: string | undefined,
 ): Promise<{ row: Doc<"players"> | null; user: Doc<"users"> | null }> {
   const userId = await getAuthUserId(ctx);
   if (userId) {
     return { row: await findByUserId(ctx, userId), user: await ctx.db.get(userId) };
   }
-  return { row: await findByClientId(ctx, clientId), user: null };
+  return {
+    row: await resolveAuthorizedPlayer(ctx, clientId, guestCapability, "profile"),
+    user: null,
+  };
 }
 
 const ZERO_STATS = {
@@ -139,6 +163,45 @@ const ZERO_STATS = {
   gamesPlayed: 0,
   unlocks: [] as string[],
 };
+
+async function guardAndRewireGuestReferences(
+  ctx: MutationCtx,
+  guest: Doc<"players">,
+  account: Doc<"players">,
+): Promise<void> {
+  const hostedRooms = await ctx.db.query("rooms")
+    .withIndex("by_host", (queryBuilder) => queryBuilder.eq("hostPlayerId", guest._id))
+    .collect();
+  for (const room of hostedRooms) {
+    if (room.status !== "ended") {
+      throw new ConvexError({
+        code: "guest_active_in_room",
+        message: "leave the active room before signing in",
+      });
+    }
+    await ctx.db.patch(room._id, { hostPlayerId: account._id });
+  }
+
+  const rows = await ctx.db.query("presence")
+    .withIndex("by_player", (queryBuilder) => queryBuilder.eq("playerId", guest._id))
+    .collect();
+  for (const row of rows) {
+    const room = await ctx.db.get(row.roomId);
+    if (room && room.status !== "ended" && row.isDeparted !== true) {
+      throw new ConvexError({
+        code: "guest_active_in_room",
+        message: "leave the active room before signing in",
+      });
+    }
+    const accountRow = await ctx.db.query("presence")
+      .withIndex("by_room_player", (queryBuilder) => (
+        queryBuilder.eq("roomId", row.roomId).eq("playerId", account._id)
+      ))
+      .unique();
+    if (accountRow) await ctx.db.delete(row._id);
+    else await ctx.db.patch(row._id, { playerId: account._id });
+  }
+}
 
 // Fold an unowned guest row into an EXISTING account row (the second-device sign-in path:
 // the account already has its row, but this browser accrued guest progress before signing
@@ -155,6 +218,7 @@ async function absorbGuestRow(
   account: Doc<"players">,
   guest: Doc<"players">,
 ): Promise<Doc<"players">> {
+  await guardAndRewireGuestReferences(ctx, guest, account);
   const merged = {
     totalKills: account.totalKills + guest.totalKills,
     totalCoins: account.totalCoins + guest.totalCoins,
@@ -165,6 +229,7 @@ async function absorbGuestRow(
     ...(account.colorIndex === undefined && guest.colorIndex !== undefined ? { colorIndex: guest.colorIndex } : {}),
     ...(account.cosmeticLoadout === undefined && guest.cosmeticLoadout !== undefined ? { cosmeticLoadout: guest.cosmeticLoadout } : {}),
     ...(account.equippedPet === undefined && guest.equippedPet !== undefined ? { equippedPet: guest.equippedPet } : {}),
+    ...(account.lastKitId === undefined && guest.lastKitId !== undefined ? { lastKitId: guest.lastKitId } : {}),
     // The account row adopts this browser's clientId (when free) so guest play after a
     // sign-out keeps accruing onto the same identity — the first-sign-in semantics.
     ...(account.clientId === undefined ? { clientId: guest.clientId } : {}),
@@ -172,6 +237,7 @@ async function absorbGuestRow(
   await ctx.db.patch(account._id, merged);
   const updated = (await ctx.db.get(account._id))!;
   await mergeBestRun(ctx, guest, updated);
+  await revokePlayerGuestSessions(ctx, guest._id);
   await ctx.db.delete(guest._id);
   return updated;
 }
@@ -197,6 +263,7 @@ async function ensureAccountRow(
 
   const existing = await findByUserId(ctx, userId);
   if (existing) {
+    await revokePlayerGuestSessions(ctx, existing._id);
     const guest = await findByClientId(ctx, clientId);
     if (guest && guest.userId === undefined && guest._id !== existing._id) {
       const absorbed = await absorbGuestRow(ctx, existing, guest);
@@ -217,6 +284,7 @@ async function ensureAccountRow(
     // the Google name (respect any customName defensively, though it should be absent).
     const name = guest.customName ?? accountName;
     await ctx.db.patch(guest._id, { userId, name, lastSeen: now });
+    await revokePlayerGuestSessions(ctx, guest._id);
     return { row: { ...guest, userId, name, lastSeen: now }, user };
   }
 
@@ -258,6 +326,8 @@ async function applyAppearance(
 export const ensurePlayer = mutation({
   args: {
     clientId: v.string(),
+    guestCapability: v.optional(v.string()),
+    guestRefreshCapability: v.optional(v.string()),
     name: v.string(),
     colorIndex: v.optional(v.number()),
     cosmetics: v.optional(v.object({
@@ -267,7 +337,14 @@ export const ensurePlayer = mutation({
       title: v.optional(v.string()),
     })),
   },
-  handler: async (ctx, { clientId, name, colorIndex, cosmetics }) => {
+  handler: async (ctx, {
+    clientId,
+    guestCapability,
+    guestRefreshCapability,
+    name,
+    colorIndex,
+    cosmetics,
+  }) => {
     const color = cleanColor(colorIndex);
     const userId = await getAuthUserId(ctx);
     if (userId) {
@@ -283,10 +360,35 @@ export const ensurePlayer = mutation({
     const trimmed = cleanName(name);
     const existing = await findByClientId(ctx, clientId);
     if (existing) {
+      if (existing.userId !== undefined) {
+        throw new ConvexError({
+          code: "account_auth_required",
+          message: "sign in to access this account",
+        });
+      }
+      let nextCredentials: GuestSessionCredentials | undefined;
+      const activeSession = await activeGuestSession(ctx, existing._id);
+      if (activeSession) {
+        await resolveAuthorizedPlayer(ctx, clientId, guestCapability, "profile");
+      } else {
+        const sessions = await ctx.db.query("guestSessions")
+          .withIndex("by_player", (queryBuilder) => queryBuilder.eq("playerId", existing._id))
+          .collect();
+        if (sessions.length > 0) {
+          nextCredentials = await refreshGuestSession(
+            ctx,
+            existing,
+            clientId,
+            guestRefreshCapability,
+          );
+        } else {
+          nextCredentials = await mintGuestSession(ctx, existing, clientId);
+        }
+      }
       await ctx.db.patch(existing._id, { name: trimmed, lastSeen: now });
       const updated = await applyAppearance(ctx, { ...existing, name: trimmed, lastSeen: now }, color, cosmetics);
       await syncIdentity(ctx, updated);
-      return toProfile(updated);
+      return toProfile(updated, null, nextCredentials);
     }
     const id = await ctx.db.insert("players", {
       clientId,
@@ -298,41 +400,25 @@ export const ensurePlayer = mutation({
     });
     const inserted = (await ctx.db.get(id))!;
     const updated = await applyAppearance(ctx, inserted, undefined, cosmetics);
-    return toProfile(updated);
+    const nextCredentials = await mintGuestSession(ctx, updated, clientId);
+    return toProfile(updated, null, nextCredentials);
   },
 });
 
-// Bank the deepest floor a run has reached, PROGRESSIVELY, on each descend — the fix for
-// depth that never charted because recordRun only fires on a clean full-party-wipe game
-// over (a death-while-teammates-continue, a disconnect, or a quit all skipped it, so the
-// board showed a stale floor). Deliberately NARROW: it only raises deepestFloor via
-// Math.max and folds the floor into the leaderboard (foldFloorProgress). It must NOT do
-// what recordRun does — no gamesPlayed increment, no kills/coins summing, no cosmetic
-// unlock grants, no amber — because those are per-RUN, not per-floor, and would multiply
-// wildly across a descent. Idempotent by Math.max: re-banking the same floor is a no-op,
-// so a run that later disconnects still keeps the depth it already reached.
 export const recordFloorProgress = mutation({
   args: { clientId: v.string(), floor: v.number() },
-  handler: async (ctx, { clientId, floor }) => {
-    const target = Math.max(0, Math.floor(floor));
-    if (target < 1) return null;
-    const userId = await getAuthUserId(ctx);
-    const row = userId
-      ? (await ensureAccountRow(ctx, userId, clientId, "blob")).row
-      : await findByClientId(ctx, clientId);
-    if (!row) return null;
-    if (target > row.deepestFloor) {
-      await ctx.db.patch(row._id, { deepestFloor: target, lastSeen: Date.now() });
-    }
-    await foldFloorProgress(ctx, { ...row, deepestFloor: Math.max(row.deepestFloor, target) }, target);
-    return null;
+  handler: async () => {
+    throw new ConvexError({
+      code: "verified_receipt_required",
+      message: "progress requires a verified game-server receipt",
+    });
   },
 });
 
 export const getProfile = query({
-  args: { clientId: v.string() },
-  handler: async (ctx, { clientId }) => {
-    const { row, user } = await resolveRow(ctx, clientId);
+  args: { clientId: v.string(), guestCapability: v.optional(v.string()) },
+  handler: async (ctx, { clientId, guestCapability }) => {
+    const { row, user } = await resolveRow(ctx, clientId, guestCapability);
     return row ? toProfile(row, user) : null;
   },
 });
@@ -347,6 +433,41 @@ export const currentUser = query({
     const user = await ctx.db.get(userId);
     if (!user) return null;
     return { name: user.name ?? null, email: user.email ?? null, image: user.image ?? null };
+  },
+});
+
+export const prepareSignOutGuest = mutation({
+  args: { clientId: v.string(), name: v.string() },
+  handler: async (ctx, { clientId, name }) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) {
+      throw new ConvexError({ code: "auth_required", message: "sign in before preparing sign out" });
+    }
+    const account = await findByUserId(ctx, userId);
+    if (!account) {
+      throw new ConvexError({ code: "player_missing", message: "account profile not found" });
+    }
+    if (account.clientId === clientId) await ctx.db.patch(account._id, { clientId: undefined });
+    const existing = await findByClientId(ctx, clientId);
+    let guest: Doc<"players">;
+    if (existing) {
+      if (existing.userId !== undefined) {
+        throw new ConvexError({ code: "client_id_in_use", message: "guest identity is unavailable" });
+      }
+      guest = existing;
+    } else {
+      const now = Date.now();
+      const guestId = await ctx.db.insert("players", {
+        clientId,
+        name: cleanName(name),
+        ...ZERO_STATS,
+        createdAt: now,
+        lastSeen: now,
+      });
+      guest = (await ctx.db.get(guestId))!;
+    }
+    const guestCredentials = await mintGuestSession(ctx, guest, clientId);
+    return toProfile(guest, null, guestCredentials);
   },
 });
 
@@ -373,7 +494,7 @@ export const setCustomName = mutation({
   },
 });
 
-interface RunArgs {
+export interface RunArgs {
   floor: number;
   kills: number;
   coins: number;
@@ -399,7 +520,11 @@ function bossKillFlag(kind: string): string {
 // comfortably under it.
 const AMBER_RUN_CAP = 1000;
 
-async function foldRun(ctx: MutationCtx, doc: Doc<"players">, run: RunArgs): Promise<Doc<"players"> | null> {
+export async function foldVerifiedRun(
+  ctx: MutationCtx,
+  doc: Doc<"players">,
+  run: RunArgs,
+): Promise<Doc<"players"> | null> {
   // SERVER-AUTHORITATIVE Amber (the client never authors the number): the recurring run pool
   // banked at the outcome fraction, plus one-time first-boss grants at full.
   const floorsCleared = Math.max(0, Math.min(Math.floor(run.floorsCleared), Math.max(0, Math.floor(run.floor))));
@@ -452,11 +577,6 @@ async function foldRun(ctx: MutationCtx, doc: Doc<"players">, run: RunArgs): Pro
   return updated;
 }
 
-// Fold a finished run into the caller's all-time stats + the global leaderboard (called on
-// game over). Amber is computed SERVER-SIDE from the run facts here — a client can never mint
-// it. Signed in: folds into the account row, creating/migrating it if login hadn't yet (so a
-// run is never lost to a startup race). Guest: folds into the existing clientId row, or no-ops
-// if there isn't one. Every gameplay-fact arg is optional so an older client still records.
 export const recordRun = mutation({
   args: {
     clientId: v.string(),
@@ -478,49 +598,65 @@ export const recordRun = mutation({
       items: v.array(v.object({ id: v.string(), count: v.number() })),
     })),
   },
-  handler: async (ctx, args) => {
-    const { clientId, floor, kills, coins, floorsCleared, bossKills, isCacheArmed, amberWindfall, outcome, durationMs, build } = args;
-    const run: RunArgs = {
-      floor, kills, coins,
-      floorsCleared: floorsCleared ?? 0,
-      bossKills: (bossKills ?? []).slice(0, 16),
-      isCacheArmed: isCacheArmed ?? false,
-      amberWindfall: Math.max(0, Math.floor(amberWindfall ?? 0)),
-      isReturn: outcome === "return",
-      durationMs: durationMs ?? 0,
-      build: cleanBuild(build),
-    };
-    const userId = await getAuthUserId(ctx);
-    if (userId) {
-      const { row, user } = await ensureAccountRow(ctx, userId, clientId, "blob");
-      const updated = await foldRun(ctx, row, run);
-      return updated ? toProfile(updated, user) : null;
-    }
-    const row = await findByClientId(ctx, clientId);
-    if (!row) return null;
-    const updated = await foldRun(ctx, row, run);
-    return updated ? toProfile(updated) : null;
+  handler: async () => {
+    throw new ConvexError({
+      code: "verified_receipt_required",
+      message: "progress requires a verified game-server receipt",
+    });
   },
 });
 
 // ---- WAVE 1: the Camp SPEND + pet equip (server-authoritative, reject client-authored amber) ----
 
 // Resolve the caller's stats row (account-first, else guest by clientId) for a write mutation.
-async function resolveWriteRow(ctx: MutationCtx, clientId: string): Promise<Doc<"players"> | null> {
-  const userId = await getAuthUserId(ctx);
-  if (userId) return (await ensureAccountRow(ctx, userId, clientId, "blob")).row;
-  return await findByClientId(ctx, clientId);
+async function resolveWriteRow(
+  ctx: MutationCtx,
+  clientId: string,
+  guestCapability: string | undefined,
+  scope: GuestScope,
+): Promise<Doc<"players">> {
+  return await resolveAuthorizedPlayer(ctx, clientId, guestCapability, scope);
 }
+
+export const confirmRunLoadout = mutation({
+  args: {
+    clientId: v.string(),
+    guestCapability: v.optional(v.string()),
+    kitId: v.string(),
+    petId: v.union(v.string(), v.null()),
+    isKitChoiceMade: v.boolean(),
+    isPetChoiceMade: v.boolean(),
+  },
+  handler: async (ctx, { clientId, guestCapability, kitId, petId, isKitChoiceMade, isPetChoiceMade }) => {
+    const row = await resolveWriteRow(ctx, clientId, guestCapability, "profile");
+    const validation = validateCombinedLoadout(row, {
+      kitId, petId, isKitChoiceMade, isPetChoiceMade,
+    });
+    if (!validation.ok) {
+      return {
+        ok: false as const,
+        reason: validation.reason,
+        profile: await ensureProfileView(ctx, row),
+      };
+    }
+    await ctx.db.patch(row._id, {
+      lastKitId: validation.kitId,
+      equippedPet: validation.petId ?? undefined,
+      lastSeen: Date.now(),
+    });
+    const updated = (await ctx.db.get(row._id))!;
+    return { ok: true as const, profile: await ensureProfileView(ctx, updated) };
+  },
+});
 
 // Buy an Amber Camp node. The purchase is validated ENTIRELY server-side against the row's
 // real Amber + owned nodes (canBuyNode): enough Amber, prereqs met, not already owned. On
 // success it deducts the Amber and records the node id in unlocks[]. The client's optimistic
 // UI reconciles from the returned profile; a rejected buy leaves the row untouched.
 export const buyNode = mutation({
-  args: { clientId: v.string(), nodeId: v.string() },
-  handler: async (ctx, { clientId, nodeId }) => {
-    const row = await resolveWriteRow(ctx, clientId);
-    if (!row) return null;
+  args: { clientId: v.string(), guestCapability: v.optional(v.string()), nodeId: v.string() },
+  handler: async (ctx, { clientId, guestCapability, nodeId }) => {
+    const row = await resolveWriteRow(ctx, clientId, guestCapability, "economy");
     const amber = row.amber ?? 0;
     const check = canBuyNode(nodeId, amber, row.unlocks);
     if (!check.ok) {
@@ -540,10 +676,9 @@ export const buyNode = mutation({
 // Equip (or clear, with null) the active companion pet. Only a pet the player OWNS via an
 // owned companion node may be equipped — a tampered id is rejected and the row is untouched.
 export const equipPet = mutation({
-  args: { clientId: v.string(), petId: v.union(v.string(), v.null()) },
-  handler: async (ctx, { clientId, petId }) => {
-    const row = await resolveWriteRow(ctx, clientId);
-    if (!row) return null;
+  args: { clientId: v.string(), guestCapability: v.optional(v.string()), petId: v.union(v.string(), v.null()) },
+  handler: async (ctx, { clientId, guestCapability, petId }) => {
+    const row = await resolveWriteRow(ctx, clientId, guestCapability, "economy");
     if (petId !== null && !isPetOwned(petId, row.unlocks)) {
       return { ok: false as const, reason: "unowned" as const, profile: await ensureProfileView(ctx, row) };
     }

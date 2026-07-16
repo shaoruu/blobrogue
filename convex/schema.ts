@@ -75,16 +75,41 @@ export default defineSchema({
     // pure visual-only companion — it rides the wire like a hat/face label and never enters
     // the sim. Only a pet the player OWNS (via an owned companion node) is ever written.
     equippedPet: v.optional(v.string()),
+    // Convenience only: the last kit confirmed on the combined pre-run gate. A room's
+    // generation-bound presence row is authoritative for online play; this field only
+    // preselects the next gate and can never authorize a run.
+    lastKitId: v.optional(v.string()),
     createdAt: v.number(),
     lastSeen: v.number(),
   })
     .index("by_clientId", ["clientId"])
     .index("by_userId", ["userId"]),
 
+  guestSessions: defineTable({
+    token: v.string(),
+    refreshToken: v.string(),
+    clientId: v.string(),
+    playerId: v.id("players"),
+    scopes: v.array(v.union(
+      v.literal("profile"),
+      v.literal("room"),
+      v.literal("ticket"),
+      v.literal("economy"),
+    )),
+    createdAt: v.number(),
+    expiresAt: v.number(),
+    refreshExpiresAt: v.number(),
+    revokedAt: v.optional(v.number()),
+  })
+    .index("by_token", ["token"])
+    .index("by_refresh", ["refreshToken"])
+    .index("by_player", ["playerId"])
+    .index("by_client", ["clientId"]),
+
   // Global leaderboard: ONE row per player — their best run (deepest floor, kills as the
-  // tie-break) — folded in by players.recordRun. The row SNAPSHOTS the run's build and the
-  // player's cosmetic loadout separately from the mutable profile, so the leaderboard
-  // profile view needs no join against players (and can never leak account fields:
+  // tie-break) — folded only from a verified game-server receipt. The row SNAPSHOTS the
+  // run's build and player's cosmetic loadout separately from the mutable profile, so the
+  // leaderboard profile view needs no join against players (and can never leak account fields:
   // name/appearance/run stats only, by construction).
   leaderboard: defineTable({
     playerId: v.id("players"),
@@ -126,10 +151,22 @@ export default defineSchema({
     floor: v.number(),
     status: v.union(v.literal("lobby"), v.literal("playing"), v.literal("ended")),
     isPublic: v.optional(v.boolean()),
+    // Monotonic run generation. Reopen increments it before clearing every member's
+    // confirmation, so a confirmation from the previous run cannot ready or mint a ticket
+    // for the next one.
+    loadoutGeneration: v.optional(v.number()),
+    generationState: v.optional(v.union(
+      v.literal("pending"),
+      v.literal("active"),
+      v.literal("completed"),
+    )),
+    generationCompletedAt: v.optional(v.number()),
+    generationCompletionJti: v.optional(v.string()),
     createdAt: v.number(),
     lastActivity: v.number(),
   })
     .index("by_code", ["code"])
+    .index("by_host", ["hostPlayerId"])
     .index("by_public_status", ["isPublic", "status", "lastActivity"]),
 
   // Live per-player state inside a room, synced ~10x/sec by the client.
@@ -163,7 +200,43 @@ export default defineSchema({
     // (reported by their own heartbeat) — the roster's READY/NOT READY + ping readout.
     isReady: v.optional(v.boolean()),
     pingMs: v.optional(v.number()),
+    // Combined per-generation run loadout. pet id absence is a valid NO PET value only
+    // when isPetChoiceMade is true; this preserves the required distinction between an
+    // explicit null and a choice that was never made.
+    loadoutKitId: v.optional(v.string()),
+    loadoutPetId: v.optional(v.string()),
+    isKitChoiceMade: v.optional(v.boolean()),
+    isPetChoiceMade: v.optional(v.boolean()),
+    isLoadoutConfirmed: v.optional(v.boolean()),
+    loadoutGeneration: v.optional(v.number()),
+    loadoutEditRevision: v.optional(v.number()),
+    // A deliberate leave during a live generation keeps this row as a loadout tombstone:
+    // rejoining the same run restores the immutable pair, while the row no longer occupies
+    // an active roster/capacity slot.
+    isDeparted: v.optional(v.boolean()),
   })
     .index("by_room", ["roomId"])
+    .index("by_player", ["playerId"])
     .index("by_room_player", ["roomId", "playerId"]),
+
+  runReceipts: defineTable({
+    jti: v.string(),
+    runId: v.string(),
+    worldId: v.string(),
+    roomId: v.id("rooms"),
+    generation: v.number(),
+    status: v.union(
+      v.literal("completed"),
+      v.literal("abandoned"),
+      v.literal("server_restart"),
+    ),
+    playerIds: v.array(v.id("players")),
+    rewardedPlayerIds: v.array(v.id("players")),
+    issuedAt: v.number(),
+    expiresAt: v.number(),
+    consumedAt: v.number(),
+  })
+    .index("by_jti", ["jti"])
+    .index("by_run", ["runId"])
+    .index("by_expiry", ["expiresAt"]),
 });

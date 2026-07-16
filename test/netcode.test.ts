@@ -31,7 +31,7 @@ class FakeSocket implements SocketLike {
   readyState = 1; // OPEN
   bufferedAmount = 0;
   onopen: (() => void) | null = null;
-  onclose: (() => void) | null = null;
+  onclose: ((event?: { code?: number }) => void) | null = null;
   onerror: ((err: unknown) => void) | null = null;
   onmessage: ((ev: { data: unknown }) => void) | null = null;
   sent: string[] = [];
@@ -149,7 +149,7 @@ async function eventChannelTests(): Promise<void> {
   rig.sock.deliver(rig.snap({ full: true }));
   rig.transport.poll();
 
-  const kill: WireEvent = { id: 1, e: { t: "enemyKill", eid: 9, kind: "slime", tier: "standard", x: 1, y: 2, combo: 1 } };
+  const kill: WireEvent = { id: 1, e: { t: "enemyKill", eid: 9, kind: "slime", tier: "standard", x: 1, y: 2, combo: 1, by: "p1" } };
   rig.world.tick = 10;
   rig.sock.deliver(rig.snap({ events: [kill], evTo: 1 }));
   rig.world.tick = 11;
@@ -593,7 +593,7 @@ async function deltaEventDedupeTests(): Promise<void> {
   rig.sock.deliver(base);
   rig.transport.poll(); // drain bootstrap
 
-  const kill: WireEvent = { id: 1, e: { t: "enemyKill", eid: 9, kind: "slime", tier: "swarm", x: 1, y: 2, combo: 1 } };
+  const kill: WireEvent = { id: 1, e: { t: "enemyKill", eid: 9, kind: "slime", tier: "swarm", x: 1, y: 2, combo: 1, by: "p1" } };
   // The kill rides a DELTA first.
   rig.world.tick = 12;
   rig.sock.deliver(deltaFrame(rig, base, 2, { events: [kill], evTo: 1 }));
@@ -613,6 +613,26 @@ async function deltaEventDedupeTests(): Promise<void> {
   rig.transport.stop();
 }
 
+async function protocolUpgradeRejectTests(): Promise<void> {
+  section("protocol rejection is terminal and never burns the reconnect grace");
+  const beforeReady = await makeRig();
+  beforeReady.sock.deliver({ t: "error", code: "protocol", msg: "expected 33" });
+  beforeReady.sock.onclose?.({ code: 4001 });
+  check("pre-world protocol rejection surfaces client_outdated",
+    beforeReady.transport.getCloseKind() === "client_outdated");
+  check("pre-world protocol rejection does not reconnect",
+    !beforeReady.transport.getReconnectInfo().isReconnecting);
+
+  const afterReady = await makeRig();
+  afterReady.sock.deliver(afterReady.snap({ full: true }));
+  afterReady.sock.deliver({ t: "error", code: "protocol", msg: "expected 33" });
+  afterReady.sock.onclose?.({ code: 4001 });
+  check("mid-run protocol rejection is terminal too",
+    afterReady.transport.getCloseKind() === "client_outdated");
+  check("stale client never loops through the 90s seat grace",
+    !afterReady.transport.getReconnectInfo().isReconnecting);
+}
+
 async function main(): Promise<void> {
   await staleAndDuplicateTests();
   await ackMonotonicTests();
@@ -630,6 +650,7 @@ async function main(): Promise<void> {
   await deltaDropKeyframeRecoveryTests();
   await deltaDropMidStreamRecoveryTests();
   await deltaEventDedupeTests();
+  await protocolUpgradeRejectTests();
   process.stdout.write(`\n${passed} checks passed, ${failed} failed\n`);
   if (failed > 0) { process.stdout.write(`FAILURES:\n${failures.map((f) => "  - " + f).join("\n")}\n`); process.exit(1); }
   process.stdout.write("\nAll client netcode ordering assertions passed.\n");

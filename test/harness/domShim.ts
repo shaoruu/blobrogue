@@ -15,9 +15,21 @@ const noop = (): void => {};
 // when a test calls fireWindowEvent — game/golden suites just accumulate inert handlers.
 const windowListeners = new Map<string, Set<(ev: unknown) => void>>();
 
+let lastWindowDispatchCountStore = 0;
+
 export function fireWindowEvent(type: string, ev: Record<string, unknown> = {}): void {
   const event = { key: "", preventDefault: noop, stopPropagation: noop, ...ev };
-  for (const fn of [...(windowListeners.get(type) ?? [])]) fn(event);
+  const listeners = [...(windowListeners.get(type) ?? [])];
+  lastWindowDispatchCountStore = listeners.length;
+  for (const fn of listeners) fn(event);
+}
+
+export function windowListenerCount(type: string): number {
+  return windowListeners.get(type)?.size ?? 0;
+}
+
+export function lastWindowDispatchCount(): number {
+  return lastWindowDispatchCountStore;
 }
 
 // The last element that received .focus(), so tests can assert focus restore by NAME.
@@ -66,6 +78,7 @@ let documentStub: any;
 
 function makeEl(tag = "div"): any {
   const store: any = { tagName: (tag || "div").toUpperCase(), nodeType: 1, tag };
+  if (store.tagName === "BUTTON") store.tabIndex = 0;
   const style = makeStyle();
   const classList = makeClassList();
   // Real child/text tracking so UI tests (menu) can assert on the rendered tree; the game
@@ -104,13 +117,16 @@ function makeEl(tag = "div"): any {
         case "addEventListener":
         case "removeEventListener":
         case "blur":
-        case "click":
         case "scrollIntoView":
         case "setPointerCapture":
         case "releasePointerCapture":
         case "after":
         case "before":
           return noop;
+        case "click":
+          return () => {
+            if (typeof t.onclick === "function") t.onclick();
+          };
         // Attributes are tracked (not styled) so UI suites can assert accessibility
         // contracts (aria-label/aria-pressed) exactly as written by the real code.
         case "setAttribute":
@@ -137,6 +153,20 @@ function makeEl(tag = "div"): any {
         case "closest":
           return () => makeEl();
         case "querySelectorAll":
+          return (selector: string) => {
+            if (selector !== "button:not(:disabled):not([hidden])") return [];
+            const matches = children.slice(0, 0);
+            const queue = [...children];
+            while (queue.length > 0) {
+              const node = queue.shift();
+              if (!node) continue;
+              if (node.tagName === "BUTTON" && node.disabled !== true && node.hidden !== true) {
+                matches.push(node);
+              }
+              if (node.children) queue.push(...node.children);
+            }
+            return matches;
+          };
         case "getElementsByClassName":
         case "getElementsByTagName":
           return () => [];
@@ -303,6 +333,7 @@ put("Image", ImageStub);
 put("AudioContext", AudioContextStub);
 put("webkitAudioContext", AudioContextStub);
 put("HTMLElement", class {});
+put("HTMLButtonElement", class {});
 put("HTMLCanvasElement", class {});
 put("HTMLImageElement", ImageStub);
 if (!g.performance) put("performance", { now: () => 0 });

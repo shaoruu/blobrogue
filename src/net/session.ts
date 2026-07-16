@@ -1,16 +1,24 @@
 import type { ConvexClient } from "convex/browser";
 import { api } from "./api.js";
 import type { ProfileDoc, CampMutationResult } from "./api.js";
-import type { RunResult } from "../game/game.js";
 import { bodyItemForPaletteIndex } from "../game/cosmetics.js";
 import type { CosmeticSlot, CosmeticLoadout } from "../game/cosmetics.js";
 import { generatedBlobName, sanitizeBlobName } from "./blobName.js";
+import { getRememberedPet, getSelectedKit, getSelectedKitSelection, rememberPet, rememberRunLoadout } from "./kitSelection.js";
+import type { PlayableKitId, RememberedKit, RememberedPet, RunLoadout } from "./kitSelection.js";
+import { isKitId, isKitUnlocked } from "../sim/kits.js";
 
 const CLIENT_ID_KEY = "blobrogue.clientId";
 const NAME_KEY = "blobrogue.name";
 const NAME_CONFIRMED_KEY = "blobrogue.nameConfirmed";
 const COLOR_KEY = "blobrogue.color";
 const COSMETICS_KEY = "blobrogue.cosmetics";
+const GUEST_CAPABILITY_KEY = "blobrogue.guestCapability";
+const GUEST_REFRESH_CAPABILITY_KEY = "blobrogue.guestRefreshCapability";
+
+export type SessionLoadoutResult =
+  | { ok: true; profile: ProfileDoc | null; isOffline: boolean }
+  | { ok: false; reason: string; profile: ProfileDoc | null; isOffline: boolean };
 
 function readOrMintClientId(): string {
   try {
@@ -71,6 +79,8 @@ export class Session {
   // signed-in players keep it across devices.
   colorIndex: number | null;
   private cosmeticPicks: StoredCosmetics;
+  private guestCapability: string | null;
+  private guestRefreshCapability: string | null;
   profile: ProfileDoc | null = null;
   private client: ConvexClient | null;
 
@@ -87,6 +97,48 @@ export class Session {
     if (this.name !== stored) { try { localStorage.setItem(NAME_KEY, this.name); } catch { /* ignore */ } }
     this.colorIndex = readStoredColor();
     this.cosmeticPicks = readStoredCosmetics();
+    try { this.guestCapability = localStorage.getItem(GUEST_CAPABILITY_KEY); } catch { this.guestCapability = null; }
+    try { this.guestRefreshCapability = localStorage.getItem(GUEST_REFRESH_CAPABILITY_KEY); } catch { this.guestRefreshCapability = null; }
+  }
+
+  get guestCapabilityArgs(): { guestCapability?: string } {
+    return this.guestCapability ? { guestCapability: this.guestCapability } : {};
+  }
+
+  private get guestSessionArgs(): {
+    guestCapability?: string;
+    guestRefreshCapability?: string;
+  } {
+    return {
+      ...this.guestCapabilityArgs,
+      ...(this.guestRefreshCapability
+        ? { guestRefreshCapability: this.guestRefreshCapability }
+        : {}),
+    };
+  }
+
+  private adoptGuestCapability(profile: ProfileDoc): void {
+    if (profile.isAccount) {
+      this.guestCapability = null;
+      this.guestRefreshCapability = null;
+      try {
+        localStorage.removeItem(GUEST_CAPABILITY_KEY);
+        localStorage.removeItem(GUEST_REFRESH_CAPABILITY_KEY);
+      } catch {}
+      return;
+    }
+    if (!profile.guestCapability || !profile.guestRefreshCapability) return;
+    this.guestCapability = profile.guestCapability;
+    this.guestRefreshCapability = profile.guestRefreshCapability;
+    try {
+      localStorage.setItem(GUEST_CAPABILITY_KEY, profile.guestCapability);
+      localStorage.setItem(GUEST_REFRESH_CAPABILITY_KEY, profile.guestRefreshCapability);
+    } catch {}
+  }
+
+  private stripGuestCredentials(profile: ProfileDoc): void {
+    delete profile.guestCapability;
+    delete profile.guestRefreshCapability;
   }
 
   get playerId(): string | null {
@@ -107,6 +159,22 @@ export class Session {
   // adopted cosmetics — can leak into the next render; the guest hydrate refills it.
   clearProfile(): void {
     this.profile = null;
+  }
+
+  async prepareSignOutGuest(): Promise<ProfileDoc | null> {
+    if (!this.client) return null;
+    try {
+      const profile = await this.client.mutation(api.players.prepareSignOutGuest, {
+        clientId: this.clientId,
+        name: this.name,
+      });
+      this.profile = profile;
+      this.adoptGuestCapability(profile);
+      this.stripGuestCredentials(profile);
+      return profile;
+    } catch {
+      return null;
+    }
   }
 
   // The equipped loadout as the renderer consumes it: local explicit picks win, the
@@ -205,11 +273,14 @@ export class Session {
     const hasPicks = COSMETIC_PICK_SLOTS.some((slot) => sent[slot] !== undefined);
     this.profile = await this.client.mutation(api.players.ensurePlayer, {
       clientId: this.clientId,
+      ...this.guestSessionArgs,
       name: this.name,
       // Only explicit local picks are sent — undefined never overwrites a saved pick.
       ...(this.colorIndex !== null ? { colorIndex: this.colorIndex } : {}),
       ...(hasPicks ? { cosmetics: sent } : {}),
     });
+    this.adoptGuestCapability(this.profile);
+    this.stripGuestCredentials(this.profile);
     // A signed-in account may carry picks made on another device; adopt them locally.
     if (this.colorIndex === null && this.profile.colorIndex !== null) {
       this.colorIndex = this.profile.colorIndex;
@@ -252,48 +323,26 @@ export class Session {
 
   async refreshProfile(): Promise<ProfileDoc | null> {
     if (!this.client) return null;
-    this.profile = await this.client.query(api.players.getProfile, { clientId: this.clientId });
+    this.profile = await this.client.query(api.players.getProfile, {
+      clientId: this.clientId,
+      ...this.guestCapabilityArgs,
+    });
+    if (this.profile) {
+      this.adoptGuestCapability(this.profile);
+      this.stripGuestCredentials(this.profile);
+    }
     return this.profile;
   }
 
-  // Bank the deepest floor reached, PROGRESSIVELY, on each descend — so a run that ends by
-  // a teammate carrying on / a disconnect / a quit (never a clean full-party-wipe game over,
-  // the only thing that calls recordRun) still records its depth on the leaderboard. Fire-
-  // and-forget: a failed floor-bank must never interrupt play, and the mutation is
-  // idempotent (Math.max) so a re-bank of the same floor is harmless.
-  recordFloorProgress(floor: number): void {
-    if (!this.client || !Number.isFinite(floor) || floor < 1) return;
-    void this.client.mutation(api.players.recordFloorProgress, {
-      clientId: this.clientId,
-      floor: Math.floor(floor),
-    }).catch(() => { /* never let a depth-bank failure interrupt the run */ });
-  }
-
-  async recordRun(result: RunResult): Promise<ProfileDoc | null> {
-    if (!this.client) return null;
-    try {
-      this.profile = await this.client.mutation(api.players.recordRun, {
-        clientId: this.clientId,
-        floor: result.floor,
-        kills: result.kills,
-        coins: result.coins,
-        // The authoritative run FACTS — the server banks Amber from these (never a client
-        // amber number). floorsCleared/bossKills come from the sim's own descend/kill events.
-        floorsCleared: result.floorsCleared,
-        bossKills: result.bossKills,
-        isCacheArmed: result.isCacheArmed,
-        amberWindfall: result.amberWindfall,
-        outcome: result.outcome,
-        durationMs: Math.round(result.durationMs),
-        // The run's final build rides along for the player's leaderboard entry (ids only —
-        // display names resolve client-side from the weapon/item catalogs).
-        build: {
-          weapons: (result.build?.weapons ?? []).map((w) => w.id),
-          items: (result.build?.items ?? []).map((it) => ({ id: it.id, count: it.count })),
-        },
-      });
-    } catch {
-      // Never let a stats-save failure interrupt the play loop.
+  async refreshVerifiedProgress(previousGamesPlayed: number): Promise<ProfileDoc | null> {
+    if (!this.client) return this.profile;
+    for (const delayMs of [0, 100, 250, 500, 1000]) {
+      if (delayMs > 0) await new Promise((resolve) => setTimeout(resolve, delayMs));
+      try {
+        const profile = await this.refreshProfile();
+        if (profile && profile.gamesPlayed > previousGamesPlayed) return profile;
+      } catch {
+      }
     }
     return this.profile;
   }
@@ -304,13 +353,93 @@ export class Session {
     return this.profile?.equippedPet ?? null;
   }
 
+  get lastKitId(): PlayableKitId {
+    const saved = this.profile?.lastKitId;
+    return saved && isKitId(saved) && saved !== "none" ? saved : getSelectedKit();
+  }
+
+  get rememberedKit(): RememberedKit {
+    const saved = this.profile?.lastKitId;
+    const profileSelection = saved && isKitId(saved) && saved !== "none"
+      ? { isRemembered: true, kitId: saved } as const
+      : null;
+    if (this.profile?.isAccount && profileSelection) return profileSelection;
+    const local = getSelectedKitSelection();
+    if (local.isRemembered) return local;
+    return profileSelection ?? local;
+  }
+
+  get rememberedPet(): RememberedPet {
+    if (this.profile?.isAccount && this.profile.lastKitId) {
+      return { isRemembered: true, petId: this.profile.equippedPet ?? null };
+    }
+    const local = getRememberedPet();
+    if (local.isRemembered) return local;
+    return {
+      isRemembered: this.profile?.lastKitId !== null && this.profile?.lastKitId !== undefined,
+      petId: this.profile?.equippedPet ?? null,
+    };
+  }
+
+  acceptConfirmedRunLoadout(loadout: RunLoadout, profile: ProfileDoc | null = this.profile): void {
+    rememberRunLoadout(loadout);
+    this.profile = profile
+      ? { ...profile, lastKitId: loadout.kitId, equippedPet: loadout.petId }
+      : null;
+  }
+
+  async confirmRunLoadout(loadout: RunLoadout): Promise<SessionLoadoutResult> {
+    if (!this.client) {
+      const level = this.profile?.masteryLevel ?? 1;
+      if (!isKitUnlocked(loadout.kitId, level)) {
+        return { ok: false, reason: "kit_locked", profile: this.profile, isOffline: true };
+      }
+      if (loadout.petId !== null) {
+        return { ok: false, reason: "offline_pet_unavailable", profile: this.profile, isOffline: true };
+      }
+      this.acceptConfirmedRunLoadout(loadout);
+      return { ok: true, profile: this.profile, isOffline: true };
+    }
+    try {
+      await this.flushIdentity();
+      const result = await this.client.mutation(api.players.confirmRunLoadout, {
+        clientId: this.clientId,
+        ...this.guestCapabilityArgs,
+        kitId: loadout.kitId,
+        petId: loadout.petId,
+        isKitChoiceMade: true,
+        isPetChoiceMade: true,
+      });
+      if (!result) {
+        return { ok: false, reason: "profile_unavailable", profile: this.profile, isOffline: false };
+      }
+      this.profile = result.profile;
+      if (!result.ok) {
+        return {
+          ok: false,
+          reason: result.reason ?? "loadout_rejected",
+          profile: result.profile,
+          isOffline: false,
+        };
+      }
+      this.acceptConfirmedRunLoadout(loadout, result.profile);
+      return { ok: true, profile: this.profile, isOffline: false };
+    } catch {
+      return { ok: false, reason: "backend_unavailable", profile: this.profile, isOffline: false };
+    }
+  }
+
   // WAVE 1 Amber Camp SPEND (server-authoritative). Buy a camp node: the server validates
   // cost/prereqs/ownership and deducts Amber, then this caches the returned profile so the UI
   // reflects the new balance + unlock. Returns the result (ok + reason) or null on failure.
   async buyNode(nodeId: string): Promise<CampMutationResult | null> {
     if (!this.client) return null;
     try {
-      const res = await this.client.mutation(api.players.buyNode, { clientId: this.clientId, nodeId });
+      const res = await this.client.mutation(api.players.buyNode, {
+        clientId: this.clientId,
+        ...this.guestCapabilityArgs,
+        nodeId,
+      });
       if (res) this.profile = res.profile;
       return res;
     } catch {
@@ -323,8 +452,15 @@ export class Session {
   async equipPet(petId: string | null): Promise<CampMutationResult | null> {
     if (!this.client) return null;
     try {
-      const res = await this.client.mutation(api.players.equipPet, { clientId: this.clientId, petId });
-      if (res) this.profile = res.profile;
+      const res = await this.client.mutation(api.players.equipPet, {
+        clientId: this.clientId,
+        ...this.guestCapabilityArgs,
+        petId,
+      });
+      if (res) {
+        this.profile = res.profile;
+        if (res.ok) rememberPet(petId);
+      }
       return res;
     } catch {
       return null;

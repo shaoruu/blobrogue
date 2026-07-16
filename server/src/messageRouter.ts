@@ -19,15 +19,15 @@ import { inputToIntent } from "./connection.js";
 import type { RoomRuntime, Seat, SessionStore, SnapshotPublisher } from "./ports.js";
 import { isKitUnlocked } from "../../src/sim/kits.js";
 import type { KitId } from "../../src/sim/kits.js";
+import type { GenerationAdmissionDecision } from "../../src/net/generationAdmission.js";
 
 const DEFAULT_WORLD_ID = "arena-1";
 const OFFER_RESENDS = 40;
-const ROOM_WORLD_PREFIX = "room:";
-
 // The room code a world id was minted from (worldIdForRoomCode), or null for non-room worlds
 // (the public default, dev worlds). Log/ops-facing only — binding always uses the full id.
 export function roomCodeOfWorldId(worldId: string): string | null {
-  return worldId.startsWith(ROOM_WORLD_PREFIX) ? worldId.slice(ROOM_WORLD_PREFIX.length) : null;
+  const match = /^(?:pvp:)?room:([^:]+)(?::g\d+)?$/.exec(worldId);
+  return match?.[1] ?? null;
 }
 
 // assertNever makes the dispatch exhaustive: a new ClientMsg variant is a COMPILE error until it
@@ -43,6 +43,8 @@ export interface RouterContext {
   sessions: SessionStore;
   publisher: SnapshotPublisher;
   codec?: Codec;
+  isAcceptingJoins?: () => boolean;
+  authorizeJoin?: (auth: AuthResult) => Promise<GenerationAdmissionDecision>;
   reject: (conn: Conn, code: string, reason: string) => void; // join reject (error + close)
   close: (conn: Conn, code: number, reason: string) => void;
 }
@@ -117,30 +119,27 @@ export class MessageRouter {
   }
 
   private onJoin(conn: Conn, msg: Extract<ClientMsg, { t: "join" }>): void {
-    if (conn.authed) {
+    if (conn.authed || conn.isAdmissionPending) {
       try { conn.ws.send(this.codec.encodeServer({ t: "error", code: "already_joined", msg: "" })); } catch { /* ignore */ }
+      return;
+    }
+    if (this.ctx.isAcceptingJoins?.() === false) {
+      this.ctx.reject(conn, "server_draining", "server update in progress");
       return;
     }
     // Strict version: must EQUAL the current protocol (no 0 / missing bypass).
     if (msg.protocol !== PROTOCOL_VERSION) { this.ctx.reject(conn, "protocol", `expected ${PROTOCOL_VERSION}`); return; }
     const auth = verifyTicket(this.ctx.config.auth, msg.ticket);
     if (!auth.ok || !auth.playerId) { this.ctx.reject(conn, "auth", auth.reason ?? "unauthorized"); return; }
-    conn.authed = true;
-    conn.authName = auth.playerId;
-    conn.displayName = auth.name ?? null;
-    conn.colorIndex = auth.colorIndex ?? null;
-    conn.hat = auth.hat ?? null;
-    conn.face = auth.face ?? null;
-    conn.pet = auth.pet ?? null;
-    // SERVER-SIDE kit-unlock gate (spec §9.5): the ticket's chosen kit is re-validated against
-    // the account's signed Mastery level. An unlocked kit stands; anything else (a client claim
-    // to an unowned kit, or a claim with no mastery proof) downgrades to GUNNER — never trusted.
-    conn.kitId = isKitUnlocked((auth.kit ?? "none") as KitId, auth.masteryLevel ?? 1)
-      ? ((auth.kit ?? "none") as KitId)
-      : "gunner";
-    // The world comes from the VERIFIED ticket: Convex mints a `wld` claim only after the
-    // player proved membership in that room, so friends sharing a code land in the same
-    // isolated world and a client can never assert a world id. No claim -> the public default.
+    const isGenerationWorld = auth.worldId !== undefined
+      && /^(?:pvp:)?room:[A-Z0-9]+:g\d+$/.test(auth.worldId);
+    const isPlayableKit = auth.kit !== undefined && auth.kit !== "none";
+    if (!this.ctx.config.auth.allowDev
+      && auth.isSyntheticVerify !== true
+      && (!isGenerationWorld || !isPlayableKit || auth.masteryLevel === undefined || auth.isPetChoiceMade !== true)) {
+      this.ctx.reject(conn, "loadout_required", "confirmed room loadout required");
+      return;
+    }
     const worldId = auth.worldId ?? DEFAULT_WORLD_ID;
     // TEMP kill switch (last line of defense): if a stale/already-minted pvp ticket somehow
     // reaches here while PVP is disabled, reject the join rather than create/bind a pvp world.
@@ -151,17 +150,71 @@ export class MessageRouter {
       this.ctx.reject(conn, PVP_DISABLED_CODE, PVP_DISABLED_MESSAGE);
       return;
     }
-    // A join presenting a resume token reclaims the reserved body instead of spawning one.
-    if (msg.resume !== undefined) { this.onResume(conn, worldId, msg.resume, auth); return; }
+    if (this.ctx.sessions.isRetired(worldId)) {
+      this.ctx.reject(conn, "run_ended", "this run generation has ended");
+      return;
+    }
+    if (isGenerationWorld && this.ctx.authorizeJoin) {
+      conn.isAdmissionPending = true;
+      void this.ctx.authorizeJoin(auth).then((decision) => {
+        conn.isAdmissionPending = false;
+        if (conn.closing) return;
+        if (this.ctx.isAcceptingJoins?.() === false) {
+          this.ctx.reject(conn, "server_draining", "server update in progress");
+          return;
+        }
+        if (!decision.isAllowed) {
+          const isRunEnded = decision.code === "generation_not_active"
+            || decision.code === "room_not_active";
+          this.ctx.reject(
+            conn,
+            isRunEnded ? "run_ended" : "admission_rejected",
+            isRunEnded ? "this run generation has ended" : "room membership changed; return to the lobby",
+          );
+          return;
+        }
+        this.bindVerifiedJoin(conn, auth, worldId, msg.resume);
+      }).catch(() => {
+        conn.isAdmissionPending = false;
+        if (!conn.closing) {
+          this.ctx.reject(conn, "admission_rejected", "online authority unavailable; retry from the lobby");
+        }
+      });
+      return;
+    }
+    this.bindVerifiedJoin(conn, auth, worldId, msg.resume);
+  }
 
-    // Plain join by an identity that still holds a seat: the player deliberately started a
-    // NEW session (fresh tab, post-expiry rejoin) — the reserved body is abandoned so the
-    // fresh spawn is never a duplicate. Continuity requires the token; identity alone never
-    // resurrects state (that would make replay rejection meaningless).
+  private bindVerifiedJoin(
+    conn: Conn,
+    auth: AuthResult,
+    worldId: string,
+    resumeToken: string | undefined,
+  ): void {
+    conn.authed = true;
+    conn.authName = auth.playerId ?? null;
+    conn.displayName = auth.name ?? null;
+    conn.colorIndex = auth.colorIndex ?? null;
+    conn.hat = auth.hat ?? null;
+    conn.face = auth.face ?? null;
+    conn.pet = auth.pet ?? null;
+    conn.kitId = isKitUnlocked((auth.kit ?? "none") as KitId, auth.masteryLevel ?? 1)
+      ? ((auth.kit ?? "none") as KitId)
+      : "gunner";
+    if (resumeToken !== undefined) {
+      this.onResume(conn, worldId, resumeToken, auth);
+      return;
+    }
     const existingRoom = this.ctx.sessions.room(worldId);
-    if (existingRoom?.discardSeat(auth.playerId)) {
-      this.ctx.metrics.counters.seatsDiscarded++;
-      conn.log.info("reserved seat discarded (plain rejoin without resume token)", { authName: auth.playerId, worldId });
+    const isSeatReserved = existingRoom
+      ? [...existingRoom.seats()].some((seat) => seat.authName === auth.playerId)
+      : false;
+    const isIdentityLive = existingRoom
+      ? [...existingRoom.conns.values()].some((other) => !other.closing && other.authName === auth.playerId)
+      : false;
+    if (isSeatReserved || isIdentityLive) {
+      this.ctx.reject(conn, "resume_required", "resume token required for this active run");
+      return;
     }
 
     conn.playerId = "p" + conn.id; // world-scoped id; auth identity kept for logs
@@ -258,6 +311,12 @@ export class MessageRouter {
   // still answerable.
   private adoptSeat(conn: Conn, seat: Seat): void {
     conn.playerId = seat.pid;
+    conn.displayName = seat.displayName;
+    conn.colorIndex = seat.colorIndex;
+    conn.hat = seat.hat;
+    conn.face = seat.face;
+    conn.pet = seat.pet;
+    conn.kitId = seat.kitId;
     conn.lastAppliedSeq = seat.lastAppliedSeq;
     conn.lastCseq = seat.lastCseq;
     conn.pendingOffer = seat.pendingOffer;
@@ -268,6 +327,12 @@ export class MessageRouter {
 
   private adoptLiveConn(conn: Conn, other: Conn): void {
     conn.playerId = other.playerId;
+    conn.displayName = other.displayName;
+    conn.colorIndex = other.colorIndex;
+    conn.hat = other.hat;
+    conn.face = other.face;
+    conn.pet = other.pet;
+    conn.kitId = other.kitId;
     conn.lastAppliedSeq = other.lastAppliedSeq;
     conn.lastCseq = other.lastCseq;
     conn.pendingOffer = other.pendingOffer;

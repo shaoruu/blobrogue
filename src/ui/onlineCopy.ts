@@ -154,11 +154,12 @@ export function inviteFailState(errMessage: string): InviteFailState {
 
 // ---- exit notes (the room-lobby status line after a run ends without a game over) ----
 
-export type OnlineExitReason = "quit" | "connect_failed" | "world_mismatch" | "party_incomplete" | "connection_lost" | "superseded" | "run_ended_away";
+export type OnlineExitReason = "quit" | "connect_failed" | "client_outdated" | "world_mismatch" | "party_incomplete" | "connection_lost" | "superseded" | "run_ended_away";
 
 export function exitNoteFor(reason: OnlineExitReason | undefined, detail?: string): string {
   switch (reason) {
     case "connect_failed": return "couldn't reach the game server \u2014 try again in a moment";
+    case "client_outdated": return "this build is out of date \u2014 refresh the page to rejoin your party";
     case "world_mismatch": return WORLD_MISMATCH_NOTE;
     case "party_incomplete": return `the party never assembled${detail ? ` \u2014 still waiting on ${detail}` : ""} \u2014 regroup and start again`;
     case "connection_lost": return `connection lost and the reconnect window ran out${detail ? ` (${detail})` : ""} \u2014 REJOIN RUN if the party is still going`;

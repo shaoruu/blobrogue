@@ -57,7 +57,7 @@ export type ConnStatus = "connecting" | "open" | "reconnecting" | "closed" | "er
 //   resume_rejected — the server refused our resume token (replay/forgery signal)
 //   connection_lost — the reconnect window ran out or the seat was gone (grace expired /
 //                     world released / server restarted): the run is unreachable, NOT a death
-export type CloseKind = "game_over" | "superseded" | "resume_rejected" | "connection_lost";
+export type CloseKind = "game_over" | "superseded" | "resume_rejected" | "connection_lost" | "client_outdated";
 
 export interface WSTransportOptions {
   url: string;
@@ -415,6 +415,11 @@ export class WSTransport implements Transport {
       this.setStatus("closed");
       return;
     }
+    if (this.rejectCode === "protocol") {
+      this.closeKind = "client_outdated";
+      this.setStatus("error");
+      return;
+    }
     if (this.isEverReady) { this.scheduleReconnect(); return; }
     this.setStatus("closed");
   }
@@ -523,7 +528,9 @@ export class WSTransport implements Transport {
       this.lastError = `${msg.code}: ${msg.msg}`;
       // Terminal join rejects (resume replay/forgery, expired seat) arrive as error frames
       // just before the server closes the socket — latch so the close routes correctly.
-      if (msg.code === "resume" || msg.code === "resume_expired") this.rejectCode = msg.code;
+      if (msg.code === "resume" || msg.code === "resume_expired" || msg.code === "protocol") {
+        this.rejectCode = msg.code;
+      }
       return;
     }
     if (msg.t === "offer") {

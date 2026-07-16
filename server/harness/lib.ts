@@ -6,6 +6,7 @@
 import { GameServer } from "../src/server.js";
 import { loadConfig, type ServerConfig } from "../src/config.js";
 import { mintTicket } from "../src/auth.js";
+import type { TicketClaims } from "../src/auth.js";
 import { createLogger } from "../src/logger.js";
 import { WSTransport, type SocketLike } from "../../src/client/wsTransport.js";
 import type { InputCmd } from "../../src/sim/input.js";
@@ -88,6 +89,11 @@ export interface BotOptions {
   world?: string;
   name?: string;
   colorIndex?: number;
+  kit?: string;
+  masteryLevel?: number;
+  pet?: string;
+  isPetChoiceMade?: boolean;
+  ticketClaims?: () => TicketClaims;
   // Reconnect tuning for the resume suite (fast backoff, scaled grace windows).
   reconnect?: { baseDelayMs?: number; maxDelayMs?: number; graceMs?: number };
 }
@@ -138,11 +144,18 @@ export class Bot {
     this.attack = o.attack;
     this.transport = new WSTransport({
       url: o.url,
-      getTicket: () => Promise.resolve(mintTicket(o.secret, o.playerId, undefined, undefined, {
-        worldId: o.world,
-        name: o.name,
-        colorIndex: o.colorIndex,
-      })),
+      getTicket: () => {
+        const claims = o.ticketClaims?.() ?? {
+          worldId: o.world,
+          name: o.name,
+          colorIndex: o.colorIndex,
+          kit: o.kit,
+          masteryLevel: o.masteryLevel,
+          pet: o.pet,
+          isPetChoiceMade: o.isPetChoiceMade,
+        };
+        return Promise.resolve(mintTicket(o.secret, o.playerId, undefined, undefined, claims));
+      },
       socketFactory: (url) => {
         if (this.isNetworkDown) return new DeadSocket();
         this.currentSocket = new LatencySocket(url, net);

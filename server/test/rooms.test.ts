@@ -5,14 +5,14 @@
 //   1. two clients whose tickets carry the SAME room world land in ONE shared world and see
 //      each other (names + colors riding the verified ticket identity onto the wire)
 //   2. different room codes are fully isolated (separate worlds, no cross-visibility)
-//   3. a claimless ticket still lands in the default/public world (old-format compat — the
-//      "solo-online" path is unaffected by rooms)
+//   3. claimless tickets remain available only to dev/test servers; production rejects them
 //   4. a signed-but-junk world claim REJECTS the join (never misroutes)
 //   5. an emptied room world is released from the registry (no per-code leak)
-//   6. the local /dev-ticket endpoint mints the same claims (two-tab dev proof)
+//   6. ended generation ids are tombstoned while the next generation remains joinable
+//   7. the local /dev-ticket endpoint mints the same claims (two-tab dev proof)
 // Run: npm run test:rooms (in server/).
 
-import { startTestServer, Bot, idle, waitUntil, sleep } from "../harness/lib.js";
+import { startTestServer, Bot, idle, waitUntil, sleep, TEST_SECRET } from "../harness/lib.js";
 import { mintTicket } from "../src/auth.js";
 import { DEFAULT_WORLD_ID } from "../src/messageRouter.js";
 import { jsonCodec, PROTOCOL_VERSION } from "../../src/net/protocol.js";
@@ -82,13 +82,28 @@ async function main(): Promise<void> {
       await waitUntil(() => a.transport.isReady() && b.transport.isReady(), 3000);
 
       // The room is already live when Cye joins (the drop-in / rejoin shape).
-      const cye = new Bot({ url: s.url, secret: s.secret, playerId: "late-c", world: "room:LATE", name: "Cye", colorIndex: 3, script: () => idle() });
+      const cye = new Bot({
+        url: s.url,
+        secret: s.secret,
+        playerId: "late-c",
+        world: "room:LATE",
+        name: "Cye",
+        colorIndex: 3,
+        kit: "phantom",
+        masteryLevel: 5,
+        pet: "doggie",
+        isPetChoiceMade: true,
+        script: () => idle(),
+      });
       cye.start();
       await waitUntil(() => cye.transport.isReady(), 3000);
       await waitUntil(() => a.transport.remotePlayers().length === 2 && cye.transport.remotePlayers().length === 2, 3000);
 
       const cyeSeenByA = a.transport.remotePlayers().find((r) => r.name === "Cye");
       check("existing members see the late joiner's ACTUAL color", cyeSeenByA?.colorIndex === 3, `color=${cyeSeenByA?.colorIndex}`);
+      check("late join safely spawns with the validated kit + cosmetic pet pair",
+        s.server.getWorld("room:LATE")?.state.players.get(cye.transport.getSelfServerId()!)?.kitId === "phantom"
+        && cyeSeenByA?.pet === "doggie");
       const seenByCye = new Map(cye.transport.remotePlayers().map((r) => [r.name, r.colorIndex]));
       check("the late joiner sees everyone's ACTUAL colors", seenByCye.get("Ada") === 2 && seenByCye.get("Bob") === 5,
         JSON.stringify([...seenByCye]));
@@ -150,6 +165,42 @@ async function main(): Promise<void> {
     } finally { await s.close(); }
   });
 
+  await test("production joins require a generation-bound combined loadout ticket", async () => {
+    const s = await startTestServer({ auth: { secret: TEST_SECRET, allowDev: false } });
+    try {
+      const ws = await rawSocket(s.url);
+      let rejectCode = "";
+      ws.on("message", (data: Buffer) => {
+        const msg = JSON.parse(data.toString("utf8")) as { t?: string; code?: string };
+        if (msg.t === "error") rejectCode = msg.code ?? "";
+      });
+      ws.send(jsonCodec.encodeClient({
+        t: "join",
+        ticket: mintTicket(s.secret, "legacy", 120),
+        protocol: PROTOCOL_VERSION,
+      }));
+      await waitUntil(() => rejectCode !== "", 2000);
+      check("claimless/default tickets are rejected outside dev", rejectCode === "loadout_required", rejectCode);
+      check("an ungated default world is never created", s.server.getWorld(DEFAULT_WORLD_ID) === undefined);
+      ws.close();
+
+      const confirmed = new Bot({
+        url: s.url,
+        secret: s.secret,
+        playerId: "confirmed",
+        world: "room:PROD:g1",
+        kit: "gunner",
+        masteryLevel: 1,
+        isPetChoiceMade: true,
+        script: () => idle(),
+      });
+      confirmed.start();
+      check("a complete signed pair joins normally",
+        await waitUntil(() => confirmed.transport.isReady(), 3000));
+      confirmed.stop();
+    } finally { await s.close(); }
+  });
+
   await test("an emptied room world is released (rooms don't accumulate server-side)", async () => {
     const s = await startTestServer();
     try {
@@ -169,6 +220,43 @@ async function main(): Promise<void> {
       const world = s.server.getWorld("room:GONE");
       check("rejoin recreates the world fresh", world !== undefined && world.state.floor === 1 && world.playerCount === 1);
       b.stop();
+    } finally { await s.close(); }
+  });
+
+  await test("an ended generation is tombstoned while the next generation can start", async () => {
+    const s = await startTestServer();
+    try {
+      const first = new Bot({
+        url: s.url, secret: s.secret, playerId: "gen-a",
+        world: "room:GENS:g1", kit: "gunner", masteryLevel: 1,
+        script: () => idle(),
+      });
+      first.start();
+      await waitUntil(() => first.transport.isReady(), 3000);
+      first.stop();
+      await waitUntil(() => s.server.getWorld("room:GENS:g1") === undefined, 2000);
+
+      const stale = new Bot({
+        url: s.url, secret: s.secret, playerId: "gen-stale",
+        world: "room:GENS:g1", kit: "gunner", masteryLevel: 1,
+        script: () => idle(),
+      });
+      stale.start();
+      await waitUntil(() => (stale.transport.lastError ?? "").includes("run_ended"), 2000);
+      check("a still-valid old ticket cannot recreate its ended generation",
+        s.server.getWorld("room:GENS:g1") === undefined
+        && (stale.transport.lastError ?? "").includes("run_ended"));
+
+      const next = new Bot({
+        url: s.url, secret: s.secret, playerId: "gen-b",
+        world: "room:GENS:g2", kit: "mender", masteryLevel: 1,
+        script: () => idle(),
+      });
+      next.start();
+      check("the next confirmed generation remains independently joinable",
+        await waitUntil(() => next.transport.isReady(), 3000));
+      stale.stop();
+      next.stop();
     } finally { await s.close(); }
   });
 

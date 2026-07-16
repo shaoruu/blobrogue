@@ -72,11 +72,33 @@ async function main(): Promise<void> {
     const graceMs = 2500;
     const s = await startTestServer({ resumeGraceMs: graceMs });
     try {
-      const bot = new Bot({ url: s.url, secret: s.secret, playerId: "resume-id", world: "room:RSME", name: "Blipper", colorIndex: 3, script: () => idle(), reconnect: { ...FAST, graceMs } });
+      let requestedKit = "phantom";
+      let requestedPet: string | undefined = "doggie";
+      const bot = new Bot({
+        url: s.url,
+        secret: s.secret,
+        playerId: "resume-id",
+        script: () => idle(),
+        reconnect: { ...FAST, graceMs },
+        ticketClaims: () => ({
+          worldId: "room:RSME",
+          name: "Blipper",
+          colorIndex: 3,
+          kit: requestedKit,
+          masteryLevel: 5,
+          pet: requestedPet,
+          isPetChoiceMade: true,
+        }),
+      });
       bot.start();
       await waitUntil(() => bot.transport.isReady(), 3000);
       const world = s.server.getWorld("room:RSME")!;
       const pid = bot.transport.getSelfServerId()!;
+      check("the active run starts with its validated Phantom + Doggie pair",
+        world.state.players.get(pid)?.kitId === "phantom"
+        && [...world.conns.values()][0]?.pet === "doggie");
+      requestedKit = "gunner";
+      requestedPet = undefined;
 
       // A run worth losing: coins, FRACTIONAL damage taken (an exact-state resume proves no
       // heal and no rounding), an extra weapon, stacked blessings, and a position away from
@@ -116,6 +138,10 @@ async function main(): Promise<void> {
           && Math.abs(self.x - wantX) < 1 && Math.abs(self.y - wantY) < 1,
           `hp=${self?.hp} coins=${self?.coins}`);
         check(`[${outageMs}ms] body is present again (targetable/damageable)`, world.state.players.get(pid)?.isAbsent === false);
+        check(`[${outageMs}ms] reconnect ignores changed ticket convenience and restores the run-bound pair`,
+          world.state.players.get(pid)?.kitId === "phantom"
+          && [...world.conns.values()][0]?.kitId === "phantom"
+          && [...world.conns.values()][0]?.pet === "doggie");
         const seat = bot.transport.getWorldRoster().find((r) => r.aid === "resume-id");
         check(`[${outageMs}ms] the resumed player keeps their real identity (name + chosen color)`,
           seat?.nm === "Blipper" && seat?.cl === 3, `nm=${seat?.nm} cl=${seat?.cl}`);

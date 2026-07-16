@@ -1,5 +1,8 @@
 import { mutation, query } from "./_generated/server";
 import { v } from "convex/values";
+import { pvpWorldIdForRoomCode, worldIdForRoomCode } from "./gsTicketCore";
+import { loadoutBlockerForMember } from "./lobbyLoadoutCore";
+import { resolveAuthorizedPlayer } from "./guestAuth";
 
 const STALE_MS = 12000;   // hide players whose client stopped syncing
 const REVIVE_HP = 2;
@@ -23,6 +26,8 @@ export const update = mutation({
     kills: v.number(),
   },
   handler: async (ctx, args) => {
+    const room = await ctx.db.get(args.roomId);
+    if (!room || room.kind === "online") return;
     const row = await ctx.db
       .query("presence")
       .withIndex("by_room_player", (q) => q.eq("roomId", args.roomId).eq("playerId", args.playerId))
@@ -48,7 +53,7 @@ export const list = query({
     const rows = await ctx.db.query("presence").withIndex("by_room", (q) => q.eq("roomId", roomId)).collect();
     const cutoff = Date.now() - STALE_MS;
     return rows
-      .filter((r) => r.updatedAt >= cutoff)
+      .filter((r) => r.updatedAt >= cutoff && r.isDeparted !== true)
       .map((r) => ({
         playerId: r.playerId,
         name: r.name,
@@ -70,6 +75,12 @@ export const list = query({
         gsJoinedAt: r.gsJoinedAt ?? null,
         isReady: r.isReady ?? false,
         pingMs: r.pingMs ?? null,
+        loadoutKitId: r.loadoutKitId ?? null,
+        loadoutPetId: r.loadoutPetId ?? null,
+        isKitChoiceMade: r.isKitChoiceMade ?? false,
+        isPetChoiceMade: r.isPetChoiceMade ?? false,
+        isLoadoutConfirmed: r.isLoadoutConfirmed ?? false,
+        loadoutGeneration: r.loadoutGeneration ?? null,
       }));
   },
 });
@@ -100,14 +111,36 @@ export const onlineCount = query({
 // The lobby READY toggle (roster shows READY/NOT READY per member; the host's START opens
 // when everyone is ready — see the menu's start gate).
 export const setReady = mutation({
-  args: { roomId: v.id("rooms"), playerId: v.id("players"), isReady: v.boolean() },
-  handler: async (ctx, { roomId, playerId, isReady }) => {
+  args: {
+    roomId: v.id("rooms"),
+    clientId: v.string(),
+    guestCapability: v.optional(v.string()),
+    isReady: v.boolean(),
+  },
+  handler: async (ctx, { roomId, clientId, guestCapability, isReady }) => {
+    const player = await resolveAuthorizedPlayer(ctx, clientId, guestCapability, "room");
     const row = await ctx.db
       .query("presence")
-      .withIndex("by_room_player", (q) => q.eq("roomId", roomId).eq("playerId", playerId))
+      .withIndex("by_room_player", (q) => q.eq("roomId", roomId).eq("playerId", player._id))
       .unique();
-    if (!row) return;
+    if (!row || row.isDeparted === true) return { ok: false as const, reason: "not_in_room" as const };
+    const room = await ctx.db.get(roomId);
+    if (!room || room.status !== "lobby") {
+      return { ok: false as const, reason: "not_in_room" as const };
+    }
+    if (isReady) {
+      const generation = room.loadoutGeneration ?? 1;
+      const blocker = loadoutBlockerForMember(row, generation);
+      if (blocker) {
+        return {
+          ok: false as const,
+          reason: "loadout_missing" as const,
+          message: blocker.message,
+        };
+      }
+    }
     await ctx.db.patch(row._id, { isReady: isReady ? true : undefined, updatedAt: Date.now() });
+    return { ok: true as const };
   },
 });
 
@@ -117,11 +150,26 @@ export const setReady = mutation({
 // snapshot — it powers the lobby's per-member LOBBY / CONNECTING / CONNECTED readout, while
 // in-run readiness always keys on the server's snapshot roster directly.
 export const reportWorld = mutation({
-  args: { roomId: v.id("rooms"), playerId: v.id("players"), worldId: v.union(v.string(), v.null()) },
-  handler: async (ctx, { roomId, playerId, worldId }) => {
+  args: {
+    roomId: v.id("rooms"),
+    clientId: v.string(),
+    guestCapability: v.optional(v.string()),
+    generation: v.number(),
+    worldId: v.union(v.string(), v.null()),
+  },
+  handler: async (ctx, { roomId, clientId, guestCapability, generation, worldId }) => {
+    const player = await resolveAuthorizedPlayer(ctx, clientId, guestCapability, "room");
+    const room = await ctx.db.get(roomId);
+    if (!room || room.kind !== "online" || room.generationState !== "active") return;
+    const currentGeneration = room.loadoutGeneration ?? 1;
+    if (generation !== currentGeneration) return;
+    const expectedWorldId = room.mode === "pvp"
+      ? pvpWorldIdForRoomCode(room.code, currentGeneration)
+      : worldIdForRoomCode(room.code, currentGeneration);
+    if (worldId !== null && worldId !== expectedWorldId) return;
     const row = await ctx.db
       .query("presence")
-      .withIndex("by_room_player", (q) => q.eq("roomId", roomId).eq("playerId", playerId))
+      .withIndex("by_room_player", (q) => q.eq("roomId", roomId).eq("playerId", player._id))
       .unique();
     if (!row) return;
     const now = Date.now();
@@ -134,6 +182,8 @@ export const reportWorld = mutation({
 export const revive = mutation({
   args: { roomId: v.id("rooms"), targetPlayerId: v.id("players") },
   handler: async (ctx, { roomId, targetPlayerId }) => {
+    const room = await ctx.db.get(roomId);
+    if (!room || room.kind === "online") return;
     const row = await ctx.db
       .query("presence")
       .withIndex("by_room_player", (q) => q.eq("roomId", roomId).eq("playerId", targetPlayerId))

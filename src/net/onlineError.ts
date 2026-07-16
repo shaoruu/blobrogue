@@ -17,6 +17,12 @@ import { ConvexError, type Value } from "convex/values";
 import { PvpDisabledError } from "./pvpFlag.js";
 
 const CONVEX_ERROR_TAG = Symbol.for("ConvexError");
+const UPDATE_REQUIRED_CODES = new Set([
+  "guest_capability_required",
+  "guest_capability_invalid",
+  "account_auth_required",
+]);
+const UPDATE_REQUIRED_MESSAGE = "This build is out of date — refresh the page to continue";
 
 export interface NormalizedOnlineError {
   // The stable machine code from a typed error (e.g. "pvp_disabled"), else null.
@@ -68,7 +74,11 @@ export function normalizeOnlineError(err: unknown, fallback = "something went wr
     const data = convexErrorData(err);
     if (data !== undefined) {
       const parsed = fromConvexData(data);
-      if (parsed !== null) return parsed;
+      if (parsed !== null) {
+        return parsed.code && UPDATE_REQUIRED_CODES.has(parsed.code)
+          ? { code: "client_outdated", message: UPDATE_REQUIRED_MESSAGE }
+          : parsed;
+      }
     }
     const frame = fromWsErrorFrame(err);
     if (frame !== null) return { code: frame.code, message: frame.message.length > 0 ? frame.message : fallback };

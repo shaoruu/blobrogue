@@ -182,7 +182,7 @@ function serverRoundTripTests(): void {
     { id: 6, kind: "aegis", owner: "pMe", fx: "sawnoff", x: 140, y: 150, life: 3.2, maxLife: 4.0, radius: 110, hp: 9, maxHp: 12 },
   );
   const events: WireEvent[] = [
-    { id: 7, e: { t: "enemyKill", eid: 1, kind: "slime", tier: "swarm", x: 10, y: 20, combo: 3 } },
+    { id: 7, e: { t: "enemyKill", eid: 1, kind: "slime", tier: "swarm", x: 10, y: 20, combo: 3, by: "p1" } },
     { id: 8, e: { t: "descend", toFloor: 3 } },
     { id: 9, e: { t: "gameOver", pid: "pMe" } },
     { id: 10, e: { t: "weaponDrop", weapon: "railgun", x: 33, y: 44 } },
@@ -274,7 +274,7 @@ function serverRoundTripTests(): void {
 // who is actually there (the Sev-0 readout).
 function worldBindingWireTests(): void {
   section("v4: authoritative world id + roster are required, strict, and round-trip");
-  check("protocol version covers authoritative PvP protection endpoints (v32)", PROTOCOL_VERSION === 32, `v=${PROTOCOL_VERSION}`);
+  check("protocol version covers the authority-plane hard cut (v33)", PROTOCOL_VERSION === 33, `v=${PROTOCOL_VERSION}`);
   check("room code maps to its world id", worldIdForRoomCode(" abcd ") === "room:ABCD");
   check("room world ids pass the shared charset gate", isValidWorldId(worldIdForRoomCode("ZZZZ")) && isValidWorldId("arena-1"));
   check("junk world ids fail the shared charset gate", !isValidWorldId("room:../../etc") && !isValidWorldId(""));
@@ -543,7 +543,7 @@ function eventScopeTests(): void {
     [{ t: "descend", toFloor: 2 }, "global"],
     [{ t: "bossPhase", eid: 3, x: 5, y: 6 }, "global"],
     [{ t: "gameOver", pid: "p1" }, "pid"],
-    [{ t: "enemyKill", eid: 1, kind: "slime", tier: "standard", x: 3, y: 4, combo: 0 }, "pos"],
+    [{ t: "enemyKill", eid: 1, kind: "slime", tier: "standard", x: 3, y: 4, combo: 0, by: "p1" }, "pos"],
     [{ t: "weaponDrop", weapon: "railgun", x: 5, y: 6 }, "pos"],
     // v18 ult casts are positional (nearby clients render the cast FX).
     [{ t: "ultOverdrive", pid: "p7", x: 1, y: 2, durationTicks: 100 }, "pos"],

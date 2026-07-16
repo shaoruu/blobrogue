@@ -23,7 +23,12 @@
 // Run: npm run test:menu
 
 import "./harness/domShim.js";
-import { fireWindowEvent, lastFocused } from "./harness/domShim.js";
+import {
+  fireWindowEvent,
+  lastFocused,
+  lastWindowDispatchCount,
+  windowListenerCount,
+} from "./harness/domShim.js";
 import { readFileSync, existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
@@ -40,12 +45,13 @@ import { worldIdForRoomCode } from "../src/net/protocol.js";
 import { WEAPONS } from "../src/sim/weapons.js";
 import { itemById } from "../src/sim/items.js";
 import { getSelectedKit, setSelectedKit } from "../src/net/kitSelection.js";
+import type { RunLoadout } from "../src/net/kitSelection.js";
 import { NUDGE_DISMISSED_AT_KEY, NUDGE_SHOWN_AT_KEY } from "../src/ui/signinNudge.js";
-import { padActions } from "../src/ui/menuGamepad.js";
+import { gridTargetIndex, padActions } from "../src/ui/menuGamepad.js";
 import { CHANGELOG, LATEST_VERSION } from "../src/generated/changelog.js";
 import {
   COPY_INVITE_LABEL, INVITE_COPIED_LABEL, INVITE_SHARED_LABEL, INVITE_COPY_FAILED_LABEL,
-  INVITE_OFFLINE_NOTE, INVITE_UNREACHABLE_NOTE, INVITE_TRY_AGAIN_LABEL, ARENA_LABEL, ARENA_PATCHING_LABEL,
+  INVITE_OFFLINE_NOTE, INVITE_UNREACHABLE_NOTE, ARENA_LABEL, ARENA_PATCHING_LABEL,
 } from "../src/ui/onlineCopy.js";
 import { PVP_PUBLIC_ENABLED, PVP_DISABLED_MESSAGE } from "../src/net/pvpFlag.js";
 
@@ -148,6 +154,10 @@ interface EnsureArgs {
   name?: string;
   colorIndex?: number;
   cosmetics?: Partial<Record<"hat" | "face" | "body" | "title", string>>;
+  kitId?: string;
+  petId?: string | null;
+  isKitChoiceMade?: boolean;
+  isPetChoiceMade?: boolean;
 }
 
 // One deferred ensurePlayer write the test settles by hand (the rapid-switch suite).
@@ -155,6 +165,10 @@ interface PendingPersist {
   args: EnsureArgs;
   resolveEcho: () => void;
   fail: () => void;
+}
+
+interface PendingLoadoutPersist {
+  resolveSuccess: () => void;
 }
 
 interface FakeOpts {
@@ -166,6 +180,8 @@ interface FakeOpts {
   // the real backend), "static" (the fixture untouched — a server refusing every pick),
   // "fail" (network failure), "manual" (the test settles each write by hand, in any order).
   persist?: "echo" | "static" | "fail" | "manual";
+  loadoutPersist?: "ok" | "fail" | "manual" | "pet_rejected";
+  isLoadoutPreserved?: boolean;
   // The rooms:join answer for invite tests: a joined room, or the server's real refusal.
   // Read at CALL time, so a test can flip it between attempts (the TRY AGAIN path).
   join?: { code: string; status: "lobby" | "playing" } | "full" | "ended" | "missing" | "classic" | "error";
@@ -174,6 +190,7 @@ interface FakeOpts {
 interface FakeConvex {
   client: ConvexClient;
   pendingPersists: PendingPersist[];
+  pendingLoadoutPersists: PendingLoadoutPersist[];
   mutationCalls: () => number;
 }
 
@@ -183,6 +200,7 @@ interface FakeConvex {
 function fakeConvex(opts: FakeOpts = {}, calls: string[] = []): FakeConvex {
   const profile = opts.profile ?? PROFILE;
   const pendingPersists: PendingPersist[] = [];
+  const pendingLoadoutPersists: PendingLoadoutPersist[] = [];
   let mutationCount = 0;
   const echo = (args: EnsureArgs): ProfileDoc => {
     const cosmetics = { ...profile.cosmetics };
@@ -204,7 +222,48 @@ function fakeConvex(opts: FakeOpts = {}, calls: string[] = []): FakeConvex {
         if (opts.join === "missing") return Promise.reject(new Error("no room with that code"));
         if (opts.join === "classic") return Promise.reject(new Error("that code is a classic co-op room"));
         if (opts.join === "error" || opts.join === undefined) return Promise.reject(new Error("boom"));
-        return Promise.resolve({ roomId: "room-doc-1", code: opts.join.code, seed: 1, floor: 1, status: opts.join.status });
+        return Promise.resolve({
+          roomId: "room-doc-1", code: opts.join.code, seed: 1, floor: 1,
+          status: opts.join.status, loadoutGeneration: 1,
+          kitId: args?.kitId ?? "gunner", petId: args?.petId ?? null,
+        });
+      }
+      if (name === "players:confirmRunLoadout") {
+        mutationCount++;
+        if (opts.loadoutPersist === "fail") return Promise.reject(new Error("offline"));
+        const result = {
+          ok: true,
+          profile: {
+            ...profile,
+            lastKitId: args?.kitId ?? "gunner",
+            equippedPet: args?.petId ?? null,
+          },
+        };
+        if (opts.loadoutPersist === "pet_rejected" && args?.petId !== null) {
+          return Promise.resolve({ ok: false, reason: "pet_unowned", profile });
+        }
+        if (opts.loadoutPersist === "manual") {
+          return new Promise((resolve) => {
+            pendingLoadoutPersists.push({ resolveSuccess: () => resolve(result) });
+          });
+        }
+        return Promise.resolve(result);
+      }
+      if (name === "players:prepareSignOutGuest") {
+        mutationCount++;
+        return Promise.resolve({
+          ...profile,
+          playerId: "signed-out-guest",
+          isAccount: false,
+          guestCapability: "signed-out-capability",
+          guestRefreshCapability: "signed-out-refresh-capability",
+          totalKills: 0,
+          deepestFloor: 0,
+          totalCoins: 0,
+          gamesPlayed: 0,
+          amber: 0,
+          unlocks: [],
+        });
       }
       if (name === "players:setCustomName") {
         // The account custom-name override: the server echoes the sanitized name as the
@@ -246,7 +305,12 @@ function fakeConvex(opts: FakeOpts = {}, calls: string[] = []): FakeConvex {
     action: () => Promise.resolve({ ticket: "t", playerId: profile.playerId }),
     onUpdate: () => () => {},
   };
-  return { client: fake as unknown as ConvexClient, pendingPersists, mutationCalls: () => mutationCount };
+  return {
+    client: fake as never as ConvexClient,
+    pendingPersists,
+    pendingLoadoutPersists,
+    mutationCalls: () => mutationCount,
+  };
 }
 
 type FakeAuth = AuthClient & { fire(): void; setSignedIn(v: boolean): void; setCompleting(v: boolean): void; signInWithGoogle: () => Promise<void> };
@@ -273,8 +337,10 @@ function makeMenu(opts: FakeOpts & { auth?: AuthClient | null } = {}): {
   menu: Menu;
   overlay: ShimNode;
   launches: LaunchRecord[];
+  soloLaunches: RunLoadout[];
   session: Session;
   pendingPersists: PendingPersist[];
+  pendingLoadoutPersists: PendingLoadoutPersist[];
   mutationCalls: () => number;
   calls: string[];
 } {
@@ -282,6 +348,7 @@ function makeMenu(opts: FakeOpts & { auth?: AuthClient | null } = {}): {
   // previous section must never leak into a fresh session.
   localStorage.removeItem("blobrogue.cosmetics");
   localStorage.removeItem("blobrogue.color");
+  if (!opts.isLoadoutPreserved) localStorage.removeItem("blobrogue.lastPetId");
   localStorage.removeItem("blobrogue.closet.seenUnlocks");
   // Sections run as an already-confirmed guest so online flows land on the surfaces under
   // test; the one-time name gate has its own sections (which clear this latch explicitly).
@@ -291,32 +358,41 @@ function makeMenu(opts: FakeOpts & { auth?: AuthClient | null } = {}): {
   const convex = fakeConvex(opts, calls);
   const session = new Session(convex.client);
   const launches: LaunchRecord[] = [];
+  const soloLaunches: RunLoadout[] = [];
   const host: MenuHost = {
-    startSolo() {},
+    startSolo(_profile, loadout) { soloLaunches.push(loadout); },
     startOnline(lobby, _profile, isPartyStart) {
       launches.push({ code: lobby.code, isPartyStart });
     },
   };
   const menu = new Menu(overlay as unknown as HTMLElement, session, convex.client, opts.auth ?? null, host);
-  return { menu, overlay, launches, session, pendingPersists: convex.pendingPersists, mutationCalls: convex.mutationCalls, calls };
+  return {
+    menu, overlay, launches, soloLaunches, session,
+    pendingPersists: convex.pendingPersists,
+    pendingLoadoutPersists: convex.pendingLoadoutPersists,
+    mutationCalls: convex.mutationCalls,
+    calls,
+  };
 }
 
 // A lobby double exposing exactly the surface showOnlineLobby reads. Kept as a plain object
 // (cast) so the test controls roster/status without Convex.
-function fakeLobby(code: string, selfId = "player-1"): {
+function fakeLobby(code: string, selfId = "player-1", isQuickPlay = false): {
   lobby: OnlineLobby;
   setStatus: (s: "lobby" | "playing" | "ended") => void;
   setPlayers: (p: LobbyPlayer[]) => void;
   fireChange: () => void;
   readyCalls: boolean[];
+  startCalls: () => number;
 } {
   let onChange: (() => void) | null = null;
   const readyCalls: boolean[] = [];
+  let startCallCount = 0;
   const state = {
     code,
     status: "lobby" as "lobby" | "playing" | "ended",
     hostPlayerId: "player-1",
-    isQuickPlay: false,
+    isQuickPlay,
     rows: [] as LobbyPlayer[],
   };
   const lobby = {
@@ -324,17 +400,73 @@ function fakeLobby(code: string, selfId = "player-1"): {
     get status() { return state.status; },
     get hostPlayerId() { return state.hostPlayerId; },
     get isQuickPlay() { return state.isQuickPlay; },
+    get loadoutGeneration() { return 1; },
     get selfId() { return selfId; },
     get isHost() { return selfId === state.hostPlayerId; },
     get isActive() { return state.status !== "ended"; },
     get isSelfReady() { return state.rows.find((r) => r.playerId === selfId)?.isReady ?? false; },
-    get isPartyReady() { return state.rows.every((p) => p.isHost || p.isReady); },
+    get isSelfLoadoutConfirmed() { return state.rows.find((r) => r.playerId === selfId)?.isLoadoutConfirmed ?? false; },
+    get selfLoadout() {
+      const row = state.rows.find((candidate) => candidate.playerId === selfId);
+      return row?.kitId ? { kitId: row.kitId, petId: row.petId } : null;
+    },
+    get selfPreselection() {
+      const row = state.rows.find((candidate) => candidate.playerId === selfId);
+      return row?.kitId ? { kitId: row.kitId, petId: row.petId } : null;
+    },
+    get isPartyReady() { return state.rows.every((p) => p.isLoadoutConfirmed && p.isReady); },
     players: () => state.rows,
     expectedWorldId: () => worldIdForRoomCode(state.code),
     onChange: (cb: () => void) => { onChange = cb; return () => { onChange = null; }; },
-    setReady: (isReady: boolean) => { readyCalls.push(isReady); },
-    start: () => Promise.resolve(),
-    reopen: () => Promise.resolve(),
+    setReady: (isReady: boolean) => {
+      readyCalls.push(isReady);
+      const row = state.rows.find((candidate) => candidate.playerId === selfId);
+      if (row) row.isReady = isReady;
+      return Promise.resolve(null);
+    },
+    start: () => { startCallCount++; return Promise.resolve(null); },
+    beginLoadoutEdit: () => {
+      const row = state.rows.find((candidate) => candidate.playerId === selfId);
+      if (row) {
+        readyCalls.push(false);
+        row.isKitChoiceMade = false;
+        row.isPetChoiceMade = false;
+        row.isLoadoutConfirmed = false;
+        row.isReady = false;
+      }
+      return Promise.resolve(null);
+    },
+    chooseDraftKit: (kitId: string) => {
+      const row = state.rows.find((candidate) => candidate.playerId === selfId);
+      if (row) {
+        row.kitId = kitId;
+        row.isKitChoiceMade = true;
+        row.isLoadoutConfirmed = false;
+        row.isReady = false;
+      }
+    },
+    chooseDraftPet: (petId: string | null) => {
+      const row = state.rows.find((candidate) => candidate.playerId === selfId);
+      if (row) {
+        row.petId = petId;
+        row.isPetChoiceMade = true;
+        row.isLoadoutConfirmed = false;
+        row.isReady = false;
+      }
+    },
+    confirmLoadout: (loadout: RunLoadout) => {
+      const row = state.rows.find((candidate) => candidate.playerId === selfId);
+      if (row) {
+        row.kitId = loadout.kitId;
+        row.petId = loadout.petId;
+        row.isKitChoiceMade = true;
+        row.isPetChoiceMade = true;
+        row.isLoadoutConfirmed = true;
+        row.isReady = false;
+      }
+      return Promise.resolve(null);
+    },
+    reopen: () => Promise.resolve(true),
     leave: () => {},
     reportWorld: () => {},
     mintTicket: () => Promise.resolve("ticket"),
@@ -345,19 +477,108 @@ function fakeLobby(code: string, selfId = "player-1"): {
     setPlayers: (p) => { state.rows = p; },
     fireChange: () => onChange?.(),
     readyCalls,
+    startCalls: () => startCallCount,
   };
 }
 
 function member(playerId: string, name: string, opts: Partial<LobbyPlayer> = {}): LobbyPlayer {
   return {
     playerId, name, colorIndex: 2, isHost: playerId === "player-1",
-    gsWorldId: null, isReady: false, pingMs: null, ...opts,
+    gsWorldId: null, isReady: false, pingMs: null,
+    kitId: "gunner", petId: null,
+    isKitChoiceMade: true, isPetChoiceMade: true, isLoadoutConfirmed: true,
+    ...opts,
   };
 }
 
 const RUN = { floor: 3, kills: 12, coins: 7, amber: 0, durationMs: 61_000 };
 
+function reachLoadoutReview(
+  overlay: ShimNode,
+  kitId = "gunner",
+  petId = "none",
+): void {
+  const kit = byClass(overlay, "kit-option").find((card) => card.getAttribute?.("data-kit") === kitId);
+  kit?.onclick?.();
+  collect(overlay, (node) => node.tagName === "BUTTON" && textOf(node).includes("NEXT · CHOOSE PET"))[0]?.onclick?.();
+  const pet = byClass(overlay, "pet-option").find((card) => card.getAttribute?.("data-pet") === petId);
+  pet?.onclick?.();
+  byClass(overlay, "loadout-review-next")[0]?.onclick?.();
+}
+
+async function passLoadoutGate(
+  overlay: ShimNode,
+  kitId = "gunner",
+  petId = "none",
+): Promise<void> {
+  reachLoadoutReview(overlay, kitId, petId);
+  byClass(overlay, "loadout-confirm")[0]?.onclick?.();
+  await settle();
+  await settle();
+}
+
 async function main(): Promise<void> {
+  section("loadout nodes keep exactly one keyboard handler");
+  {
+    localStorage.removeItem("blobrogue.selectedKit");
+    localStorage.removeItem("blobrogue.lastPetId");
+    const { menu, overlay } = makeMenu();
+    await menu.showTitle();
+    const baselineKeydownListeners = windowListenerCount("keydown");
+    collect(overlay, (node) => node.tagName === "BUTTON" && textOf(node) === "PLAY SOLO")[0]?.onclick?.();
+    await settle();
+    await settle();
+    check("KIT installs one loadout handler",
+      windowListenerCount("keydown") === baselineKeydownListeners + 1);
+
+    fireWindowEvent("keydown", { key: "2" });
+    check("one number key invokes one loadout callback",
+      lastWindowDispatchCount() - baselineKeydownListeners === 1
+      && windowListenerCount("keydown") === baselineKeydownListeners + 1);
+    check("the one number action selects Mender once",
+      byClass(overlay, "kit-option").filter((card) => (
+        card.getAttribute?.("data-kit") === "mender"
+        && (card.className ?? "").includes("selected")
+      )).length === 1);
+
+    collect(overlay, (node) => node.tagName === "BUTTON" && textOf(node).includes("NEXT · CHOOSE PET"))[0]?.onclick?.();
+    check("PET replaces the KIT handler instead of stacking",
+      textOf(overlay).includes("CHOOSE YOUR PET")
+      && windowListenerCount("keydown") === baselineKeydownListeners + 1);
+    fireWindowEvent("keydown", { key: "1" });
+    check("PET number selection still invokes one loadout callback",
+      lastWindowDispatchCount() - baselineKeydownListeners === 1
+      && windowListenerCount("keydown") === baselineKeydownListeners + 1);
+    byClass(overlay, "loadout-review-next")[0]?.onclick?.();
+    check("REVIEW replaces the PET handler instead of stacking",
+      textOf(overlay).includes("REVIEW LOADOUT")
+      && windowListenerCount("keydown") === baselineKeydownListeners + 1);
+
+    await settle();
+    const focusedBeforeTab = lastFocused();
+    fireWindowEvent("keydown", { key: "Tab" });
+    check("Tab invokes one callback and performs one focus action",
+      lastWindowDispatchCount() - baselineKeydownListeners === 1
+      && windowListenerCount("keydown") === baselineKeydownListeners + 1
+      && lastFocused() !== focusedBeforeTab);
+    fireWindowEvent("keydown", { key: "Escape" });
+    check("one Escape returns REVIEW → PET only",
+      textOf(overlay).includes("CHOOSE YOUR PET")
+      && windowListenerCount("keydown") === baselineKeydownListeners + 1
+      && lastWindowDispatchCount() - baselineKeydownListeners === 1);
+    fireWindowEvent("keydown", { key: "Escape" });
+    check("one Escape returns PET → KIT only",
+      textOf(overlay).includes("CHOOSE YOUR KIT")
+      && windowListenerCount("keydown") === baselineKeydownListeners + 1
+      && lastWindowDispatchCount() - baselineKeydownListeners === 1);
+    fireWindowEvent("keydown", { key: "Escape" });
+    check("one Escape returns KIT → origin with no orphan",
+      buttonsOf(overlay).some((button) => button.includes("PLAY SOLO"))
+      && !textOf(overlay).includes("CHOOSE YOUR")
+      && windowListenerCount("keydown") === baselineKeydownListeners
+      && lastWindowDispatchCount() - baselineKeydownListeners === 1);
+  }
+
   section("one multiplayer path: the title offers exactly PLAY ONLINE + PLAY SOLO");
   {
     const { menu, overlay } = makeMenu();
@@ -419,14 +640,313 @@ async function main(): Promise<void> {
     check("the pick persists for guests (plain localStorage, no account)", getSelectedKit() === "mender");
     await menu.showTitle();
     check("the chip reflects the changed kit on re-render", textOf(chip()).includes("MENDER") && chip()?.getAttribute?.("data-kit") === "mender");
-    // The chip's door: the standalone picker reuses the SAME kit cards as the lobby, on its own
-    // screen (discoverable + changeable, never a blocking modal).
+    // The chip opens the same mandatory two-step chooser, but saving this convenience does
+    // not authorize a run.
     await menu.showKitPicker();
-    const cards = byClass(overlay, "kit-card");
+    const cards = byClass(overlay, "kit-option");
     check("the kit picker screen renders all four kit cards", cards.length === 4, `cards=${cards.length}`);
-    check("the picker marks the current selection", cards.some((c) => (c.className ?? "").includes("sel") && textOf(c).includes("Mender")));
+    check("the remembered kit is visibly LAST USED, not silently confirmed",
+      cards.some((card) => (card.className ?? "").includes("last-used") && textOf(card).includes("MENDER")));
+    check("NEXT stays disabled until the player explicitly selects a card",
+      collect(overlay, (node) => node.tagName === "BUTTON" && textOf(node).includes("NEXT"))[0]?.disabled === true);
     check("the picker offers a back door to the title", buttonsOf(overlay).some((b) => /back/i.test(b)));
+    await passLoadoutGate(overlay, "mender");
     localStorage.removeItem("blobrogue.selectedKit"); // restore the fresh-player default for later sections
+  }
+
+  section("solo requires explicit KIT, explicit PET, then one final combined confirmation");
+  {
+    localStorage.removeItem("blobrogue.selectedKit");
+    localStorage.removeItem("blobrogue.lastPetId");
+    const { menu, overlay, soloLaunches, calls } = makeMenu();
+    await menu.showTitle();
+    collect(overlay, (node) => node.tagName === "BUTTON" && textOf(node) === "PLAY SOLO")[0]?.onclick?.();
+    check("PLAY SOLO opens KIT instead of starting", textOf(overlay).includes("CHOOSE YOUR KIT") && soloLaunches.length === 0);
+    check("new run starts with loadoutConfirmed=false",
+      byClass(overlay, "loadout-gate")[0]?.getAttribute?.("data-loadout-confirmed") === "false");
+    check("a defaulted Gunner is not called LAST USED",
+      !byClass(overlay, "kit-option").some((card) => textOf(card).includes("GUNNER") && textOf(card).includes("LAST USED")));
+    const next = collect(overlay, (node) => node.tagName === "BUTTON" && textOf(node).includes("NEXT · CHOOSE PET"))[0];
+    check("KIT preselection is not consent", next?.disabled === true);
+    check("kit cards use the canonical role, weapon, and ultimate metadata",
+      byClass(overlay, "kit-option").some((card) => textOf(card).includes("MENDER")
+        && textOf(card).includes("HEALER · SUNLANCE · ULT SANCTUARY"))
+      && byClass(overlay, "kit-option").some((card) => textOf(card).includes("BULWARK")
+        && textOf(card).includes("TANK · BOOMSTICK · ULT AEGIS")));
+    check("locked kit shows exact account requirement and progress",
+      byClass(overlay, "kit-option").some((card) => textOf(card).includes("BULWARK")
+        && textOf(card).includes("REACH ACCOUNT LV 3 · LV 1/3")));
+    const lockedBulwark = byClass(overlay, "kit-option").find((card) => card.getAttribute?.("data-kit") === "bulwark");
+    check("locked kit remains native-enabled, focusable, and aria-disabled",
+      lockedBulwark?.disabled !== true
+      && lockedBulwark?.getAttribute?.("aria-disabled") === "true"
+      && typeof lockedBulwark?.focus === "function");
+    lockedBulwark?.onclick?.();
+    check("activating a locked kit announces its exact requirement without selecting",
+      textOf(byClass(overlay, "loadout-live")[0] ?? {}) === "REACH ACCOUNT LV 3 · LV 1/3"
+      && next?.disabled === true);
+    fireWindowEvent("keydown", { key: "2" });
+    check("number-key selection drafts Mender but does not advance", textOf(overlay).includes("MENDER")
+      && byClass(overlay, "kit-option").some((card) => card.getAttribute?.("data-kit") === "mender"
+        && (card.className ?? "").includes("selected")));
+    collect(overlay, (node) => node.tagName === "BUTTON" && textOf(node).includes("NEXT · CHOOSE PET"))[0]?.onclick?.();
+    check("PET renders second with no final confirmation control",
+      textOf(overlay).includes("CHOOSE YOUR PET")
+      && byClass(overlay, "loadout-confirm").length === 0
+      && byClass(overlay, "loadout-review-next")[0]?.disabled === true);
+    check("PET options are registry-derived: No Pet plus four companions and one hidden reserve",
+      byClass(overlay, "pet-option").filter((card) => card.tagName === "BUTTON").length === 5
+      && byClass(overlay, "pet-option").some((card) => (card.className ?? "").includes("reserved")));
+    check("locked rescue copy uses the CAMP_NODES floor and progress",
+      byClass(overlay, "pet-option").some((card) => textOf(card).includes("DOGGIE")
+        && textOf(card).includes("REACH FLOOR 3 TO RESCUE · 0/3")));
+    const lockedDoggie = byClass(overlay, "pet-option").find((card) => card.getAttribute?.("data-pet") === "doggie");
+    check("locked pet remains native-enabled, focusable, and aria-disabled",
+      lockedDoggie?.disabled !== true
+      && lockedDoggie?.getAttribute?.("aria-disabled") === "true"
+      && typeof lockedDoggie?.focus === "function");
+    lockedDoggie?.onclick?.();
+    check("activating a locked pet announces its exact rescue progress",
+      textOf(byClass(overlay, "loadout-live")[0] ?? {}) === "REACH FLOOR 3 TO RESCUE · 0/3"
+      && byClass(overlay, "loadout-review-next")[0]?.disabled === true);
+    check("pet copy stays honest about cosmetic-only behavior",
+      textOf(overlay).includes("COSMETIC COMPANION · FOLLOWS YOU · NO COMBAT EFFECT")
+      && textOf(overlay).includes("PLAYER BLOB")
+      && textOf(overlay).includes("Travel alone · no gameplay change."));
+    const petThumbs = byClass(overlay, "pet-card-thumb");
+    check("every registry pet card has a fixed 56px shared-render thumbnail",
+      petThumbs.filter((thumb) => thumb.tagName === "CANVAS").length === 4
+      && petThumbs.filter((thumb) => thumb.tagName === "CANVAS")
+        .every((thumb) => thumb.width === 56 && thumb.height === 56));
+    const loadoutPreview = byClass(overlay, "loadout-preview-canvas")[0];
+    check("preview canvas reserves explicit dimensions before sprite hydration",
+      loadoutPreview?.width === 220 && loadoutPreview?.height === 244);
+    check("fresh No Pet is available but not mislabeled LAST USED",
+      !byClass(overlay, "pet-option").some((card) => card.getAttribute?.("data-pet") === "none" && textOf(card).includes("LAST USED")));
+    collect(overlay, (node) => node.tagName === "BUTTON" && textOf(node).includes("BACK · KIT"))[0]?.onclick?.();
+    check("Pet → Kit keeps the Mender draft", byClass(overlay, "kit-option").some(
+      (card) => card.getAttribute?.("data-kit") === "mender" && (card.className ?? "").includes("selected"),
+    ));
+    collect(overlay, (node) => node.tagName === "BUTTON" && textOf(node).includes("NEXT · CHOOSE PET"))[0]?.onclick?.();
+    fireWindowEvent("keydown", { key: "1" });
+    check("explicit No Pet activation only enables NEXT REVIEW",
+      byClass(overlay, "loadout-review-next")[0]?.disabled === false
+      && byClass(overlay, "loadout-confirm").length === 0);
+    check("KIT and PET activation persist nothing and launch nothing",
+      localStorage.getItem("blobrogue.selectedKit") === null
+      && calls.every((name) => name !== "players:confirmRunLoadout")
+      && soloLaunches.length === 0);
+    byClass(overlay, "loadout-review-next")[0]?.onclick?.();
+    check("REVIEW is a distinct fourth screen with both summaries",
+      textOf(overlay).includes("REVIEW LOADOUT")
+      && textOf(overlay).includes("HEALER · SUNLANCE")
+      && textOf(overlay).includes("PASSIVE · LIFEBLOOM")
+      && textOf(overlay).includes("ULT · SANCTUARY")
+      && textOf(overlay).includes("NO COMPANION"));
+    check("only REVIEW owns the combined destination CTA",
+      textOf(byClass(overlay, "loadout-confirm")[0]).includes("CONFIRM & START SOLO")
+      && byClass(overlay, "loadout-gate")[0]?.getAttribute?.("data-loadout-confirmed") === "false");
+    const finalCta = byClass(overlay, "loadout-confirm")[0];
+    check("final CTA has separate action and loadout spans",
+      textOf(byClass(finalCta ?? {}, "loadout-confirm-action")[0] ?? {}) === "CONFIRM & START SOLO"
+      && textOf(byClass(finalCta ?? {}, "loadout-confirm-loadout")[0] ?? {}) === "MENDER + NO PET");
+    check("final CTA aria-label includes destination, kit, and pet",
+      finalCta?.getAttribute?.("aria-label") === "CONFIRM & START SOLO · MENDER + NO PET");
+    collect(overlay, (node) => node.tagName === "BUTTON" && textOf(node) === "BACK · PET")[0]?.onclick?.();
+    check("Back Review → Pet preserves the deliberate No Pet draft",
+      textOf(overlay).includes("CHOOSE YOUR PET")
+      && byClass(overlay, "pet-option").some((card) => card.getAttribute?.("data-pet") === "none"
+        && (card.className ?? "").includes("selected")));
+    byClass(overlay, "loadout-review-next")[0]?.onclick?.();
+    byClass(overlay, "review-edit-kit")[0]?.onclick?.();
+    check("EDIT KIT preserves the valid pet draft",
+      byClass(overlay, "kit-option").some((card) => card.getAttribute?.("data-kit") === "mender"
+        && (card.className ?? "").includes("selected")));
+    collect(overlay, (node) => node.tagName === "BUTTON" && textOf(node).includes("NEXT · CHOOSE PET"))[0]?.onclick?.();
+    check("the preserved pet choice can continue directly back to Review",
+      byClass(overlay, "loadout-review-next")[0]?.disabled === false);
+    byClass(overlay, "loadout-review-next")[0]?.onclick?.();
+    byClass(overlay, "review-edit-pet")[0]?.onclick?.();
+    check("EDIT PET preserves the valid Mender draft",
+      textOf(overlay).includes("KIT MENDER")
+      && byClass(overlay, "pet-option").some((card) => card.getAttribute?.("data-pet") === "none"
+        && (card.className ?? "").includes("selected")));
+    byClass(overlay, "loadout-review-next")[0]?.onclick?.();
+    check("Review navigation still persisted and launched nothing",
+      calls.every((name) => name !== "players:confirmRunLoadout") && soloLaunches.length === 0);
+    byClass(overlay, "loadout-confirm")[0]?.onclick?.();
+    await settle();
+    await settle();
+    check("one final CTA persists and launches the exact explicit-null pair",
+      calls.filter((name) => name === "players:confirmRunLoadout").length === 1
+      && soloLaunches.length === 1
+      && soloLaunches[0]?.kitId === "mender"
+      && soloLaunches[0]?.petId === null);
+    await menu.showTitle();
+    collect(overlay, (node) => node.tagName === "BUTTON" && textOf(node) === "PLAY SOLO")[0]?.onclick?.();
+    const sameSessionMender = byClass(overlay, "kit-option").find((card) => card.getAttribute?.("data-kit") === "mender");
+    check("same Menu reopens with Mender LAST USED but unselected",
+      textOf(sameSessionMender ?? {}).includes("LAST USED")
+      && sameSessionMender?.getAttribute?.("aria-checked") === "false"
+      && collect(overlay, (node) => node.tagName === "BUTTON" && textOf(node).includes("NEXT"))[0]?.disabled === true);
+    sameSessionMender?.onclick?.();
+    collect(overlay, (node) => node.tagName === "BUTTON" && textOf(node).includes("NEXT · CHOOSE PET"))[0]?.onclick?.();
+    const sameSessionNoPet = byClass(overlay, "pet-option").find((card) => card.getAttribute?.("data-pet") === "none");
+    check("same Menu reopens with No Pet LAST USED but unselected",
+      textOf(sameSessionNoPet ?? {}).includes("LAST USED")
+      && sameSessionNoPet?.getAttribute?.("aria-checked") === "false"
+      && byClass(overlay, "loadout-review-next")[0]?.disabled === true);
+    await menu.showTitle();
+    const reload = makeMenu({ isLoadoutPreserved: true });
+    await reload.menu.showTitle();
+    collect(reload.overlay, (node) => node.tagName === "BUTTON" && textOf(node) === "PLAY SOLO")[0]?.onclick?.();
+    check("guest reload preselects Mender but the new run gates again",
+      byClass(reload.overlay, "kit-option").some((card) => textOf(card).includes("MENDER")
+        && textOf(card).includes("LAST USED"))
+      && collect(reload.overlay, (node) => node.tagName === "BUTTON" && textOf(node).includes("NEXT"))[0]?.disabled === true
+      && reload.soloLaunches.length === 0);
+    await reload.menu.showTitle();
+    localStorage.removeItem("blobrogue.selectedKit");
+    localStorage.removeItem("blobrogue.lastPetId");
+  }
+
+  section("long pet names provide a responsive shortName without dropping the action");
+  {
+    const profile = makeProfile({
+      unlocks: ["pet_dragon"],
+      equippedPet: "dragon",
+      lastKitId: "mender",
+      masteryLevel: 1,
+    });
+    const made = makeMenu({ profile });
+    await made.session.login();
+    await made.menu.showTitle();
+    collect(made.overlay, (node) => node.tagName === "BUTTON" && textOf(node) === "PLAY SOLO")[0]?.onclick?.();
+    reachLoadoutReview(made.overlay, "mender", "dragon");
+    const loadout = byClass(made.overlay, "loadout-confirm-loadout")[0];
+    check("full label keeps BABY DRAGON", textOf(loadout ?? {}) === "MENDER + BABY DRAGON");
+    check("responsive data uses MENDER + DRAGON", loadout?.getAttribute?.("data-short-name") === "MENDER + DRAGON");
+    check("action span remains complete", textOf(byClass(made.overlay, "loadout-confirm-action")[0] ?? {}) === "CONFIRM & START SOLO");
+    await made.menu.showTitle();
+  }
+
+  section("pet persistence failure stays on Review and Use No Pet still requires confirmation");
+  {
+    localStorage.removeItem("blobrogue.selectedKit");
+    localStorage.removeItem("blobrogue.lastPetId");
+    const profile = makeProfile({
+      unlocks: ["pet_doggie"],
+      equippedPet: "doggie",
+      lastKitId: "gunner",
+      masteryLevel: 1,
+    });
+    const fakeOpts: FakeOpts = { profile, persist: "echo", loadoutPersist: "ok" };
+    const { menu, overlay, soloLaunches, session } = makeMenu(fakeOpts);
+    await session.login();
+    fakeOpts.loadoutPersist = "pet_rejected";
+    await menu.showTitle();
+    collect(overlay, (node) => node.tagName === "BUTTON" && textOf(node) === "PLAY SOLO")[0]?.onclick?.();
+    byClass(overlay, "kit-option").find((card) => card.getAttribute?.("data-kit") === "gunner")?.onclick?.();
+    collect(overlay, (node) => node.tagName === "BUTTON" && textOf(node).includes("NEXT · CHOOSE PET"))[0]?.onclick?.();
+    byClass(overlay, "pet-option").find((card) => card.getAttribute?.("data-pet") === "doggie")?.onclick?.();
+    byClass(overlay, "loadout-review-next")[0]?.onclick?.();
+    byClass(overlay, "loadout-confirm")[0]?.onclick?.();
+    await settle();
+    await settle();
+    check("failed pet save remains on REVIEW and launches nothing",
+      textOf(overlay).includes("REVIEW LOADOUT") && textOf(overlay).includes("Rescue that pet")
+      && soloLaunches.length === 0);
+    const noPet = byClass(overlay, "loadout-no-pet")[0];
+    check("failure offers an explicit Use No Pet edit", noPet !== undefined && noPet.hidden !== true);
+    noPet.onclick?.();
+    await settle();
+    check("Use No Pet updates Review but still requires the one final CTA",
+      textOf(overlay).includes("NO COMPANION") && soloLaunches.length === 0);
+    byClass(overlay, "loadout-confirm")[0]?.onclick?.();
+    await settle();
+    check("the retried Review CTA launches only the explicit null pair",
+      soloLaunches.length === 1 && soloLaunches[0]?.petId === null);
+  }
+
+  section("offline solo permits a known unlocked kit only with explicit No Pet");
+  {
+    localStorage.removeItem("blobrogue.selectedKit");
+    localStorage.removeItem("blobrogue.lastPetId");
+    const overlay = document.createElement("div") as never as ShimNode;
+    const session = new Session(null);
+    const soloLaunches: RunLoadout[] = [];
+    const menu = new Menu(overlay as never as HTMLElement, session, null, null, {
+      startSolo(_profile, loadout) { soloLaunches.push(loadout); },
+      startOnline() {},
+    });
+    await menu.showTitle();
+    collect(overlay, (node) => node.tagName === "BUTTON" && textOf(node).includes("PLAY"))[0]?.onclick?.();
+    await passLoadoutGate(overlay, "mender", "none");
+    check("offline final CTA launches explicit Mender + No Pet",
+      soloLaunches.length === 1
+      && soloLaunches[0]?.kitId === "mender"
+      && soloLaunches[0]?.petId === null);
+  }
+
+  section("a delayed final confirmation cannot launch after the player cancels");
+  {
+    const fakeOpts: FakeOpts = { loadoutPersist: "ok" };
+    const made = makeMenu(fakeOpts);
+    await made.session.login();
+    fakeOpts.loadoutPersist = "manual";
+    await made.menu.showTitle();
+    collect(made.overlay, (node) => node.tagName === "BUTTON" && textOf(node) === "PLAY SOLO")[0]?.onclick?.();
+    byClass(made.overlay, "kit-option").find((card) => card.getAttribute?.("data-kit") === "gunner")?.onclick?.();
+    collect(made.overlay, (node) => node.tagName === "BUTTON" && textOf(node).includes("NEXT · CHOOSE PET"))[0]?.onclick?.();
+    byClass(made.overlay, "pet-option").find((card) => card.getAttribute?.("data-pet") === "none")?.onclick?.();
+    byClass(made.overlay, "loadout-review-next")[0]?.onclick?.();
+    byClass(made.overlay, "loadout-confirm")[0]?.onclick?.();
+    await settle();
+    check("the save is genuinely pending", made.pendingLoadoutPersists.length === 1);
+    check("pending confirmation disables both Edit actions",
+      byClass(made.overlay, "review-edit-kit")[0]?.disabled === true
+      && byClass(made.overlay, "review-edit-pet")[0]?.disabled === true);
+    collect(made.overlay, (node) => node.tagName === "BUTTON" && textOf(node) === "CANCEL")[0]?.onclick?.();
+    await settle();
+    check("cancel returns to the origin without launching", buttonsOf(made.overlay).some((button) => button.includes("PLAY SOLO"))
+      && made.soloLaunches.length === 0);
+    made.pendingLoadoutPersists[0]?.resolveSuccess();
+    await settle();
+    await settle();
+    check("late success neither resurrects the gate nor starts a run",
+      buttonsOf(made.overlay).some((button) => button.includes("PLAY SOLO"))
+      && made.soloLaunches.length === 0
+      && !textOf(made.overlay).includes("CHOOSE YOUR PET"));
+  }
+
+  section("solo, quick-play, and private replay all gate again before a new generation");
+  {
+    const solo = makeMenu();
+    solo.menu.showGameOver(RUN, PROFILE, { isNewBest: false, online: null });
+    fireWindowEvent("keydown", { key: "Enter" });
+    check("solo Play Again returns to KIT before launch",
+      textOf(solo.overlay).includes("CHOOSE YOUR KIT") && solo.soloLaunches.length === 0);
+    await solo.menu.showTitle();
+
+    const quick = makeMenu();
+    const quickLobby = fakeLobby("FAST", "player-1", true);
+    quick.menu.showGameOver(RUN, PROFILE, { isNewBest: false, online: quickLobby.lobby });
+    fireWindowEvent("keydown", { key: "Enter" });
+    check("quick-play Play Again opens the replay KIT gate before matchmaking",
+      textOf(quick.overlay).includes("CHOOSE YOUR KIT")
+      && quick.calls.every((name) => name !== "rooms:quickPlay"));
+    await quick.menu.showTitle();
+
+    const privateReplay = makeMenu();
+    const privateLobby = fakeLobby("ABCD");
+    privateReplay.menu.showGameOver(RUN, PROFILE, { isNewBest: false, online: privateLobby.lobby });
+    fireWindowEvent("keydown", { key: "Enter" });
+    await settle();
+    await settle();
+    check("private replay reopens into the generation-bound KIT gate",
+      textOf(privateReplay.overlay).includes("CHOOSE YOUR KIT")
+      && textOf(privateReplay.overlay).includes("ROOM ABCD"));
+    await privateReplay.menu.showTitle();
   }
 
   section("the hero blob stage: identity showpiece in the raised hero band");
@@ -488,7 +1008,7 @@ async function main(): Promise<void> {
       previewSrc.includes("visibilitychange") && previewSrc.includes("prefers-reduced-motion") && previewSrc.includes("setPaused"));
     const menuSrc = readFileSync(join(ROOT, "src/ui/menu.ts"), "utf8");
     check("the menu parks the title loop while hidden (in-run) and while the overlay covers it",
-      /hide\(\) \{[\s\S]{0,220}setPaused\(true\)/.test(menuSrc) && menuSrc.includes("this.titleStage?.setPaused(true);") && menuSrc.includes("this.titleStage?.setPaused(false);"));
+      /hide\(\) \{[\s\S]{0,400}setPaused\(true\)/.test(menuSrc) && menuSrc.includes("this.titleStage?.setPaused(true);") && menuSrc.includes("this.titleStage?.setPaused(false);"));
 
     // Signed-out/guest: the default blob (amber, no hat/glasses) — never blank; a saved
     // guest body-color pick still renders through the same shared look resolution.
@@ -765,6 +1285,7 @@ async function main(): Promise<void> {
     check("Escape from leaderboard restores the LEADERBOARD nav destination", lastFocused()?.className?.includes("nav-leaderboard") === true, lastFocused()?.className);
 
     await menu.showOnlineHome();
+    await passLoadoutGate(overlay);
     fireWindowEvent("keydown", { key: "Escape" });
     await settle();
     check("Escape from the online home lands back on PLAY ONLINE", lastFocused()?.className?.includes("btn-quick") === true, lastFocused()?.className);
@@ -816,6 +1337,7 @@ async function main(): Promise<void> {
   {
     const { menu, overlay } = makeMenu();
     await menu.showOnlineHome("finding a room\u2026");
+    await passLoadoutGate(overlay);
     check("the online home status is a reserved .status-line", byClass(overlay, "status-line").length === 1);
     check("status copy renders inside it", textOf(byClass(overlay, "status-line")[0]).includes("finding a room"));
   }
@@ -1192,7 +1714,10 @@ async function main(): Promise<void> {
     const bDown = idle.slice(); bDown[1] = true;
     check("B maps to back (the same Escape path)", padActions(idle, bDown).join(",") === "back");
     const dpad = idle.slice(); dpad[13] = true;
-    check("D-pad down maps to focusNext", padActions(idle, dpad).join(",") === "focusNext");
+    check("D-pad down preserves its spatial direction", padActions(idle, dpad).join(",") === "focusDown");
+    check("2×2 Kit Down maps Gunner → Bulwark", gridTargetIndex(0, 4, 2, "down") === 2);
+    check("3×2 Pet Down maps No Pet → Baby Dragon", gridTargetIndex(0, 5, 3, "down") === 3);
+    check("Pet's reserved sixth cell never steals focus", gridTargetIndex(2, 5, 3, "down") === 2);
     const lb = idle.slice(); lb[4] = true;
     const rb = idle.slice(); rb[5] = true;
     check("LB/RB map to tab cycling", padActions(idle, lb).join(",") === "tabPrev" && padActions(idle, rb).join(",") === "tabNext");
@@ -1254,6 +1779,26 @@ async function main(): Promise<void> {
     check("the NEW badge clears on the next visit (marked seen)", !textOf(crownCard() ?? {}).includes("NEW"));
   }
 
+  section("solo progression is explicitly unverified and grants nothing competitive");
+  {
+    const { menu, overlay } = makeMenu({ auth: fakeAuth(false) });
+    menu.showGameOver(RUN, PROFILE, {
+      isNewBest: false,
+      online: null,
+      bankedAmber: 0,
+      newUnlocks: [],
+      isProgressVerified: false,
+      progressNote: "SOLO RUN · UNVERIFIED — Mastery, Amber, rescues, and leaderboard unchanged",
+    });
+    check("results name the unverified solo restriction",
+      textOf(overlay).includes("SOLO RUN · UNVERIFIED")
+      && textOf(overlay).includes("leaderboard unchanged"));
+    check("unverified run shows no authoritative reward celebration",
+      !textOf(overlay).includes("Banked") && !textOf(overlay).includes("NEW BEST"));
+    check("unverified solo run does not trigger a saved-progress sign-in nudge",
+      !buttonsOf(overlay).some((button) => button.includes("Sign in with Google")));
+  }
+
   section("post-run sign-in nudge: guests once per session, cooldown-guarded, honest copy");
   {
     localStorage.removeItem(NUDGE_DISMISSED_AT_KEY);
@@ -1295,6 +1840,12 @@ async function main(): Promise<void> {
   {
     const { menu, overlay } = makeMenu();
     await menu.showOnlineHome();
+    reachLoadoutReview(overlay);
+    check("online REVIEW owns CONFIRM & CONTINUE ONLINE",
+      textOf(byClass(overlay, "loadout-confirm")[0]).includes("CONFIRM & CONTINUE ONLINE"));
+    byClass(overlay, "loadout-confirm")[0]?.onclick?.();
+    await settle();
+    await settle();
     const buttons = buttonsOf(overlay);
     check("QUICK PLAY present", buttons.some((b) => b.includes("QUICK PLAY")));
     check("CREATE ROOM present", buttons.some((b) => b.includes("CREATE ROOM")));
@@ -1361,7 +1912,9 @@ async function main(): Promise<void> {
     check("PLAY ONLINE commits the sanitized typed name", session.name === "Zippy Zap", session.name);
     check("...and the picked color (party color + body item together)", session.colorIndex === 3 && session.cosmetics.body === "body_pink", `${session.colorIndex}/${session.cosmetics.body}`);
     check("...and latches nameConfirmed", localStorage.getItem("blobrogue.nameConfirmed") === "1");
-    check("...and proceeds to the online home", buttonsOf(overlay).some((b) => b.includes("QUICK PLAY")));
+    check("...and proceeds to the required KIT gate", textOf(overlay).includes("CHOOSE YOUR KIT"));
+    await passLoadoutGate(overlay);
+    check("KIT → PET confirmation proceeds to the online home", buttonsOf(overlay).some((b) => b.includes("QUICK PLAY")));
     await menu.showOnlineHome();
     check("a confirmed guest skips straight to online (never re-prompted)",
       buttonsOf(overlay).some((b) => b.includes("QUICK PLAY")) && !textOf(overlay).includes("WHAT'S YOUR NAME?"));
@@ -1380,7 +1933,9 @@ async function main(): Promise<void> {
     await settle();
     check("junk input keeps the generated default", session.name === generated, session.name);
     check("the committed name is never 'blob'", session.name.toLowerCase() !== "blob");
-    check("the gate still proceeds", buttonsOf(overlay).some((b) => b.includes("QUICK PLAY")));
+    check("the name gate still proceeds to KIT", textOf(overlay).includes("CHOOSE YOUR KIT"));
+    await passLoadoutGate(overlay);
+    check("the combined gate still reaches online home", buttonsOf(overlay).some((b) => b.includes("QUICK PLAY")));
   }
 
   section("name gate routing: back declines without latching; signed-in players skip");
@@ -1398,7 +1953,8 @@ async function main(): Promise<void> {
     localStorage.removeItem("blobrogue.nameConfirmed");
     await signed.menu.showOnlineHome();
     check("signed-in players use their Google name and skip the prompt",
-      buttonsOf(signed.overlay).some((b) => b.includes("QUICK PLAY")) && !textOf(signed.overlay).includes("WHAT'S YOUR NAME?"));
+      textOf(signed.overlay).includes("CHOOSE YOUR KIT") && !textOf(signed.overlay).includes("WHAT'S YOUR NAME?"));
+    await passLoadoutGate(signed.overlay);
     localStorage.setItem("blobrogue.nameConfirmed", "1");
   }
 
@@ -1423,10 +1979,12 @@ async function main(): Promise<void> {
     ]);
     menu.showOnlineLobby(f.lobby, PROFILE);
     const text = textOf(overlay);
-    check("a ready member reads READY", /READY \u00b7 87ms/.test(text), text.slice(0, 220));
+    check("a ready member reads LOADOUT ✓ / READY ✓",
+      text.includes("LOADOUT ✓ · READY ✓ · 87ms"), text.slice(0, 220));
     check("an unready member reads NOT READY", text.includes("NOT READY"));
     check("pings ride the roster chips", text.includes("42ms") && text.includes("87ms"));
-    check("the host row is implicit consent (HOST, no ready toggle)", text.includes("HOST \u00b7 42ms"));
+    check("the host is identified and still carries explicit readiness", text.includes("HOST") && text.includes("NOT READY \u00b7 42ms"));
+    check("every row shows the confirmed combined pair", text.includes("GUNNER + NO PET") && text.includes("LOADOUT ✓"));
     // The header confirms the identity THIS player joins as: YOU: [swatch] <name>.
     const you = byClass(overlay, "lobby-you");
     check("the lobby header carries the YOU confirmation", you.length === 1 && textOf(you[0]).includes("YOU:"), textOf(you[0] ?? {}));
@@ -1434,19 +1992,116 @@ async function main(): Promise<void> {
     check("...and their committed color swatch", byClass(you[0] ?? {}, "you-swatch").length === 1);
   }
 
-  section("host start gate: all-ready START RUN, otherwise hold-to-START ANYWAY");
+  section("lobby roster follows the authoritative blocker ladder");
   {
     const { menu, overlay } = makeMenu();
     const f = fakeLobby("ABCD");
-    f.setPlayers([member("player-1", "Ada"), member("player-2", "Bob", { isReady: true })]);
+    f.setPlayers([
+      member("player-1", "Kitless", {
+        isKitChoiceMade: false, isPetChoiceMade: false, isLoadoutConfirmed: false,
+      }),
+      member("player-2", "Petless", {
+        isPetChoiceMade: false, isLoadoutConfirmed: false,
+      }),
+      member("player-3", "Unconfirmed", {
+        isLoadoutConfirmed: false,
+      }),
+      member("player-4", "Unready"),
+      member("player-5", "Ready", { isReady: true }),
+    ]);
     menu.showOnlineLobby(f.lobby, PROFILE);
-    check("everyone ready -> plain START RUN", buttonsOf(overlay).some((b) => b.includes("START RUN")));
+    const text = textOf(overlay);
+    check("missing kit is named exactly", text.includes("CHOOSE KIT"));
+    check("missing pet is named exactly", text.includes("CHOOSE PET"));
+    check("unconfirmed pair is named exactly", text.includes("CONFIRM LOADOUT"));
+    check("confirmed-but-unready is distinct", text.includes("LOADOUT ✓ · NOT READY"));
+    check("ready is the final state", text.includes("LOADOUT ✓ · READY ✓"));
+    f.setPlayers([
+      member("player-1", "UnreadyHost"),
+      member("player-2", "KitlessBob", {
+        isKitChoiceMade: false, isPetChoiceMade: false, isLoadoutConfirmed: false,
+      }),
+    ]);
+    menu.showOnlineLobby(f.lobby, PROFILE);
+    check("party-wide ladder prioritizes CHOOSE KIT over an earlier NOT READY row",
+      textOf(overlay).includes("KitlessBob must choose a kit"));
+  }
 
-    f.setPlayers([member("player-1", "Ada"), member("player-2", "Bob", { isReady: false })]);
+  section("private CHANGE LOADOUT uses the same gate and clears ready on final confirmation");
+  {
+    const { menu, overlay } = makeMenu();
+    const f = fakeLobby("ABCD");
+    f.setPlayers([member("player-1", "Ada", { isReady: true })]);
+    menu.showOnlineLobby(f.lobby, PROFILE);
+    byClass(overlay, "change-loadout")[0]?.onclick?.();
+    await settle();
+    check("entering the editor first removes ready consent", f.readyCalls[0] === false);
+    check("the shared KIT gate opens with room context",
+      textOf(overlay).includes("CHOOSE YOUR KIT") && textOf(overlay).includes("ROOM ABCD"));
+    reachLoadoutReview(overlay, "mender", "none");
+    check("private REVIEW uses CONFIRM LOADOUT and never Ready",
+      textOf(byClass(overlay, "loadout-confirm")[0]).includes("CONFIRM LOADOUT")
+      && f.readyCalls.every((isReady) => !isReady));
+    byClass(overlay, "loadout-confirm")[0]?.onclick?.();
+    await settle();
+    await settle();
+    const roster = textOf(overlay);
+    check("final confirm returns to lobby with the new pair and NOT READY",
+      roster.includes("MENDER + NO PET") && roster.includes("NOT READY"));
+    check("Review confirmation never readies implicitly",
+      f.readyCalls.every((isReady) => !isReady)
+      && buttonsOf(overlay).some((button) => button.includes("READY UP")));
+  }
+
+  section("host start gate: every member must be loadout-confirmed and ready");
+  {
+    const { menu, overlay } = makeMenu();
+    const f = fakeLobby("ABCD");
+    f.setPlayers([member("player-1", "Ada", { isReady: true }), member("player-2", "Bob", { isReady: true })]);
+    menu.showOnlineLobby(f.lobby, PROFILE);
+    const enabledStart = collect(overlay, (node) => node.tagName === "BUTTON" && textOf(node).includes("START RUN"))[0];
+    check("everyone ready -> enabled START RUN", enabledStart?.disabled === false);
+    enabledStart?.onclick?.();
+    await settle();
+    check("enabled START reaches the authoritative mutation", f.startCalls() === 1);
+
+    f.setPlayers([member("player-1", "Ada", { isReady: true }), member("player-2", "Bob", { isReady: false })]);
     menu.showOnlineLobby(f.lobby, PROFILE);
     const buttons = buttonsOf(overlay);
-    check("someone not ready -> START ANYWAY requires the 3s hold", buttons.some((b) => b === "START ANYWAY \u2014 hold 3s"), buttons.join(" | "));
-    check("no plain START RUN escape hatch remains", !buttons.some((b) => b.includes("START RUN")));
+    const disabledStart = collect(overlay, (node) => node.tagName === "BUTTON" && textOf(node).includes("START RUN"))[0];
+    check("incomplete party hard-disables START", disabledStart?.disabled === true);
+    disabledStart?.onclick?.();
+    await settle();
+    check("disabled START sends no mutation", f.startCalls() === 1);
+    check("disabled START retains the exact blocker copy", textOf(overlay).includes("Bob is not ready"));
+    check("START remains visible instead of offering a partial-launch escape hatch", buttons.some((b) => b.includes("START RUN")));
+    const blockerCases: Array<{ label: string; opts: Partial<LobbyPlayer>; copy: string }> = [
+      {
+        label: "kitless",
+        opts: { isKitChoiceMade: false, isPetChoiceMade: false, isLoadoutConfirmed: false, isReady: false },
+        copy: "Bob must choose a kit",
+      },
+      {
+        label: "petless",
+        opts: { isPetChoiceMade: false, isLoadoutConfirmed: false, isReady: false },
+        copy: "Bob must choose a pet or No Pet",
+      },
+      {
+        label: "unconfirmed",
+        opts: { isLoadoutConfirmed: false, isReady: false },
+        copy: "Bob must confirm loadout",
+      },
+    ];
+    for (const blockerCase of blockerCases) {
+      f.setPlayers([member("player-1", "Ada", { isReady: true }), member("player-2", "Bob", blockerCase.opts)]);
+      menu.showOnlineLobby(f.lobby, PROFILE);
+      const blocked = collect(overlay, (node) => node.tagName === "BUTTON" && textOf(node).includes("START RUN"))[0];
+      blocked?.onclick?.();
+      check(`${blockerCase.label} hard-disables START and sends no mutation`,
+        blocked?.disabled === true && f.startCalls() === 1);
+      check(`${blockerCase.label} keeps the exact blocker copy`, textOf(overlay).includes(blockerCase.copy));
+    }
+    check("START ANYWAY is removed", !buttons.some((b) => b.includes("START ANYWAY")));
   }
 
   section("a non-host member gets the READY UP toggle");
@@ -1501,21 +2156,30 @@ async function main(): Promise<void> {
     check("rejoin button rendered for the live room", rejoin !== undefined);
   }
 
-  section("invite links: shell first, inline connecting state, the SAME join path as manual");
+  section("invite links: KIT → PET → JOIN CODE, then the SAME validated join as manual");
   {
-    const { menu, overlay, launches } = makeMenu({ join: { code: "ABCD", status: "lobby" } });
+    const { menu, overlay, launches, calls } = makeMenu({ join: { code: "ABCD", status: "lobby" } });
     const loc = window.location as unknown as { pathname: string; search: string; href: string };
     loc.pathname = "/r/ABCD"; loc.search = ""; loc.href = "http://localhost/r/ABCD";
-    const pending = menu.openInvite("ABCD");
-    // The canonical shell paints SYNCHRONOUSLY with the join in flight — never blank,
-    // never a modal: the connecting state is the Online Home's own status line.
-    const busyText = textOf(overlay);
-    check("the shell renders FIRST with JOINING ROOM <CODE>\u2026 inline", busyText.includes("PLAY ONLINE") && busyText.includes("JOINING ROOM ABCD"), busyText.slice(0, 120));
-    const quickBtn = collect(overlay, (n) => n.tagName === "BUTTON" && textOf(n).includes("QUICK PLAY"))[0];
-    check("the home actions are disabled while the join owns the screen", quickBtn?.disabled === true);
-    check("the connecting state lives in the reserved status line (not a modal)", byClass(overlay, "status-line").length === 1);
-    check("the URL is not consumed until the attempt resolves", loc.pathname === "/r/ABCD");
-    await pending;
+    await menu.openInvite("ABCD");
+    check("the invite renders KIT before any join", textOf(overlay).includes("CHOOSE YOUR KIT") && !calls.includes("rooms:join"));
+    check("invite context names INVITE and room code exactly once",
+      textOf(byClass(overlay, "loadout-context")[0] ?? {}) === "INVITE · ROOM ABCD");
+    check("the URL is not consumed before final confirmation", loc.pathname === "/r/ABCD");
+    byClass(overlay, "kit-option").find((card) => card.getAttribute?.("data-kit") === "gunner")?.onclick?.();
+    collect(overlay, (node) => node.tagName === "BUTTON" && textOf(node).includes("NEXT · CHOOSE PET"))[0]?.onclick?.();
+    check("invite PET context includes INVITE and room code once",
+      textOf(byClass(overlay, "loadout-context")[0] ?? {}) === "KIT GUNNER · INVITE · ROOM ABCD");
+    byClass(overlay, "pet-option").find((card) => card.getAttribute?.("data-pet") === "none")?.onclick?.();
+    byClass(overlay, "loadout-review-next")[0]?.onclick?.();
+    check("invite REVIEW context includes INVITE and room code once",
+      textOf(byClass(overlay, "loadout-context")[0] ?? {}) === "INVITE · ROOM ABCD");
+    check("invite REVIEW owns the exact combined destination CTA",
+      textOf(byClass(overlay, "loadout-confirm")[0]).includes("CONFIRM & JOIN ABCD")
+      && !calls.includes("rooms:join"));
+    byClass(overlay, "loadout-confirm")[0]?.onclick?.();
+    await settle();
+    await settle();
     const text = textOf(overlay);
     check("success+lobby lands IN the room lobby (auto-joined, nothing to retype)", text.includes("ROOM ABCD"));
     check("the code badge renders the joined room", textOf(byClass(overlay, "code-badge")[0] ?? {}) === "ABCD");
@@ -1525,10 +2189,12 @@ async function main(): Promise<void> {
 
   section("invite onto a live run: the existing join-live path drops into the run");
   {
-    const { menu, launches } = makeMenu({ join: { code: "WXYZ", status: "playing" } });
+    const { menu, overlay, launches } = makeMenu({ join: { code: "WXYZ", status: "playing" } });
     const loc = window.location as unknown as { pathname: string; search: string; href: string };
     loc.pathname = "/"; loc.search = "?room=WXYZ"; loc.href = "http://localhost/?room=WXYZ";
     await menu.openInvite("WXYZ");
+    check("a live-room late join still gates before spawn", launches.length === 0);
+    await passLoadoutGate(overlay);
     check("success+already-playing launches through the join-live path", launches.length === 1 && launches[0]?.code === "WXYZ");
     check("...ungated (a drop-in, not a party start)", launches[0]?.isPartyStart === false);
     check("the query-form invite is consumed on resolve too", loc.search === "", loc.search);
@@ -1545,31 +2211,28 @@ async function main(): Promise<void> {
     for (const { join, reason } of expectations) {
       const { menu, overlay } = makeMenu({ join });
       await menu.openInvite("ABCD");
+      await passLoadoutGate(overlay);
       const text = textOf(overlay);
       check(`${join}: the exact spec reason renders`, text.includes(reason), text.slice(0, 160));
-      const quickBtn = collect(overlay, (n) => n.tagName === "BUTTON" && textOf(n).includes("QUICK PLAY"))[0];
-      const joinBtn = collect(overlay, (n) => n.tagName === "BUTTON" && textOf(n).includes("JOIN CODE"))[0];
-      const createBtn = collect(overlay, (n) => n.tagName === "BUTTON" && textOf(n).includes("CREATE ROOM"))[0];
-      check(`${join}: QUICK PLAY / CREATE ROOM / JOIN CODE stay live (never a dead end)`,
-        quickBtn?.disabled !== true && joinBtn?.disabled !== true && createBtn?.disabled !== true
-        && quickBtn !== undefined && joinBtn !== undefined && createBtn !== undefined);
-      check(`${join}: a definitive refusal never offers TRY AGAIN`, byClass(overlay, "status-retry").length === 0);
+      check(`${join}: failure stays in REVIEW with the final CTA retryable`,
+        text.includes("REVIEW LOADOUT") && byClass(overlay, "loadout-confirm")[0]?.disabled !== true);
+      collect(overlay, (node) => node.tagName === "BUTTON" && textOf(node).includes("BACK · PET"))[0]?.onclick?.();
+      collect(overlay, (node) => node.tagName === "BUTTON" && textOf(node).includes("BACK · KIT"))[0]?.onclick?.();
+      collect(overlay, (node) => node.tagName === "BUTTON" && textOf(node) === "BACK")[0]?.onclick?.();
+      await settle();
     }
   }
 
-  section("network failure: COULDN'T REACH THE SERVER + TRY AGAIN re-runs the same join");
+  section("network failure stays in the gate and final CTA retries the same validated join");
   {
     const fakeOpts: FakeOpts = { join: "error" };
     const { menu, overlay } = makeMenu(fakeOpts);
     await menu.openInvite("ABCD");
+    await passLoadoutGate(overlay);
     check("an unrecognized failure reads as the network state", textOf(overlay).includes(INVITE_UNREACHABLE_NOTE));
-    const retryBtn = byClass(overlay, "status-retry")[0];
-    check("TRY AGAIN renders INSIDE the reserved status line (zero shift)",
-      retryBtn !== undefined && textOf(retryBtn) === INVITE_TRY_AGAIN_LABEL
-      && byClass(byClass(overlay, "status-line")[0] ?? {}, "status-retry").length === 1);
-    // The server comes back; TRY AGAIN re-runs the SAME validated join.
+    check("the same final CTA remains enabled for retry", byClass(overlay, "loadout-confirm")[0]?.disabled !== true);
     fakeOpts.join = { code: "ABCD", status: "lobby" };
-    retryBtn.onclick?.();
+    byClass(overlay, "loadout-confirm")[0]?.onclick?.();
     await settle();
     await settle();
     check("TRY AGAIN re-runs the join and lands in the room", textOf(overlay).includes("ROOM ABCD"), textOf(overlay).slice(0, 120));
@@ -1590,6 +2253,7 @@ async function main(): Promise<void> {
   {
     const guest = makeMenu({ join: { code: "GHJK", status: "lobby" }, auth: null });
     await guest.menu.openInvite("GHJK");
+    await passLoadoutGate(guest.overlay);
     check("the guest lands in the room lobby", textOf(guest.overlay).includes("ROOM GHJK"));
     const flushIdx = guest.calls.indexOf("players:ensurePlayer");
     const joinIdx = guest.calls.indexOf("rooms:join");
@@ -1607,8 +2271,9 @@ async function main(): Promise<void> {
     const play = collect(overlay, (n) => n.tagName === "BUTTON" && textOf(n).includes("PLAY ONLINE"))[0];
     play?.onclick?.();
     await settle();
-    await settle();
-    check("committing the gate continues the invite into the room lobby", textOf(overlay).includes("ROOM ABCD"), textOf(overlay).slice(0, 120));
+    check("name confirmation continues to the invite KIT gate", textOf(overlay).includes("CHOOSE YOUR KIT"));
+    await passLoadoutGate(overlay);
+    check("KIT → PET → JOIN continues into the room lobby", textOf(overlay).includes("ROOM ABCD"), textOf(overlay).slice(0, 120));
     check("the gate latched (next invite skips it)", localStorage.getItem("blobrogue.nameConfirmed") === "1");
   }
 
@@ -1623,6 +2288,7 @@ async function main(): Promise<void> {
     nav.clipboard = { writeText: (t) => { copiedUrls.push(t); return Promise.resolve(); } };
     const { menu, overlay } = makeMenu({ join: { code: "ABCD", status: "lobby" } });
     await menu.openInvite("ABCD");
+    await passLoadoutGate(overlay);
     const btn = byClass(overlay, "invite-copy")[0];
     check("the control idles as COPY INVITE", textOf(btn ?? {}) === COPY_INVITE_LABEL);
     const buttonsBefore = buttonsOf(overlay).length;
@@ -1656,6 +2322,7 @@ async function main(): Promise<void> {
   {
     const { menu, overlay } = makeMenu({ join: { code: "ABCD", status: "lobby" } });
     await menu.openInvite("ABCD");
+    await passLoadoutGate(overlay);
     check("the badge + invite control share one row", byClass(overlay, "code-row").length === 1);
     check("the invite-url line is reserved EMPTY from first paint", byClass(overlay, "invite-url").length === 1 && textOf(byClass(overlay, "invite-url")[0]) === "");
     const html = readFileSync(join(ROOT, "index.html"), "utf8");

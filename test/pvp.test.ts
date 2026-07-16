@@ -1497,7 +1497,7 @@ section("DETERMINISM EDGE-CASES: self-immune, same-tick order-stable, no shoot-f
 // ---------------------------------------------------------------------------------------------
 section("P2 WIRE: protocol v32, match block + spawn protection + reliable events");
 {
-  check("PROTOCOL_VERSION bumped to 32", PROTOCOL_VERSION === 32);
+  check("PROTOCOL_VERSION bumped to 33", PROTOCOL_VERSION === 33);
 
   // A pvp snapshot round-trips the match block, per-player team, and the local respawn field.
   const w = pvpWorld(30, ["p1", "p2"]);

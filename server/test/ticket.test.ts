@@ -58,6 +58,10 @@ async function main(): Promise<void> {
       ["full cosmetic identity", { worldId: "room:ABCD", name: "Ada", colorIndex: 2, hat: "hat_crown", face: "face_monocle" }],
       // v18: the kit + mastery-level claims (the byte contract must hold with them too).
       ["kit + mastery", { worldId: "room:ABCD", name: "Ada", colorIndex: 2, kit: "phantom", masteryLevel: 5 }],
+      ["combined kit + pet", {
+        worldId: "room:PAIR:g2", name: "Mend", kit: "mender", masteryLevel: 2,
+        pet: "doggie", isPetChoiceMade: true,
+      }],
     ];
     for (const [label, claims] of claimVariants) {
       const fromConvex = await mintGsTicket(secret, "player-1", 120, now, claims);
@@ -76,7 +80,20 @@ async function main(): Promise<void> {
     for (const code of ["abcd", " QQQQ ", "zz99"]) {
       check(`minter and client agree on worldIdForRoomCode(${JSON.stringify(code)})`, worldIdForRoomCode(code) === clientWorldIdForRoomCode(code));
     }
-    const ticket = await mintGsTicket(secret, "player-1", 120, now, { worldId: world, name: "Ada", colorIndex: 2, hat: "hat_top", face: "face_round" });
+    check("generation-bound room ids agree and invalidate prior generations",
+      worldIdForRoomCode("abcd", 1) === clientWorldIdForRoomCode("abcd", 1)
+      && worldIdForRoomCode("abcd", 1) === "room:ABCD:g1"
+      && worldIdForRoomCode("abcd", 2) === "room:ABCD:g2");
+    const ticket = await mintGsTicket(secret, "player-1", 120, now, {
+      worldId: world,
+      name: "Ada",
+      colorIndex: 2,
+      hat: "hat_top",
+      face: "face_round",
+      kit: "mender",
+      masteryLevel: 1,
+      isPetChoiceMade: true,
+    });
     const res = verifyTicket(cfg, ticket, now);
     check("claimed ticket verifies", res.ok === true, res.reason ?? "");
     check("world claim round-trips", res.worldId === "room:ABCD", `got=${res.worldId}`);
@@ -84,6 +101,8 @@ async function main(): Promise<void> {
     check("color claim round-trips", res.colorIndex === 2, `got=${res.colorIndex}`);
     check("hat claim round-trips", res.hat === "hat_top", `got=${res.hat}`);
     check("face claim round-trips", res.face === "face_round", `got=${res.face}`);
+    check("explicit No Pet confirmation round-trips without a pet id",
+      res.isPetChoiceMade === true && res.pet === undefined);
 
     const bare = await mintGsTicket(secret, "player-1", 120, now);
     const bareRes = verifyTicket(cfg, bare, now);

@@ -2,6 +2,8 @@ import { Sprites, playerColor, heroBodySprite } from "../game/assets.js";
 import { createAnim, stepAnim, characterXform, CHARACTER_STYLE } from "../game/anim.js";
 import { drawLoadoutOverlays, isLoadoutArtSettled } from "../game/cosmeticArt.js";
 import type { CosmeticXform } from "../game/cosmeticSockets.js";
+import { drawPetFrame } from "../game/petRenderer.js";
+import { petSpriteFor } from "../game/pets.js";
 
 // A small live preview of a blob's appearance (tint + cosmetic overlays) for the menu:
 // the closet's mirror, the title's character stage, and the leaderboard profile view.
@@ -131,6 +133,46 @@ export interface BlobPreview {
   setPaused(isPaused: boolean): void;
 }
 
+export interface LoadoutPreview {
+  el: HTMLCanvasElement;
+  setLoadout(look: BlobLook, petId: string | null): void;
+  setPaused(isPaused: boolean): void;
+  dispose(): void;
+}
+
+export function createPetThumbnail(petId: string, size = 60): HTMLCanvasElement {
+  const el = document.createElement("canvas");
+  el.width = size;
+  el.height = size;
+  el.className = "pet-card-thumb";
+  el.setAttribute("aria-hidden", "true");
+  const sprite = petSpriteFor(petId);
+  const draw = () => {
+    const ctx = el.getContext("2d");
+    if (!ctx) return;
+    ctx.clearRect(0, 0, size, size);
+    drawPetFrame(ctx, sprites(), {
+      petId,
+      clip: "idle",
+      cx: size / 2,
+      cy: size / 2,
+      size: Math.round(size * 0.88),
+      facing: 1,
+      xform: { ox: 0, oy: 0, sx: 1, sy: 1, rot: 0 },
+      clock: 0,
+    });
+  };
+  const settle = () => {
+    draw();
+    if (el.isConnected && sprite !== null && !sprites().isSpriteSettled(sprite)) {
+      requestAnimationFrame(settle);
+    }
+  };
+  draw();
+  queueMicrotask(settle);
+  return el;
+}
+
 export function createBlobPreview(initial: BlobLook, size = 96, opts: BlobPreviewOptions = {}): BlobPreview {
   const el = document.createElement("canvas");
   // Canvas dimensions are set BEFORE any render — the box is fixed from first paint.
@@ -232,6 +274,133 @@ export function createBlobPreview(initial: BlobLook, size = 96, opts: BlobPrevie
       isPausedByHost = isPaused;
       if (isPaused) { cancelAnimationFrame(raf); raf = 0; last = 0; }
       else schedule();
+    },
+  };
+}
+
+export function createLoadoutPreview(
+  initialLook: BlobLook,
+  initialPetId: string | null,
+  width = 220,
+  height = 300,
+): LoadoutPreview {
+  const el = document.createElement("canvas");
+  el.width = width;
+  el.height = height;
+  el.className = "loadout-preview-canvas";
+  el.setAttribute("aria-hidden", "true");
+  let look = initialLook;
+  let petId = initialPetId;
+  let raf = 0;
+  let last = 0;
+  let clock = 0;
+  let isPaused = false;
+  let isDisposed = false;
+  const blobAnim = createAnim();
+  const petAnim = createAnim();
+  const isReducedMotion = typeof matchMedia === "function"
+    && matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+  const draw = () => {
+    const ctx = el.getContext("2d");
+    if (!ctx) return;
+    ctx.clearRect(0, 0, width, height);
+    ctx.imageSmoothingEnabled = false;
+    const isTrotting = !isReducedMotion && clock % 5 < 1.4;
+    const blobXform = characterXform(blobAnim, CHARACTER_STYLE);
+    drawBlob(ctx, look, {
+      cx: width * 0.43,
+      cy: height * 0.5,
+      size: Math.min(124, width * 0.58),
+      xf: blobXform,
+    });
+    if (petId !== null) {
+      const petXform = characterXform(petAnim, CHARACTER_STYLE);
+      const trotOffset = isTrotting ? Math.sin(clock * 5) * 10 : 0;
+      drawPetFrame(ctx, sprites(), {
+        petId,
+        clip: isTrotting ? "walk" : "idle",
+        cx: width * 0.76 + trotOffset,
+        cy: height * 0.64,
+        size: Math.min(58, width * 0.27),
+        facing: isTrotting && Math.cos(clock * 5) < 0 ? -1 : 1,
+        xform: petXform,
+        clock: petAnim.clock,
+      });
+    }
+  };
+
+  const isSettled = () => {
+    const petSprite = petId === null ? null : petSpriteFor(petId);
+    return isBlobReady(look)
+      && (petSprite === null || sprites().isSpriteSettled(petSprite));
+  };
+
+  const isRunnable = () => !isDisposed
+    && el.isConnected
+    && !isPaused
+    && document.hidden !== true
+    && (!isReducedMotion || !isSettled());
+
+  const schedule = () => {
+    if (raf === 0 && isRunnable()) raf = requestAnimationFrame(tick);
+  };
+
+  const tick = (now: number) => {
+    raf = 0;
+    if (!isRunnable()) { last = 0; return; }
+    const dt = Math.min(0.05, last > 0 ? (now - last) / 1000 : 0.016);
+    last = now;
+    if (!isReducedMotion) {
+      clock += dt;
+      const isTrotting = clock % 5 < 1.4;
+      stepAnim(blobAnim, dt, false, 0);
+      stepAnim(petAnim, dt, isTrotting, isTrotting ? 0.4 : 0);
+    }
+    draw();
+    schedule();
+  };
+
+  const onVisibility = () => {
+    if (!el.isConnected) {
+      document.removeEventListener("visibilitychange", onVisibility);
+      return;
+    }
+    if (document.hidden === true) {
+      cancelAnimationFrame(raf);
+      raf = 0;
+      last = 0;
+    } else {
+      schedule();
+    }
+  };
+  document.addEventListener("visibilitychange", onVisibility);
+  draw();
+  queueMicrotask(schedule);
+
+  return {
+    el,
+    setLoadout(nextLook, nextPetId) {
+      look = nextLook;
+      petId = nextPetId;
+      draw();
+      schedule();
+    },
+    setPaused(nextIsPaused) {
+      isPaused = nextIsPaused;
+      if (isPaused) {
+        cancelAnimationFrame(raf);
+        raf = 0;
+        last = 0;
+      } else {
+        schedule();
+      }
+    },
+    dispose() {
+      isDisposed = true;
+      cancelAnimationFrame(raf);
+      raf = 0;
+      document.removeEventListener("visibilitychange", onVisibility);
     },
   };
 }

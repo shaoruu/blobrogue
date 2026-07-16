@@ -13,6 +13,7 @@ import { rollPvpDraftChoicesWith, itemById, itemDesc, itemLevelsOf, isPvpBlessin
 import type { PlayerMods, ItemDef } from "../sim/items.js";
 import { PLAYER, REVIVE, BOSS, MARROW, WEAVER, GILDED, GORGE, TIERS, ELITE_BULWARK, MARSHAL, ROLL_AFFIX, RESONANCE_FAMILIES, RESONANCE_TELEGRAPH_COLOR } from "../sim/balance.js";
 import { petSpriteFor } from "./pets.js";
+import { drawPetFrame, PET_RENDER_SIZE } from "./petRenderer.js";
 import {
   createPetFollow, stepPetFollow, PET_REST_OFFSET, PET_REST_DROP, PET_MAX_SPEED,
 } from "./petFollow.js";
@@ -199,9 +200,6 @@ interface RemoteAnimEntry { anim: Anim; lastX: number; lastY: number; isDashing:
 // velocity that scampers to catch up and coasts to a sit — see petFollow.ts), plus an anim
 // clock for the idle-breathe / run cycle. Purely cosmetic — never a sim entity.
 interface PetRenderEntry { petId: string; follow: PetFollow; anim: Anim; wasMoving: boolean; }
-// Companion pet draw size (px) — a small companion beside the ~52px blob. The FOLLOW tuning
-// (offsets, speeds, warp) lives with the physics in petFollow.ts.
-const PET_SIZE = 34;
 // Per-pet voice: a move cue (while trotting), a settle cue (on stop), and an optional trot
 // loop. The doggie has the richest set (a felt trot loop + pant); the others get a small
 // species move/settle. Cooldowns live in the wave spec, so this only fires on transitions.
@@ -4360,6 +4358,7 @@ export class Game {
     if (mismatch) { this.quitToMenu("world_mismatch", `expected ${mismatch.expected}, got ${mismatch.got}`); return; }
     switch (kind) {
       case "connection_lost": this.quitToMenu("connection_lost"); return;
+      case "client_outdated": this.quitToMenu("client_outdated"); return;
       case "superseded": this.quitToMenu("superseded"); return;
       case "resume_rejected": this.quitToMenu("connection_lost", "resume rejected"); return;
       // The run ended while we were still behind the veil — nothing was played; regroup.
@@ -8500,8 +8499,6 @@ export class Game {
 
     const cam = this.renderCam;
     for (const pet of this.petRenders.values()) {
-      const sprite = petSpriteFor(pet.petId);
-      if (sprite === null) continue;
       const f = pet.follow;
       const sx = f.x - cam.x, sy = f.y - cam.y;
       const xf = characterXform(pet.anim, CHARACTER_STYLE);
@@ -8514,7 +8511,16 @@ export class Game {
       //         idle transform (breathe/bob) animates it, so a sat pet is never a dead frame.
       // A still-streaming sprite degrades to a tinted disc (never blank, never a crash).
       const clip = f.isMoving ? "walk" : "idle";
-      this.drawChar(sprite, clip, sx, sy, PET_SIZE, f.facing, xf, 1, 1, 0, pet.anim.clock, null, false);
+      drawPetFrame(this.ctx, this.sprites, {
+        petId: pet.petId,
+        clip,
+        cx: sx,
+        cy: sy,
+        size: PET_RENDER_SIZE,
+        facing: f.facing,
+        xform: xf,
+        clock: pet.anim.clock,
+      });
     }
   }
 
