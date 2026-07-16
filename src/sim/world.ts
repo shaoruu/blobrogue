@@ -4285,6 +4285,8 @@ function startMeleeSwing(w: WorldState, p: PlayerSim, ev: SimEvent[]): void {
   p.shotSeq++;
   // Slash-wind fires at the pre-knockback position (x,y); the small tip burst fires after
   // the weapon's self-knockback (bx,by). They differ only for the spear (its kb > 0).
+  // Hold Fast is gun-only: melee kick uses the authored FIRE_KNOCKBACK raw, never
+  // selfKnockbackMult / applyWeaponKick (which emits the hold_fast blessingProc).
   const preX = p.x, preY = p.y;
   const kb = C.FIRE_KNOCKBACK[p.weapon];
   if (kb !== 0) {
@@ -11072,6 +11074,8 @@ function dashClearSilk(w: WorldState, p: PlayerSim, ev: SimEvent[]): void {
 }
 
 function webSlowMult(w: WorldState, x: number, y: number): number {
+  // Pathmaker pave is silk-immune: a player center on live pave never takes Weaver web slow.
+  if (isPavedAt(w, x, y)) return 1;
   for (const h of w.hazards) {
     if (h.kind !== "web") continue;
     if (Math.hypot(x - h.x, y - h.y) < h.radius) return WEAVER.webSlow;

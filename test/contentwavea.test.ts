@@ -24,7 +24,7 @@ import type { Bullet, HazardKind, WeaponId } from "../src/sim/types.js";
 import { TILE } from "../src/sim/types.js";
 import { WEAPONS, PICKUP_WEAPONS } from "../src/sim/weapons.js";
 import { ARSENAL } from "../src/sim/arsenal.js";
-import { REVIVE, WEAPON_RESONANCE } from "../src/sim/balance.js";
+import { PLAYER, REVIVE, WEAPON_RESONANCE } from "../src/sim/balance.js";
 import {
   FIRE_KNOCKBACK, MAX_PAVE_ZONE_EFFECTS, MAX_PAVE_ZONES_PER_OWNER,
   MAX_ZONE_EFFECTS, WEAPON_KB,
@@ -158,6 +158,10 @@ section("canonical roadmap and additive catalog migration");
     ["MOORING NAIL", "ANCHOR / GRAPPLE", "SLUICEGATE", "MODESHIFT", "ODDSMAKER", "GAMBLE",
       "PATHMAKER", "CLEANSE / PAVE", "HOLD FAST", "NOTHING WASTED", "SECOND BREATH MUDDY",
       "ON THE BEAT", "SHARED ROPE"].every((token) => roadmap.includes(token)));
+  const gameSource = readFileSync(new URL("../src/game/game.ts", import.meta.url), "utf8");
+  check("Shared Rope prompt/ring/proximity UI consumes the authority radius helper only",
+    !gameSource.includes("REVIVE.radius")
+    && (gameSource.match(/effectiveReviveRadius\(this\.p\)/g)?.length ?? 0) >= 3);
 
   const fixture = JSON.parse(readFileSync(
     new URL("./fixtures/content_catalog.fixtures.json", import.meta.url), "utf8",
@@ -296,7 +300,20 @@ section("MOORING NAIL — ANCHOR / GRAPPLE");
   maxPellet.player.y = 12 * TILE;
   maxPellet.player.mods.extraPellets = 7;
   acquireWeaponInWorld(maxPellet.world, maxPellet.player.id, "mooring_nail");
-  fireOnce(maxPellet.world, maxPellet.player, Math.PI);
+  const mooringVolley = fireOnce(maxPellet.world, maxPellet.player, Math.PI);
+  const relativeAngles = mooringVolley.slice(1)
+    .map((bullet) => {
+      let angle = Math.atan2(bullet.vy, bullet.vx) - Math.PI;
+      while (angle > Math.PI) angle -= Math.PI * 2;
+      while (angle < -Math.PI) angle += Math.PI * 2;
+      return angle;
+    })
+    .sort((left, right) => left - right);
+  check("pellet0 is the sole centered anchor and non-anchor pellets fan symmetrically",
+    Math.abs(Math.atan2(mooringVolley[0].vy, mooringVolley[0].vx) - Math.PI) < 1e-9
+    && mooringVolley.filter((bullet) => bullet.grapplePull !== undefined).length === 1
+    && relativeAngles.every((angle, index) =>
+      Math.abs(angle + relativeAngles[relativeAngles.length - 1 - index]) < 1e-9));
   let maxPelletGrapples = 0;
   for (let tick = 0; tick < 90; tick++) {
     const events = stepWorld(
@@ -577,6 +594,35 @@ section("PATHMAKER — CLEANSE / PAVE");
   stepWorld(safety.world, new Map([[safety.player.id, input(safety.world.tick + 1)]]), DT);
   check("expiry restores surviving underlying floor danger without resurrecting cleansed hazards",
     safety.player.hp < damagedHp);
+
+  const silkRoute = arena(0xA310);
+  silkRoute.world.effects.push({
+    id: silkRoute.world.nextEffectId++, kind: "zone", owner: silkRoute.player.id,
+    fx: "pathmaker", x: 420, y: 600, life: 3, maxLife: 3,
+    radius: 27, chillRate: 0, isPaved: true,
+  });
+  silkRoute.world.hazards.push({
+    id: silkRoute.world.nextHazardId++, kind: "web", x: 420, y: 600,
+    radius: 60, life: 10, maxLife: 10,
+  });
+  silkRoute.player.x = 420;
+  silkRoute.player.y = 600;
+  stepWorld(
+    silkRoute.world,
+    new Map([[silkRoute.player.id, input(1, { moveX: 1 })]]),
+    DT,
+  );
+  const pavedMove = silkRoute.player.x - 420;
+  silkRoute.player.x = 448;
+  stepWorld(
+    silkRoute.world,
+    new Map([[silkRoute.player.id, input(2, { moveX: 1 })]]),
+    DT,
+  );
+  const webMove = silkRoute.player.x - 448;
+  check("fresh silk cannot slow a player center inside live pave, but slows outside",
+    Math.abs(pavedMove - PLAYER.moveSpeed * DT) < 1e-6
+    && webMove < pavedMove * 0.75);
 }
 
 section("PATHMAKER party route budgets");
@@ -692,6 +738,29 @@ section("blessing mechanics and interactions");
   check("HOLD FAST stabilization feedback fires once at the collision-clamped recoil result",
     holdEvents.filter((event) =>
       event.t === "blessingProc" && event.item === "hold_fast").length === 1);
+  const spearKick = (isBlessed: boolean): { distance: number; procCount: number } => {
+    const sample = arena(isBlessed ? 0xB004 : 0xB005);
+    acquireWeaponInWorld(sample.world, sample.player.id, "spear");
+    if (isBlessed) applyLevel(sample.world, sample.player, "hold_fast", 3);
+    const startX = sample.player.x;
+    sample.player.fireCd = 0;
+    const events = stepWorld(
+      sample.world,
+      new Map([[sample.player.id, input(1, { firing: true })]]),
+      DT,
+    );
+    return {
+      distance: startX - sample.player.x,
+      procCount: events.filter((event) =>
+        event.t === "blessingProc" && event.item === "hold_fast").length,
+    };
+  };
+  const plainSpear = spearKick(false);
+  const heldSpear = spearKick(true);
+  check("HOLD FAST is gun-only — melee kick keeps full authored FIRE_KNOCKBACK",
+    Math.abs(heldSpear.distance - plainSpear.distance) < 1e-6
+    && heldSpear.procCount === 0
+    && plainSpear.distance > 0);
 
   const { world: reclaimWorld, player: reclaimPlayer } = arena(0xB101);
   reclaimPlayer.x = 5 * TILE;

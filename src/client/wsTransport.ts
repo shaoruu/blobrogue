@@ -161,6 +161,7 @@ function pidOf(e: SimEvent): PlayerId | undefined {
 // and pass anyway; the local player's own copies still play exactly once (deduped by id).
 const REMOTE_AUDIBLE_EVENTS: ReadonlySet<SimEvent["t"]> = new Set<SimEvent["t"]>([
   "shot", "meleeSwing", "playerHurt", "heal", "pickup", "pvpShieldBreak",
+  "grappleResolved", "blessingProc", "reviveHandoff",
 ]);
 
 export class WSTransport implements Transport {
@@ -287,6 +288,9 @@ export class WSTransport implements Transport {
     this.curMode = mode;
     this.curSeed = STAGE_B_SEED;
     this.curFloor = STAGE_B_FLOOR;
+    // Fresh online join / restart must not inherit a prior session's legacy catalog latch —
+    // otherwise a Wave A run after a legacy join stays stuck on catalog 0 until a snap rebuild.
+    this.curCatalogVersion = CURRENT_CONTENT_CATALOG_VERSION;
     this.predState = createWorld(STAGE_B_SEED, STAGE_B_FLOOR, {
       mode, catalogVersion: this.curCatalogVersion,
     });
@@ -759,7 +763,8 @@ export class WSTransport implements Transport {
       }
       // Keep global/world events, this client's OWN player events, and the shared moments
       // that everyone standing at them must replay: revive, plus a NETWORKED player's combat
-      // FX (shot/meleeSwing/playerHurt/heal/pickup — v14). Those now ride "pos" scope, so the
+      // FX (shot/meleeSwing/playerHurt/heal/pickup and Wave A positional feedback). Those ride
+      // "pos" scope, so the
       // server delivers a teammate's actions to nearby clients; the client replays them
       // POSITIONALLY (handleSimEvent branches self vs remote), so a friend is audible to all.
       if (pid === undefined || pid === this.selfServerId || e.t === "revive" || REMOTE_AUDIBLE_EVENTS.has(e.t)) this.events.push(e);

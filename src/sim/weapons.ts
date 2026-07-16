@@ -681,8 +681,18 @@ export function fire(spec: ShotSpec, x: number, y: number, aim: number, rng: Rng
         : undefined;
     }
     const isAnchorPellet = spec.grapplePull !== undefined && i === 0;
-    const t = spec.pellets === 1 || isAnchorPellet ? 0 : (i / (spec.pellets - 1)) - 0.5;
-    const jitter = isAnchorPellet ? 0 : (rng.next() - 0.5) * (spec.spread * 0.3);
+    // Mooring Nail: pellet0 is the sole centered grapple anchor. Extra pellets fan
+    // symmetrically around aim via t=(i/(n-1))-0.5 over the EXTRA set only — never
+    // pin-asymmetry from including the anchored center in the fan denominator.
+    const grappleExtraCount = spec.grapplePull !== undefined ? spec.pellets - 1 : 0;
+    const t = spec.pellets === 1 || isAnchorPellet
+      ? 0
+      : spec.grapplePull !== undefined
+        ? grappleExtraCount === 1 ? 0 : ((i - 1) / (grappleExtraCount - 1)) - 0.5
+        : (i / (spec.pellets - 1)) - 0.5;
+    const jitter = spec.grapplePull !== undefined
+      ? 0
+      : (rng.next() - 0.5) * (spec.spread * 0.3);
     const a = aim + t * spec.spread + jitter;
     const isCrit = spec.critChance > 0 && rng.next() < spec.critChance;
     shots.push({
