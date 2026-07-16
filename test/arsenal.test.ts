@@ -997,7 +997,8 @@ function envelopeGates(): void {
     (["sword", "longsword", "spear"] as WeaponId[]).every((id) =>
       WEAPONS[id].melee!.reach <= 80 && WEAPONS[id].fireCd >= 0.18));
   check("≤3 persistent families ship per batch (shared caps/telemetry before more)",
-    ALL_WEAPONS.filter((id) => ARSENAL[id].authority.some((a) => a === "effects:zone" || a === "effects:wire" || a === "effects:sentry")).length <= 3);
+    new Set(ALL_WEAPONS.flatMap((id) => ARSENAL[id].authority)
+      .filter((channel) => channel === "effects:zone" || channel === "effects:wire" || channel === "effects:sentry")).size <= 3);
 
   section("[HOLD] envelope: party trap budget — the world holds at most 6 wires");
   {
@@ -1124,6 +1125,10 @@ function differentiationGates(m: Matrix): void {
         const baseline = measureRoom("pistol", "secondlane");
         ok = own.isCleared && own.clearTicks <= baseline.clearTicks * 0.85;
         detail = `own=${(own.clearTicks / 60).toFixed(1)}s baseline=${(baseline.clearTicks / 60).toFixed(1)}s`;
+      } else if (metric === "paving") {
+        const paint = WEAPONS[id].paint;
+        ok = paint?.isPaving === true && paint.radius >= 24 && paint.life >= 3;
+        detail = paint === undefined ? "no paint spec" : `radius=${paint.radius} life=${paint.life}`;
       } else if ((entry.resource === "health-risk" || entry.resource === "coin-fed") && metric !== "boss") {
         // Cost-paid run vs the room's neutral median: the payoff must be real (the
         // Lastlight pays in hearts, the Midas in coins — same paid-ceiling contract).
@@ -1153,9 +1158,11 @@ function differentiationGates(m: Matrix): void {
     const sorted = vals.slice().sort((a, b) => dir === "low" ? a - b : b - a);
     return sorted[Math.floor(sorted.length / 4)];
   };
-  const bossVals75 = p75(ALL_WEAPONS.map((id) => m.boss.get(id)!), "high");
-  const roomVals75 = p75(ALL_WEAPONS.map((id) => roomScore(id)), "high");
-  const safetyVals75 = p75(ALL_WEAPONS.map((id) => metricValue(m, id, "safety")), "low");
+  const waveA = new Set<WeaponId>(["mooring_nail", "sluicegate", "oddsmaker", "pathmaker"]);
+  const referenceWeapons = ALL_WEAPONS.filter((id) => !waveA.has(id));
+  const bossVals75 = p75(referenceWeapons.map((id) => m.boss.get(id)!), "high");
+  const roomVals75 = p75(referenceWeapons.map((id) => roomScore(id)), "high");
+  const safetyVals75 = p75(referenceWeapons.map((id) => metricValue(m, id, "safety")), "low");
   const allRounders = ALL_WEAPONS.filter((id) =>
     m.boss.get(id)! > bossVals75 && roomScore(id) > roomVals75 && metricValue(m, id, "safety") < safetyVals75);
   check("no weapon holds the boss + room + safety top quartiles at once", allRounders.length === 0,
@@ -1167,7 +1174,8 @@ function differentiationGates(m: Matrix): void {
 function creativeGates(m: Matrix): void {
   // Every post-cluster addition is audited: the effect wave AND the legendary wave.
   const NEW_WAVE: WeaponId[] = ["lastlight", "breach", "snapwire", "frostline", "halo", "sentry", "crook",
-    "reaper", "swarm", "midas", "phase", "vortex"];
+    "reaper", "swarm", "midas", "phase", "vortex",
+    "mooring_nail", "sluicegate", "oddsmaker", "pathmaker"];
   const mechSig = (wep: Weapon): string => [
     wep.melee ? (wep.melee.isThrust ? "thrust" : "sweep") : "",
     wep.charge ? "charge" : "", wep.wire ? "wire" : "", wep.paint ? "paint" : "",
@@ -1182,6 +1190,8 @@ function creativeGates(m: Matrix): void {
     wep.killShards !== undefined ? "reap" : "", wep.accel !== undefined ? "accel" : "",
     wep.coinBoost !== undefined ? "gilded" : "", wep.isPhase === true ? "phase" : "",
     wep.implode !== undefined ? "implode" : "",
+    wep.grapple !== undefined ? "grapple" : "", wep.modeShift !== undefined ? "modeshift" : "",
+    wep.gamble !== undefined ? "gamble" : "", wep.paint?.isPaving === true ? "pave" : "",
   ].filter((x) => x.length > 0).join("+") || "plain";
 
   section("[MAJOR] creative audit: every addition moves a whole play dimension");

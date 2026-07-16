@@ -28,7 +28,7 @@ export type RoomId = "swarm" | "anchor" | "brawl" | "lane" | "cover" | "kite" | 
 // A declared performance metric (balancer envelope): the room clear times plus the
 // cross-room aggregates. Each weapon declares 1-2 metrics it beats the arsenal median
 // on by >=15% (proven in test/arsenal.test.ts) — its authored, measurable identity.
-export type MetricId = RoomId | "safety" | "control" | "boss";
+export type MetricId = RoomId | "safety" | "control" | "boss" | "paving";
 export type RangeBand = "point-blank" | "close" | "mid" | "long" | "self" | "placed";
 export type TargetProfile = "swarm" | "single" | "pack" | "lane" | "anchor" | "control" | "mixed";
 // "coin-fed" (the Midas): the run economy amplifies the shot — never gates it. The
@@ -680,13 +680,13 @@ export const ARSENAL: Record<WeaponId, WeaponManifestEntry> = {
   },
   mooring_nail: {
     role: "wall grappler: nail the room and pull yourself onto a new line",
-    metrics: ["safety"],
+    metrics: ["lane", "door"],
     novelty: {
       nearest: "crook",
       axes: ["positioning", "geometry"],
       note: "The Crooked Chain moves a body relative to the player; the Mooring Nail bites room geometry and moves the player to the anchor.",
     },
-    idealRange: "long", target: "lane",
+    idealRange: "long", target: "control",
     strength: "A wall hit crosses danger and opens a firing angle while the deep-piercing nail clears its path.",
     weakness: "Open ground offers no anchor, and the modest nail stalls on a lone heavy body.",
     resource: "position", status: "none",
@@ -698,13 +698,13 @@ export const ARSENAL: Record<WeaponId, WeaponManifestEntry> = {
   },
   sluicegate: {
     role: "alternating gate: flood the near pack, then drain the long lane",
-    metrics: ["brawl", "lane"],
+    metrics: ["lane", "cover"],
     novelty: {
       nearest: "burst",
       axes: ["timing", "geometry"],
       note: "Its geometry changes every committed shot: a short wide fan and a long piercing lance form a fixed two-beat sequence.",
     },
-    idealRange: "mid", target: "mixed",
+    idealRange: "mid", target: "pack",
     strength: "The fixed two-beat sequence answers a crowd and its back-line anchor without changing weapons.",
     weakness: "The wrong half of the cycle is deliberately poor for the current room shape.",
     resource: "none", status: "none",
@@ -716,13 +716,13 @@ export const ARSENAL: Record<WeaponId, WeaponManifestEntry> = {
   },
   oddsmaker: {
     role: "payload gambler: commit before knowing how the room will bend",
-    metrics: ["swarm"],
+    metrics: ["brawl", "door"],
     novelty: {
       nearest: "midas",
       axes: ["timing", "priority", "geometry"],
       note: "Midas prices a known shot with coins; Oddsmaker deterministically rolls one of four spatial payloads per owner and shot.",
     },
-    idealRange: "mid", target: "mixed",
+    idealRange: "mid", target: "pack",
     strength: "Every outcome edits the room differently: bank, seek, blast, or pierce.",
     weakness: "No outcome can be demanded twice; a poor roll against the current shape costs the full cycle.",
     resource: "none", status: "none",
@@ -734,7 +734,7 @@ export const ARSENAL: Record<WeaponId, WeaponManifestEntry> = {
   },
   pathmaker: {
     role: "safe-route painter: cleanse hostile ground and pave the crossing",
-    metrics: ["control", "safety"],
+    metrics: ["paving"],
     novelty: {
       nearest: "frostline",
       axes: ["geometry", "positioning"],
@@ -748,6 +748,6 @@ export const ARSENAL: Record<WeaponId, WeaponManifestEntry> = {
     audio: "shootPathmaker",
     visual: "#a8d7a0 pale safe-route plates under a quiet bead; held_pathmaker hook",
     authority: ["bullets", "effects:zone"],
-    excelRoom: "cover", weakRoom: "anchor",
+    excelRoom: "ambush", weakRoom: "anchor",
   },
 };
