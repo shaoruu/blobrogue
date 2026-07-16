@@ -11784,9 +11784,17 @@ function giantExposeSeams(w: WorldState, e: Enemy, ev: SimEvent[], spec: GiantSp
     const bankArc = arc / bankFacings.length;
     const ang = bankFacings[bankIndex]
       + (bankCount > 1 ? (bankOffset / (bankCount - 1) - 0.5) * bankArc : 0);
-    const x = e.x + Math.cos(ang) * gc.seamRingDist;
-    const y = e.y + Math.sin(ang) * gc.seamRingDist;
-    if (!settleSpawnPoint(w, x, y, ENEMY_ARCHETYPES[spec.seamKind].radius)) continue;
+    const seamRadius = ENEMY_ARCHETYPES[spec.seamKind].radius;
+    let isSettled = false;
+    for (let extra = 0; extra <= TILE; extra += TILE / 4) {
+      const x = e.x + Math.cos(ang) * (gc.seamRingDist + extra);
+      const y = e.y + Math.sin(ang) * (gc.seamRingDist + extra);
+      if (!settleSpawnPoint(w, x, y, seamRadius)) continue;
+      if (Math.hypot(settlePoint.x - e.x, settlePoint.y - e.y) <= e.radius + seamRadius + 20) continue;
+      isSettled = true;
+      break;
+    }
+    if (!isSettled) continue;
     const seam = createEnemy(spec.seamKind, settlePoint.x, settlePoint.y, w.floor, w.rng, w.nextEnemyId++, {
       isSummoned: true, players: w.encounterPlayers,
     });

@@ -345,7 +345,7 @@ function sweepNavigationRun(players: number, seed: number): {
   const starts: Point[][] = [];
   for (const radius of [170, 210]) {
     const bodyInset = Math.asin(Math.min(0.99, (18 + PALE.globRadius) / radius));
-    const offsets = [-initialSafe.width / 2 + bodyInset + 0.04, 0];
+    const offsets = radius === 170 ? [-initialSafe.width / 2 + bodyInset + 0.04, 0] : [0];
     for (const offset of offsets) {
       const point = {
         x: boss.x + Math.cos(initialSafe.center + offset) * radius,
