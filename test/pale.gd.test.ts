@@ -272,6 +272,15 @@ function ring2NavigationGate(): void {
     }
   }
   const isReached = starts.map(() => false);
+  for (let index = 0; index < starts.length; index++) {
+    for (const point of starts[index]) {
+      const radius = Math.hypot(point.x - boss.x, point.y - boss.y);
+      const inset = Math.asin(Math.min(0.99, (player.pr + PALE.globRadius) / radius));
+      if (isInsideGap(Math.atan2(point.y - boss.y, point.x - boss.x), gapB, gapWidth, inset)) {
+        isReached[index] = true;
+      }
+    }
+  }
   const frames = Math.ceil(PALE.ring2DelaySec / DT);
   let isEveryFrameOpen = true;
   for (let tick = 0; tick < frames; tick++) {
@@ -309,7 +318,12 @@ function seedP2Pools(world: WorldState, boss: Enemy, ids: PlayerId[]): void {
   }
 }
 
-function sweepNavigationRun(players: number, seed: number): { isRouteOpen: boolean; minReachable: number } {
+function sweepNavigationRun(players: number, seed: number): {
+  isRouteOpen: boolean;
+  minReachable: number;
+  collapseTick: number;
+  collapsedStart: number;
+} {
   const { world, boss, ids } = arena(players, seed);
   seedP2Pools(world, boss, ids);
   devSpawnProp(world, "pale_debris", boss.x + 90, boss.y);
@@ -340,6 +354,8 @@ function sweepNavigationRun(players: number, seed: number): { isRouteOpen: boole
   if (starts.length < 3) throw new Error(`Pale sweep setup produced only ${starts.length} legal representative starts`);
   let minReachable = Number.POSITIVE_INFINITY;
   let isRouteOpen = true;
+  let collapseTick = -1;
+  let collapsedStart = -1;
   const maxFrames = Math.ceil((PALE.spokeDuration + PALE.globLife + 0.5) / DT);
   for (let tick = 0; tick < maxFrames; tick++) {
     const before = new Map(world.bullets.map((entry) => [entry, { x: entry.x, y: entry.y }]));
@@ -348,18 +364,26 @@ function sweepNavigationRun(players: number, seed: number): { isRouteOpen: boole
     for (let index = 0; index < starts.length; index++) {
       starts[index] = advanceReachable(world, starts[index], segments, 18, 100);
       minReachable = Math.min(minReachable, starts[index].length);
-      if (starts[index].length === 0) isRouteOpen = false;
+      if (starts[index].length === 0) {
+        isRouteOpen = false;
+        if (collapseTick < 0) {
+          collapseTick = tick;
+          collapsedStart = index;
+        }
+      }
     }
   }
-  return { isRouteOpen: isRouteOpen && starts.every((set) => set.length > 0), minReachable };
+  return { isRouteOpen: isRouteOpen && starts.every((set) => set.length > 0), minReachable, collapseTick, collapsedStart };
 }
 
 function sweepNavigationGates(): void {
   section("P3 swept volume: real bullets, pools, debris, walls, body radius, and worst warmth slow");
   const one = sweepNavigationRun(1, 0xA301);
   const four = sweepNavigationRun(4, 0xA304);
-  check("1P representative center/edge starts retain a continuous no-damage walk route", one.isRouteOpen, `minReachable=${one.minReachable}`);
-  check("4P representative center/edge starts retain a continuous no-damage walk route", four.isRouteOpen, `minReachable=${four.minReachable}`);
+  check("1P representative center/edge starts retain a continuous no-damage walk route", one.isRouteOpen,
+    `minReachable=${one.minReachable} collapse=${one.collapseTick}/start${one.collapsedStart}`);
+  check("4P representative center/edge starts retain a continuous no-damage walk route", four.isRouteOpen,
+    `minReachable=${four.minReachable} collapse=${four.collapseTick}/start${four.collapsedStart}`);
   for (let emission = 0; emission <= Math.ceil(PALE.spokeDuration / PALE.spokeInterval); emission++) {
     const safe = giantSafeIntersection(emission, 1, PALE);
     check(`emission ${emission} keeps an explicitly bounded safe intersection`, safe !== null && safe.width > 0.12);
