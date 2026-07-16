@@ -30,6 +30,8 @@ async function boot(players, phase, isHitDebug = false) {
 
 for (const phase of [1, 2, 3]) {
   const page = await boot(1, phase);
+  await page.evaluate((value) => window.__game.devSetPalePhase(value), phase);
+  await page.waitForTimeout(60);
   await page.screenshot({ path: join(outDir, `pale-1p-p${phase}.png`) });
   await page.close();
 }
@@ -60,7 +62,10 @@ for (const beat of ["sweepWindup", "sweepActive"]) {
 
 for (const isChilled of [true, false]) {
   const page = await boot(1, 3);
-  await page.evaluate((value) => window.__game.devSetPaleWarmth(value), isChilled);
+  await page.evaluate((value) => {
+    window.__game.devSetPaleBeat("sweepWindup");
+    window.__game.devSetPaleWarmth(value);
+  }, isChilled);
   await page.waitForTimeout(60);
   await page.screenshot({ path: join(outDir, isChilled ? "pale-warmth-chilled.png" : "pale-warmth-thawed.png") });
   await page.close();
@@ -68,6 +73,8 @@ for (const isChilled of [true, false]) {
 
 for (const phase of [1, 2, 3]) {
   const page = await boot(1, phase, true);
+  await page.evaluate((value) => window.__game.devSetPalePhase(value), phase);
+  await page.waitForTimeout(60);
   await page.screenshot({ path: join(outDir, `pale-hit-radius-p${phase}.png`) });
   await page.close();
 }
