@@ -43,7 +43,7 @@ I iterate through this until done. Newest feedback appended; status kept current
 🟡 Shop: click-outside-to-close + clearer sold-out/heart-limit states. [specced]
 🟡 Ground FX: frost zone ✅done, thumper scorch decal + frost render tweak. [queued in visual pass]
 🟡 Music expansion (~29 tracks, pool+shuffle+combat crossfade) + AMBER HOME MOTIF: canonical melody authored w/ literal MIDI at /workspace/blobrogue_audio_manifest/amber_motif/ (amber_motif.mid). Build = generate EL bed then DAW/sample-layer the MIDI over it (clean celesta F100 / broken-detuned-inverted Jet); NEVER text-to-music the tune. Plant in menu+Amberwild during music pass so it's internalized before Jet. Giant signature separate; they meet only at F100. [audio spec in]
-🟡 Run persistence — reconnect resumes the run instead of dropping it. [todo → design]
+🟢 SHIPPED Run persistence — authoritative seat reserve/restore, generation-bound resume, restart tombstones, and policy-bound admission.
 🟡 Hotbar full-swap flow redo (auto-swap equipped, E for slot pick). [specced]
 🟡 Everything spawnable in DEV WORLD (standing checklist per feature).
 
@@ -56,9 +56,9 @@ I iterate through this until done. Newest feedback appended; status kept current
 - 🔴 choir.png 6% teal — minor cleanup (re-snap on choir_cyan/bone lane when convenient).
 - 🔴 Sump deep-mob enemies (Wave 1 packet called for 2-3 corrupted variants — not yet built).
 
-## Tech debt (TD daily gate 2026-07-10, non-blocking)
-- 🔴 BUNDLE BUDGET: client bundle 687KB / 202KB gzip (was 398KB), Vite chunk-size warning. Add a bundle budget + code-split (lazy dev/creative sandbox + heavy art/audio tables) before it hurts mobile load. TD tracking next gate.
-- 🔴 REFACTOR: src/sim/world.ts 8,886 lines + src/game/game.ts 7,532 — staged carve of world.ts by system behind a WorldContext (NOT big-bang). Server side already cleanly split.
+## Tech debt (TD daily gate 2026-07-16, non-blocking)
+- 🟢 BUNDLE BUDGET WIRED+GREEN: initial 317.3/340KB; lazy game 573/700KB.
+- 🔴 REFACTOR: `src/sim/world.ts` 12,430 lines + `src/game/game.ts` 9,613 — staged WorldContext carve remains overdue; required RoomRuntime/SessionStore/SnapshotPublisher ports are present.
 
 ## Dev panel QoL (Ian 2026-07-10)
 - 🔴 DEV PANEL THUMBNAILS: add a sprite thumbnail/preview to each enemy + boss spawn row (same style as the existing gun preview: pickup/held img + name/stats). Enemies are text-only rows today (src/dev/sandbox.ts ~line 145, dev-lbl span). Guns ALREADY have it (dev-weapon-preview ~line 161). Extend to enemies/bosses; nice-to-have for kits/mutators/affixes/cosmetics too.

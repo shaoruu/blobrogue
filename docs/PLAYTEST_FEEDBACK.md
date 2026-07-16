@@ -4,7 +4,7 @@ This is the source of truth for Ian's playtest feedback. Main runner updates it 
 
 ## Hard priorities / governance
 - `SHIPPED` **Full authoritative multiplayer end-to-end (coding priority #1) — LIVE.** Server owns ALL gameplay state. Stage A #20, Stage B #21, Stage C SHIPPED via #24 (supersedes #22, now closed); lobby/rooms/identity #26; control plane #23; juice #27. TD daily gate: PASS, main production-green. Playable at blobrogue-shaoruuu.vercel.app (Play Online → room code). Slack updates: `#ian-brain`.
-- `BLOCKED (Patch 0)` **PVP / ARENA (FFA deathmatch).** Mode MVP built (#121, frag-limit respawn, 100 HP, mode-gated pure sim, no fork). Kill switch **SHIPPED + live, PVP intentionally DISABLED** (#127, five-layer fail-closed; `ARENA · PATCHING` is expected, not a bug). Client presentation **SHIPPED** (#129: HP bar not 100 hearts, match HUD scoreboard/timer/countdown/respawn/result, all co-op floor/GO-DOWN chrome suppressed; verified live in a real rendered arena). Server-side **Patch 0 hardening in flight** (#128: 6 blockers + canDamage/respawn lifecycle, co-op byte-identical, PvP goldens + real-socket E2E). **Fun pass** (game designer + balancer specced): Wave 1 = per-weapon knockback + lethal-pit ring-out env-kills + combo juice + mid-match blessing draft (behind a default-off toggle) + comeback marker + instant re-queue; Wave 2 = contested center + hazards + kit counters; Wave 3 = PvP ult rework + objective mode. **Re-enable gate = Patch 0 PASS + a fun/complete loop + a real live played match; PVP stays public-disabled until then.**
+- `BLOCKED (public re-enable)` **PVP / ARENA (FFA deathmatch).** Public PVP is intentionally disabled; `ARENA · PATCHING` is expected. MVP #121, kill switch #127, Patch 0 #128, HUD #129, Wave 1 physics/pits/requeue #130, and threat-aware fairness #136 are `SHIPPED` and live dark. Authority foundation #137 is merged and dark-deployed: durable `private_draft_v1`, ticket v2, admission a2, immutable GS policy, cap4, and exact composite verification. Private/public flags and drafts remain OFF. Next: separate PR B draft runtime, then PR C private UX/enable. Public re-enable still requires a complete, fun loop and Ian's real-human live match; automation must never flip it.
 - `LOCKED` Server hosting: Vercel client + Hetzner authoritative Node server; PM2/nginx/WSS; admin.create.town safe control plane; no laptop dependency.
 - `LOCKED` Technical Director owns daily architecture automation + every-major-PR PASS/BLOCK. Main runner routes fixes/final calls.
 - `LOCKED` Main runner makes product/creative decisions; no approval widgets/babysitting.
@@ -15,9 +15,9 @@ This is the source of truth for Ian's playtest feedback. Main runner updates it 
 - `SHIPPED` Stage A pure deterministic sim (`src/sim`, LocalTransport); 6 goldens / 4,500 ticks deterministic. PR #20.
 - `SHIPPED` Stage B authoritative WS transport/server/prediction/reconciliation/interpolation/security/harness. PR #21. Measured 100ms RTT+5% loss p90 ~179ms, drift 0px.
 - `SHIPPED` Stage C ALL-state authority: players/inventory/blessings/coins/combo/floor seed+dungeon/objective/exit/descend/enemies/bullets/hits/status/loot/props/chests. SHIPPED via #24 (all TD blockers resolved; #22 superseded+closed). Deployed live (protocol v3, gs.create.town). Room-scoped worlds via #26. TD gate PASS.
-- `BUILDING` admin.create.town blobrogue panel cloud agent + blobrogue-control immutable release pipeline cloud agent.
+- `SHIPPED` admin.create.town BlobRogue panel/control immutable release pipeline, including deploy/restart/rollback exact composite authority verification.
 - `READY` admin.create.town persistent browser session logged in.
-- `BLOCKED` Actual Hetzner install: recreated box lacks town/Hetzner SSH key+host config; safe control plane is the preferred no-laptop solution.
+- `SHIPPED` Hetzner GS/control install live behind PM2/nginx/WSS, with immutable releases and durable generation state.
 - `DECIDED` Colyseus: adopt patterns/adapter seam; do not replace measured raw-WS stack mid-flight. Revisit at Stage D reconnect/multi-room/matchmaking/schema-delta/horizontal placement.
 
 ## Bugs / clarity / UI — current
