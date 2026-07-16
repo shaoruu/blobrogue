@@ -29,6 +29,10 @@ import {
 } from "../src/auth.js";
 import { worldIdForRoomCode as clientWorldIdForRoomCode } from "../../src/net/protocol.js";
 import { PRIVATE_DRAFT_PVP_POLICY } from "../../src/net/pvpPolicy.js";
+import {
+  requirePvpPolicyId,
+  type PvpPolicyId,
+} from "../../convex/pvpPolicy.js";
 
 let passed = 0, failed = 0;
 const failures: string[] = [];
@@ -38,6 +42,14 @@ function check(name: string, cond: boolean, detail = ""): void {
 }
 function section(name: string): void {
   process.stdout.write(`\n[${name}]\n`);
+}
+
+function resolvePolicyForTest(value: string | null | undefined): string {
+  try {
+    return requirePvpPolicyId(value);
+  } catch (error) {
+    return error instanceof Error ? error.message : String(error);
+  }
 }
 
 function signedEnvelope(
@@ -197,9 +209,17 @@ async function main(): Promise<void> {
 
   section("v2 PVP policy ticket is explicit, byte-locked, and fail-closed");
   {
+    const canonicalPolicy: PvpPolicyId = requirePvpPolicyId(PRIVATE_DRAFT_PVP_POLICY);
+    check("canonical policy resolver returns the exact policy union",
+      canonicalPolicy === PRIVATE_DRAFT_PVP_POLICY);
+    check("missing/null policy fails closed before mint",
+      resolvePolicyForTest(undefined) === "policy_required"
+      && resolvePolicyForTest(null) === "policy_required");
+    check("unknown policy fails closed before mint",
+      resolvePolicyForTest("future_public_v1") === "policy_invalid");
     const claims = {
       worldId: pvpWorldIdForRoomCode("wave", 7),
-      pvpPolicy: PRIVATE_DRAFT_PVP_POLICY,
+      pvpPolicy: canonicalPolicy,
       name: "Arena Host",
       colorIndex: 4,
       kit: "gunner",

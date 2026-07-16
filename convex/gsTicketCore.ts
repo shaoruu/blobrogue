@@ -21,6 +21,8 @@
 // player proved room membership (see convex/gsTicket.ts), and the game server binds the
 // connection to exactly the world the ticket names — a client can never assert a world id.
 
+import type { PvpPolicyId } from "./pvpPolicy";
+
 export interface GsTicketPayload {
   pid: string;  // authenticated playerId
   exp: number;  // unix seconds expiry
@@ -53,7 +55,7 @@ export interface GsTicketClaims {
 
 export interface PvpGsTicketClaims extends GsTicketClaims {
   worldId: string;
-  pvpPolicy: string;
+  pvpPolicy: PvpPolicyId;
 }
 
 // The single room-code -> authoritative-world-id mapping. Convex mints with it; the game

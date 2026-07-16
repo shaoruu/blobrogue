@@ -23,7 +23,7 @@ import {
   type PvpGsTicketClaims,
 } from "./gsTicketCore";
 import { isKitId, isKitUnlocked, masteryLevelForXp } from "./masteryCore";
-import { isPvpPolicyId } from "./pvpPolicy";
+import { requirePvpPolicyId } from "./pvpPolicy";
 
 const TICKET_TTL_SECS = 120;
 
@@ -58,17 +58,23 @@ export const mint = action({
     if (snapshot.petId !== null) claims.pet = snapshot.petId;
     claims.isPetChoiceMade = true;
     const mode = snapshot.mode;
-    claims.worldId = mode === "pvp"
+    const worldId = mode === "pvp"
       ? pvpWorldIdForRoomCode(snapshot.roomCode, snapshot.generation)
       : worldIdForRoomCode(snapshot.roomCode, snapshot.generation);
+    claims.worldId = worldId;
 
     let ticket: string;
     if (mode === "pvp") {
-      if (!isPvpPolicyId(snapshot.pvpPolicy ?? "")) throw new Error("policy_required");
+      const pvpPolicy = requirePvpPolicyId(snapshot.pvpPolicy);
+      const pvpClaims = {
+        ...claims,
+        worldId,
+        pvpPolicy,
+      } satisfies PvpGsTicketClaims;
       ticket = await mintPvpGsTicket(
         secret,
         playerId,
-        { ...claims, worldId: claims.worldId, pvpPolicy: snapshot.pvpPolicy } satisfies PvpGsTicketClaims,
+        pvpClaims,
         TICKET_TTL_SECS,
         Date.now(),
       );

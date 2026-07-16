@@ -4,8 +4,18 @@ export type PvpAccess = "private" | "public";
 
 export const PVP_POLICY_MAX_PLAYERS = 4;
 
-export function isPvpPolicyId(value: string): value is PvpPolicyId {
+export function isPvpPolicyId(
+  value: string | null | undefined,
+): value is PvpPolicyId {
   return value === PRIVATE_DRAFT_PVP_POLICY;
+}
+
+export function requirePvpPolicyId(
+  value: string | null | undefined,
+): PvpPolicyId {
+  if (value === null || value === undefined) throw new Error("policy_required");
+  if (!isPvpPolicyId(value)) throw new Error("policy_invalid");
+  return value;
 }
 
 export type PvpPolicyRejectCode =
