@@ -8262,6 +8262,22 @@ export class Game {
         this.fxLayer("crackle", "#f0d9ff", bx, by, R * 3.4, R * 3.4, 0.6, this.animClock * 10);
         return this.fxLayer("core_dot", "#e9d2ff", bx, by, R * 2.2, R * 2.2, 1, 0);
       }
+      case "mooring_nail":
+        this.fxTrail("trail_streak", color, bx, by, trailLen, R * 1.4, 0.65, angle);
+        this.fxLayer("chain_link", color, bx, by, R * 4.5, R * 2.2, 0.55, angle);
+        return this.fxLayer("slug", "#f1e6c8", bx, by, R * 5, R * 2.2, 1, angle);
+      case "sluicegate":
+        this.fxLayer("glow_round", color, bx, by, R * 5.5, R * 5.5, 0.35, 0);
+        this.fxTrail("comet_trail", color, bx, by, trailLen * 0.75, R * 2.2, 0.55, angle);
+        return this.fxLayer("slug", "#d9fbff", bx, by, R * 3.2, R * 2.2, 0.9, angle);
+      case "oddsmaker":
+        this.fxLayer("glow_round", color, bx, by, R * 6, R * 6, 0.4, 0);
+        this.fxLayer("crackle", "#fff0bd", bx, by, R * 4, R * 4, 0.55, this.animClock * 8);
+        return this.fxLayer("slug", "#fff7dd", bx, by, R * 3.2, R * 3.2, 1, angle + Math.PI / 4);
+      case "pathmaker":
+        this.fxLayer("frost", color, bx, by, R * 4.5, R * 4.5, 0.6, angle);
+        this.fxTrail("trail_streak", color, bx, by, trailLen * 0.55, R * 1.8, 0.45, angle);
+        return this.fxLayer("core_dot", "#e9f8df", bx, by, R * 2.4, R * 2.4, 1, 0);
       case "lastlight":
         // The desperate round: a fierce red glow trailing a hot streak into a white-hot core
         // that blazes brightest when HP runs low — the last-stand ember.
