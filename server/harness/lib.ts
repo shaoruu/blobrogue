@@ -118,6 +118,7 @@ class DeadSocket implements SocketLike {
 
 export class Bot {
   readonly transport: WSTransport;
+  private net: NetConditions;
   private readonly script: InputScript;
   private readonly frameMs: number;
   private readonly attack: "boss" | "nearest" | undefined;
@@ -140,7 +141,7 @@ export class Bot {
   }
 
   constructor(o: BotOptions) {
-    const net = o.net ?? PERFECT_NET;
+    this.net = { ...(o.net ?? PERFECT_NET) };
     this.script = o.script ?? SCRIPTS.idle;
     this.frameMs = o.frameMs ?? 16;
     this.attack = o.attack;
@@ -167,7 +168,7 @@ export class Bot {
       },
       socketFactory: (url) => {
         if (this.isNetworkDown) return new DeadSocket();
-        this.currentSocket = new LatencySocket(url, net);
+        this.currentSocket = new LatencySocket(url, this.net);
         return this.currentSocket;
       },
       now: () => Date.now(),
@@ -175,6 +176,18 @@ export class Bot {
       reconnectMaxDelayMs: o.reconnect?.maxDelayMs,
       resumeGraceMs: o.reconnect?.graceMs,
     });
+  }
+
+  async setNetworkConditions(net: NetConditions): Promise<void> {
+    if (!this.transport.isReady()) {
+      throw new Error(`network conditions require a ready bot (status=${this.transport.getStatus()})`);
+    }
+    const socket = this.currentSocket;
+    if (socket === null) {
+      throw new Error(`network conditions require a live socket (status=${this.transport.getStatus()})`);
+    }
+    this.net = { ...net };
+    await socket.setNetworkConditions(this.net);
   }
 
   // Abruptly kill the live socket (no close handshake — a Wi-Fi drop). Optionally keep the

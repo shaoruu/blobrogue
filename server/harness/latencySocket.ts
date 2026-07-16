@@ -20,13 +20,15 @@ export const PERFECT_NET: NetConditions = { rttMs: 0, jitterMs: 0, loss: 0 };
 export class LatencySocket implements SocketLike {
   private ws: WsClient;
   private net: NetConditions;
+  private nextDeliveryId = 0;
+  private readonly pendingDeliveries = new Map<number, Promise<void>>();
   onopen: (() => void) | null = null;
   onclose: ((ev?: { code?: number }) => void) | null = null;
   onerror: ((err: unknown) => void) | null = null;
   onmessage: ((ev: { data: unknown }) => void) | null = null;
 
   constructor(url: string, net: NetConditions) {
-    this.net = net;
+    this.net = { ...net };
     this.ws = new WsClient(url);
     this.ws.on("open", () => this.onopen?.());
     // The close code rides through so the transport can tell lifecycle closes (game over,
@@ -51,7 +53,28 @@ export class LatencySocket implements SocketLike {
     if (this.net.loss > 0 && random() < this.net.loss) return; // dropped
     const d = this.oneWayDelay();
     if (d <= 0) fn();
-    else setTimeout(fn, d);
+    else {
+      const deliveryId = ++this.nextDeliveryId;
+      let finishDelivery: () => void = () => {};
+      const delivery = new Promise<void>((resolve) => { finishDelivery = resolve; });
+      this.pendingDeliveries.set(deliveryId, delivery);
+      setTimeout(() => {
+        try { fn(); }
+        finally {
+          this.pendingDeliveries.delete(deliveryId);
+          finishDelivery();
+        }
+      }, d);
+    }
+  }
+
+  async setNetworkConditions(net: NetConditions): Promise<void> {
+    const boundaryId = this.nextDeliveryId;
+    const priorDeliveries = [...this.pendingDeliveries]
+      .filter(([deliveryId]) => deliveryId <= boundaryId)
+      .map(([, delivery]) => delivery);
+    this.net = { ...net };
+    await Promise.all(priorDeliveries);
   }
 
   get readyState(): number {
