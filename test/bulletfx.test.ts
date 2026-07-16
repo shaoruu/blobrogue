@@ -20,6 +20,15 @@ import type { WeaponId, Bullet } from "../src/sim/types.js";
 // recipe; false means the caller falls back to the plain circle).
 interface FxProbe {
   drawBulletFx(b: Bullet, bx: number, by: number): boolean;
+  renderHeldWeapon(
+    cx: number,
+    cy: number,
+    aim: number,
+    weapon: WeaponId,
+    alpha: number,
+    recoil: number,
+    isSluiceDrain: boolean,
+  ): void;
 }
 
 let passed = 0;
@@ -80,6 +89,17 @@ async function main(): Promise<void> {
   ]);
   check("Sluice FLOOD and DRAIN are blind-distinct projectile silhouettes",
     sluiceSignatures.size === 2);
+  const heldSignature = (isSluiceDrain: boolean): number => {
+    const ctx = canvas.getContext("2d");
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    probe.renderHeldWeapon(160, 120, 0, "sluicegate", 1, 0, isSluiceDrain);
+    const pixels = ctx.getImageData(120, 80, 80, 80).data;
+    let hash = 2166136261;
+    for (const channel of pixels) hash = Math.imul(hash ^ channel, 16777619);
+    return hash >>> 0;
+  };
+  check("Sluice next FLOOD/DRAIN mode is blind-distinct before firing",
+    heldSignature(false) !== heldSignature(true));
   const oddsmakerSignatures = new Set(
     (["ricochet", "seeker", "blast", "pierce"] as const)
       .map((oddsmakerOutcome) =>
