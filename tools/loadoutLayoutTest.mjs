@@ -379,6 +379,7 @@ async function runViewport(browser, viewport) {
 
   await capture(page, viewport, "kit");
   const kitResult = { step: "kit", ...(await measureStep(page, "kit")) };
+  await page.keyboard.press("ArrowRight");
   kitResult.failures.push(...await semanticFailures(page, "kit"));
   results.push(kitResult);
   await verifyNoShift(page, "kit");
@@ -388,6 +389,7 @@ async function runViewport(browser, viewport) {
 
   await capture(page, viewport, "pet-before");
   const petBeforeResult = { step: "pet-before", ...(await measureStep(page, "pet")) };
+  await page.keyboard.press("ArrowRight");
   petBeforeResult.failures.push(...await semanticFailures(page, "pet"));
   results.push(petBeforeResult);
   await verifyNoShift(page, "pet-before");
@@ -402,6 +404,7 @@ async function runViewport(browser, viewport) {
   }
   await capture(page, viewport, "pet");
   const petResult = { step: "pet", ...(await measureStep(page, "pet")) };
+  await page.keyboard.press("ArrowRight");
   petResult.failures.push(...await semanticFailures(page, "pet", true));
   results.push(petResult);
   await verifyNoShift(page, "pet");
