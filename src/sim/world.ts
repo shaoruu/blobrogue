@@ -4300,7 +4300,7 @@ function updateBullets(w: WorldState, dt: number, ev: SimEvent[]): void {
       }
     }
     b.x += b.vx * dt; b.y += b.vy * dt; b.life -= dt;
-    const wallContact = b.friendly && b.isPhase !== true
+    const wallContact = !(b.friendly && b.isPhase === true)
       ? b.grapplePull !== undefined
         ? firstWallContact(w, b.prevX, b.prevY, b.x, b.y)
         : isWall(w, b.x, b.y) ? { x: b.prevX, y: b.prevY } : null
