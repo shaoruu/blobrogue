@@ -1,5 +1,8 @@
-export const PRIVATE_DRAFT_PVP_POLICY = "private_draft_v1" as const;
-export type PvpPolicyId = typeof PRIVATE_DRAFT_PVP_POLICY;
+import { PRIVATE_DRAFT_PVP_POLICY } from "../pvpPolicyId.js";
+import type { PvpPolicyId } from "../pvpPolicyId.js";
+
+export { PRIVATE_DRAFT_PVP_POLICY };
+export type { PvpPolicyId };
 export type PvpAccess = "private" | "public";
 
 export const PVP_POLICY_MAX_PLAYERS = 4;
