@@ -77,6 +77,13 @@ interface PaleGolden {
     bossTransitionEvents: number;
     chestCount: number;
     isBossDead: boolean;
+    finalPhase: number;
+    finalHp: number;
+    finalAttack: string;
+    finalExposed: number;
+    finalAddTimer: number;
+    finalSeamLife: number;
+    finalLiveSeams: number;
   };
   stateHash: string;
   eventHash: string;
@@ -369,6 +376,13 @@ function runScenario(): ScenarioRun {
         bossTransitionEvents,
         chestCount: world.chests.length,
         isBossDead: boss.dead,
+        finalPhase: boss.boss?.phase ?? 0,
+        finalHp: r(boss.hp),
+        finalAttack: `${boss.attack.phase}:${boss.attack.move}:${r(boss.attack.time)}`,
+        finalExposed: r(boss.boss?.exposed ?? 0),
+        finalAddTimer: r(boss.boss?.addTimer ?? 0),
+        finalSeamLife: r(boss.boss?.seamLife ?? 0),
+        finalLiveSeams: world.enemies.filter((enemy) => !enemy.dead && enemy.kind === "pale_seam").length,
       },
       stateHash: hash(stateBytes),
       eventHash: hash(eventBytes),
