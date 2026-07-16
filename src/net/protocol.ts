@@ -842,6 +842,12 @@ const SLUICE_MODES: Record<SluiceMode, true> = { flood: true, drain: true };
 const ODDSMAKER_OUTCOMES: Record<OddsmakerOutcome, true> = {
   ricochet: true, seeker: true, blast: true, pierce: true,
 };
+const SHOT_MODES: Record<SluiceMode | "none", true> = {
+  flood: true, drain: true, none: true,
+};
+const SHOT_OUTCOMES: Record<OddsmakerOutcome | "none", true> = {
+  ricochet: true, seeker: true, blast: true, pierce: true, none: true,
+};
 function inSet<T extends string>(set: Record<T, true>, v: unknown, what: string): T {
   if (typeof v !== "string" || !Object.prototype.hasOwnProperty.call(set, v)) throw new ProtocolError(`bad ${what}`);
   return v as T;
@@ -997,6 +1003,10 @@ function validateEvent(v: unknown): SimEvent {
     if (kind === "num" && !isFiniteNum(val)) throw new ProtocolError(`bad event ${t}.${field}`);
     if (kind === "str" && typeof val !== "string") throw new ProtocolError(`bad event ${t}.${field}`);
     if (kind === "bool" && typeof val !== "boolean") throw new ProtocolError(`bad event ${t}.${field}`);
+  }
+  if (t === "shot") {
+    inSet(SHOT_MODES, o.mode, "event shot.mode");
+    inSet(SHOT_OUTCOMES, o.outcome, "event shot.outcome");
   }
   return o as unknown as SimEvent;
 }

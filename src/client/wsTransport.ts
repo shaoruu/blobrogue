@@ -34,6 +34,7 @@ import {
   CURRENT_CONTENT_CATALOG_VERSION,
 } from "../sim/contentCatalog.js";
 import type { ContentCatalogVersion } from "../sim/contentCatalog.js";
+import { createWeaponBag } from "../sim/weaponBag.js";
 
 // A server blessing offer as surfaced to the game: the id must be echoed back with the choice
 // so the server can validate the answer against exactly this offer.
@@ -605,6 +606,8 @@ export class WSTransport implements Transport {
     this.renderState.seed = seed;
     this.predState.catalogVersion = catalogVersion;
     this.renderState.catalogVersion = catalogVersion;
+    this.predState.weaponBag = createWeaponBag(seed, catalogVersion);
+    this.renderState.weaponBag = createWeaponBag(seed, catalogVersion);
     // Carry the authoritative world MODE onto the local worlds so loadFloorIntoWorld builds the
     // SAME geometry the server did — the fixed pvp arena for a pvp world, the seeded dungeon for
     // co-op. Without it the client always rebuilt a co-op dungeon, so a pvp arena rendered as a

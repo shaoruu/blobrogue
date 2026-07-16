@@ -12,6 +12,7 @@ import type { WeaponId, WeaponRarity } from "./types.js";
 import { WEAPONS } from "./weapons.js";
 import {
   CURRENT_CONTENT_CATALOG_VERSION,
+  LEGACY_CONTENT_CATALOG_VERSION,
   contentCatalogFor,
 } from "./contentCatalog.js";
 import type { ContentCatalogVersion } from "./contentCatalog.js";
@@ -25,7 +26,7 @@ import type { WeaponOfferHistory } from "./offerHistory.js";
 
 export interface WeaponBag extends WeaponOfferHistory {
   seed: number;        // the run seed the shuffles derive from
-  catalogVersion: ContentCatalogVersion;
+  catalogVersion?: ContentCatalogVersion;
   order: WeaponId[];   // the undealt remainder of the current pass
   refills: number;     // completed passes
   weightedDraws: number;
@@ -56,7 +57,7 @@ export function createWeaponBag(
 // and every pass reshuffles differently so a long run doesn't loop one fixed order.
 function refillBag(bag: WeaponBag): void {
   const rng = new Rng((bag.seed ^ BAG_SALT) + bag.refills * 0x1f83d9ab);
-  const order = [...contentCatalogFor(bag.catalogVersion).pickupWeapons];
+  const order = [...contentCatalogFor(weaponBagCatalogVersion(bag)).pickupWeapons];
   for (let i = order.length - 1; i > 0; i--) {
     const j = rng.int(0, i);
     [order[i], order[j]] = [order[j], order[i]];
@@ -114,7 +115,7 @@ export function rollWeaponOfferWithHistory(
 // legendary floor gate through `exclude`, whose skip-while-others-remain semantics
 // already guarantee a draw never hangs.
 export function drawWeaponFromBag(bag: WeaponBag, exclude: ReadonlySet<WeaponId>, rarity?: WeaponRarity): WeaponId {
-  const pickupWeapons = contentCatalogFor(bag.catalogVersion).pickupWeapons;
+  const pickupWeapons = contentCatalogFor(weaponBagCatalogVersion(bag)).pickupWeapons;
   if (bag.order.length > 0 && rarity !== undefined) {
     const fitsTier = (id: WeaponId): boolean => WEAPONS[id].rarity === rarity && !exclude.has(id);
     let idx = bag.order.findIndex((id) => fitsTier(id) && !bag.recentWeaponOffers.includes(id));
@@ -139,4 +140,8 @@ export function drawWeaponFromBag(bag: WeaponBag, exclude: ReadonlySet<WeaponId>
     ? pickupWeapons
     : pickupWeapons.filter((id) => WEAPONS[id].rarity === rarity);
   return rollWeaponOfferWithHistory(tierPool, () => rng.next(), bag, exclude);
+}
+
+export function weaponBagCatalogVersion(bag: WeaponBag): ContentCatalogVersion {
+  return bag.catalogVersion ?? LEGACY_CONTENT_CATALOG_VERSION;
 }

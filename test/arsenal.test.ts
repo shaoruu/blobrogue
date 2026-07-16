@@ -976,6 +976,16 @@ function envelopeGates(): void {
       && Math.abs(average - 0.511) < 0.001,
       `${flood.toFixed(3)}/${drain.toFixed(3)}/${average.toFixed(3)}`);
   }
+  {
+    const oddBase = idealBossDps("oddsmaker", false) / PU_DPS;
+    check("Oddsmaker's four one-payload outcomes share the locked .495 base PU envelope",
+      Math.abs(oddBase - 0.495) < 0.001
+      && WEAPONS.oddsmaker.gamble?.outcomes.length === 4,
+      oddBase.toFixed(3));
+  }
+  check("Mooring .267 and Pathmaker .220 provisional base PU stay below 1.35",
+    Math.abs(idealBossDps("mooring_nail", false) / PU_DPS - 0.267) < 0.001
+    && Math.abs(idealBossDps("pathmaker", false) / PU_DPS - 0.220) < 0.001);
   // Band assignment. Direct single-target-capable weapons hold the neutral band; pack/
   // swarm/control specialists are exempt from the FLOOR (their damage lives in rooms,
   // priced by their boss coefficients) but bound by the same ceiling; lob artillery

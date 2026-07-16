@@ -569,22 +569,34 @@ async function deltaDropMidStreamRecoveryTests(): Promise<void> {
   rig.sock.deliver(s1);
 
   // Delta sseq 2 (base 1) applied -> baseline advances to 2 (client acks 2).
+  const owner = rig.world.players.get(rig.pid)!;
+  owner.weaponCycles.sluicegate = 10;
+  owner.weaponCycles.oddsmaker = 20;
+  owner.isMuddyRefundSpent = true;
   rig.world.enemies[0].x += 20; rig.world.tick = 12;
   const s2 = keyframe(rig, 2);
   rig.sock.deliver(deltaFrame(rig, s1, 2));
   check("delta 2 applied", rig.transport.getLatestSnapshot()!.tick === 12);
 
   // Delta sseq 3 (base 2) is DROPPED in flight.
+  owner.weaponCycles.sluicegate = 0x0fffffff;
+  owner.weaponCycles.oddsmaker = 0x0fffffff;
+  owner.isMuddyRefundSpent = true;
   rig.world.enemies[0].x += 20; rig.world.tick = 13; // (never delivered)
 
   // The server re-diffs against the last ACKED baseline (2) for the next frame: delta sseq 4,
   // base 2, carrying ALL changes since 2. The client (still at baseline 2) applies it and
   // reconverges — the dropped delta 3 never mattered.
+  owner.weaponCycles.sluicegate = 0;
+  owner.weaponCycles.oddsmaker = 0;
+  owner.isMuddyRefundSpent = false;
   rig.world.enemies[0].x += 20; rig.world.tick = 14; // total +40 since s2
   rig.sock.deliver(deltaFrame(rig, s2, 4));
   const got = rig.transport.getLatestSnapshot()!;
   check("client reconverged to full authoritative state after the dropped delta", Math.abs(got.enemies[0].x - rig.world.enemies[0].x) < 1e-9, `got=${got.enemies[0].x} truth=${rig.world.enemies[0].x}`);
   check("client tick jumped straight to the recovered frame", got.tick === 14);
+  check("dropped cycle delta recovers exact mode/outcome state from the next authoritative frame",
+    got.self?.sgc === 0 && got.self.ogc === 0 && !got.self.isMds);
   rig.transport.stop();
 }
 
