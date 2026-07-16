@@ -1448,7 +1448,7 @@ function worldIdOf(o: Record<string, unknown>): string {
   return wid;
 }
 
-function catalogVersionOf(value: unknown): ContentCatalogVersion {
+function catalogVersionOf(value: WireValue | undefined): ContentCatalogVersion {
   if (value === undefined) return LEGACY_CONTENT_CATALOG_VERSION;
   if (typeof value !== "number" || !Number.isInteger(value) || !isContentCatalogVersion(value)) {
     throw new ProtocolError("bad catalog version");
@@ -1480,7 +1480,7 @@ export function validateSnap(o: Record<string, unknown>): Extract<ServerMsg, { t
     wait: arr(o.wait, "wait").map(validateWaitWire),
     ...(o.tok !== undefined ? { tok: shortStr(o, "tok", 64) } : {}),
     seed: intOf(o, "seed", -Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER),
-    cat: catalogVersionOf(o.cat),
+    cat: catalogVersionOf(o.cat as WireValue | undefined),
     floor: intOf(o, "floor", 1, 1e6),
     pcl: intOf(o, "pcl", 1, 4),
     cleared: boolOf(o, "cleared"),

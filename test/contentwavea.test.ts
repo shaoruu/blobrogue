@@ -210,7 +210,7 @@ section("canonical roadmap and additive catalog migration");
   check("old snapshots missing catalog decode legacy, never current", validateSnap(oldWire).cat === 0);
   let isUnknownRejected = false;
   try { validateSnap({ ...snap, cat: 2 }); } catch { isUnknownRejected = true; }
-  check("unknown future catalog versions fail closed", isUnknownRejected);
+  check("unsupported future catalog versions fail closed", isUnknownRejected);
 
   let isForgedClientFieldRejected = false;
   try {
