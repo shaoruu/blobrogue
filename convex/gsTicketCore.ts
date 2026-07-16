@@ -21,7 +21,7 @@
 // player proved room membership (see convex/gsTicket.ts), and the game server binds the
 // connection to exactly the world the ticket names — a client can never assert a world id.
 
-import type { PvpPolicyId } from "./pvpPolicy";
+import type { PvpPolicyId } from "./pvpPolicy.js";
 
 export interface GsTicketPayload {
   pid: string;  // authenticated playerId
