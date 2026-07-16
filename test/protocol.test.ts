@@ -301,7 +301,10 @@ function worldBindingWireTests(): void {
   check("snapshot carries the full roster (interest-independent identities + on/away)", deepEqual(snap.roster, roster));
   check("snapshot carries the resume token when supplied", snap.tok === "tok-abc123");
   check("snapshot carries the party-wait state (sorted, whole seconds)",
-    deepEqual(snap.wait, [{ pid: "pMe", s: 43 }, { pid: "pOther", s: 7 }]), JSON.stringify(snap.wait));
+    deepEqual(snap.wait, [
+      { pid: "pMe", s: 43, k: "blessing", tr: "none", cb: false },
+      { pid: "pOther", s: 7, k: "blessing", tr: "none", cb: false },
+    ]), JSON.stringify(snap.wait));
   const decoded = jsonCodec.decodeServer(jsonCodec.encodeServer(snap));
   check("wid/roster/tok/wait round-trip deep-equal", deepEqual(decoded, snap));
 

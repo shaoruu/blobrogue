@@ -1178,9 +1178,9 @@ section("PER-WEAPON TTK band (1v1 median 3-5s across the arsenal)");
 }
 
 // ---------------------------------------------------------------------------------------------
-section("FULL-DRAFT TTK: glass-cannon / deadeye / pierce stack stays in band");
+section("FULL-DRAFT TTK: legal crit / pierce / core stack stays in band");
 {
-  const draftedIds = ["glass_cannon", "deadeye", "full_metal", "core_damage"];
+  const draftedIds = ["deadeye", "full_metal", "core_damage", "core_fire"];
   const draftedTtks: number[] = [];
   for (let seed = 70; seed < 91; seed++) {
     const w = pvpWorld(seed, ["p1", "p2"]);

@@ -201,7 +201,7 @@ try {
     }, 2_000));
 
   const reconnectPid = bots[2].transport.getSelfServerId()!;
-  const reconnectOffer = offers[2];
+  const reconnectOffer = bots[2].transport.consumePendingOffer()!;
   const reconnectRemaining = world?.state.players.get(reconnectPid)?.pvpDraftOfferTicksLeft ?? 0;
   bots[2].dropConnection(true);
   check("disconnect freezes that chooser's remaining offer duration",
@@ -214,12 +214,15 @@ try {
   check("reconnect restores the exact same authoritative offer",
     await waitUntil(() => {
       const offer = bots[2].transport.getPendingOfferPeek();
-      return offer?.id === reconnectOffer.id
+      return !bots[2].transport.getReconnectInfo().isReconnecting
+        && world?.state.players.get(reconnectPid)?.isAbsent === false
+        && offer?.id === reconnectOffer.id
         && offer.k === "pvp_draft"
         && offer.choices.join(",") === reconnectOffer.choices.join(",");
     }, 4_000));
 
   const expiryPid = bots[3].transport.getSelfServerId()!;
+  bots[3].transport.consumePendingOffer();
   const expiryPlayer = world?.state.players.get(expiryPid);
   if (expiryPlayer !== undefined) expiryPlayer.pvpDraftOfferTicksLeft = 1;
   check("expired PVP offer clears sim and connection state",
@@ -231,7 +234,10 @@ try {
   await waitUntil(() => world?.state.players.get(expiryPid)?.isAbsent === true, 2_000);
   bots[3].restoreNetwork();
   check("expired offer never resurrects after a later reconnect",
-    await waitUntil(() => bots[3].transport.isReady(), 4_000)
+    await waitUntil(() =>
+      !bots[3].transport.getReconnectInfo().isReconnecting
+      && world?.state.players.get(expiryPid)?.isAbsent === false,
+    4_000)
     && bots[3].transport.getPendingOfferPeek() === null);
 
   fifth.stop();

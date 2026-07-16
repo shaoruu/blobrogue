@@ -199,6 +199,7 @@ section("joins, absence, and present-only comeback");
   world.match!.scores.set("p2", 1);
   world.match!.scores.set("p3", 2);
   world.match!.scores.set("p4", 3);
+  world.match!.scores.set("join", 4);
   setPlayerAbsence(world, "away", true);
   const p2 = world.players.get("p2")!;
   p2.pvpDraftFrags = PVP.draftEveryFrags;
@@ -301,12 +302,14 @@ section("chooser input pause and damageability");
   attacker.ownedWeapons = ["railgun"];
   const xBefore = chooser.x;
   const hpBefore = chooser.hp;
-  const inputs = new Map([
+  stepCollect(world, 1, new Map([
+    ["p1", idle({ moveX: 1, firing: true, dash: true })],
+  ]));
+  check("only chooser input is paused", chooser.x === xBefore);
+  stepCollect(world, 12, new Map([
     ["p1", idle({ moveX: 1, firing: true, dash: true })],
     ["p2", idle({ firing: true, aim: 0 })],
-  ]);
-  stepCollect(world, 12, inputs);
-  check("only chooser input is paused", chooser.x === xBefore);
+  ]));
   check("chooser remains damageable while selecting", chooser.hp < hpBefore);
   check("paused chooser cannot create a shot", !world.bullets.some((bullet) => bullet.owner === "p1"));
 }
@@ -410,7 +413,7 @@ section("10k deterministic offer seeds");
   let newHits = 0;
   for (let seed = 0; seed < 10_000; seed++) {
     const rng = new Rng(seed ^ 0x61a9);
-    const picks = rollPvpDraftChoicesWith(3, () => rng.next(), [upgradeId]);
+    const picks = rollPvpDraftChoicesWith(1, () => rng.next(), [upgradeId]);
     for (const pick of picks) {
       if (pick.id === upgradeId) upgradeHits++;
       else if (pick.rarity === "uncommon") newHits++;
@@ -421,8 +424,8 @@ section("10k deterministic offer seeds");
     .filter((item) => item.rarity === "uncommon" && item.id !== upgradeId)
     .length;
   check("new picks retain the locked 3x per-item upgrade weight",
-    newHits / uncommonNewCount > upgradeHits * 2.7
-    && newHits / uncommonNewCount < upgradeHits * 3.3,
+    newHits / uncommonNewCount > upgradeHits * 2.8
+    && newHits / uncommonNewCount < upgradeHits * 3.2,
     `new/item=${(newHits / uncommonNewCount).toFixed(0)} upgrade=${upgradeHits}`);
   check("owned levels never exceed each item's legal cap",
     [...itemLevelsOf(maxed)].every(([id, level]) => level === itemMaxLevel(itemById(id)!)));
