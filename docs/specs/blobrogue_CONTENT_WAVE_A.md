@@ -24,7 +24,8 @@ floor hazards remain dangerous during travel.
 PATHMAKER safety applies only when a player center is inside a live paved zone. A transient
 web, cinder, or corruption circle is cleansed only when its full authoritative footprint is
 contained by the newly painted circle. Paving never clears boss state or resurrects deleted
-hazards after expiry.
+hazards after expiry. The total zone budget is 48: Frostline reserves 32 and paving reserves
+16, with at most 8 live pave zones per owner and 8 admitted zones per committed shot.
 
 ## Blessings
 
@@ -50,3 +51,19 @@ owner's revive radius and channel rate; one authoritative reviver owns each chan
 
 Boss signature and permanent reward mappings are outside this manifest and remain unchanged.
 Art, audio, and human play approval remain external gates.
+
+## Authority and protocol
+
+Each owned weapon has an authoritative remaining cooldown. Switching saves the outgoing
+cooldown and restores the incoming weapon's cooldown; inactive cooldowns continue to decay.
+A newly acquired weapon starts ready, while swapping back to a previously fired weapon resumes
+its remaining cadence. Cooldowns survive snapshots, deltas, reconnect, floor transitions, and
+resume.
+
+Protocol v34 belongs to PR #142 and carries catalog version, weapon cooldowns/cycles,
+SLUICEGATE observer mode, ODDSMAKER bullet outcome, Muddy dash state, and revive channel owner.
+Pale PR #140 rebases after #142 as v35. PvP work follows the latest merged protocol and only
+allocates another version when it changes the wire.
+
+The main agent still owes approved held/pickup/pave art and authored audio takes. Current audio
+rows are typed silent hooks; runtime oscillators and generated placeholder binaries are banned.

@@ -681,6 +681,17 @@ section("blessing mechanics and interactions");
   const heldKick = kickDistance(true);
   check("HOLD FAST reduces real authoritative weapon displacement by 60%",
     Math.abs(heldKick - baseKick * 0.4) < 1e-6, `${baseKick.toFixed(2)} -> ${heldKick.toFixed(2)}`);
+  const holdFeedback = arena(0xB003);
+  acquireWeaponInWorld(holdFeedback.world, holdFeedback.player.id, "cannon");
+  applyLevel(holdFeedback.world, holdFeedback.player, "hold_fast", 3);
+  const holdEvents = stepWorld(
+    holdFeedback.world,
+    new Map([[holdFeedback.player.id, input(1, { firing: true })]]),
+    DT,
+  );
+  check("HOLD FAST stabilization feedback fires once at the collision-clamped recoil result",
+    holdEvents.filter((event) =>
+      event.t === "blessingProc" && event.item === "hold_fast").length === 1);
 
   const { world: reclaimWorld, player: reclaimPlayer } = arena(0xB101);
   reclaimPlayer.x = 5 * TILE;
