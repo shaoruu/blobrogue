@@ -77,7 +77,12 @@ export type EnemyKind =
   //  - gorge_seam: a tectonic WEAK-POINT that juts out of the current shell — a destructible
   //    mechanic body (like the Weaver's knot / Tithe's slab: no loot, no combo). Destroy the
   //    whole exposed set to crack the shell and open the exposed window on the bared material.
-  | "gorge" | "gorge_seam";
+  | "gorge" | "gorge_seam"
+  // SEVER (F55 HUNT/INTERCEPT — Batch1 OWNER LOCK): ONE isBossKind chase core that flees
+  // through RoomEdges across 3 checkpoints. Signature move WORLDSPLIT (wire: "worldsplit").
+  //  - sever_anchor: resin ANCHOR tooth (mechanic body) — destroy 2 per checkpoint room to
+  //    trap both exits and open the intercept damage window. Never a boss kind.
+  | "sever" | "sever_anchor";
 
 // Telegraphed-attack state machine. Committed attacks read as
 // CHASE -> WINDUP (telegraph, aim locks partway) -> ACTIVE -> RECOVER -> cooldown.
@@ -129,7 +134,10 @@ export type AttackMove =
   //  - "rip":    the Tithe's P3 SIGNATURE — it rips ALL its plating into a slow rotating
   //    barrage wheel, then collapses into a long exposed window (a dedicated move so the
   //    debris-wheel VFX binds to a real signal, not shared with MARROW's "spin").
-  | "tracer" | "beam" | "spew" | "hurl" | "rip";
+  | "tracer" | "beam" | "spew" | "hurl" | "rip"
+  // SEVER F55 signature — WORLDSPLIT: 1.5s blade-plant tell → 1.2s moving fracture → 3.0s
+  // reel-back punish. Display name is always WORLDSPLIT; wire id is the closed AttackMove.
+  | "worldsplit";
 
 // Grouped so the whole attack subsystem lives in one cohesive place per enemy
 // (allocated once at spawn, never per frame).
@@ -840,6 +848,8 @@ export type SpriteName =
   // only). "gorge_seam" is the tectonic weak-point's small crack-chunk (the molten core material
   // showing through the shell), drawn small + additively lit as a peel target.
   | "gorge" | "gorge_shell_chitin" | "gorge_shell_core" | "gorge_seam"
+  // SEVER (F55): placeholder art hooks only (reuse Weaver sheets) — no art generation this batch.
+  | "sever" | "sever_anchor"
   | "patch"
   // Client-side cosmetic companion pets (META spec §3). A pure render key mapping to a
   // swappable placeholder asset; the sim never references it (pets are OUT of the sim). The

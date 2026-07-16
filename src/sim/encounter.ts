@@ -105,6 +105,35 @@ export function initSmokeEncounter(dungeon: Dungeon): EncounterState {
   };
 }
 
+
+// Batch1 Sever F55: hunt/intercept encounter on the Batch0 room graph.
+// flags (OWNER LOCK): escapeMeter, supportsCut, interceptState, chosenExitEdgeId, worldsplitPhase
+export function initHuntEncounter(dungeon: Dungeon): EncounterState {
+  const bp = dungeon.blueprint;
+  const spawnRoomId = bp?.spawnRoomId ?? (dungeon.rooms.length > 1 ? 1 : 0);
+  const routeEdgeId = bp && bp.chaseEdgeIds.length > 0 ? bp.chaseEdgeIds[0] : (dungeon.edges.length > 0 ? 0 : null);
+  return {
+    kind: "hunt",
+    active: true,
+    structureKind: "hunt",
+    currentRoomId: spawnRoomId,
+    routeEdgeId,
+    checkpoint: 0,
+    objectiveProgress: 0,
+    carrierPlayerId: null,
+    failureCount: 0,
+    completed: false,
+    failed: false,
+    flags: {
+      escapeMeter: 0,
+      supportsCut: 0,
+      interceptState: "hunt", // hunt | trap | window | escaped
+      chosenExitEdgeId: routeEdgeId ?? -1,
+      worldsplitPhase: "idle", // idle | plant | fracture | punish
+    },
+  };
+}
+
 export function completeEncounter(e: EncounterState): void {
   e.completed = true;
   e.active = true;
