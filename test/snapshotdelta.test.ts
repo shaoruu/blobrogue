@@ -291,7 +291,7 @@ function waveAStateTests(): void {
     raw.cat = value;
     let isRejected = false;
     try { validateSnap(raw); } catch { isRejected = true; }
-    check(`unknown catalog value ${String(value)} fails closed`, isRejected);
+    check(`unsupported catalog value ${String(value)} fails closed`, isRejected);
   }
 }
 
