@@ -260,7 +260,8 @@ AUTH_SETUP.md      operator steps to enable Google sign-in
 
 ## 7. Authoritative online play (the game server + the room lobby) — THE multiplayer path
 
-The protocol-v34 draft/receipt/admission/migration/secret/drain order is security-sensitive.
+The authority and draft protocol ordering is security-sensitive. After rebase onto main
+Choirmaster v39, the policy-bound PVP private draft WaitWire/offer wire allocates protocol v40.
 Follow [`docs/security/run-authority.md`](docs/security/run-authority.md) for every authority-plane
 rollout; do not infer that order from the general provisioning checklist above.
 

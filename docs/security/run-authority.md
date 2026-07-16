@@ -93,7 +93,7 @@ canonical `<prefix>.<payload>` text.
 
 The game server stores the verified policy immutably on its room runtime. Every later join and
 resume must present the same policy, and active bodies plus reserved reconnect seats share the
-four-player cap. `/version` exposes protocol 34, ticket `v1`/`v2`, admission `a2`, supported
+four-player cap. `/version` exposes protocol 40, ticket `v1`/`v2`, admission `a2`, supported
 policies, and both dark rollout flags. Control requires the exact policy catalog
 `["private_draft_v1"]`, the terminal v2 parser acknowledgement, and ordinary WS/snapshot
 liveness. The older signed v1 liveness synthetic remains deliberately separate: it creates an
@@ -117,24 +117,24 @@ responses become local `admission_unavailable` and cannot bind a world.
 
 ## Rolling deployment order
 
-This is a coordinated protocol-v34 hard cut, not a rolling mixed-version deploy.
+This is a coordinated protocol-v40 hard cut, not a rolling mixed-version deploy.
 
 1. Set a new Convex `GS_RECEIPT_SECRET`, distinct from `GS_AUTH_SECRET`, and deploy the additive
    schema, receipt/admission routes, guest capability resolver, and migration function.
-2. Enter maintenance and stop legacy joins. Drain all pre-v34 worlds. A v32 server has no signed
-   completion route, so verify `/worlds` is empty before continuing; v33 worlds must also drain
+2. Enter maintenance and stop legacy joins. Drain all pre-v40 worlds. A v32 server has no signed
+   completion route, so verify `/worlds` is empty before continuing; v33–v39 worlds must also drain
    because their offer/snapshot contract predates policy-bound drafts.
 3. Run
    `migrations.backfillGenerationState({ isLegacyWorldsDrained: true })`. The explicit assertion
    converts drained legacy `playing` rooms to completed so they can reopen once, without
    pretending an old server emitted a receipt.
-4. Publish the v34 client bundle.
+4. Publish the v40 client bundle.
 5. Configure GS with `GS_AUTH_SECRET`, the distinct `GS_RECEIPT_SECRET`,
    `GS_CONVEX_RECEIPT_URL`, `GS_CONVEX_ADMISSION_URL`, and durable
    `GS_GENERATION_STATE_PATH`.
-6. Deploy/reload GS v34, run the signed non-generation synthetic join, then resume joins.
+6. Deploy/reload GS v40, run the signed non-generation synthetic join, then resume joins.
 
-For later v34 deploys, use the normal control-plane drain and flush endpoints. Drain refuses new
+For later v40 deploys, use the normal control-plane drain and flush endpoints. Drain refuses new
 joins; flush clears reconnect seats, persists signed abandonment receipts, retires worlds, and
 only then permits reload.
 
@@ -142,8 +142,8 @@ Old clients receive a terminal protocol or guest-capability rejection with refre
 copy. They do not retry for the 90-second reconnect window and cannot strand a room.
 
 The policy-bound draft runtime changes the offer/event/snapshot contract, so
-`PROTOCOL_VERSION` is 34 across client, game server, and control. Old clients terminate with
-refresh-required copy. Ticket v2 and admission a2 remain the authority envelopes.
+`PROTOCOL_VERSION` is 40 across client, game server, and control (v40 = PVP private draft wire after Choirmaster v39). Old clients terminate with refresh-required copy. Ticket v2 and
+admission a2 remain the authority envelopes.
 
 `RoomRuntime.pvpPolicy === "private_draft_v1"` is the sole draft-runtime switch. The immutable
 policy is copied into the simulation when the world is constructed; null, unsupported, public,

@@ -299,7 +299,6 @@ export const FIXED_DT = 1 / TICK_HZ; // 50ms authoritative step
 // v33: authority-plane hard cut. Guest capabilities, signed run receipts, and durable generation
 // admission require the coordinated client/Convex/GS rollout; stale clients get a terminal
 // refresh-required rejection instead of retrying through the reconnect grace.
-<<<<<<< HEAD
 // v34 (Batch0 encounter architecture): snapshots grow optional `enc` — EncounterWire carrying
 //   kind/active/structure/currentRoom/routeEdge/checkpoint/objectiveProgress/carrier/failure/
 //   completed/failed for HUD progress pips, carrier highlight, spectator objective read, and
@@ -341,18 +340,11 @@ export const FIXED_DT = 1 / TICK_HZ; // 50ms authoritative step
 //   acousticShadowPillarId / silencedMask) ride Batch0's existing enc wire.
 // v40: policy-bound PVP private draft wire after Choirmaster v39. Snapshot wait rows and
 //   authoritative offer frames identify the draft surface/trigger/comeback state (offer k/tr/
-//   isComeback), and mode-gated draft/combat events carry offline balance telemetry. The strict
-//   join gate makes older clients terminally refresh instead of rendering a co-op offer surface
-//   against a live arena.
+//   isComeback), and mode-gated draft events carry balance telemetry. The strict join gate
+//   makes older clients terminally refresh instead of rendering a co-op offer surface against
+//   a live arena.
 export const PROTOCOL_VERSION = 40;
 
-=======
-// v34: policy-bound PVP drafts. Snapshot wait rows and authoritative offer frames identify the
-// draft surface/trigger/comeback state, and mode-gated draft events carry balance telemetry. The
-// strict join gate makes older clients terminally refresh instead of rendering a
-// co-op offer surface against a live arena.
-export const PROTOCOL_VERSION = 34;
->>>>>>> dc80e9c5 (fix(pvp): isolate authoritative draft telemetry)
 
 // How long the server reserves a disconnected player's body (their seat) before the
 // authoritative leave lifecycle applies. 90s per the studio balance gate's reconnect
