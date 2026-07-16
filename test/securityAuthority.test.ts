@@ -84,6 +84,7 @@ const migrationSource = readFileSync(new URL("../convex/migrations.ts", import.m
 const serverSource = readFileSync(new URL("../server/src/server.ts", import.meta.url), "utf8");
 const pvpSimSource = readFileSync(new URL("../src/sim/pvp.ts", import.meta.url), "utf8");
 const worldSource = readFileSync(new URL("../src/sim/world.ts", import.meta.url), "utf8");
+const protocolSource = readFileSync(new URL("../src/net/protocol.ts", import.meta.url), "utf8");
 const routerSource = readFileSync(new URL("../server/src/messageRouter.ts", import.meta.url), "utf8");
 const admissionClientSource = readFileSync(new URL("../server/src/generationAdmissionClient.ts", import.meta.url), "utf8");
 const ticketAuthSource = readFileSync(new URL("../server/src/auth.ts", import.meta.url), "utf8");
@@ -132,6 +133,11 @@ check("PVP draft runtime is policy-only while verified progression stays off",
   !pvpSimSource.includes("draftEnabled")
   && worldSource.includes("w.pvpPolicy === PRIVATE_DRAFT_PVP_POLICY")
   && serverSource.includes("if (!world || world.isPvp) return;"));
+check("high-rate PVP damage telemetry is server-only and structurally logged",
+  worldSource.includes("w.pvpTelemetryEvents.push")
+  && serverSource.includes('this.log.info("pvp telemetry"')
+  && serverSource.includes("payload: JSON.stringify(events)")
+  && !protocolSource.includes('pvpDamage: { scope:'));
 check("Convex/browser ticket minter cannot emit the control-only probe purpose",
   !ticketCoreSource.includes("pr:"));
 const probeBranch = routerSource.indexOf("auth.isPolicyAuthorityProbe === true");

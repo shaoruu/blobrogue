@@ -43,7 +43,7 @@ export interface BlessingOffer {
   choices: string[];
   k: "blessing" | "pvp_draft";
   tr: "none" | "frag" | "time" | "dedup";
-  cb: boolean;
+  isComeback: boolean;
 }
 
 // Minimal socket surface (a subset shared by browser WebSocket and the `ws` package).
@@ -563,7 +563,7 @@ export class WSTransport implements Transport {
           choices: msg.choices.slice(),
           k: msg.k,
           tr: msg.tr,
-          cb: msg.cb,
+          isComeback: msg.isComeback,
         };
       }
       return;

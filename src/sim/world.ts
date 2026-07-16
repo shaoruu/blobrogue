@@ -101,7 +101,7 @@ import type {
 } from "./pvp.js";
 import { lowHpFrac, liveDamageMult, liveFireRateMult, gunnerDamageMult, gunnerFireRateMult, expectedBossDps } from "./weaponStats.js";
 import type { PlayerMods, ItemDef } from "./items.js";
-import type { SimEvent } from "./events.js";
+import type { PvpTelemetryEvent, SimEvent } from "./events.js";
 import type { InputCmd, PlayerId } from "./input.js";
 import { LOCAL_ID, IDLE_INPUT } from "./input.js";
 import { PRIVATE_DRAFT_PVP_POLICY } from "../pvpPolicyId.js";
@@ -462,8 +462,8 @@ export interface PlayerSim {
   // reads this pair specifically, so nearby damage never steals a walked-in suicide.
   lastPvpKnockbackBy: PlayerId | null;
   lastPvpKnockbackTick: number;
-  // Per-player draft cadence and deterministic offer identity. These fields are inert in co-op
-  // and stay server-side; online clients receive only the resulting validated choice set.
+  // Per-player draft cadence and deterministic offer identity. These fields are inert in co-op.
+  // Cadence stays server-side; clients receive the validated offer plus bounded trigger metadata.
   pvpDraftFrags: number;
   pvpDraftActiveTicks: number;
   pvpDraftOrdinal: number;
@@ -471,8 +471,9 @@ export interface PlayerSim {
   pvpDraftTierBump: number;
   pvpDraftTrigger: PvpDraftTrigger;
   pvpDraftOfferTicksLeft: number;
-  pvpDraftDelayDeathReported: boolean;
-  pvpDraftDelayAbsenceReported: boolean;
+  pvpDraftOfferElapsedTicks: number;
+  isPvpDraftDeathDelayReported: boolean;
+  isPvpDraftAbsenceDelayReported: boolean;
 }
 
 // Extra AI target points fed in by the client from co-op presence (Stage A keeps co-op on
@@ -635,6 +636,9 @@ export interface WorldState {
   // enemy history uses, keyed by player id. Recorded only in pvp (empty/unread in co-op), so
   // the co-op golden path is untouched. Rewind is bounded identically (LAGCOMP window).
   playerHist: Map<PlayerId, EnemyHist>;
+  // High-rate PVP balance telemetry is drained by the authoritative server after each tick.
+  // It never enters the reliable client event ring.
+  pvpTelemetryEvents: PvpTelemetryEvent[];
   // Authoritative pending blessing offers: pid -> seconds left to answer. An entry exists
   // from the moment an offerBlessing event is raised until the pick is applied (or the offer
   // expires / the player leaves). While pending, that player's INPUT is paused. Co-op grants
@@ -745,8 +749,9 @@ export function createPlayer(id: PlayerId, x: number, y: number): PlayerSim {
     pvpDraftTierBump: 0,
     pvpDraftTrigger: "none",
     pvpDraftOfferTicksLeft: 0,
-    pvpDraftDelayDeathReported: false,
-    pvpDraftDelayAbsenceReported: false,
+    pvpDraftOfferElapsedTicks: 0,
+    isPvpDraftDeathDelayReported: false,
+    isPvpDraftAbsenceDelayReported: false,
   };
 }
 
@@ -835,6 +840,7 @@ export function createWorld(seed: number, floor: number, opts: WorldOptions = {}
     histHead: 0,
     histCount: 0,
     playerHist: new Map(),
+    pvpTelemetryEvents: [],
     pendingBlessings: new Map(),
     isBlessingOfferedThisFloor: false,
     wipeTimer: 0,
@@ -2998,8 +3004,9 @@ function raiseBlessingOffer(
   if (isDraft && p !== undefined) {
     p.pvpDraftTrigger = draftTrigger;
     p.pvpDraftOfferTicksLeft = pvpDraftOfferTicks();
-    p.pvpDraftDelayDeathReported = false;
-    p.pvpDraftDelayAbsenceReported = false;
+    p.pvpDraftOfferElapsedTicks = 0;
+    p.isPvpDraftDeathDelayReported = false;
+    p.isPvpDraftAbsenceDelayReported = false;
     w.pendingBlessings.set(pid, PVP.draftOfferSec);
   } else {
     w.pendingBlessings.set(pid, C.BLESSING_OFFER_TTL);
@@ -3017,15 +3024,18 @@ function raiseBlessingOffer(
 export function chooseBlessingInWorld(w: WorldState, pid: PlayerId, item: ItemDef): SimEvent[] {
   if (isPvp(w) && !isPvpBlessingId(item.id)) return [];
   const p = w.players.get(pid);
-  const isDraft = isPvpDraftRuntime(w) && w.pendingBlessings.has(pid) && p !== undefined;
-  const source = p?.pvpDraftTrigger ?? "none";
-  const ordinal = p?.pvpDraftOrdinal ?? 0;
-  const comeback = (p?.pvpDraftTierBump ?? 0) > 0;
-  const latencyTicks = p === undefined ? 0 : Math.max(0, w.tick - p.pvpDraftTick);
-  const nextLevel = p === undefined ? 0 : (itemLevelsOf(p.ownedItemIds).get(item.id) ?? 0) + 1;
+  if (p === undefined || !w.pendingBlessings.has(pid)) return [];
+  const currentLevel = itemLevelsOf(p.ownedItemIds).get(item.id) ?? 0;
+  if (currentLevel >= itemMaxLevel(item)) return [];
+  const isDraft = isPvpDraftRuntime(w);
+  const source = p.pvpDraftTrigger;
+  const ordinal = p.pvpDraftOrdinal;
+  const isComeback = p.pvpDraftTierBump > 0;
+  const latencyTicks = isDraft ? p.pvpDraftOfferElapsedTicks : 0;
+  const nextLevel = currentLevel + 1;
   w.pendingBlessings.delete(pid);
   const events = applyItemToWorld(w, pid, item);
-  if (isDraft && p !== undefined && events.length > 0) {
+  if (isDraft && events.length > 0) {
     const scores = w.match?.scores;
     const score = scores?.get(pid) ?? 0;
     const leaderScore = scores === undefined || scores.size === 0
@@ -3035,7 +3045,7 @@ export function chooseBlessingInWorld(w: WorldState, pid: PlayerId, item: ItemDe
       t: "pvpDraftPicked",
       pid,
       source,
-      comeback,
+      isComeback,
       ordinal,
       item: item.id,
       level: nextLevel,
@@ -3045,6 +3055,7 @@ export function chooseBlessingInWorld(w: WorldState, pid: PlayerId, item: ItemDe
       leaderScore,
     });
     p.pvpDraftOfferTicksLeft = 0;
+    p.pvpDraftOfferElapsedTicks = 0;
     p.pvpDraftTrigger = "none";
   }
   return events;
@@ -3066,9 +3077,10 @@ export function dismissBlessingOfferInWorld(
       source: p.pvpDraftTrigger,
       ordinal: p.pvpDraftOrdinal,
       outcome,
-      latencyTicks: Math.max(0, w.tick - p.pvpDraftTick),
+      latencyTicks: p.pvpDraftOfferElapsedTicks,
     });
     p.pvpDraftOfferTicksLeft = 0;
+    p.pvpDraftOfferElapsedTicks = 0;
     p.pvpDraftTrigger = "none";
   }
   w.pendingBlessings.delete(pid);
@@ -3416,8 +3428,8 @@ function tickPendingBlessings(w: WorldState, dt: number, ev: SimEvent[]): void {
         );
       }
       if (!isEnough || p.isAbsent) {
-        if (!p.pvpDraftDelayAbsenceReported) {
-          p.pvpDraftDelayAbsenceReported = true;
+        if (!p.isPvpDraftAbsenceDelayReported) {
+          p.isPvpDraftAbsenceDelayReported = true;
           ev.push({
             t: "pvpDraftDelayed",
             pid,
@@ -3428,8 +3440,8 @@ function tickPendingBlessings(w: WorldState, dt: number, ev: SimEvent[]): void {
         }
         continue;
       }
-      if ((p.hp <= 0 || p.respawnT > 0) && !p.pvpDraftDelayDeathReported) {
-        p.pvpDraftDelayDeathReported = true;
+      if ((p.hp <= 0 || p.respawnT > 0) && !p.isPvpDraftDeathDelayReported) {
+        p.isPvpDraftDeathDelayReported = true;
         ev.push({
           t: "pvpDraftDelayed",
           pid,
@@ -3439,11 +3451,13 @@ function tickPendingBlessings(w: WorldState, dt: number, ev: SimEvent[]): void {
         });
       }
       p.pvpDraftOfferTicksLeft--;
+      p.pvpDraftOfferElapsedTicks++;
       if (p.pvpDraftOfferTicksLeft <= 0) {
         const source = p.pvpDraftTrigger;
         const ordinal = p.pvpDraftOrdinal;
-        const latencyTicks = Math.max(0, w.tick - p.pvpDraftTick);
+        const latencyTicks = p.pvpDraftOfferElapsedTicks;
         w.pendingBlessings.delete(pid);
+        p.pvpDraftOfferElapsedTicks = 0;
         p.pvpDraftTrigger = "none";
         ev.push({ t: "blessingExpired", pid });
         ev.push({ t: "pvpDraftResolved", pid, source, ordinal, outcome: "expiry", latencyTicks });
@@ -14305,7 +14319,7 @@ function damagePlayerPvp(
   }
   p.hp -= amount;
   if (by !== null && by !== p.id) {
-    ev.push({
+    w.pvpTelemetryEvents.push({
       t: "pvpDamage",
       by,
       victim: p.id,
@@ -14536,8 +14550,9 @@ function resetPvpDrafts(w: WorldState): void {
     p.pvpDraftTierBump = 0;
     p.pvpDraftTrigger = "none";
     p.pvpDraftOfferTicksLeft = 0;
-    p.pvpDraftDelayDeathReported = false;
-    p.pvpDraftDelayAbsenceReported = false;
+    p.pvpDraftOfferElapsedTicks = 0;
+    p.isPvpDraftDeathDelayReported = false;
+    p.isPvpDraftAbsenceDelayReported = false;
   }
 }
 
@@ -14725,8 +14740,8 @@ function raiseDuePvpDrafts(w: WorldState, ev: SimEvent[]): void {
     const isTimeDue = p.pvpDraftActiveTicks >= cadenceTicks;
     if (!isFragDue && !isTimeDue) continue;
     if (p.hp <= 0 || p.respawnT > 0) {
-      if (!p.pvpDraftDelayDeathReported) {
-        p.pvpDraftDelayDeathReported = true;
+      if (!p.isPvpDraftDeathDelayReported) {
+        p.isPvpDraftDeathDelayReported = true;
         ev.push({
           t: "pvpDraftDelayed",
           pid,
@@ -14755,7 +14770,7 @@ function raiseDuePvpDrafts(w: WorldState, ev: SimEvent[]): void {
       t: "pvpDraftTriggered",
       pid,
       source,
-      comeback: p.pvpDraftTierBump > 0,
+      isComeback: p.pvpDraftTierBump > 0,
       ordinal: p.pvpDraftOrdinal,
       score,
       leaderScore,
@@ -15273,7 +15288,10 @@ export function stepWorldPhase(w: WorldState, dt: number, ev: SimEvent[]): void 
 
 export function beginWorldTick(w: WorldState): void {
   w.tick++;
-  if (isPvp(w)) syncPvpSpawnProtection(w);
+  if (isPvp(w)) {
+    w.pvpTelemetryEvents = [];
+    syncPvpSpawnProtection(w);
+  }
 }
 
 export function stepWorld(w: WorldState, inputs: Map<PlayerId, InputCmd>, dt: number): SimEvent[] {

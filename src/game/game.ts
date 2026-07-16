@@ -3160,7 +3160,6 @@ export class Game {
       case "pvpDraftPicked":
       case "pvpDraftResolved":
       case "pvpDraftDelayed":
-      case "pvpDamage":
         break;
       case "pvpMatchOver":
         // Reliable, id-tagged (never lost): the winner hears the victory sting, everyone else
@@ -3425,7 +3424,7 @@ export class Game {
     choices: string[];
     k: "blessing" | "pvp_draft";
     tr: "none" | "frag" | "time" | "dedup";
-    cb: boolean;
+    isComeback: boolean;
   }) {
     const choices = offer.choices
       .map((id) => itemById(id))

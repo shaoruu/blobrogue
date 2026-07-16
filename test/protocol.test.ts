@@ -191,12 +191,11 @@ function serverRoundTripTests(): void {
     { id: 12, e: { t: "tetherLatch", eid: 5, x: 200, y: 210, tx: 260, ty: 210, inv: false } },
     { id: 13, e: { t: "sentryShot", x: 400, y: 380, aim: 0.5 } },
     { id: 14, e: { t: "haloFlare", x: 300, y: 300, r: 96 } },
-    { id: 15, e: { t: "pvpDraftTriggered", pid: "pMe", source: "dedup", comeback: true, ordinal: 2, score: 2, leaderScore: 4 } },
-    { id: 16, e: { t: "pvpDraftOffered", pid: "pMe", source: "dedup", comeback: true, ordinal: 2, items: "split_shot:uncommon:1,deadeye:rare:2,core_dash:rare:1" } },
-    { id: 17, e: { t: "pvpDraftPicked", pid: "pMe", source: "dedup", comeback: true, ordinal: 2, item: "deadeye", level: 2, latencyTicks: 18, hp: 72, score: 2, leaderScore: 4 } },
+    { id: 15, e: { t: "pvpDraftTriggered", pid: "pMe", source: "dedup", isComeback: true, ordinal: 2, score: 2, leaderScore: 4 } },
+    { id: 16, e: { t: "pvpDraftOffered", pid: "pMe", source: "dedup", isComeback: true, ordinal: 2, items: "split_shot:uncommon:1,deadeye:rare:2,core_dash:rare:1" } },
+    { id: 17, e: { t: "pvpDraftPicked", pid: "pMe", source: "dedup", isComeback: true, ordinal: 2, item: "deadeye", level: 2, latencyTicks: 18, hp: 72, score: 2, leaderScore: 4 } },
     { id: 18, e: { t: "pvpDraftResolved", pid: "pMe", source: "time", ordinal: 3, outcome: "expiry", latencyTicks: 1200 } },
     { id: 19, e: { t: "pvpDraftDelayed", pid: "pMe", ordinal: 3, reason: "absence", remainingTicks: 900 } },
-    { id: 20, e: { t: "pvpDamage", by: "pOther", victim: "pMe", weapon: "pistol", damage: 3.56, victimHp: 68.44 } },
   ];
   const snap = buildSnapshot(w, "pMe", 12, events, 9, false, { worldId: "w-test" });
   const decoded = jsonCodec.decodeServer(jsonCodec.encodeServer(snap));
@@ -218,7 +217,7 @@ function serverRoundTripTests(): void {
 
   const others: ServerMsg[] = [
     { t: "ping", id: 4, tick: 100, time: 1234567 },
-    { t: "offer", id: 2, choices: ["it_a", "it_b", "it_c"], k: "blessing", tr: "none", cb: false },
+    { t: "offer", id: 2, choices: ["it_a", "it_b", "it_c"], k: "blessing", tr: "none", isComeback: false },
     { t: "error", code: "auth", msg: "nope" },
   ];
   for (const m of others) {
@@ -302,8 +301,8 @@ function worldBindingWireTests(): void {
   check("snapshot carries the resume token when supplied", snap.tok === "tok-abc123");
   check("snapshot carries the party-wait state (sorted, whole seconds)",
     deepEqual(snap.wait, [
-      { pid: "pMe", s: 43, k: "blessing", tr: "none", cb: false },
-      { pid: "pOther", s: 7, k: "blessing", tr: "none", cb: false },
+      { pid: "pMe", s: 43, k: "blessing", tr: "none", isComeback: false },
+      { pid: "pOther", s: 7, k: "blessing", tr: "none", isComeback: false },
     ]), JSON.stringify(snap.wait));
   const decoded = jsonCodec.decodeServer(jsonCodec.encodeServer(snap));
   check("wid/roster/tok/wait round-trip deep-equal", deepEqual(decoded, snap));

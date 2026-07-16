@@ -366,7 +366,7 @@ async function headlessClientSpectateTests(): Promise<void> {
     choices: ["glass_cannon", "hair_trigger", "split_shot"],
     k: "blessing",
     tr: "none",
-    cb: false,
+    isComeback: false,
   });
   game.tick(1 / 60);
   check("a reward overlay flips the input context to blessing", game.input.context === "blessing", `ctx=${game.input.context}`);

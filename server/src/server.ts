@@ -251,7 +251,12 @@ export class GameServer {
     this.metrics.counters.seatsExpired += this.sessions.sweep(this.clock.now());
     for (const room of this.sessions.rooms()) {
       this.detectSoftAbsence(room);
-      try { room.step(this.cfg); } catch (err) { this.log.error("world step failed", { worldId: room.id, err: String(err) }); }
+      try {
+        room.step(this.cfg);
+        this.recordPvpTelemetry(room);
+      } catch (err) {
+        this.log.error("world step failed", { worldId: room.id, err: String(err) });
+      }
     }
     for (const room of this.sessions.rooms()) {
       this.applyOffers(room);
@@ -263,6 +268,17 @@ export class GameServer {
     const dur = this.clock.mono() - t0;
     this.metrics.recordTick(dur);
     if (dur > TICK_MS) this.log.warn("tick over budget", { ms: Number(dur.toFixed(2)), budget: TICK_MS });
+  }
+
+  private recordPvpTelemetry(room: RoomRuntime): void {
+    const events = room.pvpTelemetryEvents();
+    if (events.length === 0 || room.pvpPolicy === null) return;
+    this.log.info("pvp telemetry", {
+      tick: room.state.tick,
+      policy: room.pvpPolicy,
+      count: events.length,
+      payload: JSON.stringify(events),
+    });
   }
 
   // Silent-drop detection (balance gate §6: bodies go invulnerable/non-targeting within 3s of

@@ -22,7 +22,7 @@ import {
   itemMaxLevel,
   rollPvpDraftChoicesWith,
 } from "../src/sim/items.js";
-import type { SimEvent } from "../src/sim/events.js";
+import type { PvpDamageTelemetryEvent, SimEvent } from "../src/sim/events.js";
 import type { InputCmd } from "../src/sim/input.js";
 import { Rng } from "../src/sim/rng.js";
 import { PRIVATE_DRAFT_PVP_POLICY } from "../src/net/pvpPolicy.js";
@@ -208,7 +208,7 @@ section("joins, absence, and present-only comeback");
       event.t === "pvpDraftTriggered" && event.pid === "p2",
   );
   check("absent reserved seats do not displace the present bottom third",
-    trigger?.comeback === true);
+    trigger?.isComeback === true);
 }
 
 section("offer lifetime, death, reconnect, and isolation");
@@ -242,18 +242,32 @@ section("offer lifetime, death, reconnect, and isolation");
     && p2.ownedItemIds.filter((id) => id === p2Item.id).length === 1
     && !world.pendingBlessings.has("p2"));
 
+  const maxedItem = itemById("core_dash")!;
+  p3.ownedItemIds.push(maxedItem.id);
+  check("a stale max-capped choice rejects without consuming the live offer",
+    chooseBlessingInWorld(world, "p3", maxedItem).length === 0
+    && world.pendingBlessings.has("p3")
+    && p3.pvpDraftTrigger !== "none");
+
   const remainingBefore = p3.pvpDraftOfferTicksLeft;
+  const elapsedBefore = p3.pvpDraftOfferElapsedTicks;
   setPlayerAbsence(world, "p3", true);
   stepCollect(world, 50);
   check("an absent chooser keeps the same offer and remaining duration",
     world.pendingBlessings.has("p3")
-    && p3.pvpDraftOfferTicksLeft === remainingBefore);
+    && p3.pvpDraftOfferTicksLeft === remainingBefore
+    && p3.pvpDraftOfferElapsedTicks === elapsedBefore);
   setPlayerAbsence(world, "p3", false);
   p3.pvpDraftOfferTicksLeft = 1;
   const expiry = stepCollect(world, 1);
   check("expiry is deterministic and clears only its owner",
     !world.pendingBlessings.has("p3")
-    && expiry.some((event) => event.t === "pvpDraftResolved" && event.pid === "p3" && event.outcome === "expiry"));
+    && expiry.some((event) =>
+      event.t === "pvpDraftResolved"
+      && event.pid === "p3"
+      && event.outcome === "expiry"
+      && event.latencyTicks === elapsedBefore + 1
+    ));
   setPlayerAbsence(world, "p3", true);
   setPlayerAbsence(world, "p3", false);
   check("an expired offer never resurrects on reconnect",
@@ -306,12 +320,29 @@ section("chooser input pause and damageability");
     ["p1", idle({ moveX: 1, firing: true, dash: true })],
   ]));
   check("only chooser input is paused", chooser.x === xBefore);
-  stepCollect(world, 12, new Map([
-    ["p1", idle({ moveX: 1, firing: true, dash: true })],
-    ["p2", idle({ firing: true, aim: 0 })],
-  ]));
+  let damageTelemetry: PvpDamageTelemetryEvent | undefined;
+  for (let tick = 0; tick < 12; tick++) {
+    stepCollect(world, 1, new Map([
+      ["p1", idle({ moveX: 1, firing: true, dash: true })],
+      ["p2", idle({ firing: true, aim: 0 })],
+    ]));
+    const observed = world.pvpTelemetryEvents.find(
+      (event): event is PvpDamageTelemetryEvent => event.t === "pvpDamage",
+    );
+    if (observed !== undefined) damageTelemetry = observed;
+  }
   check("chooser remains damageable while selecting", chooser.hp < hpBefore);
   check("paused chooser cannot create a shot", !world.bullets.some((bullet) => bullet.owner === "p1"));
+  check("damage telemetry carries bounded world-local TTK data",
+    damageTelemetry?.by === "p2"
+    && damageTelemetry.victim === "p1"
+    && damageTelemetry.weapon === "railgun"
+    && damageTelemetry.damage > 0
+    && damageTelemetry.victimHp < hpBefore);
+  world.bullets = [];
+  stepCollect(world, 1);
+  check("high-rate damage telemetry is tick-scoped, not a reliable-event backlog",
+    world.pvpTelemetryEvents.length === 0);
 }
 
 section("match lifecycle clears offers and drafted builds");

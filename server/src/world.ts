@@ -15,7 +15,7 @@ import { PVP, pvpDraftSeed } from "../../src/sim/pvp.js";
 import type { WorldMode } from "../../src/sim/pvp.js";
 import type { PvpPolicyId } from "../../src/net/pvpPolicy.js";
 import type { WorldState } from "../../src/sim/world.js";
-import type { SimEvent } from "../../src/sim/events.js";
+import type { PvpTelemetryEvent, SimEvent } from "../../src/sim/events.js";
 import type { InputCmd, PlayerId } from "../../src/sim/input.js";
 import { TILE, type WeaponId } from "../../src/sim/types.js";
 import { Rng, randomSeed } from "../../src/sim/rng.js";
@@ -79,6 +79,7 @@ export class GameWorld implements RoomRuntime {
   // Offers whose TTL expired this tick (already resolved on BOTH sides here) — surfaced for
   // the server's logging/metrics.
   private expiredOffersThisTick: PlayerId[] = [];
+  private pvpTelemetryThisTick: PvpTelemetryEvent[] = [];
   private joinedAtTick = new Map<PlayerId, number>();
   private joinedAtFloor = new Map<PlayerId, number>();
   private bossKillsByPlayer = new Map<PlayerId, Set<string>>();
@@ -120,6 +121,7 @@ export class GameWorld implements RoomRuntime {
     this.injectedEvents.length = 0;
     this.gameOverThisTick = [];
     this.offerThisTick = [];
+    this.pvpTelemetryThisTick = [];
     this.seatMap.clear();
     this.joinedAtTick.clear();
     this.joinedAtFloor.clear();
@@ -300,7 +302,7 @@ export class GameWorld implements RoomRuntime {
           t: "pvpDraftOffered",
           pid,
           source: p.pvpDraftTrigger,
-          comeback: p.pvpDraftTierBump > 0,
+          isComeback: p.pvpDraftTierBump > 0,
           ordinal: p.pvpDraftOrdinal,
           items: choices
             .map((item) => `${item.id}:${item.rarity}:${(levels.get(item.id) ?? 0) + 1}`)
@@ -328,6 +330,7 @@ export class GameWorld implements RoomRuntime {
     // Resolves the sim's pending offer too: the pick ends the player's pause/damage shield
     // and releases the party's descend gate.
     const evs = chooseBlessingInWorld(this.state, pid, def);
+    if (!evs.some((event) => event.t === "itemPicked")) return false;
     for (const e of evs) this.injectedEvents.push(e);
     return true;
   }
@@ -396,6 +399,9 @@ export class GameWorld implements RoomRuntime {
   expiredOfferPlayers(): PlayerId[] {
     return this.expiredOffersThisTick;
   }
+  pvpTelemetryEvents(): readonly PvpTelemetryEvent[] {
+    return this.pvpTelemetryThisTick;
+  }
 
   // Advance ONE authoritative tick. The server tick owns simulation time: each connected player
   // consumes at most ONE queued input command, applied at the FIXED step. If none arrived,
@@ -403,6 +409,7 @@ export class GameWorld implements RoomRuntime {
   // simulation rate independent of client frame rate and immune to client-authored dt.
   step(cfg: ServerConfig): void {
     const ev: SimEvent[] = [];
+    this.pvpTelemetryThisTick = [];
     if (this.injectedEvents.length > 0) { for (const e of this.injectedEvents) ev.push(e); this.injectedEvents.length = 0; }
     const isPvpWorld = isPvp(this.state);
     if (isPvpWorld) beginWorldTick(this.state);
@@ -447,6 +454,7 @@ export class GameWorld implements RoomRuntime {
     }
 
     stepWorldPhase(this.state, FIXED_DT, ev);
+    for (const event of this.state.pvpTelemetryEvents) this.pvpTelemetryThisTick.push(event);
     if (!isPvpWorld) this.state.tick++;
     this.commitEvents(ev);
   }
@@ -463,6 +471,13 @@ export class GameWorld implements RoomRuntime {
     this.expiredOffersThisTick = [];
     for (const e of ev) {
       this.eventLog.push({ id: this.nextEventId++, e });
+      if (e.t === "pvpDraftTriggered"
+        || e.t === "pvpDraftOffered"
+        || e.t === "pvpDraftPicked"
+        || e.t === "pvpDraftResolved"
+        || e.t === "pvpDraftDelayed") {
+        this.pvpTelemetryThisTick.push(e);
+      }
       if (e.t === "enemyKill" && e.by.length > 0 && isBossKind(e.kind)) {
         this.bossKillsByPlayer.get(e.by)?.add(e.kind);
       }

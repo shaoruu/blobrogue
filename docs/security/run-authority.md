@@ -153,6 +153,13 @@ absence freeze the affected clocks; death does not cancel a pending offer becaus
 blessing cannot fire, heal, move, or otherwise cause immediate combat action. Match over,
 no-contest, final leave, and requeue clear every pending offer and drafted build.
 
+Low-rate draft trigger/offer/pick/resolve/delay facts use the reliable event stream. High-rate
+damage facts never enter that ring: the game server drains them from a per-tick authoritative
+buffer and writes one structured `pvp telemetry` record per non-empty tick. Records contain only
+the fixed policy, sim tick, world-local player ids, weapon, bounded damage/HP, item rarity/level,
+active-time pick latency, score, and outcome. They contain no account identity, room code, ticket,
+resume token, or secret, and are sufficient to derive post-pick TTK and winner delta offline.
+
 Deploy Convex policy schema/query support before the matching game server, verify `/version`,
 and keep both PVP flags false. This change is safe to merge dark but does not authorize private
 or public admission; a later private-PVP release must flip only the private guard after its

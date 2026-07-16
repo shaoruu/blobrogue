@@ -299,6 +299,7 @@ export const FIXED_DT = 1 / TICK_HZ; // 50ms authoritative step
 // v33: authority-plane hard cut. Guest capabilities, signed run receipts, and durable generation
 // admission require the coordinated client/Convex/GS rollout; stale clients get a terminal
 // refresh-required rejection instead of retrying through the reconnect grace.
+<<<<<<< HEAD
 // v34 (Batch0 encounter architecture): snapshots grow optional `enc` — EncounterWire carrying
 //   kind/active/structure/currentRoom/routeEdge/checkpoint/objectiveProgress/carrier/failure/
 //   completed/failed for HUD progress pips, carrier highlight, spectator objective read, and
@@ -345,6 +346,13 @@ export const FIXED_DT = 1 / TICK_HZ; // 50ms authoritative step
 //   against a live arena.
 export const PROTOCOL_VERSION = 40;
 
+=======
+// v34: policy-bound PVP drafts. Snapshot wait rows and authoritative offer frames identify the
+// draft surface/trigger/comeback state, and mode-gated draft events carry balance telemetry. The
+// strict join gate makes older clients terminally refresh instead of rendering a
+// co-op offer surface against a live arena.
+export const PROTOCOL_VERSION = 34;
+>>>>>>> dc80e9c5 (fix(pvp): isolate authoritative draft telemetry)
 
 // How long the server reserves a disconnected player's body (their seat) before the
 // authoritative leave lifecycle applies. 90s per the studio balance gate's reconnect
@@ -503,7 +511,7 @@ export interface WaitWire {
   s: number;
   k: "blessing" | "pvp_draft";
   tr: PvpDraftTrigger;
-  cb: boolean;
+  isComeback: boolean;
 }
 
 // A snapshot event carries a monotonic id so the reliable-event channel can dedupe (client
@@ -778,7 +786,7 @@ export type ServerMsg =
   // `id` so it is idempotent: the server resends it (bounded) until the choice arrives or the
   // offer expires, and the client shows each id only once (no double prompt from resends). The
   // client replies with `chooseBlessing {offerId, choiceId}`; choice authority stays server-side.
-  | { t: "offer"; id: number; choices: string[]; k: "blessing" | "pvp_draft"; tr: PvpDraftTrigger; cb: boolean }
+  | { t: "offer"; id: number; choices: string[]; k: "blessing" | "pvp_draft"; tr: PvpDraftTrigger; isComeback: boolean }
   | { t: "error"; code: string; msg: string };
 
 // The complete snapshot message (a keyframe). The delta channel reconstructs one of these
@@ -1041,12 +1049,11 @@ const EVENT_SPECS: Record<SimEvent["t"], EventSpec> = {
   pvpShieldBreak: { scope: "pos", fields: { pid: "str", x: "num", y: "num" } },
   pvpSpawnAttackBlocked: { scope: "pid", fields: { pid: "str", x: "num", y: "num" } },
   pvpSuddenDeath: { scope: "global", fields: { leader: "str" } },
-  pvpDraftTriggered: { scope: "pid", fields: { pid: "str", source: "str", comeback: "bool", ordinal: "num", score: "num", leaderScore: "num" } },
-  pvpDraftOffered: { scope: "pid", fields: { pid: "str", source: "str", comeback: "bool", ordinal: "num", items: "str" } },
-  pvpDraftPicked: { scope: "pid", fields: { pid: "str", source: "str", comeback: "bool", ordinal: "num", item: "str", level: "num", latencyTicks: "num", hp: "num", score: "num", leaderScore: "num" } },
+  pvpDraftTriggered: { scope: "pid", fields: { pid: "str", source: "str", isComeback: "bool", ordinal: "num", score: "num", leaderScore: "num" } },
+  pvpDraftOffered: { scope: "pid", fields: { pid: "str", source: "str", isComeback: "bool", ordinal: "num", items: "str" } },
+  pvpDraftPicked: { scope: "pid", fields: { pid: "str", source: "str", isComeback: "bool", ordinal: "num", item: "str", level: "num", latencyTicks: "num", hp: "num", score: "num", leaderScore: "num" } },
   pvpDraftResolved: { scope: "pid", fields: { pid: "str", source: "str", ordinal: "num", outcome: "str", latencyTicks: "num" } },
   pvpDraftDelayed: { scope: "pid", fields: { pid: "str", ordinal: "num", reason: "str", remainingTicks: "num" } },
-  pvpDamage: { scope: "global", fields: { by: "str", victim: "str", weapon: "str", damage: "num", victimHp: "num" } },
   pvpMatchOver: { scope: "global", fields: { winner: "str" } },
   // flash/trauma carry no position — rare, tiny, and safe to deliver globally.
   flash: { scope: "global", fields: { eid: "num" } },
@@ -1544,7 +1551,7 @@ function validateWaitWire(v: unknown): WaitWire {
     s: num(o, "s", 0, 1e4),
     k: inSet(OFFER_KINDS, o.k, "wait.k"),
     tr: inSet(PVP_DRAFT_TRIGGERS, o.tr, "wait.tr"),
-    cb: boolOf(o, "cb"),
+    isComeback: boolOf(o, "isComeback"),
   };
 }
 
@@ -1736,7 +1743,7 @@ function decodeServerMsg(raw: string): ServerMsg {
         choices,
         k: inSet(OFFER_KINDS, o.k, "offer.k"),
         tr: inSet(PVP_DRAFT_TRIGGERS, o.tr, "offer.tr"),
-        cb: boolOf(o, "cb"),
+        isComeback: boolOf(o, "isComeback"),
       };
     }
     case "error":
@@ -2195,7 +2202,7 @@ function partyWait(w: WorldState): WaitWire[] {
       s: Math.max(0, Math.ceil(left)),
       k: isDraft ? "pvp_draft" : "blessing",
       tr: isDraft ? player?.pvpDraftTrigger ?? "none" : "none",
-      cb: isDraft && (player?.pvpDraftTierBump ?? 0) > 0,
+      isComeback: isDraft && (player?.pvpDraftTierBump ?? 0) > 0,
     });
   }
   out.sort((a, b) => a.pid.localeCompare(b.pid));

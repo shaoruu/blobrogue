@@ -250,7 +250,7 @@ export class WsSnapshotPublisher implements SnapshotPublisher {
           choices: conn.pendingOffer,
           k: isDraft ? "pvp_draft" : "blessing",
           tr: isDraft ? player?.pvpDraftTrigger ?? "none" : "none",
-          cb: isDraft && (player?.pvpDraftTierBump ?? 0) > 0,
+          isComeback: isDraft && (player?.pvpDraftTierBump ?? 0) > 0,
         }));
       } catch { /* closing */ }
     }

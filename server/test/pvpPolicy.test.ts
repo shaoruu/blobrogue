@@ -176,6 +176,13 @@ try {
         && offer.choices.length === PVP.draftChoices
         && new Set(offer.choices).size === PVP.draftChoices;
     }));
+  check("authoritative offer telemetry carries item rarity and next level",
+    await waitUntil(() => bots[0].events.some((event) =>
+      event.t === "pvpDraftOffered"
+      && event.source === "dedup"
+      && event.items.split(",").length === PVP.draftChoices
+      && event.items.split(",").every((item) => /^[a-z_]+:(uncommon|rare):[1-3]$/.test(item))
+    ), 2_000));
   const offers = bots.map((bot) => bot.transport.getPendingOfferPeek()!);
   const rejectedBefore = server.server.health().counters.rejectedInputs;
   bots[0].transport.sendChooseBlessing(offers[0].id + 1, offers[0].choices[0]);
@@ -199,6 +206,13 @@ try {
         && world?.state.pendingBlessings.has(pid) === false
         && (world?.state.pendingBlessings.size ?? 0) === PVP_POLICY_MAX_PLAYERS - 1;
     }, 2_000));
+  check("authoritative pick telemetry carries item, level, and active latency",
+    await waitUntil(() => bots[0].events.some((event) =>
+      event.t === "pvpDraftPicked"
+      && event.item === offers[0].choices[0]
+      && event.level === 1
+      && event.latencyTicks >= 0
+    ), 2_000));
 
   const reconnectPid = bots[2].transport.getSelfServerId()!;
   const reconnectOffer = bots[2].transport.consumePendingOffer()!;
