@@ -75,6 +75,7 @@
     "test:onlinelobby": "tsx test/onlinelobby.test.ts",
     "test:loadout": "tsx test/loadout.test.ts",
     "test:loadoutcss": "tsx test/loadoutCss.test.ts",
+    "test:loadoutlayout": "node tools/loadoutLayoutTest.mjs",
     "test:securityauthority": "tsx test/securityAuthority.test.ts",
     "prepare:convex-test": "node tools/prepareConvexTestBindings.mjs",
     "typecheck:convex": "npm run prepare:convex-test && tsc -p convex/tsconfig.json --noEmit",

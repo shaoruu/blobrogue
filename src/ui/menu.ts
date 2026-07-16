@@ -940,11 +940,18 @@ export class Menu {
         icon.className = "loadout-kit-icon";
         const titleRow = el("div", "loadout-card-title");
         titleRow.append(icon, el("span", "kit-name", meta.name.toUpperCase()));
-        card.append(
-          el("span", "loadout-key", String(index + 1)),
-          titleRow,
+        const badge = el("span", "loadout-card-badge loadout-key", isSelected ? "✓" : String(index + 1));
+        badge.setAttribute("aria-hidden", "true");
+        const header = el("div", "loadout-card-header");
+        header.append(titleRow, badge);
+        const description = el("div", "loadout-card-description");
+        description.append(
           el("span", "kit-role", `${meta.role.toUpperCase()} · ${weaponName(KIT_START_WEAPON[kit]).toUpperCase()} · ULT ${meta.ult.toUpperCase()}`),
           el("span", "kit-blurb", meta.blurb),
+        );
+        card.append(
+          header,
+          description,
         );
         const state = el("span", "loadout-card-state");
         if (!isUnlocked) {
@@ -1081,27 +1088,26 @@ export class Menu {
           `${name}${isOwned ? "" : `, locked, ${requirement}`}`,
         );
         card.setAttribute("data-pet", option.petId ?? "none");
-        const petMain = el("div", "pet-card-main");
+        const header = el("div", "loadout-card-header pet-card-main");
         if (option.petId === null) {
           const noPetThumb = el("span", "pet-card-thumb pet-card-none", "—");
           noPetThumb.setAttribute("aria-hidden", "true");
-          petMain.appendChild(noPetThumb);
+          header.appendChild(noPetThumb);
         } else {
-          petMain.appendChild(createPetThumbnail(option.petId, 56));
+          header.appendChild(createPetThumbnail(option.petId, 56));
         }
-        const petCopy = el("div", "pet-card-copy");
-        petCopy.append(
-          el("span", "pet-name", name),
-          el(
-            "span",
-            "pet-kind",
-            option.petId === null
-              ? "TRAVEL ALONE · NO GAMEPLAY CHANGE"
-              : "COSMETIC COMPANION · FOLLOWS YOU · NO COMBAT EFFECT",
-          ),
+        header.appendChild(el("span", "loadout-card-title pet-name", name));
+        const badge = el("span", "loadout-card-badge loadout-key", isSelected ? "✓" : String(index + 1));
+        badge.setAttribute("aria-hidden", "true");
+        header.appendChild(badge);
+        const description = el(
+          "div",
+          "loadout-card-description pet-kind",
+          option.petId === null
+            ? "TRAVEL ALONE · NO GAMEPLAY CHANGE"
+            : "COSMETIC COMPANION · FOLLOWS YOU · NO COMBAT EFFECT",
         );
-        petMain.appendChild(petCopy);
-        card.append(el("span", "loadout-key", String(index + 1)), petMain);
+        card.append(header, description);
         const state = el("span", "loadout-card-state");
         if (!isOwned && rescueFloor !== undefined) {
           state.textContent = requirement;
@@ -1178,6 +1184,7 @@ export class Menu {
       const grid = el("div", "loadout-review-grid");
 
       const kitCard = el("section", "loadout-review-card review-kit");
+      const kitContent = el("div", "loadout-review-content");
       const kitTitle = el("div", "review-title");
       const icon = document.createElement("img");
       icon.src = `/sprites/ui/${draftKitId}_24.png`;
@@ -1186,7 +1193,7 @@ export class Menu {
       icon.height = 24;
       icon.className = "loadout-kit-icon";
       kitTitle.append(icon, el("span", "", meta.name.toUpperCase()));
-      kitCard.append(
+      kitContent.append(
         el("span", "review-kicker", "KIT"),
         kitTitle,
         el("span", "review-line", `${meta.role.toUpperCase()} · ${weaponName(KIT_START_WEAPON[draftKitId]).toUpperCase()}`),
@@ -1203,10 +1210,11 @@ export class Menu {
         errorMessage = "";
         showKit();
       };
-      kitCard.appendChild(editKit);
+      kitCard.append(kitContent, editKit);
 
       const petCard = el("section", "loadout-review-card review-pet");
-      petCard.appendChild(el("span", "review-kicker", "PET"));
+      const petContent = el("div", "loadout-review-content");
+      petContent.appendChild(el("span", "review-kicker", "PET"));
       const petPreview = el("div", "review-pet-preview");
       if (!this.loadoutPreview) {
         this.loadoutPreview = createLoadoutPreview(
@@ -1222,7 +1230,7 @@ export class Menu {
         );
       }
       petPreview.appendChild(this.loadoutPreview.el);
-      petCard.append(
+      petContent.append(
         petPreview,
         el("span", "review-pet-name", draftPetId === null ? "NO COMPANION" : petName(draftPetId)),
         el(
@@ -1242,7 +1250,7 @@ export class Menu {
         errorMessage = "";
         showPet();
       };
-      petCard.appendChild(editPet);
+      petCard.append(petContent, editPet);
       grid.append(kitCard, petCard);
       view.body.appendChild(grid);
 
