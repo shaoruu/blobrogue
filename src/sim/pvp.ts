@@ -627,8 +627,8 @@ export function buildPvpArena(): PvpArena {
   const cover: Vec2[] = COVER_TILES.map(([tx, ty]) => tileCenter(tx, ty));
   const pits: Vec2[] = PIT_TILES.map(([tx, ty]) => tileCenter(tx, ty));
   const c = (n - 1) >> 1; // center tile (9)
-  const room: Room = { x: 1, y: 1, w: n - 2, h: n - 2, cx: c, cy: c, kind: "normal", shape: "arena" };
-  const dungeon: Dungeon = { w: n, h: n, tiles, rooms: [room], spawn: { x: c, y: c }, exit: { x: c, y: c } };
+  const room: Room = { id: 0, x: 1, y: 1, w: n - 2, h: n - 2, cx: c, cy: c, kind: "normal", shape: "arena" };
+  const dungeon: Dungeon = { w: n, h: n, tiles, rooms: [room], edges: [], blueprint: null, spawn: { x: c, y: c }, exit: { x: c, y: c } };
   const pitWarnings: Vec2[] = [];
   for (let ty = 0; ty < n; ty++) {
     for (let tx = 0; tx < n; tx++) {

@@ -28,16 +28,43 @@ export type RoomKind = "spawn" | "normal" | "large" | "treasure" | "exit" | "haz
 // rooms host dense formations); the client reads it for per-room presentation.
 export type RoomShape = "rect" | "cell" | "hall" | "pillars" | "arena" | "cavern" | "vault" | "gauntlet";
 
+// Explicit corridor / door / shortcut edge retained from generation (Batch0). Shortcuts are
+// invisible to rooms[] adjacency alone — never infer them later from tiles.
+export interface RoomEdge {
+  a: number;          // room id
+  b: number;          // room id
+  path: { x: number; y: number }[]; // corridor centerline tiles (dense)
+  doorA: { x: number; y: number };  // mouth tile in room A
+  doorB: { x: number; y: number };  // mouth tile in room B
+  width: number;      // corridor width in tiles
+  isShortcut: boolean;
+  locked?: boolean;   // encounter may lock/unlock
+}
+
+// Boss-floor encounter blueprint plumbing (Batch0). 'arena' preserves Gorge F50; later
+// batches author hunt/split/escape/escort without rewriting the dungeon graph.
+export type EncounterStructureKind = "arena" | "hunt" | "split" | "escape" | "escort";
+
+export interface EncounterBlueprint {
+  structureKind: EncounterStructureKind;
+  spawnRoomId: number;           // boss / encounter spawn room (not always rooms[last])
+  objectiveRoomIds: number[];    // reserved objective rooms
+  chaseEdgeIds: number[];        // authored chase/escape path; width guaranteed >= 3
+}
+
 export interface Dungeon {
   w: number;
   h: number;
   tiles: TileKind[]; // row-major, 0 = floor, 1 = wall, 2 = walkable lethal void
   rooms: Room[];
+  edges: RoomEdge[]; // authoritative graph (chain + shortcuts); never inferred later
+  blueprint: EncounterBlueprint | null;
   spawn: { x: number; y: number }; // tile coords
   exit: { x: number; y: number };  // tile coords
 }
 
 export interface Room {
+  id: number; // index-stable for the floor seed (equals rooms[] index after journey order)
   x: number;
   y: number;
   w: number;
@@ -46,6 +73,46 @@ export interface Room {
   cy: number;
   kind: RoomKind;
   shape: RoomShape;
+}
+
+function roomContains(room: Room, tx: number, ty: number): boolean {
+  return tx >= room.x && ty >= room.y && tx < room.x + room.w && ty < room.y + room.h;
+}
+
+// Tile -> room id. Room rects win; corridor tiles resolve to the nearer door-endpoint among
+// edges whose path contains the tile (Manhattan). Returns -1 when neither applies.
+export function roomIdAt(d: Dungeon, tx: number, ty: number): number {
+  for (const room of d.rooms) {
+    if (roomContains(room, tx, ty)) return room.id;
+  }
+  let bestId = -1;
+  let bestD = Infinity;
+  for (const edge of d.edges) {
+    let onPath = false;
+    for (const p of edge.path) {
+      if (p.x === tx && p.y === ty) { onPath = true; break; }
+    }
+    if (!onPath) continue;
+    const da = Math.abs(tx - edge.doorA.x) + Math.abs(ty - edge.doorA.y);
+    const db = Math.abs(tx - edge.doorB.x) + Math.abs(ty - edge.doorB.y);
+    if (da <= db) {
+      if (da < bestD) { bestD = da; bestId = edge.a; }
+    } else if (db < bestD) {
+      bestD = db; bestId = edge.b;
+    }
+  }
+  return bestId;
+}
+
+export function neighbors(d: Dungeon, roomId: number): RoomEdge[] {
+  return d.edges.filter((e) => e.a === roomId || e.b === roomId);
+}
+
+export function edgeBetween(d: Dungeon, a: number, b: number): RoomEdge | null {
+  for (const e of d.edges) {
+    if ((e.a === a && e.b === b) || (e.a === b && e.b === a)) return e;
+  }
+  return null;
 }
 
 // Overall run depth 0..1 (floor 26+ = 1): the master escalation dial for shape drama,
@@ -314,22 +381,90 @@ function rollCorridorWidth(rand: Rng, floor: number): number {
   return 2;
 }
 
-function connectRooms(c: Carver, rand: Rng, a: Room, b: Room, floor: number, forceWidth?: number): void {
+function pushPathUnique(path: { x: number; y: number }[], x: number, y: number): void {
+  const last = path[path.length - 1];
+  if (last && last.x === x && last.y === y) return;
+  path.push({ x, y });
+}
+
+function pathH(path: { x: number; y: number }[], x0: number, x1: number, y: number): void {
+  const step = x0 <= x1 ? 1 : -1;
+  for (let x = x0; ; x += step) {
+    pushPathUnique(path, x, y);
+    if (x === x1) break;
+  }
+}
+
+function pathV(path: { x: number; y: number }[], y0: number, y1: number, x: number): void {
+  const step = y0 <= y1 ? 1 : -1;
+  for (let y = y0; ; y += step) {
+    pushPathUnique(path, x, y);
+    if (y === y1) break;
+  }
+}
+
+function doorMouth(room: Room, path: { x: number; y: number }[], fromStart: boolean): { x: number; y: number } {
+  if (path.length === 0) return { x: room.cx, y: room.cy };
+  if (fromStart) {
+    let last = path[0];
+    for (const p of path) {
+      if (!roomContains(room, p.x, p.y)) break;
+      last = p;
+    }
+    return { x: last.x, y: last.y };
+  }
+  let last = path[path.length - 1];
+  for (let i = path.length - 1; i >= 0; i--) {
+    const p = path[i];
+    if (!roomContains(room, p.x, p.y)) break;
+    last = p;
+  }
+  return { x: last.x, y: last.y };
+}
+
+// Carve a corridor and RETURN the authoritative RoomEdge (Batch0). RNG draws stay in the
+// same order/count as the pre-graph generator so existing dungeon tiles stay bit-identical.
+function connectRooms(
+  c: Carver,
+  rand: Rng,
+  a: Room,
+  b: Room,
+  floor: number,
+  forceWidth: number | undefined,
+  isShortcut: boolean,
+): RoomEdge {
   const width = forceWidth ?? rollCorridorWidth(rand, floor);
   const isZ = floor >= 4 && rand.chance(0.25 + 0.35 * depthFactor(floor));
+  const path: { x: number; y: number }[] = [];
   if (isZ && Math.abs(a.cx - b.cx) >= 6) {
     // Z-jog on the horizontal run: two bends read as a dug passage, not a ruler line.
     const mx = Math.min(a.cx, b.cx) + 2 + rand.int(0, Math.abs(a.cx - b.cx) - 4);
     carveH(c, a.cx, mx, a.cy, width);
     carveV(c, a.cy, b.cy, mx, width);
     carveH(c, mx, b.cx, b.cy, width);
+    pathH(path, a.cx, mx, a.cy);
+    pathV(path, a.cy, b.cy, mx);
+    pathH(path, mx, b.cx, b.cy);
   } else if (rand.chance(0.5)) {
     carveH(c, a.cx, b.cx, a.cy, width);
     carveV(c, a.cy, b.cy, b.cx, width);
+    pathH(path, a.cx, b.cx, a.cy);
+    pathV(path, a.cy, b.cy, b.cx);
   } else {
     carveV(c, a.cy, b.cy, a.cx, width);
     carveH(c, a.cx, b.cx, b.cy, width);
+    pathV(path, a.cy, b.cy, a.cx);
+    pathH(path, a.cx, b.cx, b.cy);
   }
+  return {
+    a: a.id,
+    b: b.id,
+    path,
+    doorA: doorMouth(a, path, true),
+    doorB: doorMouth(b, path, false),
+    width,
+    isShortcut,
+  };
 }
 
 // ---- erosion (deep-floor decay) ----
@@ -434,6 +569,7 @@ function overlaps(rooms: Room[], rx: number, ry: number, rw: number, rh: number)
 
 function makeRoom(rx: number, ry: number, rw: number, rh: number, shape: RoomShape): Room {
   return {
+    id: -1,
     x: rx, y: ry, w: rw, h: rh,
     cx: Math.floor(rx + rw / 2),
     cy: Math.floor(ry + rh / 2),
@@ -570,10 +706,14 @@ export function generateDungeon(seed: number, floor: number): Dungeon {
     if (room.shape === "arena" && room !== bossArena) carveArenaPiece(c, rand, room, floor);
   }
 
-  // ---- corridors: the chain, then loop shortcuts ----
+  // Stable room ids = journey index (Batch0). Assigned BEFORE edges so RoomEdge.a/b are final.
+  for (let i = 0; i < chain.length; i++) chain[i].id = i;
+
+  // ---- corridors: the chain, then loop shortcuts (edges retained authoritatively) ----
+  const edges: RoomEdge[] = [];
   for (let i = 1; i < chain.length; i++) {
     const isBossApproach = bossArena !== null && i === chain.length - 1;
-    connectRooms(c, rand, chain[i - 1], chain[i], floor, isBossApproach ? 3 : undefined);
+    edges.push(connectRooms(c, rand, chain[i - 1], chain[i], floor, isBossApproach ? 3 : undefined, false));
   }
   const extraCount = chain.length >= 4 ? rand.int(1, Math.min(3, Math.max(1, Math.floor(chain.length / 3)))) : 0;
   const linked = new Set<string>();
@@ -592,7 +732,7 @@ export function generateDungeon(seed: number, floor: number): Dungeon {
     }
     if (pickI < 0) continue;
     linked.add(`${pickI}:${pickJ}`);
-    connectRooms(c, rand, chain[pickI], chain[pickJ], floor);
+    edges.push(connectRooms(c, rand, chain[pickI], chain[pickJ], floor, undefined, true));
   }
 
   // ---- set dressing: vault ring (re-seals corridor punctures), erosion, sealing ----
@@ -612,11 +752,35 @@ export function generateDungeon(seed: number, floor: number): Dungeon {
   const last = chain[chain.length - 1];
   sealUnreachable(c, { x: first.cx, y: first.cy });
 
+  // Boss-floor 'arena' blueprint: spawn/objective = final arena room; the grand approach
+  // edge (last chain edge) is the chase path and already carved at width 3.
+  let blueprint: EncounterBlueprint | null = null;
+  if (bossArena !== null) {
+    const spawnRoomId = last.id;
+    const approachIdx = edges.length > 0 ? chain.length - 2 : -1; // chain edge index == rooms-1-1
+    // Chain edges were pushed first (indices 0..chain.length-2); the approach is the last of those.
+    const chaseEdgeIds: number[] = [];
+    if (chain.length >= 2) {
+      const approachEdge = edges.find((e) => !e.isShortcut && e.a === chain[chain.length - 2].id && e.b === last.id)
+        ?? edges.find((e) => !e.isShortcut && e.b === chain[chain.length - 2].id && e.a === last.id);
+      if (approachEdge) chaseEdgeIds.push(edges.indexOf(approachEdge));
+    }
+    blueprint = {
+      structureKind: "arena",
+      spawnRoomId,
+      objectiveRoomIds: [spawnRoomId],
+      chaseEdgeIds,
+    };
+    void approachIdx;
+  }
+
   return {
     w,
     h,
     tiles: c.tiles,
     rooms: chain,
+    edges,
+    blueprint,
     spawn: { x: first.cx, y: first.cy },
     exit: { x: last.cx, y: last.cy },
   };

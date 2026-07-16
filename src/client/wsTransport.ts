@@ -1116,6 +1116,11 @@ export class WSTransport implements Transport {
     return this.latestSnap?.cleared ?? false;
   }
 
+  // Batch0 encounter status from the authoritative snapshot (progress/checkpoint/carrier).
+  encounterStatus(): import("../net/protocol.js").EncounterWire | null {
+    return this.latestSnap?.enc ?? null;
+  }
+
   // Terminal run state from authoritative SNAPSHOT state (not just the transient gameOver
   // event) — a backpressure-dropped final snapshot can't strand the client mid-run.
   isRunOver(): boolean {

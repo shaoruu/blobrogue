@@ -63,7 +63,7 @@ function gridDungeon(rows: readonly string[]): Dungeon {
     if (rows[y].length !== w) throw new Error(`ragged grid row ${y}`);
     for (let x = 0; x < w; x++) tiles[y * w + x] = rows[y][x] === "#" ? 1 : 0;
   }
-  return { w, h, tiles, rooms: [], spawn: { x: 1, y: 1 }, exit: { x: w - 2, y: h - 2 } };
+  return { w, h, tiles, rooms: [], edges: [], blueprint: null, spawn: { x: 1, y: 1 }, exit: { x: w - 2, y: h - 2 } };
 }
 
 // A plain room: straight N/S/E/W boundary runs + the four concave corners.

@@ -12,6 +12,7 @@
 
 import type { PlayerSim, WorldState } from "../sim/world.js";
 import { isFloorCleared, playersAtExit, isPlayerOut } from "../sim/world.js";
+import type { EncounterState } from "../sim/encounter.js";
 import { shopSlotForViewer } from "../sim/shop.js";
 import type { ShopSlot, ShopSlotKind, ShopState } from "../sim/shop.js";
 import type {
@@ -292,7 +293,13 @@ export const FIXED_DT = 1 / TICK_HZ; // 50ms authoritative step
 // v33: authority-plane hard cut. Guest capabilities, signed run receipts, and durable generation
 // admission require the coordinated client/Convex/GS rollout; stale clients get a terminal
 // refresh-required rejection instead of retrying through the reconnect grace.
-export const PROTOCOL_VERSION = 33;
+// v34 (Batch0 encounter architecture): snapshots grow optional `enc` — EncounterWire carrying
+//   kind/active/structure/currentRoom/routeEdge/checkpoint/objectiveProgress/carrier/failure/
+//   completed/failed for HUD progress pips, carrier highlight, spectator objective read, and
+//   same-run reconnect restore. null on non-encounter floors. Additive + strict decode; a v33
+//   client rejects a snapshot carrying `enc` (validateSnap exact shape). Gorge arena path
+//   still clears via HP-death; custom completion rides enc.completed + isFloorCleared.
+export const PROTOCOL_VERSION = 34;
 
 // How long the server reserves a disconnected player's body (their seat) before the
 // authoritative leave lifecycle applies. 90s per the studio balance gate's reconnect
@@ -539,6 +546,20 @@ export interface ShopSlotWire {
   sold: PlayerId | null; by: PlayerId[];
   myst: boolean; // mystery pedestal: wpn is hidden (null) on the wire until a buy reveals
 }
+// Batch0 encounter status (HUD/reconnect). Compact plain-data; flags stay sim-internal.
+export interface EncounterWire {
+  k: string;   // kind
+  a: boolean;  // active
+  sk: string;  // structureKind
+  cr: number;  // currentRoomId
+  re: number;  // routeEdgeId (-1 = null)
+  cp: number;  // checkpoint
+  op: number;  // objectiveProgress
+  ca: string;  // carrierPlayerId ("" = null)
+  fc: number;  // failureCount
+  co: boolean; // completed
+  fa: boolean; // failed
+}
 export interface ShopWire { md: ShopMode; kx: number; ky: number; ru: number; slots: ShopSlotWire[] }
 
 // PVP FFA match block — ONE small top-level object on the snapshot (never smeared across every
@@ -667,6 +688,7 @@ export type ServerMsg =
       shop: ShopWire | null;     // Patch's stall (shop floors only) — stock + claim state
       effs: EffectWire[];        // shared weapon effect entities (the effect wave)
       match: MatchWire | null;   // pvp FFA match block (phase/timer/scores/winner); null in co-op
+      enc: EncounterWire | null; // Batch0 encounter status (null on non-encounter floors)
       events: WireEvent[];       // reliable, id-tagged events (dedupe + ack) -> client replays juice
     }
   // Snapshot DELTA (v24): only what CHANGED since the baseline snapshot `b` (the client's last
@@ -1302,6 +1324,24 @@ function validateShopSlotWire(v: unknown): ShopSlotWire {
   };
 }
 
+function validateEncounterWire(v: unknown): EncounterWire {
+  const o = obj(v, "enc");
+  exactKeys(o, ["k", "a", "sk", "cr", "re", "cp", "op", "ca", "fc", "co", "fa"]);
+  return {
+    k: shortStr(o, "k", 32),
+    a: boolOf(o, "a"),
+    sk: shortStr(o, "sk", 32),
+    cr: intOf(o, "cr", -1, 1e6),
+    re: intOf(o, "re", -1, 1e6),
+    cp: intOf(o, "cp", 0, 1e6),
+    op: num(o, "op", -1e9, 1e9),
+    ca: idRefOf(o, "ca"),
+    fc: intOf(o, "fc", 0, 1e6),
+    co: boolOf(o, "co"),
+    fa: boolOf(o, "fa"),
+  };
+}
+
 function validateShopWire(v: unknown): ShopWire {
   const o = obj(v, "shop");
   const slots = arr(o.slots, "shop.slots").map(validateShopSlotWire);
@@ -1424,6 +1464,7 @@ export function validateSnap(o: Record<string, unknown>): Extract<ServerMsg, { t
     shop: o.shop === null ? null : validateShopWire(o.shop),
     effs: arr(o.effs, "effs").map(validateEffectWire),
     match: o.match === null || o.match === undefined ? null : validateMatchWire(o.match),
+    enc: o.enc === null || o.enc === undefined ? null : validateEncounterWire(o.enc),
     events: arr(o.events, "events").map(validateWireEvent),
   };
 }
@@ -1725,6 +1766,22 @@ export function enemyFromWire(w: EnemyWire, x: number, y: number): Enemy {
 export function toPropWire(p: Prop): PropWire {
   return { id: p.id, kind: p.kind, x: p.x, y: p.y, brk: p.breakT ?? -1 };
 }
+export function toEncounterWire(e: EncounterState): EncounterWire {
+  return {
+    k: e.kind,
+    a: e.active,
+    sk: e.structureKind,
+    cr: e.currentRoomId,
+    re: e.routeEdgeId === null ? -1 : e.routeEdgeId,
+    cp: e.checkpoint,
+    op: e.objectiveProgress,
+    ca: e.carrierPlayerId ?? "",
+    fc: e.failureCount,
+    co: e.completed,
+    fa: e.failed,
+  };
+}
+
 export function toShopWire(s: ShopState, viewerId?: PlayerId): ShopWire {
   return {
     md: s.mode, kx: s.keeperX, ky: s.keeperY, ru: s.rerollsUsed,
@@ -2040,6 +2097,7 @@ export function buildSnapshot(
     effs: w.effects.map(toEffectWire),
     // pvp match block (one small object; null in co-op).
     match: w.match ? toMatchWire(w.match, w) : null,
+    enc: w.encounter ? toEncounterWire(w.encounter) : null,
     events,
   };
 }

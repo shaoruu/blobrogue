@@ -58,6 +58,7 @@
     "test:earnedwindows": "tsx test/earnedwindows.test.ts",
     "test:wave1bosses": "tsx test/wave1bosses.test.ts",
     "test:gorge": "tsx test/gorge.test.ts",
+    "test:encounterArch": "tsx test/encounterArch.test.ts",
     "test:fairsurprise": "tsx test/fairsurprise.test.ts",
     "test:scaling": "tsx test/scaling.test.ts",
     "scaling:report": "tsx test/scaling.test.ts --report",

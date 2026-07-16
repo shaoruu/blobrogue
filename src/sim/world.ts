@@ -9,6 +9,27 @@
 // golden-master oracle).
 
 import { generateDungeon } from "./dungeon.js";
+import {
+  type EncounterState,
+  initArenaEncounter,
+  isEncounterObjectiveComplete,
+  completeEncounter,
+  cloneEncounter,
+} from "./encounter.js";
+
+export type { EncounterState } from "./encounter.js";
+export {
+  createIdleEncounter,
+  initArenaEncounter,
+  initSmokeEncounter,
+  isEncounterObjectiveComplete,
+  completeEncounter,
+  cloneEncounter,
+  setEncounterCheckpoint,
+  setEncounterCarrier,
+  bumpEncounterProgress,
+  encounterEqual,
+} from "./encounter.js";
 import type { Dungeon, Room } from "./dungeon.js";
 import type { FlowField } from "./pathfind.js";
 import { createNav, markNavTargets, navChaseField, navReachField, navClassFor, navStepPoint, navPoint } from "./nav.js";
@@ -477,6 +498,10 @@ export interface WorldState {
   // build — resolved + frozen but not yet EXPRESSED (no vision/hazard/spawn changes), so existing
   // floors stay byte-identical.
   floorDescriptor: FloorDescriptor;
+  // Batch0 encounter architecture: plain-data route/checkpoint/objective/carrier.
+  // null on non-encounter floors; 'arena' on boss floors (Gorge HP-death unchanged).
+  // NEVER overloaded onto BossState. Reconnect/replay safe (JSON-serializable).
+  encounter: EncounterState | null;
   // Threat-cap reinforcements: pre-planned units beyond the ActiveThreatCap, released in
   // waves as the living threat drops (spawnReleaseCd staggers the trickle).
   pendingSpawns: Enemy[];
@@ -650,7 +675,7 @@ export function createWorld(seed: number, floor: number, opts: WorldOptions = {}
     recentReleases: [],
     gauntlet: null,
     shop: null,
-    dungeon: { w: 0, h: 0, tiles: [], rooms: [], spawn: { x: 0, y: 0 }, exit: { x: 0, y: 0 } },
+    dungeon: { w: 0, h: 0, tiles: [], rooms: [], edges: [], blueprint: null, spawn: { x: 0, y: 0 }, exit: { x: 0, y: 0 } },
     nav: createNav(),
     obstacleRev: 0,
     flowCd: 0,
@@ -666,6 +691,7 @@ export function createWorld(seed: number, floor: number, opts: WorldOptions = {}
     encounterPower: 1,
     jetMirror: [],
     floorDescriptor: resolveFloorDescriptor(seed, floor, 1),
+    encounter: null,
     pendingSpawns: [],
     spawnReleaseCd: 0,
     heartsThisFloor: 0,
@@ -1681,8 +1707,8 @@ function buildArena(): Dungeon {
       tiles[y * w + x] = isBorder ? 1 : 0;
     }
   }
-  const room: Room = { x: 1, y: 1, w: w - 2, h: h - 2, cx: w >> 1, cy: h >> 1, kind: "normal", shape: "rect" };
-  return { w, h, tiles, rooms: [room], spawn: { x: w >> 1, y: h >> 1 }, exit: { x: w - 3, y: 2 } };
+  const room: Room = { id: 0, x: 1, y: 1, w: w - 2, h: h - 2, cx: w >> 1, cy: h >> 1, kind: "normal", shape: "rect" };
+  return { w, h, tiles, rooms: [room], edges: [], blueprint: null, spawn: { x: w >> 1, y: h >> 1 }, exit: { x: w - 3, y: 2 } };
 }
 
 // Build (or rebuild, on descend) the floor's world content. Does NOT reseed w.rng — the
@@ -1734,6 +1760,15 @@ export function loadFloorIntoWorld(w: WorldState, floor: number, playerCountAtLo
   } else {
     w.dungeon = w.isSandbox ? buildArena() : generateDungeon(w.seed, floor);
     w.match = null;
+  }
+  // Batch0: attach encounter state from the dungeon blueprint. Boss floors get 'arena'
+  // (progress HUD only — completion stays on Gorge HP-death). Non-boss / sandbox / pvp: null.
+  if (pvp || isBare) {
+    w.encounter = null;
+  } else if (w.dungeon.blueprint !== null && w.dungeon.blueprint.structureKind === "arena") {
+    w.encounter = initArenaEncounter(w.dungeon);
+  } else {
+    w.encounter = null;
   }
   w.bullets = [];
   w.hazards = [];
@@ -1841,7 +1876,37 @@ export function isFloorCleared(w: WorldState): boolean {
   // zero-enemy arena can never leak co-op floor-exit/stairs readiness to a client HUD.
   if (isPvp(w)) return false;
   if (w.gauntlet !== null && (w.gauntlet.stage < GAUNTLET.rounds.length || !w.gauntlet.isRewarded)) return false;
+  // Batch0 custom encounter completion: when an active encounter marks completed, the exit
+  // opens WITHOUT requiring enemies.length===0 (phantom adds / mechanic bodies may remain).
+  // Arena/null encounters still clear via the classic enemies-empty path (Gorge HP-death
+  // calls endBossDanger which empties the floor first).
+  if (isEncounterObjectiveComplete(w.encounter)) return true;
   return w.enemies.length === 0 && w.pendingSpawns.length === 0;
+}
+
+// Batch0: immutable same-run restore of encounter plain-data (reconnect / late-join).
+export function restoreEncounterInWorld(w: WorldState, encounter: EncounterState | null): void {
+  w.encounter = encounter === null ? null : cloneEncounter(encounter);
+}
+
+// Batch0 reward hook: place a premium boss chest at the encounter objective room (or exit).
+// Used by custom completion paths; arena/Gorge still drop via the classic kill path.
+export function grantEncounterCompletionReward(w: WorldState): void {
+  if (w.encounter === null || !w.encounter.completed) return;
+  if (w.chests.some((c) => c.kind === "boss" && !c.opened)) return;
+  const d = w.dungeon;
+  let room: Room | undefined = d.rooms.find((r) => r.id === w.encounter!.currentRoomId);
+  if (!room) room = d.rooms[d.rooms.length - 1];
+  if (!room) return;
+  const x = room.cx * TILE + TILE / 2;
+  const y = room.cy * TILE + TILE / 2;
+  w.chests.push({
+    id: w.nextChestId++,
+    kind: "boss",
+    x, y,
+    radius: 18,
+    opened: false,
+  });
 }
 
 // Reset a live world to a FRESH run: new seed, new RNG stream, floor 1, cleared terminal state.
@@ -3512,6 +3577,12 @@ function endBossDanger(w: WorldState, boss: Enemy, ev: SimEvent[]): void {
     if (other === boss || other.dead) continue;
     other.dead = true;
     ev.push({ t: "puff", x: other.x, y: other.y, n: 6, color: ENEMY_ARCHETYPES[other.kind].tint });
+  }
+  // Batch0: mirror arena completion onto EncounterState for HUD/wire/reconnect. Does NOT
+  // replace HP-death — this runs AFTER the classic clear path empties the floor.
+  if (w.encounter !== null && w.encounter.kind === "arena") {
+    completeEncounter(w.encounter);
+    w.encounter.flags.bossKind = boss.kind;
   }
 }
 
