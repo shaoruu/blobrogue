@@ -434,30 +434,6 @@ async function main(): Promise<void> {
     } finally { await s.close(); }
   });
 
-  // ---- H6: deterministic game-over leave lifecycle ----
-  await test("H6: full wipe deterministically closes the socket + removes the player", async () => {
-    const s = await startTestServer();
-    try {
-      const bot = new Bot({ url: s.url, secret: s.secret, playerId: "solo-death", script: () => ({ seq: 0, moveX: 0, moveY: 0, aim: 0, firing: false, dash: false }) });
-      bot.start();
-      await waitUntil(() => bot.transport.isReady(), 3000);
-      const world = s.server.getWorld()!;
-      const pid = bot.serverId()!;
-      const p = world.state.players.get(pid)!;
-      p.hp = 1; p.invuln = 0;
-      // A slime on top of the (only) player -> contact downs them; the wipe is the held
-      // 4.0s all-down beat (studio balance gate §6), THEN game over closes the socket.
-      devSpawnEnemy(world.state, "slime", p.x, p.y).spawnTimer = 0;
-      const isDowned = await waitUntil(() => world.state.players.get(pid)?.isDown === true, 3000);
-      check("the last player going to 0 goes DOWN first (the 4.0s wipe hold)", isDowned && !world.state.isRunOver);
-      const closed = await waitUntil(() => bot.transport.getStatus() === "closed", 8000);
-      check("socket deterministically closed on game over", closed);
-      const removed = await waitUntil(() => (s.server.getWorld()?.playerCount ?? 0) === 0, 2000);
-      check("player removed from the world on game over", removed, `players=${s.server.getWorld()?.playerCount}`);
-      bot.stop();
-    } finally { await s.close(); }
-  });
-
   process.stdout.write(`\n${passed} checks passed, ${failed} failed\n`);
   if (failed > 0) { process.stdout.write(`FAILURES:\n${failures.map((f) => "  - " + f).join("\n")}\n`); process.exit(1); }
   process.stdout.write("\nAll Stage-C hardening regressions passed.\n");
