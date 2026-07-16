@@ -255,7 +255,9 @@ section("PATHMAKER — CLEANSE / PAVE");
     const safeHp = player.hp;
     stepWorld(world, new Map([[player.id, input(world.tick + 1)]]), DT);
     check("paved ground suppresses floor damage and rift pressure", player.hp === safeHp);
-    paving.life = 0;
+    for (const effect of world.effects) {
+      if (effect.kind === "zone" && effect.isPaved) effect.life = 0;
+    }
     player.invuln = 0;
     stepWorld(world, new Map([[player.id, input(world.tick + 1)]]), DT);
     check("the same floor hazard damages again after the paving expires", player.hp < safeHp);
@@ -347,7 +349,7 @@ section("blessing mechanics and interactions");
   const downed = spawnPlayerInWorld(ropeWorld, "downed");
   reviver.x = 300;
   reviver.y = 600;
-  downed.x = 300 + 96 + 24;
+  downed.x = 300 + 46 + 24;
   downed.y = 600;
   downed.hp = 0;
   downed.isDown = true;
