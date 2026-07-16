@@ -65,9 +65,19 @@ for (const players of [2, 4]) {
   await page.evaluate(() => {
     window.__game.devSetPalePhase(2);
     const boss = window.__game.devWorld().enemies.find((enemy) => enemy.kind === "pale");
-    if (boss?.boss) boss.boss.addTimer = 0;
+    if (boss?.boss) {
+      boss.boss.addTimer = 0;
+      boss.attack.phase = "none";
+      boss.attack.move = "none";
+      boss.attack.cooldown = 999;
+    }
   });
-  await page.waitForTimeout(180);
+  await page.waitForFunction(
+    () => window.__game.devWorld().enemies.filter((enemy) => enemy.kind === "pale_seam" && !enemy.dead).length >= 2,
+    null,
+    { timeout: 5000 },
+  );
+  await page.waitForTimeout(60);
   await page.screenshot({ path: join(outDir, `pale-${players}p-dual-flanks.png`) });
   await page.close();
 }
