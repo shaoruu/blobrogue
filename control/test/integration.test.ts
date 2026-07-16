@@ -5,11 +5,22 @@
 // exercises the live socket + tick loop, which is the property that matters.
 
 import { WebSocket } from "ws";
+import { createHmac } from "node:crypto";
+import { createServer } from "node:http";
 
 import {
   HttpGameServerProbe,
+  SYNTHETIC_ADMISSION_ENVELOPE,
+  SYNTHETIC_COOP_TICKET_ENVELOPE,
   SYNTHETIC_JOIN_PROTOCOL,
+  SYNTHETIC_PVP_TICKET_ENVELOPE,
+  POLICY_PROBE_PURPOSE,
+  POLICY_PROBE_SUBJECT,
+  POLICY_PROBE_WORLD_PREFIX,
   isSyntheticSpawnProtectionSelf,
+  mintPolicyParserProbeTicket,
+  validateAuthorityVersion,
+  type ProbeJson,
 } from "../src/adapters/httpProbe.js";
 import { NodeTailReader } from "../src/adapters/tail.js";
 import type { WorldSummary } from "../src/types.js";
@@ -38,10 +49,77 @@ async function bootGs(heartbeatMs: number): Promise<{ port: number; close: () =>
   return { port, close: () => gs.close() };
 }
 
+interface PolicyProbeFrame {
+  t?: string;
+  code?: string;
+  depth?: string;
+}
+
+function signProbePayload(payload: object, version: "v1" | "v2" = "v2"): string {
+  const encoded = Buffer.from(JSON.stringify(payload), "utf8").toString("base64url");
+  const body = `${version}.${encoded}`;
+  const signature = createHmac("sha256", GS_SECRET).update(body).digest("base64url");
+  return `${body}.${signature}`;
+}
+
+async function sendPolicyProbeTicket(port: number, ticket: string): Promise<PolicyProbeFrame> {
+  return await new Promise<PolicyProbeFrame>((resolve) => {
+    const socket = new WebSocket(`ws://127.0.0.1:${port}/ws`);
+    const timer = setTimeout(() => {
+      socket.close();
+      resolve({ t: "timeout" });
+    }, 2_000);
+    let isSettled = false;
+    const finish = (frame: PolicyProbeFrame): void => {
+      if (isSettled) return;
+      isSettled = true;
+      clearTimeout(timer);
+      socket.close();
+      resolve(frame);
+    };
+    socket.on("open", () => {
+      socket.send(JSON.stringify({ t: "join", ticket, protocol: SYNTHETIC_JOIN_PROTOCOL }));
+    });
+    socket.on("message", (data: Buffer) => {
+      const frame = JSON.parse(data.toString("utf8")) as PolicyProbeFrame;
+      if (frame.t === "authorityAck" || frame.t === "error") finish(frame);
+    });
+    socket.on("close", () => finish({ t: "closed" }));
+  });
+}
+
 export async function suite(t: TestRunner): Promise<void> {
   await t.suite("integration: real gs status + synthetic-join verify", async () => {
     t.check("synthetic join speaks the current game protocol", SYNTHETIC_JOIN_PROTOCOL === PROTOCOL_VERSION,
       `probe=${SYNTHETIC_JOIN_PROTOCOL} game=${PROTOCOL_VERSION}`);
+    t.check("synthetic authority probe expects v1 co-op, v2 PVP, and a2 admission",
+      SYNTHETIC_COOP_TICKET_ENVELOPE === "v1"
+      && SYNTHETIC_PVP_TICKET_ENVELOPE === "v2"
+      && SYNTHETIC_ADMISSION_ENVELOPE === "a2");
+    const versionBase = {
+      protocol: PROTOCOL_VERSION,
+      coopTicket: "v1",
+      pvpTicket: "v2",
+      admission: "a2",
+      pvpPrivateEnabled: false,
+      pvpPublicEnabled: false,
+    };
+    t.check("exact canonical policy catalog passes",
+      validateAuthorityVersion({ ...versionBase, pvpPolicies: ["private_draft_v1"] }).isValid);
+    const catalogCases: Array<[string, ProbeJson, string]> = [
+      ["missing", versionBase, "pvp_policy_catalog_malformed"],
+      ["empty", { ...versionBase, pvpPolicies: [] }, "pvp_policy_catalog_mismatch"],
+      ["extra", { ...versionBase, pvpPolicies: ["private_draft_v1", "future_public_v1"] }, "pvp_policy_catalog_mismatch"],
+      ["unknown", { ...versionBase, pvpPolicies: ["future_public_v1"] }, "pvp_policy_catalog_mismatch"],
+      ["duplicate", { ...versionBase, pvpPolicies: ["private_draft_v1", "private_draft_v1"] }, "pvp_policy_catalog_duplicate"],
+      ["malformed", { ...versionBase, pvpPolicies: "private_draft_v1" }, "pvp_policy_catalog_malformed"],
+    ];
+    for (const [label, candidate, detail] of catalogCases) {
+      const validation = validateAuthorityVersion(candidate);
+      t.check(`${label} policy catalog fails VERIFY clearly`,
+        !validation.isValid && validation.detail === detail,
+        `detail=${validation.detail ?? ""}`);
+    }
     t.check("control rejects missing or malformed v33 spawn protection self fields",
       isSyntheticSpawnProtectionSelf({ spo: 0, sge: 0, sse: 0, sgr: 0, ssh: 0, sfl: false })
       && !isSyntheticSpawnProtectionSelf({ spo: 0, sge: 0, sse: 0, sgr: 0, ssh: 0 })
@@ -56,8 +134,113 @@ export async function suite(t: TestRunner): Promise<void> {
       t.check("real gs status ok", status.status === "ok", `status=${status.status}`);
       const readiness = await probe.readiness();
       t.check("real gs ready", readiness.live && readiness.ready);
-      const verify = await probe.verify();
-      t.check("full synthetic join verifies against real gs", verify.ok && verify.depth === "synthetic_join", `ok=${verify.ok} depth=${verify.depth} detail=${verify.detail ?? ""}`);
+      const beforePolicyProbe = await probe.status();
+      const beforePolicyWorlds = await probe.worlds();
+      const policyProbe = await probe.verifyPolicyParser();
+      t.check("live deployed v2 parser returns the terminal authority acknowledgement",
+        policyProbe.ok && policyProbe.depth === "policy_v2_parser",
+        `ok=${policyProbe.ok} detail=${policyProbe.detail ?? ""}`);
+      let afterPolicyProbe = await probe.status();
+      for (let attempt = 0; attempt < 100 && afterPolicyProbe.connections !== 0; attempt++) {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        afterPolicyProbe = await probe.status();
+      }
+      t.check("successful parser probe creates no world, body, seat, or retained connection",
+        beforePolicyProbe.worlds === 0
+        && beforePolicyProbe.players === 0
+        && beforePolicyProbe.connections === 0
+        && beforePolicyWorlds.length === 0
+        && afterPolicyProbe.worlds === 0
+        && afterPolicyProbe.players === 0
+        && afterPolicyProbe.connections === 0
+        && (await probe.worlds()).length === 0);
+
+      const expires = Math.floor(Date.now() / 1000) + 60;
+      const canonical = {
+        pid: POLICY_PROBE_SUBJECT,
+        exp: expires,
+        wld: `${POLICY_PROBE_WORLD_PREFIX}0123456789abcdef`,
+        pp: "private_draft_v1",
+        pr: POLICY_PROBE_PURPOSE,
+      };
+      const validTicket = mintPolicyParserProbeTicket(
+        GS_SECRET,
+        60,
+        Date.now(),
+        "fedcba9876543210",
+      );
+      const malformedTickets = [
+        ["missing policy", signProbePayload({
+          pid: canonical.pid, exp: canonical.exp, wld: canonical.wld, pr: canonical.pr,
+        })],
+        ["unknown policy", signProbePayload({ ...canonical, pp: "future_public_v1" })],
+        ["wrong subject", signProbePayload({ ...canonical, pid: "synthetic-verify" })],
+        ["wrong namespace", signProbePayload({ ...canonical, wld: "verify:wrong" })],
+        ["normal PVP world", signProbePayload({ ...canonical, wld: "pvp:room:PROB:g1" })],
+        ["wrong purpose", signProbePayload({ ...canonical, pr: "synthetic_join" })],
+        ["missing purpose", signProbePayload({
+          pid: canonical.pid, exp: canonical.exp, wld: canonical.wld, pp: canonical.pp,
+        })],
+        ["wrong key order", signProbePayload({
+          exp: canonical.exp,
+          pid: canonical.pid,
+          wld: canonical.wld,
+          pp: canonical.pp,
+          pr: canonical.pr,
+        })],
+        ["wrong version", signProbePayload(canonical, "v1")],
+        ["forged signature", `${validTicket.slice(0, -1)}${validTicket.endsWith("a") ? "b" : "a"}`],
+      ] as const;
+      for (const [label, ticket] of malformedTickets) {
+        const frame = await sendPolicyProbeTicket(gs.port, ticket);
+        t.check(`${label} probe rejects without authority acknowledgement`,
+          frame.t === "error" && frame.depth !== POLICY_PROBE_PURPOSE,
+          `frame=${JSON.stringify(frame)}`);
+      }
+      let afterRejects = await probe.status();
+      for (let attempt = 0; attempt < 100 && afterRejects.connections !== 0; attempt++) {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        afterRejects = await probe.status();
+      }
+      t.check("probe rejects leave all gameplay authority state empty",
+        afterRejects.worlds === 0
+        && afterRejects.players === 0
+        && afterRejects.connections === 0
+        && (await probe.worlds()).length === 0);
+
+      const mismatchedVersionServer = createServer((_request, response) => {
+        response.writeHead(200, { "content-type": "application/json" });
+        response.end(JSON.stringify({
+          ...versionBase,
+          pvpPolicies: ["private_draft_v1", "future_public_v1"],
+        }));
+      });
+      await new Promise<void>((resolve) => mismatchedVersionServer.listen(0, "127.0.0.1", resolve));
+      const mismatchAddress = mismatchedVersionServer.address();
+      if (mismatchAddress === null || typeof mismatchAddress === "string") {
+        throw new Error("version mismatch server did not bind");
+      }
+      const mismatchProbe = new HttpGameServerProbe(
+        {
+          baseUrl: `http://127.0.0.1:${mismatchAddress.port}`,
+          wsUrl: `ws://127.0.0.1:${gs.port}/ws`,
+          logOutFile: null,
+          syntheticTicketSecret: GS_SECRET,
+          logTailMax: 100,
+        },
+        new NodeTailReader(),
+      );
+      const mismatchResult = await mismatchProbe.verifyForDeploy();
+      t.check("advertised constants cannot hide a mismatched deployed policy catalog",
+        !mismatchResult.ok
+        && mismatchResult.depth === "http_only"
+        && mismatchResult.detail === "pvp_policy_catalog_mismatch");
+      await new Promise<void>((resolve) => mismatchedVersionServer.close(() => resolve()));
+
+      const verify = await probe.verifyForDeploy();
+      t.check("full VERIFY requires parser acknowledgement plus ordinary synthetic liveness",
+        verify.ok && verify.depth === "policy_v2_parser+synthetic_join",
+        `ok=${verify.ok} depth=${verify.depth} detail=${verify.detail ?? ""}`);
       // Per-world occupancy over the live /worlds endpoint: hold a real join open in a room
       // world and the panel read shows exactly that world with its occupant — the ops view
       // that answers "did the room's members land in one world?".
@@ -108,8 +291,15 @@ export async function suite(t: TestRunner): Promise<void> {
         { baseUrl: `http://127.0.0.1:${gs.port}`, wsUrl: `ws://127.0.0.1:${gs.port}/ws`, logOutFile: null, syntheticTicketSecret: null, logTailMax: 100 },
         new NodeTailReader(),
       );
-      const verify = await probe.verify();
-      t.check("ws-liveness verify passes without game credentials", verify.ok && verify.depth === "ws_liveness", `ok=${verify.ok} depth=${verify.depth}`);
+      const diagnostic = await probe.verifyDiagnostic();
+      t.check("credential-free ws liveness remains diagnostic-only",
+        diagnostic.ok && diagnostic.depth === "ws_liveness",
+        `ok=${diagnostic.ok} depth=${diagnostic.depth}`);
+      const deployVerify = await probe.verifyForDeploy();
+      t.check("credential-free deploy verification fails closed",
+        !deployVerify.ok
+        && deployVerify.depth === "http_only"
+        && deployVerify.detail === "policy_probe_secret_missing");
     } finally {
       await gs.close();
     }

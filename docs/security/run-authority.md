@@ -50,6 +50,71 @@ fresh guest row and capability pair while the account JWT is still present, then
 When a guest is merged into an existing account, active room references block the merge.
 Inactive host/presence references are rewired transactionally before the guest row is deleted.
 
+## Dark PVP room policy foundation
+
+PVP authorization is bound to one durable room field, `rooms.pvpPolicy`. The only policy
+recognized by this release is `private_draft_v1`: it requires `mode=pvp`, `isPublic=false`, and a
+maximum of four members. Co-op rooms must not carry a policy. Missing, unknown, or inconsistent
+policy never defaults, downgrades, or falls back; legacy PVP rows without policy remain
+inaccessible and the generation migration deliberately does not upgrade them.
+
+Convex chooses the canonical policy from a private-room intent. The browser cannot submit a
+policy value. Both private and public PVP rollout flags remain false, independently, so this
+foundation creates no production PVP path.
+
+Policy-bound PVP tickets use `v2` with fixed payload order
+`pid,exp,wld,pp,nm,cl,ht,fc,kt,ml,pt,pc,sv`; `pp` is the canonical policy id. Co-op remains on
+ticket `v1`. A v1 ticket cannot enter PVP, and v2 cannot authorize co-op. Generation admission is
+the `a2` envelope and MAC-binds `mode` and `pvpPolicy` with player, world, room, generation,
+loadout, expiry, and jti. Convex compares those values against one current durable room snapshot.
+
+The control-plane parser probe is a separate v2 domain with exact ordered claims
+`pid,exp,wld,pp,pr`: subject `synthetic-policy-v2`, world
+`verify-policy-v2:<16 lowercase hex>`, policy `private_draft_v1`, and purpose
+`policy_v2_parser`. The GS emits `authorityAck/policy_v2_parser` and closes before rollout flags,
+admission, reservation, registry, world, or player creation. Wrong purpose, subject, namespace,
+policy, version, signature, field set, or key order terminates as a rejection. Convex and browser
+ticket minters do not expose the purpose claim.
+
+Signed ticket payloads pass a bounded recursive JSON scanner before `JSON.parse`. It requires
+fatal UTF-8, one complete top-level object, valid JSON tokens and surrogate pairs, and unique
+decoded property names in every object scope. Policy v2 tickets additionally require
+byte-for-byte equality with their locked-order `JSON.stringify` form, rejecting whitespace,
+reordered or escaped key spellings, noncanonical numbers, duplicate claims, and trailing tokens
+even under a valid HMAC. Admission a2 proofs use the same duplicate-aware structural scanner.
+
+Shared HMAC envelopes (`r1` receipts and `a2` admission proofs) also require canonical unpadded
+base64url on both payload and signature segments. The decoder accepts only `A-Z`, `a-z`, `0-9`,
+`_`, and `-`; rejects padding, whitespace, standard-base64 characters, Unicode, invalid lengths,
+and unused-tail-bit aliases; then re-encodes decoded bytes and requires exact string equality.
+HMAC-SHA256 signatures are exactly 32 decoded bytes and 43 encoded characters. Node receipt and
+ticket verification uses the same helper, while Web Crypto still verifies the MAC over the exact
+canonical `<prefix>.<payload>` text.
+
+The game server stores the verified policy immutably on its room runtime. Every later join and
+resume must present the same policy, and active bodies plus reserved reconnect seats share the
+four-player cap. `/version` exposes protocol 33, ticket `v1`/`v2`, admission `a2`, supported
+policies, and both dark rollout flags. Control requires the exact policy catalog
+`["private_draft_v1"]`, the terminal v2 parser acknowledgement, and ordinary WS/snapshot
+liveness. The older signed v1 liveness synthetic remains deliberately separate: it creates an
+ephemeral non-generation world/body and follows the normal reconnect cleanup lifecycle, so it is
+not evidence of policy authority and is never used for the v2 parser gate.
+
+Production control startup requires `BRC_GS_SYNTHETIC_TICKET_SECRET`. Read-only
+`verifyDiagnostic()` may report HTTP or credential-free WS liveness in development.
+`verifyForDeploy()` fails with `policy_probe_secret_missing` without the secret and succeeds only
+at exact depth `policy_v2_parser+synthetic_join`. Deploy, restart, and rollback call only the
+authority-required method and independently reject every partial depth.
+
+Admission responses are also closed: the only positive body is exactly
+`{"isAllowed":true,"code":"ok"}`. A negative body must be exactly
+`{"isAllowed":false,"code":<allowlisted code>}` with one of `room_not_active`,
+`generation_not_active`, `player_missing`, `membership_changed`, `policy_required`,
+`policy_invalid`, `policy_mismatch`, `private_disabled`, `public_disabled`, or `room_full`.
+Only HTTP 200 may carry the allow body, and only HTTP 403 may carry a known deny. Malformed JSON,
+extra or inherited keys, every other status/body pairing, unknown codes, timeout, and 5xx
+responses become local `admission_unavailable` and cannot bind a world.
+
 ## Rolling deployment order
 
 This is a coordinated protocol-v33 hard cut, not a rolling mixed-version deploy.
@@ -74,6 +139,13 @@ only then permits reload.
 
 Old clients receive a terminal protocol or guest-capability rejection with refresh-required
 copy. They do not retry for the 90-second reconnect window and cannot strand a room.
+
+The policy foundation does not change the WebSocket join or snapshot shape, so
+`PROTOCOL_VERSION` remains 33. Ticket v2 and admission a2 are server-side envelope changes.
+Deploy Convex policy schema/query support before the matching game server, verify `/version`,
+and keep both PVP flags false. A later private-PVP rollout still requires a coordinated Convex,
+game-server, and client release; no flag may be enabled while either side reports an older
+authority contract.
 
 ## Migration and compatibility
 

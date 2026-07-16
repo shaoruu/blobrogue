@@ -54,7 +54,7 @@ const MAX_CATCHUP = 20;
 const MAX_MALFORMED = 3;
 // Close codes that are part of the deliberate lifecycle — never grounds for a reconnect seat:
 // join rejects, game over, superseded connections, and explicit client leaves.
-const SEATLESS_CLOSE_CODES: ReadonlySet<number> = new Set([4001, 4008, 4009, 4010, 4011]);
+const SEATLESS_CLOSE_CODES: ReadonlySet<number> = new Set([4001, 4008, 4009, 4010, 4011, 4012]);
 
 interface PendingCompletion {
   runId: string;
@@ -122,12 +122,20 @@ export class GameServer {
       cfg.admissionEndpoint,
       cfg.receiptSecret,
       this.log,
+      fetch,
+      () => { this.metrics.counters.admissionMalformedResponses++; },
     );
     // The room factory picks the world MODE from the world IDENTITY: a pvp world id (minted only
     // for a pvp room) spins up a deathmatch world, everything else stays co-op. The mode is part
     // of the id, so every joiner of the same room lands in the same kind of world.
     this.sessions = deps.sessions ?? new WorldRegistry(
-      (id) => new GameWorld(id, undefined, cfg.arena, isPvpWorldId(id) ? "pvp" : "coop"),
+      (id, pvpPolicy) => new GameWorld(
+        id,
+        undefined,
+        cfg.arena,
+        isPvpWorldId(id) ? "pvp" : "coop",
+        pvpPolicy,
+      ),
       this.log,
       deps.generationAdmissions ?? new GenerationAdmissionStore(cfg.generationStatePath),
       (room) => this.onWorldReleased(room),
@@ -396,6 +404,8 @@ export class GameServer {
       worldId: auth.worldId,
       roomCode: world.roomCode,
       generation: world.generation,
+      mode: world.isPvp ? "pvp" : "coop",
+      pvpPolicy: auth.pvpPolicy ?? null,
       kitId: auth.kit,
       petId: auth.pet ?? null,
       isPetChoiceMade: true,
@@ -484,6 +494,13 @@ export class GameServer {
 
   private rejectJoin(conn: Conn, code: string, reason: string): void {
     this.metrics.counters.joinsRejected++;
+    if (code === "policy_required") this.metrics.counters.policyRequiredRejected++;
+    else if (code === "policy_invalid") this.metrics.counters.policyInvalidRejected++;
+    else if (code === "policy_mismatch") this.metrics.counters.policyMismatchRejected++;
+    else if (code === "private_disabled") this.metrics.counters.privateDisabledRejected++;
+    else if (code === "public_disabled") this.metrics.counters.publicDisabledRejected++;
+    else if (code === "room_full") this.metrics.counters.roomFullRejected++;
+    else if (code === "admission_unavailable") this.metrics.counters.admissionUnavailableRejected++;
     conn.log.warn("join rejected", { code, reason });
     try { conn.ws.send(jsonCodec.encodeServer({ t: "error", code, msg: reason })); } catch { /* ignore */ }
     this.closeConn(conn, 4001, code);

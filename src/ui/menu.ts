@@ -31,7 +31,7 @@ import {
   ARENA_LABEL, ARENA_PATCHING_LABEL,
 } from "./onlineCopy.js";
 import { inviteUrlFor, shareInviteUrl, stripInviteFromLocation } from "../net/inviteLink.js";
-import { PVP_PUBLIC_ENABLED, PVP_DISABLED_MESSAGE, PVP_DISABLED_CODE } from "../net/pvpFlag.js";
+import { PVP_PUBLIC_ENABLED, PVP_DISABLED_MESSAGE, isPvpDisabledCode } from "../net/pvpFlag.js";
 import { normalizeOnlineError } from "../net/onlineError.js";
 import type { NormalizedOnlineError } from "../net/onlineError.js";
 import { CHANGELOG, LATEST_VERSION } from "../generated/changelog.js";
@@ -2804,7 +2804,9 @@ export class Menu {
         if (!isTimedOut) stripInviteFromLocation();
       },
       onFail: (e) => {
-        const fail = e.code === PVP_DISABLED_CODE ? { note: e.message, isRetryable: false } : inviteFailState(e.message);
+        const fail = e.code !== null && isPvpDisabledCode(e.code)
+          ? { note: e.message, isRetryable: false }
+          : inviteFailState(e.message);
         failure = fail.note;
       },
     });

@@ -21,10 +21,13 @@
 // player proved room membership (see convex/gsTicket.ts), and the game server binds the
 // connection to exactly the world the ticket names — a client can never assert a world id.
 
+import type { PvpPolicyId } from "./pvpPolicy.js";
+
 export interface GsTicketPayload {
   pid: string;  // authenticated playerId
   exp: number;  // unix seconds expiry
   wld?: string; // authorized world id (absent -> the default/public world)
+  pp?: string;  // canonical PVP room policy (v2 PVP tickets only)
   nm?: string;  // display name shown to other players
   cl?: number;  // party color index (name label / minimap identity tint)
   ht?: string;  // cosmetic hat id (visual-only; see convex/cosmeticsCore.ts)
@@ -48,6 +51,11 @@ export interface GsTicketClaims {
   pet?: string;
   isPetChoiceMade?: boolean;
   isSyntheticVerify?: boolean;
+}
+
+export interface PvpGsTicketClaims extends GsTicketClaims {
+  worldId: string;
+  pvpPolicy: PvpPolicyId;
 }
 
 // The single room-code -> authoritative-world-id mapping. Convex mints with it; the game
@@ -109,6 +117,35 @@ export async function mintGsTicket(
   if (claims.isSyntheticVerify !== undefined) payload.sv = claims.isSyntheticVerify;
   const enc = new TextEncoder();
   const body = "v1." + b64urlFromBytes(enc.encode(JSON.stringify(payload)));
+  const key = await crypto.subtle.importKey("raw", enc.encode(secret), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+  const sig = new Uint8Array(await crypto.subtle.sign("HMAC", key, enc.encode(body)));
+  return body + "." + b64urlFromBytes(sig);
+}
+
+export async function mintPvpGsTicket(
+  secret: string,
+  playerId: string,
+  claims: PvpGsTicketClaims,
+  ttlSecs = 120,
+  nowMs = Date.now(),
+): Promise<string> {
+  const payload: GsTicketPayload = {
+    pid: playerId,
+    exp: Math.floor(nowMs / 1000) + ttlSecs,
+    wld: claims.worldId,
+    pp: claims.pvpPolicy,
+  };
+  if (claims.name !== undefined) payload.nm = claims.name;
+  if (claims.colorIndex !== undefined) payload.cl = claims.colorIndex;
+  if (claims.hat !== undefined) payload.ht = claims.hat;
+  if (claims.face !== undefined) payload.fc = claims.face;
+  if (claims.kit !== undefined) payload.kt = claims.kit;
+  if (claims.masteryLevel !== undefined) payload.ml = claims.masteryLevel;
+  if (claims.pet !== undefined) payload.pt = claims.pet;
+  if (claims.isPetChoiceMade !== undefined) payload.pc = claims.isPetChoiceMade;
+  if (claims.isSyntheticVerify !== undefined) payload.sv = claims.isSyntheticVerify;
+  const enc = new TextEncoder();
+  const body = "v2." + b64urlFromBytes(enc.encode(JSON.stringify(payload)));
   const key = await crypto.subtle.importKey("raw", enc.encode(secret), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
   const sig = new Uint8Array(await crypto.subtle.sign("HMAC", key, enc.encode(body)));
   return body + "." + b64urlFromBytes(sig);

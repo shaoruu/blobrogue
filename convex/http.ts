@@ -5,6 +5,10 @@ import { internal } from "./_generated/api";
 import { httpAction } from "./_generated/server";
 import { verifyGenerationAdmissionProof } from "./generationAdmissionCore";
 import { verifyRunCompletionReceipt } from "./runReceiptCore";
+import {
+  parseGenerationAdmissionDecision,
+  type AdmissionJson,
+} from "../src/net/generationAdmission";
 
 // Convex Auth mounts its OAuth routes (sign-in redirect + provider callback) under
 // /api/auth on the deployment's .convex.site domain. The Google "Authorized redirect
@@ -84,10 +88,16 @@ http.route({
       worldId: payload.worldId,
       roomCode: payload.roomCode,
       generation: payload.generation,
+      mode: payload.mode,
+      pvpPolicy: payload.pvpPolicy,
       kitId: payload.kitId,
       petId: payload.petId,
     });
-    return Response.json(decision, { status: decision.isAllowed ? 200 : 403 });
+    const validatedDecision = parseGenerationAdmissionDecision(decision as AdmissionJson);
+    if (validatedDecision === null) {
+      return Response.json({ isAllowed: false, code: "admission_unavailable" }, { status: 503 });
+    }
+    return Response.json(validatedDecision, { status: validatedDecision.isAllowed ? 200 : 403 });
   }),
 });
 

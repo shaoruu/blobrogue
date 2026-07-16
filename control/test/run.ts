@@ -9,9 +9,11 @@ import { suite as deploySuite } from "./deploy.test.js";
 import { suite as apiSuite } from "./api.test.js";
 import { suite as redactSuite } from "./redact.test.js";
 import { suite as integrationSuite } from "./integration.test.js";
+import { suite as configSuite } from "./config.test.js";
 
 async function main(): Promise<void> {
   const t = new TestRunner();
+  await configSuite(t);
   await authSuite(t);
   await verifierSuite(t);
   await deploySuite(t);

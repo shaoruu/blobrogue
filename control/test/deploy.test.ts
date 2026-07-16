@@ -5,6 +5,7 @@
 
 import { LockedError } from "../src/errors.js";
 import type { OperationContext } from "../src/deployController.js";
+import type { VerifyDepth } from "../src/types.js";
 import { makeTestBed, stageRelease, TestRunner } from "./harness.js";
 
 const CTX: OperationContext = { actor: "op", requestId: "req-1", idempotencyKey: null, tokenJti: "jti", confirmJti: "cf" };
@@ -49,7 +50,7 @@ export async function suite(t: TestRunner): Promise<void> {
       const prev = stageRelease(bed.fs, bed.cfg.releasesRoot, { version: "1.0.0" });
       await bed.deps.releases.switchCurrent(prev);
       const next = stageRelease(bed.fs, bed.cfg.releasesRoot, { version: "2.0.0" });
-      bed.probe.verifyValue = { ok: false, depth: "synthetic_join", detail: "synthetic join failed" };
+      bed.probe.verifyForDeployValue = { ok: false, depth: "synthetic_join", detail: "synthetic join failed" };
 
       const op = await bed.deps.controller.deploy(next, CTX);
       t.check("operation rolled_back", op.state === "rolled_back" && op.result === "rolled_back", `state=${op.state}`);
@@ -91,6 +92,67 @@ export async function suite(t: TestRunner): Promise<void> {
       t.check("only blobrogue-gs reloaded", bed.pm2.reloads.length === 1 && bed.pm2.reloads[0] === "blobrogue-gs");
     } finally {
       await bed.close();
+    }
+  });
+
+  await t.suite("lifecycle verification accepts only exact composite authority depth", async () => {
+    const partialDepths: VerifyDepth[] = [
+      "http_only",
+      "ws_liveness",
+      "policy_v2_parser",
+      "synthetic_join",
+    ];
+    for (const depth of partialDepths) {
+      const deployBed = await makeTestBed();
+      try {
+        const previous = stageRelease(deployBed.fs, deployBed.cfg.releasesRoot, { version: "1.0.0" });
+        const next = stageRelease(deployBed.fs, deployBed.cfg.releasesRoot, { version: "2.0.0" });
+        await deployBed.deps.releases.switchCurrent(previous);
+        deployBed.probe.verifyForDeployValue = { ok: true, depth, detail: null };
+        const deployed = await deployBed.deps.controller.deploy(next, CTX);
+        t.check(`deploy rejects partial depth ${depth}`,
+          deployed.state === "rolled_back"
+          && (deployed.error ?? "").includes(`authority_depth_required:${depth}`));
+      } finally {
+        await deployBed.close();
+      }
+
+      const restartBed = await makeTestBed();
+      try {
+        restartBed.probe.verifyForDeployValue = { ok: true, depth, detail: null };
+        const restarted = await restartBed.deps.controller.restart(CTX);
+        t.check(`restart rejects partial depth ${depth}`,
+          restarted.state === "failed"
+          && (restarted.error ?? "").includes(`authority_depth_required:${depth}`));
+      } finally {
+        await restartBed.close();
+      }
+
+      const rollbackBed = await makeTestBed();
+      try {
+        const current = stageRelease(rollbackBed.fs, rollbackBed.cfg.releasesRoot, { version: "2.0.0" });
+        const target = stageRelease(rollbackBed.fs, rollbackBed.cfg.releasesRoot, { version: "1.0.0" });
+        await rollbackBed.deps.releases.switchCurrent(current);
+        rollbackBed.probe.verifyForDeployValue = { ok: true, depth, detail: null };
+        const rolledBack = await rollbackBed.deps.controller.rollback(target, CTX);
+        t.check(`rollback rejects partial depth ${depth}`,
+          rolledBack.state === "failed"
+          && (rolledBack.error ?? "").includes(`authority_depth_required:${depth}`));
+      } finally {
+        await rollbackBed.close();
+      }
+    }
+
+    const exactBed = await makeTestBed();
+    try {
+      const current = stageRelease(exactBed.fs, exactBed.cfg.releasesRoot, { version: "2.0.0" });
+      const target = stageRelease(exactBed.fs, exactBed.cfg.releasesRoot, { version: "1.0.0" });
+      await exactBed.deps.releases.switchCurrent(current);
+      const rolledBack = await exactBed.deps.controller.rollback(target, CTX);
+      t.check("rollback accepts exact composite authority depth",
+        rolledBack.state === "done" && rolledBack.result === "success");
+    } finally {
+      await exactBed.close();
     }
   });
 

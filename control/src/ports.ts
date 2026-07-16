@@ -69,7 +69,8 @@ export interface GameServerProbe {
   metrics(): Promise<MetricsSnapshot>;
   worlds(): Promise<WorldSummary[]>;
   logs(q: LogQuery): Promise<LogRecord[]>;
-  verify(): Promise<VerifyResult>;
+  verifyDiagnostic(): Promise<VerifyResult>;
+  verifyForDeploy(): Promise<VerifyResult>;
   // Best-effort lifecycle nudge to the running gs. The real gs may not implement these yet; the
   // adapter reports `unsupported`/`deferred_to_reload` rather than failing a deploy (spec §4.5).
   lifecycle(action: GameServerLifecycleAction): Promise<AdminEffectResult>;

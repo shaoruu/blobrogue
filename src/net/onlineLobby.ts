@@ -5,7 +5,7 @@ import type { Session } from "./session.js";
 import { worldIdForRoomCode, pvpWorldIdForRoomCode } from "./worldId.js";
 import type { PlayableKitId, RunLoadout } from "./kitSelection.js";
 import { isKitId } from "../sim/kits.js";
-import { assertPvpModeAllowed } from "./pvpFlag.js";
+import { assertPvpAccessAllowed } from "./pvpFlag.js";
 
 // One room session for AUTHORITATIVE online play — the ONLY multiplayer product path.
 // Convex hosts only the social handshake: the room code, who is EXPECTED in it (roster),
@@ -150,7 +150,7 @@ export class OnlineLobby {
   async create(mode: RoomMode, loadout: RunLoadout): Promise<void> {
     // TEMP kill switch: refuse a pvp room before touching the backend — the typed pvp_disabled
     // error carries the clean copy. Co-op is untouched. (Convex enforces this independently.)
-    assertPvpModeAllowed(mode);
+    assertPvpAccessAllowed(mode, "private");
     await this.flushIdentity();
     const playerId = this.requirePlayerId();
     const res = await this.client.mutation(api.rooms.create, {
@@ -180,7 +180,7 @@ export class OnlineLobby {
     // TEMP kill switch: the room dictates the mode (the joiner adopts it), so a pvp room is
     // refused here too while disabled. Convex rejects the join independently — this guards the
     // stale-cache race where a client learns the mode only from the response. Co-op untouched.
-    assertPvpModeAllowed(res.mode ?? "coop");
+    assertPvpAccessAllowed(res.mode ?? "coop", "private");
     this.roomId = res.roomId;
     this.code = res.code;
     this.mode = res.mode ?? "coop"; // the room dictates the mode; the joiner adopts it
@@ -195,7 +195,7 @@ export class OnlineLobby {
   // "playing" — the pool has no start gate; players drop in and out).
   async quickPlay(mode: RoomMode, loadout: RunLoadout): Promise<void> {
     // TEMP kill switch: refuse the pvp public pool before any backend call. Co-op untouched.
-    assertPvpModeAllowed(mode);
+    assertPvpAccessAllowed(mode, "public");
     await this.flushIdentity();
     this.requirePlayerId();
     const res = await this.client.mutation(api.rooms.quickPlay, {

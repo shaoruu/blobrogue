@@ -9,9 +9,8 @@
 // disconnect/reconnect grace case (scoreboard reads the absent seat not-alive, the match pauses,
 // the seat resumes) — so a dropped snapshot never loses a kill and an outage never desyncs a match.
 //
-// TEMP kill switch: PVP entry is disabled by default (config.pvpPublicEnabled mirrors the shared
-// build flag). This suite proves the PVP plumbing is intact + un-deleted by starting the server
-// with it explicitly ENABLED; the DISABLED reject is covered by test/pvpdisabled.test.ts.
+// PVP entry is dark by default. This suite exercises an explicitly enabled private-policy room;
+// disabled and malformed policy rejects are covered by pvpdisabled/pvpPolicy tests.
 //
 // Run: npm run test:pvp (in server/)
 
@@ -35,7 +34,7 @@ async function test(name: string, fn: () => Promise<void>): Promise<void> {
 
 async function main(): Promise<void> {
   await test("a pvp-prefixed world id spins up a deathmatch world and publishes the match block", async () => {
-    const s = await startTestServer({ pvpPublicEnabled: true });
+    const s = await startTestServer({ pvpPrivateEnabled: true });
     try {
       const world = "pvp:room:ARENA";
       const a = new Bot({ url: s.url, secret: s.secret, playerId: "a", world, name: "aaa", colorIndex: 1, script: () => idle() });
@@ -91,7 +90,7 @@ async function main(): Promise<void> {
   });
 
   await test("real-socket hard grace preserves control while suppressing authoritative attacks", async () => {
-    const s = await startTestServer({ pvpPublicEnabled: true });
+    const s = await startTestServer({ pvpPrivateEnabled: true });
     try {
       const world = "pvp:room:SAFE";
       let isHoldingFire = true;
@@ -185,7 +184,7 @@ async function main(): Promise<void> {
 
   await test("H5 real-socket resume preserves grace endpoints and held-offense latch", async () => {
     const s = await startTestServer({
-      pvpPublicEnabled: true,
+      pvpPrivateEnabled: true,
       resumeGraceMs: 4000,
     });
     try {
@@ -284,7 +283,7 @@ async function main(): Promise<void> {
   });
 
   await test("adversarial E2E: two real sockets through damage -> exact-once pvpKill -> respawn -> match-over", async () => {
-    const s = await startTestServer({ pvpPublicEnabled: true });
+    const s = await startTestServer({ pvpPrivateEnabled: true });
     try {
       const world = "pvp:room:E2E";
       // The shooter holds the trigger every frame (aim right); the countdown freeze means no round
@@ -354,7 +353,7 @@ async function main(): Promise<void> {
 
   await test("adversarial E2E: a disconnect inside the grace pauses the match; the seat resumes not-lost", async () => {
     const graceMs = 3000;
-    const s = await startTestServer({ pvpPublicEnabled: true, resumeGraceMs: graceMs });
+    const s = await startTestServer({ pvpPrivateEnabled: true, resumeGraceMs: graceMs });
     try {
       const world = "pvp:room:GRC";
       const a = new Bot({ url: s.url, secret: s.secret, playerId: "ga", world, name: "ga", colorIndex: 1, script: () => idle(), reconnect: { baseDelayMs: 80, maxDelayMs: 250, graceMs } });

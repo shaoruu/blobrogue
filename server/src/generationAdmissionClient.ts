@@ -2,8 +2,10 @@ import { createHmac, randomBytes } from "node:crypto";
 import {
   GENERATION_ADMISSION_PREFIX,
   isGenerationAdmissionPayload,
+  parseGenerationAdmissionDecision,
 } from "../../src/net/generationAdmission.js";
 import type {
+  AdmissionJson,
   GenerationAdmissionDecision,
   GenerationAdmissionPayload,
 } from "../../src/net/generationAdmission.js";
@@ -35,6 +37,7 @@ export class GenerationAdmissionClient {
     private secret: string | null,
     private log: Logger,
     private fetcher: Fetcher = fetch,
+    private onMalformedResponse: () => void = () => {},
   ) {}
 
   async check(payload: GenerationAdmissionPayload): Promise<GenerationAdmissionDecision> {
@@ -49,12 +52,22 @@ export class GenerationAdmissionClient {
         body: JSON.stringify({ proof }),
         signal: AbortSignal.timeout(2_500),
       });
-      const decision = await response.json() as GenerationAdmissionDecision;
-      if (response.ok && decision.isAllowed === true) return decision;
-      return {
-        isAllowed: false,
-        code: typeof decision.code === "string" ? decision.code : "admission_rejected",
-      };
+      let body: AdmissionJson;
+      try {
+        body = await response.json() as AdmissionJson;
+      } catch {
+        this.recordMalformed(response.status, payload);
+        return { isAllowed: false, code: "admission_unavailable" };
+      }
+      const decision = parseGenerationAdmissionDecision(body);
+      if (decision === null) {
+        this.recordMalformed(response.status, payload);
+        return { isAllowed: false, code: "admission_unavailable" };
+      }
+      if (response.status === 200 && decision.isAllowed) return decision;
+      if (response.status === 403 && !decision.isAllowed) return decision;
+      this.recordMalformed(response.status, payload);
+      return { isAllowed: false, code: "admission_unavailable" };
     } catch (error) {
       this.log.warn("generation admission check failed closed", {
         worldId: payload.worldId,
@@ -63,5 +76,14 @@ export class GenerationAdmissionClient {
       });
       return { isAllowed: false, code: "admission_unavailable" };
     }
+  }
+
+  private recordMalformed(status: number, payload: GenerationAdmissionPayload): void {
+    this.onMalformedResponse();
+    this.log.warn("generation admission response rejected as malformed", {
+      status,
+      mode: payload.mode,
+      pvpPolicy: payload.pvpPolicy ?? "",
+    });
   }
 }

@@ -9,7 +9,12 @@
 // stays far below every cap.
 
 import { jsonCodec, PROTOCOL_VERSION, ProtocolError, INTERP_DELAY_MIN_MS, INTERP_DELAY_MAX_MS, isPvpWorldId, type ClientMsg, type Codec } from "../../src/net/protocol.js";
-import { PVP_DISABLED_CODE, PVP_DISABLED_MESSAGE } from "../../src/net/pvpFlag.js";
+import {
+  PVP_DISABLED_MESSAGE,
+  PVP_PRIVATE_DISABLED_CODE,
+  PVP_PUBLIC_DISABLED_CODE,
+} from "../../src/net/pvpFlag.js";
+import { PVP_POLICY_MAX_PLAYERS, pvpPolicyAccess } from "../../src/net/pvpPolicy.js";
 import { mintResumeToken, resumeTokensEqual, verifyTicket, type AuthResult } from "./auth.js";
 import type { ServerConfig } from "./config.js";
 import type { Clock } from "./clock.js";
@@ -23,11 +28,22 @@ import type { GenerationAdmissionDecision } from "../../src/net/generationAdmiss
 
 const DEFAULT_WORLD_ID = "arena-1";
 const OFFER_RESENDS = 40;
+export const POLICY_AUTHORITY_ACK = {
+  t: "authorityAck",
+  depth: "policy_v2_parser",
+  ticket: "v2",
+  policy: "private_draft_v1",
+} as const;
 // The room code a world id was minted from (worldIdForRoomCode), or null for non-room worlds
 // (the public default, dev worlds). Log/ops-facing only — binding always uses the full id.
 export function roomCodeOfWorldId(worldId: string): string | null {
   const match = /^(?:pvp:)?room:([^:]+)(?::g\d+)?$/.exec(worldId);
   return match?.[1] ?? null;
+}
+
+function generationOfWorldId(worldId: string): number {
+  const match = /:g(\d+)$/.exec(worldId);
+  return match ? Number(match[1]) : 0;
 }
 
 // assertNever makes the dispatch exhaustive: a new ClientMsg variant is a COMPILE error until it
@@ -130,7 +146,31 @@ export class MessageRouter {
     // Strict version: must EQUAL the current protocol (no 0 / missing bypass).
     if (msg.protocol !== PROTOCOL_VERSION) { this.ctx.reject(conn, "protocol", `expected ${PROTOCOL_VERSION}`); return; }
     const auth = verifyTicket(this.ctx.config.auth, msg.ticket);
-    if (!auth.ok || !auth.playerId) { this.ctx.reject(conn, "auth", auth.reason ?? "unauthorized"); return; }
+    if (!auth.ok || !auth.playerId) {
+      const reason = auth.reason ?? "unauthorized";
+      const code = reason === "policy_required" || reason === "policy_invalid" ? reason : "auth";
+      if (code !== "auth") {
+        conn.log.warn("policy ticket rejected", {
+          code,
+          worldId: auth.worldId ?? "",
+          generation: auth.worldId ? generationOfWorldId(auth.worldId) : 0,
+          pvpPolicy: auth.pvpPolicy ?? "",
+        });
+      }
+      this.ctx.reject(conn, code, reason);
+      return;
+    }
+    if (auth.isPolicyAuthorityProbe === true) {
+      this.ctx.metrics.counters.policyAuthorityProbeOk++;
+      conn.log.info("policy parser authority probe accepted", {
+        depth: POLICY_AUTHORITY_ACK.depth,
+        ticket: POLICY_AUTHORITY_ACK.ticket,
+        pvpPolicy: POLICY_AUTHORITY_ACK.policy,
+      });
+      try { conn.ws.send(JSON.stringify(POLICY_AUTHORITY_ACK)); } catch { /* closing */ }
+      this.ctx.close(conn, 4012, "authority probe complete");
+      return;
+    }
     const isGenerationWorld = auth.worldId !== undefined
       && /^(?:pvp:)?room:[A-Z0-9]+:g\d+$/.test(auth.worldId);
     const isPlayableKit = auth.kit !== undefined && auth.kit !== "none";
@@ -141,13 +181,27 @@ export class MessageRouter {
       return;
     }
     const worldId = auth.worldId ?? DEFAULT_WORLD_ID;
-    // TEMP kill switch (last line of defense): if a stale/already-minted pvp ticket somehow
-    // reaches here while PVP is disabled, reject the join rather than create/bind a pvp world.
-    // This guards BOTH plain join and resume — the branch below never runs — and never falls
-    // back to co-op (a co-op world id would be a different, unauthorized world). The flag
-    // defaults to the shared build constant (see config.pvpPublicEnabled).
-    if (isPvpWorldId(worldId) && !this.ctx.config.pvpPublicEnabled) {
-      this.ctx.reject(conn, PVP_DISABLED_CODE, PVP_DISABLED_MESSAGE);
+    if (isPvpWorldId(worldId)) {
+      if (auth.pvpPolicy === undefined) {
+        this.rejectPolicy(conn, "policy_required", "PVP room policy required", auth, worldId);
+        return;
+      }
+      const access = pvpPolicyAccess(auth.pvpPolicy);
+      const isEnabled = access === "private"
+        ? this.ctx.config.pvpPrivateEnabled
+        : this.ctx.config.pvpPublicEnabled;
+      if (!isEnabled) {
+        this.rejectPolicy(
+          conn,
+          access === "private" ? PVP_PRIVATE_DISABLED_CODE : PVP_PUBLIC_DISABLED_CODE,
+          PVP_DISABLED_MESSAGE,
+          auth,
+          worldId,
+        );
+        return;
+      }
+    } else if (auth.pvpPolicy !== undefined) {
+      this.rejectPolicy(conn, "policy_invalid", "PVP policy cannot authorize a co-op world", auth, worldId);
       return;
     }
     if (this.ctx.sessions.isRetired(worldId)) {
@@ -166,18 +220,34 @@ export class MessageRouter {
         if (!decision.isAllowed) {
           const isRunEnded = decision.code === "generation_not_active"
             || decision.code === "room_not_active";
-          this.ctx.reject(
-            conn,
-            isRunEnded ? "run_ended" : "admission_rejected",
-            isRunEnded ? "this run generation has ended" : "room membership changed; return to the lobby",
-          );
+          const stableCode = isRunEnded ? "run_ended" : decision.code;
+          const reason = isRunEnded
+            ? "this run generation has ended"
+            : "room membership changed; return to the lobby";
+          if (stableCode === "policy_required"
+            || stableCode === "policy_invalid"
+            || stableCode === "policy_mismatch"
+            || stableCode === "private_disabled"
+            || stableCode === "public_disabled"
+            || stableCode === "room_full"
+            || stableCode === "admission_unavailable") {
+            this.rejectPolicy(conn, stableCode, reason, auth, worldId);
+          } else {
+            this.ctx.reject(conn, stableCode, reason);
+          }
           return;
         }
         this.bindVerifiedJoin(conn, auth, worldId, msg.resume);
       }).catch(() => {
         conn.isAdmissionPending = false;
         if (!conn.closing) {
-          this.ctx.reject(conn, "admission_rejected", "online authority unavailable; retry from the lobby");
+          this.rejectPolicy(
+            conn,
+            "admission_unavailable",
+            "online authority unavailable; retry from the lobby",
+            auth,
+            worldId,
+          );
         }
       });
       return;
@@ -206,6 +276,11 @@ export class MessageRouter {
       return;
     }
     const existingRoom = this.ctx.sessions.room(worldId);
+    const pvpPolicy = auth.pvpPolicy ?? null;
+    if (existingRoom && existingRoom.pvpPolicy !== pvpPolicy) {
+      this.rejectPolicy(conn, "policy_mismatch", "room policy changed", auth, worldId);
+      return;
+    }
     const isSeatReserved = existingRoom
       ? [...existingRoom.seats()].some((seat) => seat.authName === auth.playerId)
       : false;
@@ -216,9 +291,14 @@ export class MessageRouter {
       this.ctx.reject(conn, "resume_required", "resume token required for this active run");
       return;
     }
+    if (existingRoom && pvpPolicy !== null
+      && existingRoom.playerCount >= PVP_POLICY_MAX_PLAYERS) {
+      this.rejectPolicy(conn, "room_full", "that room is full", auth, worldId);
+      return;
+    }
 
     conn.playerId = "p" + conn.id; // world-scoped id; auth identity kept for logs
-    const room = this.ctx.sessions.bind(conn, worldId);
+    const room = this.ctx.sessions.bind(conn, worldId, pvpPolicy);
     this.finishJoin(conn, room, auth, "join ok");
     this.supersedeDuplicateIdentity(room, conn);
   }
@@ -233,6 +313,8 @@ export class MessageRouter {
     conn.log.info(what, {
       authName: conn.authName ?? "", playerId: conn.playerId ?? "", worldId: room.id,
       roomCode: roomCodeOfWorldId(room.id) ?? "", ticketWorld: auth.worldId ?? "",
+      pvpPolicy: room.pvpPolicy ?? "",
+      generation: generationOfWorldId(room.id),
       name: conn.displayName ?? "", worldPlayers: room.playerCount,
     });
     this.ctx.publisher.sendFull(room, conn);
@@ -247,6 +329,11 @@ export class MessageRouter {
     const room = this.ctx.sessions.room(worldId);
     const authName = conn.authName ?? "";
     if (room) {
+      if (room.pvpPolicy !== (auth.pvpPolicy ?? null)) {
+        this.ctx.metrics.counters.resumesRejected++;
+        this.rejectPolicy(conn, "policy_mismatch", "room policy changed", auth, worldId);
+        return;
+      }
       const taken = room.takeSeat(authName, token, this.ctx.clock.now());
       if (taken.ok) {
         this.adoptSeat(conn, taken.seat);
@@ -303,6 +390,22 @@ export class MessageRouter {
     this.ctx.metrics.counters.resumesExpired++;
     conn.log.info("resume expired (no seat)", { authName, worldId });
     this.ctx.reject(conn, "resume_expired", "seat expired or server restarted");
+  }
+
+  private rejectPolicy(
+    conn: Conn,
+    code: string,
+    reason: string,
+    auth: AuthResult,
+    worldId: string,
+  ): void {
+    conn.log.warn("policy join rejected", {
+      code,
+      worldId,
+      generation: generationOfWorldId(worldId),
+      pvpPolicy: auth.pvpPolicy ?? "",
+    });
+    this.ctx.reject(conn, code, reason);
   }
 
   // Continuity transfer: the resumed connection IS the old player. lastAppliedSeq/lastCseq

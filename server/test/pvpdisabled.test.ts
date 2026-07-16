@@ -12,9 +12,15 @@
 // Run: npm run test:pvpdisabled (in server/)
 
 import { startTestServer, Bot, idle, waitUntil } from "../harness/lib.js";
-import { mintTicket } from "../src/auth.js";
+import { mintPvpTicket, mintTicket } from "../src/auth.js";
 import { jsonCodec, PROTOCOL_VERSION, pvpWorldIdForRoomCode, worldIdForRoomCode } from "../../src/net/protocol.js";
-import { PVP_PUBLIC_ENABLED, PVP_DISABLED_CODE, PVP_DISABLED_MESSAGE } from "../../src/net/pvpFlag.js";
+import {
+  PVP_PRIVATE_ENABLED,
+  PVP_PUBLIC_ENABLED,
+  PVP_DISABLED_MESSAGE,
+  PVP_PRIVATE_DISABLED_CODE,
+} from "../../src/net/pvpFlag.js";
+import { PRIVATE_DRAFT_PVP_POLICY } from "../../src/net/pvpPolicy.js";
 import { WebSocket as WsClient } from "ws";
 
 let passed = 0;
@@ -43,9 +49,10 @@ function rawSocket(url: string): Promise<WsClient> {
 interface ErrorFrame { t?: string; code?: string; msg?: string }
 
 async function main(): Promise<void> {
-  check("PVP is disabled in this build (the containment default)", PVP_PUBLIC_ENABLED === false);
+  check("private and public PVP are disabled in this build",
+    PVP_PRIVATE_ENABLED === false && PVP_PUBLIC_ENABLED === false);
 
-  await test("a stale pvp ticket is REJECTED (pvp_disabled) — no pvp world created, no co-op fallback", async () => {
+  await test("a policy-bound private ticket is rejected while the private flag is dark", async () => {
     const s = await startTestServer();
     try {
       const before = s.server.health().counters.joinsRejected;
@@ -57,18 +64,50 @@ async function main(): Promise<void> {
         if (msg.t === "error") frame = msg;
         if (msg.t === "snap") sawSnap = true;
       });
-      // A ticket minted for a pvp world (what a stale client / an older cached bundle would send).
-      const ticket = mintTicket(s.secret, "stale-pvp", 120, Date.now(), { worldId: pvpWorldIdForRoomCode("AAAA") });
+      const worldId = pvpWorldIdForRoomCode("AAAA");
+      const ticket = mintPvpTicket(
+        s.secret,
+        "stale-pvp",
+        { worldId, pvpPolicy: PRIVATE_DRAFT_PVP_POLICY },
+        120,
+        Date.now(),
+      );
       ws.send(jsonCodec.encodeClient({ t: "join", ticket, protocol: PROTOCOL_VERSION }));
       await waitUntil(() => frame !== null, 2000);
       const err: ErrorFrame = frame ?? {};
-      check("the join is rejected with the typed pvp_disabled code", err.code === PVP_DISABLED_CODE, JSON.stringify(err));
+      check("the join is rejected with private_disabled", err.code === PVP_PRIVATE_DISABLED_CODE, JSON.stringify(err));
       check("the reject carries the clean player-facing copy", err.msg === PVP_DISABLED_MESSAGE, err.msg ?? "");
       check("the rejection is counted", s.server.health().counters.joinsRejected === before + 1);
+      check("the stable private-disabled counter is incremented",
+        s.server.health().counters.privateDisabledRejected === 1);
       check("NO pvp world was created for it", s.server.getWorld(pvpWorldIdForRoomCode("AAAA")) === undefined);
       check("it did NOT silently land in a co-op world (no fallback)", s.server.getWorld(worldIdForRoomCode("AAAA")) === undefined);
       check("the registry stayed empty", s.server.health().worlds === 0, `worlds=${s.server.health().worlds}`);
       check("the client never received a spawn snapshot", !sawSnap);
+    } finally { await s.close(); }
+  });
+
+  await test("a legacy v1 PVP ticket cannot bypass policy binding", async () => {
+    const s = await startTestServer({ pvpPrivateEnabled: true });
+    try {
+      const ws = await rawSocket(s.url);
+      let frame: ErrorFrame | null = null;
+      ws.on("message", (data: Buffer) => {
+        const msg = JSON.parse(data.toString("utf8")) as ErrorFrame;
+        if (msg.t === "error") frame = msg;
+      });
+      const ticket = mintTicket(s.secret, "legacy-pvp", 120, Date.now(), {
+        worldId: pvpWorldIdForRoomCode("LEGA"),
+      });
+      ws.send(jsonCodec.encodeClient({ t: "join", ticket, protocol: PROTOCOL_VERSION }));
+      await waitUntil(() => frame !== null, 2000);
+      const error: ErrorFrame = frame ?? {};
+      check("missing policy rejects before world creation",
+        error.code === "policy_required"
+        && error.msg === "policy_required"
+        && s.server.getWorld(pvpWorldIdForRoomCode("LEGA")) === undefined);
+      check("the stable policy-required counter is incremented",
+        s.server.health().counters.policyRequiredRejected === 1);
     } finally { await s.close(); }
   });
 
@@ -81,11 +120,17 @@ async function main(): Promise<void> {
         const msg = JSON.parse(data.toString("utf8")) as ErrorFrame & { t?: string };
         if (msg.t === "error") frame = msg;
       });
-      const ticket = mintTicket(s.secret, "stale-pvp-resume", 120, Date.now(), { worldId: pvpWorldIdForRoomCode("BBBB") });
+      const ticket = mintPvpTicket(
+        s.secret,
+        "stale-pvp-resume",
+        { worldId: pvpWorldIdForRoomCode("BBBB"), pvpPolicy: PRIVATE_DRAFT_PVP_POLICY },
+        120,
+        Date.now(),
+      );
       ws.send(jsonCodec.encodeClient({ t: "join", ticket, protocol: PROTOCOL_VERSION, resume: "some-old-token" }));
       await waitUntil(() => frame !== null, 2000);
       const err: ErrorFrame = frame ?? {};
-      check("a pvp resume is rejected with pvp_disabled", err.code === PVP_DISABLED_CODE, JSON.stringify(err));
+      check("a pvp resume is rejected with private_disabled", err.code === PVP_PRIVATE_DISABLED_CODE, JSON.stringify(err));
       check("no pvp world was created by the resume attempt", s.server.getWorld(pvpWorldIdForRoomCode("BBBB")) === undefined);
     } finally { await s.close(); }
   });

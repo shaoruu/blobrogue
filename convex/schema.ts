@@ -146,6 +146,9 @@ export default defineSchema({
     // PVP arena deathmatch. Optional so every pre-existing room reads as "coop" (zero change);
     // it only changes which authoritative WORLD id the ticket mint binds (pvp: prefix).
     mode: v.optional(v.union(v.literal("coop"), v.literal("pvp"))),
+    // Canonical immutable PVP policy for the room's full life. Co-op has no policy. Legacy
+    // PVP rows without one remain inaccessible and are never inferred or backfilled.
+    pvpPolicy: v.optional(v.literal("private_draft_v1")),
     hostPlayerId: v.id("players"),
     seed: v.number(),
     floor: v.number(),

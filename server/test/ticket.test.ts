@@ -10,9 +10,29 @@
 //      color), and malformed claims reject rather than misroute
 // Run: npm run test:ticket (in server/).
 
-import { mintGsTicket, worldIdForRoomCode, type GsTicketClaims } from "../../convex/gsTicketCore.js";
-import { mintTicket, verifyTicket, type AuthConfig } from "../src/auth.js";
+import { createHmac } from "node:crypto";
+import {
+  mintGsTicket,
+  mintPvpGsTicket,
+  pvpWorldIdForRoomCode,
+  worldIdForRoomCode,
+  type GsTicketClaims,
+} from "../../convex/gsTicketCore.js";
+import {
+  POLICY_AUTHORITY_PROBE_PURPOSE,
+  POLICY_AUTHORITY_PROBE_SUBJECT,
+  POLICY_AUTHORITY_PROBE_WORLD_PREFIX,
+  mintPvpTicket,
+  mintTicket,
+  verifyTicket,
+  type AuthConfig,
+} from "../src/auth.js";
 import { worldIdForRoomCode as clientWorldIdForRoomCode } from "../../src/net/protocol.js";
+import { PRIVATE_DRAFT_PVP_POLICY } from "../../src/net/pvpPolicy.js";
+import {
+  requirePvpPolicyId,
+  type PvpPolicyId,
+} from "../../convex/pvpPolicy.js";
 
 let passed = 0, failed = 0;
 const failures: string[] = [];
@@ -22,6 +42,36 @@ function check(name: string, cond: boolean, detail = ""): void {
 }
 function section(name: string): void {
   process.stdout.write(`\n[${name}]\n`);
+}
+
+function resolvePolicyForTest(value: string | null | undefined): string {
+  try {
+    return requirePvpPolicyId(value);
+  } catch (error) {
+    return error instanceof Error ? error.message : String(error);
+  }
+}
+
+function signedEnvelope(
+  secret: string,
+  version: "v1" | "v2",
+  payload: Record<string, string | number | boolean>,
+): string {
+  const encoded = Buffer.from(JSON.stringify(payload), "utf8").toString("base64url");
+  const body = `${version}.${encoded}`;
+  const signature = createHmac("sha256", secret).update(body).digest("base64url");
+  return `${body}.${signature}`;
+}
+
+function signedRawEnvelope(
+  secret: string,
+  version: "v1" | "v2",
+  rawPayload: string,
+): string {
+  const encoded = Buffer.from(rawPayload, "utf8").toString("base64url");
+  const body = `${version}.${encoded}`;
+  const signature = createHmac("sha256", secret).update(body).digest("base64url");
+  return `${body}.${signature}`;
 }
 
 async function main(): Promise<void> {
@@ -157,6 +207,141 @@ async function main(): Promise<void> {
     check("world-claim swap rejects (sig no longer matches)", verifyTicket(cfg, `${head}.${swapped}.${ticket.split(".")[2]}`, now).ok === false);
   }
 
+  section("v2 PVP policy ticket is explicit, byte-locked, and fail-closed");
+  {
+    const canonicalPolicy: PvpPolicyId = requirePvpPolicyId(PRIVATE_DRAFT_PVP_POLICY);
+    check("canonical policy resolver returns the exact policy union",
+      canonicalPolicy === PRIVATE_DRAFT_PVP_POLICY);
+    check("missing/null policy fails closed before mint",
+      resolvePolicyForTest(undefined) === "policy_required"
+      && resolvePolicyForTest(null) === "policy_required");
+    check("unknown policy fails closed before mint",
+      resolvePolicyForTest("future_public_v1") === "policy_invalid");
+    const claims = {
+      worldId: pvpWorldIdForRoomCode("wave", 7),
+      pvpPolicy: canonicalPolicy,
+      name: "Arena Host",
+      colorIndex: 4,
+      kit: "gunner",
+      masteryLevel: 1,
+      isPetChoiceMade: true,
+    } as const;
+    const convexTicket = await mintPvpGsTicket(secret, "private-host", claims, 120, now);
+    const serverTicket = mintPvpTicket(secret, "private-host", claims, 120, now);
+    check("Convex and Node mint byte-identical v2 PVP tickets", convexTicket === serverTicket);
+    const verified = verifyTicket(cfg, convexTicket, now);
+    check("v2 binds exact world and canonical policy",
+      verified.ok
+      && verified.ticketVersion === 2
+      && verified.worldId === "pvp:room:WAVE:g7"
+      && verified.pvpPolicy === PRIVATE_DRAFT_PVP_POLICY);
+
+    const missingPolicy = mintTicket(secret, "legacy-pvp", 120, now, {
+      worldId: pvpWorldIdForRoomCode("wave", 7),
+    });
+    check("v1 can never enter policy-bound PVP", verifyTicket(cfg, missingPolicy, now).reason === "policy_required");
+
+    const base = {
+      pid: "private-host",
+      exp: Math.floor(now / 1000) + 120,
+      wld: "pvp:room:WAVE:g7",
+    };
+    check("v2 missing policy rejects",
+      verifyTicket(cfg, signedEnvelope(secret, "v2", base), now).reason === "policy_required");
+    check("v2 unknown policy rejects",
+      verifyTicket(cfg, signedEnvelope(secret, "v2", { ...base, pp: "future_public_v1" }), now).reason === "policy_invalid");
+    check("v2 co-op world plus PVP policy rejects",
+      verifyTicket(cfg, signedEnvelope(secret, "v2", {
+        ...base,
+        wld: "room:WAVE:g7",
+        pp: PRIVATE_DRAFT_PVP_POLICY,
+      }), now).reason === "policy_invalid");
+
+    const [version, encoded, signature] = convexTicket.split(".");
+    const payload = JSON.parse(Buffer.from(encoded, "base64url").toString("utf8")) as Record<string, string | number | boolean>;
+    const modified = Buffer.from(JSON.stringify({ ...payload, pp: "future_public_v1" }), "utf8").toString("base64url");
+    check("modified signed policy claim fails HMAC",
+      verifyTicket(cfg, `${version}.${modified}.${signature}`, now).reason === "bad_sig");
+  }
+
+  section("duplicate-aware canonical v2 payload contract");
+  {
+    const expires = Math.floor(now / 1000) + 120;
+    const fields = [
+      `"pid":${JSON.stringify(POLICY_AUTHORITY_PROBE_SUBJECT)}`,
+      `"exp":${expires}`,
+      `"wld":${JSON.stringify(`${POLICY_AUTHORITY_PROBE_WORLD_PREFIX}0123456789abcdef`)}`,
+      `"pp":${JSON.stringify(PRIVATE_DRAFT_PVP_POLICY)}`,
+      `"pr":${JSON.stringify(POLICY_AUTHORITY_PROBE_PURPOSE)}`,
+    ];
+    const keyIndex = new Map([
+      ["pid", 0],
+      ["exp", 1],
+      ["wld", 2],
+      ["pp", 3],
+      ["pr", 4],
+    ]);
+    const escapedKeys = new Map([
+      ["pid", "p\\u0069d"],
+      ["exp", "e\\u0078p"],
+      ["wld", "w\\u006cd"],
+      ["pp", "p\\u0070"],
+      ["pr", "p\\u0072"],
+    ]);
+    for (const key of ["pid", "exp", "wld", "pp", "pr"]) {
+      const index = keyIndex.get(key)!;
+      const canonicalField = fields[index];
+      const evilValue = key === "exp" ? "0" : '"evil"';
+      const evilField = `"${key}":${evilValue}`;
+      const sameField = canonicalField;
+      const escapedField = `"${escapedKeys.get(key)!}":${key === "exp" ? String(expires) : canonicalField.slice(canonicalField.indexOf(":") + 1)}`;
+      const variants = [
+        ["canonical-first evil-last", `{${fields.join(",")},${evilField}}`],
+        ["evil-first canonical-last", `{${evilField},${fields.join(",")}}`],
+        ["duplicate same value", `{${fields.join(",")},${sameField}}`],
+        ["escaped-equivalent duplicate", `{${escapedField},${fields.join(",")}}`],
+      ] as const;
+      for (const [label, raw] of variants) {
+        check(`${key}: ${label} rejects despite valid HMAC`,
+          verifyTicket(cfg, signedRawEnvelope(secret, "v2", raw), now).reason === "policy_invalid");
+      }
+    }
+
+    const canonicalRaw = `{${fields.join(",")}}`;
+    const structuralJunk = [
+      ["nested object", canonicalRaw.slice(0, -1) + ',"extra":{"pid":"nested","pid":"duplicate"}}'],
+      ["nested array", canonicalRaw.slice(0, -1) + ',"extra":[{"pp":"x","pp":"y"}]}'],
+      ["trailing token", canonicalRaw + " null"],
+      ["reordered keys", `{${[fields[1], fields[0], ...fields.slice(2)].join(",")}}`],
+      ["extra whitespace", `{ ${fields.join(",")} }`],
+    ] as const;
+    for (const [label, raw] of structuralJunk) {
+      check(`${label} rejects under canonical probe bytes`,
+        verifyTicket(cfg, signedRawEnvelope(secret, "v2", raw), now).reason === "policy_invalid");
+    }
+
+    const normalPvpRaw = Buffer.from(
+      mintPvpTicket(secret, "normal-v2", {
+        worldId: "pvp:room:NORM:g1",
+        pvpPolicy: PRIVATE_DRAFT_PVP_POLICY,
+        kit: "gunner",
+        masteryLevel: 1,
+        isPetChoiceMade: true,
+      }, 120, now).split(".")[1],
+      "base64url",
+    ).toString("utf8");
+    check("normal v2 PVP mint uses canonical bytes",
+      verifyTicket(cfg, signedRawEnvelope(secret, "v2", normalPvpRaw), now).ok);
+    check("normal v2 reordered bytes reject",
+      verifyTicket(
+        cfg,
+        signedRawEnvelope(secret, "v2", normalPvpRaw.replace('{"pid":', `{"exp":${expires},"pid":`).replace(`,"exp":${expires}`, "")),
+        now,
+      ).reason === "policy_invalid");
+    check("normal v2 whitespace bytes reject",
+      verifyTicket(cfg, signedRawEnvelope(secret, "v2", normalPvpRaw.replace("{", "{ ")), now).reason === "policy_invalid");
+  }
+
   section("adversarial tickets reject");
   {
     const good = await mintGsTicket(secret, "victim", 120, now);
@@ -165,7 +350,7 @@ async function main(): Promise<void> {
     // Forge a different pid over the original signature.
     const forgedPayload = Buffer.from(JSON.stringify({ pid: "attacker", exp: Math.floor(now / 1000) + 120 })).toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
     check("payload swap rejects (sig no longer matches)", verifyTicket(cfg, `${head}.${forgedPayload}.${sig}`, now).ok === false);
-    check("wrong version prefix rejects", verifyTicket(cfg, `v2.${payload}.${sig}`, now).ok === false);
+    check("changing only the envelope version rejects", verifyTicket(cfg, `v2.${payload}.${sig}`, now).ok === false);
     check("wrong secret rejects", verifyTicket({ secret: "other-secret", allowDev: false }, good, now).ok === false);
     const expired = await mintGsTicket(secret, "victim", 60, now - 120_000);
     const expRes = verifyTicket(cfg, expired, now);

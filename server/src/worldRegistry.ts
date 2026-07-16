@@ -7,8 +7,9 @@ import type { Logger } from "./logger.js";
 import type { RoomRuntime, SessionStore } from "./ports.js";
 import type { Conn } from "./connection.js";
 import { GenerationAdmissionStore } from "./generationAdmissionStore.js";
+import type { PvpPolicyId } from "../../src/net/pvpPolicy.js";
 
-export type RoomFactory = (id: string) => RoomRuntime;
+export type RoomFactory = (id: string, pvpPolicy: PvpPolicyId | null) => RoomRuntime;
 
 export class WorldRegistry implements SessionStore {
   private worlds = new Map<string, RoomRuntime>();
@@ -20,13 +21,15 @@ export class WorldRegistry implements SessionStore {
     private onReleased: (room: RoomRuntime) => void = () => {},
   ) {}
 
-  ensureRoom(id: string): RoomRuntime {
+  ensureRoom(id: string, pvpPolicy: PvpPolicyId | null): RoomRuntime {
     let room = this.worlds.get(id);
     if (!room) {
       this.admissions.markActive(id);
-      room = this.factory(id);
+      room = this.factory(id, pvpPolicy);
       this.worlds.set(id, room);
-      this.log.info("world created", { worldId: id });
+      this.log.info("world created", { worldId: id, pvpPolicy: pvpPolicy ?? "" });
+    } else if (room.pvpPolicy !== pvpPolicy) {
+      throw new Error("world policy mismatch");
     }
     return room;
   }
@@ -58,8 +61,8 @@ export class WorldRegistry implements SessionStore {
   }
 
   // Bind a connection to a room: add its player + register the conn on the room.
-  bind(conn: Conn, roomId: string): RoomRuntime {
-    const room = this.ensureRoom(roomId);
+  bind(conn: Conn, roomId: string, pvpPolicy: PvpPolicyId | null): RoomRuntime {
+    const room = this.ensureRoom(roomId, pvpPolicy);
     room.addPlayer(conn.playerId!, conn.kitId, conn.authName ?? conn.playerId!);
     room.conns.set(conn.id, conn);
     conn.worldId = room.id;

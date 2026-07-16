@@ -78,6 +78,53 @@ import type {
 // v32: shared spawn protection end ticks and held-offense arming feedback.
 // v33: authority-plane receipt/capability/generation admission hard cut.
 export const SYNTHETIC_JOIN_PROTOCOL = 33;
+export const SYNTHETIC_COOP_TICKET_ENVELOPE = "v1";
+export const SYNTHETIC_PVP_TICKET_ENVELOPE = "v2";
+export const SYNTHETIC_ADMISSION_ENVELOPE = "a2";
+export const SYNTHETIC_PVP_POLICIES = ["private_draft_v1"] as const;
+export const POLICY_PROBE_SUBJECT = "synthetic-policy-v2";
+export const POLICY_PROBE_PURPOSE = "policy_v2_parser";
+export const POLICY_PROBE_WORLD_PREFIX = "verify-policy-v2:";
+
+export type ProbeJson =
+  | null
+  | boolean
+  | number
+  | string
+  | ProbeJson[]
+  | { [key: string]: ProbeJson };
+
+export interface AuthorityVersionValidation {
+  isValid: boolean;
+  detail: string | null;
+}
+
+export function validateAuthorityVersion(value: ProbeJson): AuthorityVersionValidation {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    return { isValid: false, detail: "authority_contract_malformed" };
+  }
+  const policies = value.pvpPolicies;
+  if (!Array.isArray(policies) || !policies.every((policy) => typeof policy === "string")) {
+    return { isValid: false, detail: "pvp_policy_catalog_malformed" };
+  }
+  if (new Set(policies).size !== policies.length) {
+    return { isValid: false, detail: "pvp_policy_catalog_duplicate" };
+  }
+  const actualPolicies = policies.slice().sort();
+  const expectedPolicies = [...SYNTHETIC_PVP_POLICIES].sort();
+  if (JSON.stringify(actualPolicies) !== JSON.stringify(expectedPolicies)) {
+    return { isValid: false, detail: "pvp_policy_catalog_mismatch" };
+  }
+  const isContractValid = value.protocol === SYNTHETIC_JOIN_PROTOCOL
+    && value.coopTicket === SYNTHETIC_COOP_TICKET_ENVELOPE
+    && value.pvpTicket === SYNTHETIC_PVP_TICKET_ENVELOPE
+    && value.admission === SYNTHETIC_ADMISSION_ENVELOPE
+    && value.pvpPrivateEnabled === false
+    && value.pvpPublicEnabled === false;
+  return isContractValid
+    ? { isValid: true, detail: null }
+    : { isValid: false, detail: "authority_contract_mismatch" };
+}
 
 interface SyntheticSpawnSelf {
   spo?: number;
@@ -193,17 +240,109 @@ export class HttpGameServerProbe implements GameServerProbe {
     }
   }
 
-  async verify(): Promise<VerifyResult> {
+  async verifyDiagnostic(): Promise<VerifyResult> {
+    const authorityFailure = await this.authorityFailure();
+    if (authorityFailure !== null) return authorityFailure;
     const readiness = await this.readiness();
     if (!readiness.ready) return { ok: false, depth: "http_only", detail: readiness.detail };
-
     const wsResult = await this.probeWs();
-    if (!wsResult.ok) return { ok: false, depth: "ws_liveness", detail: wsResult.detail };
-    if (wsResult.depth === "synthetic_join") return { ok: true, depth: "synthetic_join", detail: null };
-    return { ok: true, depth: "ws_liveness", detail: null };
+    return {
+      ok: wsResult.ok,
+      depth: wsResult.depth,
+      detail: wsResult.detail,
+    };
+  }
+
+  async verifyForDeploy(): Promise<VerifyResult> {
+    if (this.cfg.syntheticTicketSecret === null) {
+      return { ok: false, depth: "http_only", detail: "policy_probe_secret_missing" };
+    }
+    const authorityFailure = await this.authorityFailure();
+    if (authorityFailure !== null) return authorityFailure;
+    const readiness = await this.readiness();
+    if (!readiness.ready) return { ok: false, depth: "http_only", detail: readiness.detail };
+    const policyResult = await this.verifyPolicyParser();
+    if (!policyResult.ok || policyResult.depth !== "policy_v2_parser") return policyResult;
+    const wsResult = await this.probeWs();
+    if (!wsResult.ok || wsResult.depth !== "synthetic_join") {
+      return { ok: false, depth: wsResult.depth, detail: wsResult.detail ?? "synthetic_join_required" };
+    }
+    return { ok: true, depth: "policy_v2_parser+synthetic_join", detail: null };
+  }
+
+  private async authorityFailure(): Promise<VerifyResult | null> {
+    const authority = await this.getJsonShaped<{ [key: string]: ProbeJson }>(
+      `${this.cfg.baseUrl}/version`,
+    );
+    const authorityValidation = validateAuthorityVersion(authority);
+    if (!authorityValidation.isValid) {
+      return { ok: false, depth: "http_only", detail: authorityValidation.detail };
+    }
+    return null;
+  }
+
+  async verifyPolicyParser(): Promise<VerifyResult> {
+    const secret = this.cfg.syntheticTicketSecret;
+    if (secret === null) {
+      return { ok: false, depth: "policy_v2_parser", detail: "policy_probe_secret_missing" };
+    }
+    const result = await this.probePolicyParser(secret);
+    return {
+      ok: result.ok,
+      depth: "policy_v2_parser",
+      detail: result.detail,
+    };
   }
 
   // ---- ws verification ----
+
+  private probePolicyParser(secret: string): Promise<{ ok: boolean; detail: string | null }> {
+    return new Promise((resolve) => {
+      let settled = false;
+      const ws = new WebSocket(this.cfg.wsUrl, { handshakeTimeout: 3000 });
+      const timer = setTimeout(() => finish(false, "timeout"), 5000);
+      const finish = (ok: boolean, detail: string | null): void => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        try { ws.close(); } catch { /* already closing */ }
+        resolve({ ok, detail });
+      };
+      ws.on("open", () => {
+        const ticket = mintPolicyParserProbeTicket(secret, 60);
+        try {
+          ws.send(JSON.stringify({ t: "join", ticket, protocol: SYNTHETIC_JOIN_PROTOCOL }));
+        } catch {
+          finish(false, "send_failed");
+        }
+      });
+      ws.on("message", (data: Buffer | ArrayBuffer | Buffer[]) => {
+        const text = Buffer.isBuffer(data)
+          ? data.toString("utf8")
+          : Array.isArray(data)
+            ? Buffer.concat(data).toString("utf8")
+            : Buffer.from(data).toString("utf8");
+        let message: ProbeJson;
+        try { message = JSON.parse(text) as ProbeJson; } catch { return; }
+        if (message === null || typeof message !== "object" || Array.isArray(message)) return;
+        if (message.t === "authorityAck"
+          && message.depth === POLICY_PROBE_PURPOSE
+          && message.ticket === SYNTHETIC_PVP_TICKET_ENVELOPE
+          && message.policy === SYNTHETIC_PVP_POLICIES[0]
+          && Object.keys(message).length === 4) {
+          finish(true, null);
+          return;
+        }
+        if (message.t === "error") {
+          finish(false, typeof message.code === "string" ? `policy_probe_rejected:${message.code}` : "policy_probe_rejected");
+        }
+      });
+      ws.on("error", (error) => finish(false, error instanceof Error ? error.message : "ws_error"));
+      ws.on("close", () => {
+        if (!settled) finish(false, "closed_without_ack");
+      });
+    });
+  }
 
   private probeWs(): Promise<{ ok: boolean; depth: "ws_liveness" | "synthetic_join"; detail: string | null }> {
     return new Promise((resolve) => {
@@ -317,6 +456,25 @@ function parseLogLine(line: string): RawLog | null {
     msg: typeof o.msg === "string" ? o.msg : "",
     fields,
   };
+}
+
+export function mintPolicyParserProbeTicket(
+  secret: string,
+  ttlSec: number,
+  nowMs = Date.now(),
+  nonce = randomBytes(8).toString("hex"),
+): string {
+  const payload = {
+    pid: POLICY_PROBE_SUBJECT,
+    exp: Math.floor(nowMs / 1000) + ttlSec,
+    wld: `${POLICY_PROBE_WORLD_PREFIX}${nonce}`,
+    pp: SYNTHETIC_PVP_POLICIES[0],
+    pr: POLICY_PROBE_PURPOSE,
+  };
+  const encoded = Buffer.from(JSON.stringify(payload), "utf8").toString("base64url");
+  const body = `v2.${encoded}`;
+  const signature = createHmac("sha256", secret).update(body).digest("base64url");
+  return `${body}.${signature}`;
 }
 
 // Mints a game ticket in the gs `v1.<b64url(payload)>.<hmac>` envelope. This mirrors the game

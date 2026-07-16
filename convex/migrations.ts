@@ -14,6 +14,7 @@ export const backfillGenerationState = internalMutation({
     let updated = 0;
     for (const room of rooms) {
       if ((room.kind ?? "coop") !== "online" || room.generationState !== undefined) continue;
+      // Deliberately do not infer pvpPolicy. A legacy PVP row without one stays inaccessible.
       await ctx.db.patch(room._id, {
         generationState: room.status === "playing"
           ? "completed"

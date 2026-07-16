@@ -7,6 +7,9 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { mintTicket, isValidWorldId, sanitizeDisplayName, type TicketClaims } from "./auth.js";
 import type { ServerConfig } from "./config.js";
 import type { HealthReport } from "./metrics.js";
+import { PROTOCOL_VERSION } from "../../src/net/protocol.js";
+import { GENERATION_ADMISSION_PREFIX } from "../../src/net/generationAdmission.js";
+import { PRIVATE_DRAFT_PVP_POLICY } from "../../src/net/pvpPolicy.js";
 
 // One live world, as exposed to the control panel: which world exists, how many players it
 // holds, its tick, WHO is connected (display names, ordered by join), and whose seats are
@@ -56,6 +59,19 @@ export function createHttpHandler(deps: HttpDeps): (req: IncomingMessage, res: S
 
     if (url.pathname === "/worlds") {
       res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ worlds: deps.worlds() }));
+      return;
+    }
+
+    if (url.pathname === "/version") {
+      res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({
+        protocol: PROTOCOL_VERSION,
+        coopTicket: "v1",
+        pvpTicket: "v2",
+        admission: GENERATION_ADMISSION_PREFIX,
+        pvpPolicies: [PRIVATE_DRAFT_PVP_POLICY],
+        pvpPrivateEnabled: deps.config.pvpPrivateEnabled,
+        pvpPublicEnabled: deps.config.pvpPublicEnabled,
+      }));
       return;
     }
 

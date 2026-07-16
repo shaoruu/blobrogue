@@ -51,7 +51,8 @@ export interface GameServerAdmin {
   flush(): Promise<AdminEffectResult>;
   resume(): Promise<AdminEffectResult>;
   restart(): Promise<void>; // reloads exactly blobrogue-gs
-  verify(): Promise<VerifyResult>;
+  verifyDiagnostic(): Promise<VerifyResult>;
+  verifyForDeploy(): Promise<VerifyResult>;
 }
 
 // Verifies an on-box release: recomputes checksum, re-derives the releaseId, confirms gates.

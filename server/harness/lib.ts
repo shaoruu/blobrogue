@@ -5,13 +5,15 @@
 
 import { GameServer } from "../src/server.js";
 import { loadConfig, type ServerConfig } from "../src/config.js";
-import { mintTicket } from "../src/auth.js";
+import { mintPvpTicket, mintTicket } from "../src/auth.js";
 import type { TicketClaims } from "../src/auth.js";
 import { createLogger } from "../src/logger.js";
 import { WSTransport, type SocketLike } from "../../src/client/wsTransport.js";
 import type { InputCmd } from "../../src/sim/input.js";
 import type { SimEvent } from "../../src/sim/events.js";
 import { LatencySocket, type NetConditions, PERFECT_NET } from "./latencySocket.js";
+import { isPvpWorldId } from "../../src/net/worldId.js";
+import { PRIVATE_DRAFT_PVP_POLICY } from "../../src/net/pvpPolicy.js";
 
 export const TEST_SECRET = "harness-shared-secret";
 
@@ -154,7 +156,14 @@ export class Bot {
           pet: o.pet,
           isPetChoiceMade: o.isPetChoiceMade,
         };
-        return Promise.resolve(mintTicket(o.secret, o.playerId, undefined, undefined, claims));
+        const ticket = claims.worldId !== undefined && isPvpWorldId(claims.worldId)
+          ? mintPvpTicket(
+              o.secret,
+              o.playerId,
+              { ...claims, worldId: claims.worldId, pvpPolicy: PRIVATE_DRAFT_PVP_POLICY },
+            )
+          : mintTicket(o.secret, o.playerId, undefined, undefined, claims);
+        return Promise.resolve(ticket);
       },
       socketFactory: (url) => {
         if (this.isNetworkDown) return new DeadSocket();
