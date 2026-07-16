@@ -21,7 +21,10 @@ async function boot(players, phase, isHitDebug = false) {
   await page.goto(url + query, { waitUntil: "load" });
   await page.waitForFunction(() => window.__game !== undefined, null, { timeout: 30000 });
   await page.waitForTimeout(1200);
-  await page.evaluate(() => document.querySelector(".dev-panel")?.remove());
+  await page.evaluate(() => {
+    document.querySelector(".dev-panel")?.remove();
+    document.querySelector(".floor-banner")?.remove();
+  });
   return page;
 }
 
@@ -78,7 +81,10 @@ async function record(name, setup, durationMs) {
   await page.goto(url + "/?dev=1&qa=pale&players=1&phase=3&hideBossName=1", { waitUntil: "load" });
   await page.waitForFunction(() => window.__game !== undefined, null, { timeout: 30000 });
   await page.waitForTimeout(900);
-  await page.evaluate(() => document.querySelector(".dev-panel")?.remove());
+  await page.evaluate(() => {
+    document.querySelector(".dev-panel")?.remove();
+    document.querySelector(".floor-banner")?.remove();
+  });
   await page.evaluate(setup);
   await page.waitForTimeout(durationMs);
   const video = page.video();

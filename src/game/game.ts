@@ -1062,6 +1062,7 @@ export class Game {
   private isFlowDebug = false; // draw the pathfinding flow-field arrows over the floor
   private isDevBossNameHidden = false;
   private isDevHitRadiusVisible = false;
+  private isDevPaleCapture = false;
   private fps = 0;             // smoothed frames/sec, surfaced via devSnapshot()
 
   constructor(
@@ -4757,6 +4758,7 @@ export class Game {
     this.renderGrapplePreview();
     this.renderTracers();
     this.renderRemotePlayers();
+    this.renderDevPalePlayers();
     this.renderPets(); // client-side cosmetic companions (follow/sit; never a sim entity)
     this.renderAfterimages();
     this.renderHealBeam(); // MENDER Lifebloom tether (under the bodies) — see who you're healing
@@ -8866,6 +8868,35 @@ export class Game {
     }
   }
 
+  private renderDevPalePlayers(): void {
+    if (!this.isDevPaleCapture || this.world.players.size <= 1) return;
+    const { ctx, renderCam: cam } = this;
+    let colorIndex = 1;
+    for (const player of this.world.players.values()) {
+      if (player.id === LOCAL_ID) continue;
+      const sx = player.x - cam.x;
+      const sy = player.y - cam.y;
+      const color = playerColor(colorIndex++);
+      const tinted = this.sprites.tintedSprite(heroBodySprite(null), color);
+      ctx.save();
+      ctx.translate(sx, sy);
+      if (tinted) {
+        ctx.drawImage(tinted, -26, -26, 52, 52);
+      } else {
+        ctx.fillStyle = color;
+        ctx.beginPath();
+        ctx.arc(0, 0, player.pr, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.restore();
+      ctx.fillStyle = color;
+      ctx.font = '700 11px "Silkscreen", monospace';
+      ctx.textAlign = "center";
+      ctx.fillText(`P${colorIndex}`, sx, sy - 32);
+      ctx.textAlign = "left";
+    }
+  }
+
   // Cosmetic companion pets (META spec §3): a pure CLIENT-SIDE follower per player who has one
   // equipped — the local player (from selfPet) and any teammate (from the wire identity pet).
   // The pet TROTS to keep near its owner with a little lag + a settle distance (it SITS when it
@@ -9971,6 +10002,7 @@ export class Game {
 
   devSetupPaleCapture(players = 1, phase = 1): void {
     this.devLoadRealFloor(75);
+    this.isDevPaleCapture = true;
     this.isDevBossNameHidden = true;
     this.world.enemies = this.world.enemies.filter((enemy) => enemy.kind === "pale");
     const boss = this.world.enemies[0];
@@ -9988,6 +10020,7 @@ export class Game {
     this.devTeleport(activePlayers[0].x, activePlayers[0].y);
     this.cam.x = boss.x - this.canvas.width / 2;
     this.cam.y = boss.y - this.canvas.height / 2;
+    this.hud.clear();
   }
 
   devSetPalePhase(phase: number): void {

@@ -578,7 +578,7 @@ function paleAuthorityWireTests(): void {
     buildSnapshot(w, "pMe", 0, [], 0, false, { worldId: "w-pale" }),
   ));
   if (decoded.t !== "snap") throw new Error("expected Pale snapshot");
-  const pale = decoded.enemies.find((enemy) => enemy.kind === "pale");
+  const pale = decoded.enemies.find((enemy) => enemy.id === boss.id);
   check("Pale attack time/count/sequence/parity survive the strict wire",
     pale !== undefined
     && pale.atk.tm === 0.65
