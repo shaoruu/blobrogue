@@ -268,9 +268,11 @@ function ring2NavigationGate(): void {
   for (const radius of radii) {
     const inset = Math.asin(Math.min(0.99, (player.pr + PALE.globRadius) / radius));
     for (const offset of [-gapWidth / 2 + inset + 0.03, 0, gapWidth / 2 - inset - 0.03]) {
-      starts.push([{ x: boss.x + Math.cos(gapA + offset) * radius, y: boss.y + Math.sin(gapA + offset) * radius }]);
+      const point = { x: boss.x + Math.cos(gapA + offset) * radius, y: boss.y + Math.sin(gapA + offset) * radius };
+      if (!isDangerous(world, point, [], player.pr)) starts.push([point]);
     }
   }
+  if (starts.length < 4) throw new Error(`ring2 setup produced only ${starts.length} legal edge/center starts`);
   const isReached = starts.map(() => false);
   for (let index = 0; index < starts.length; index++) {
     for (const point of starts[index]) {
