@@ -83,6 +83,8 @@ const admissionSource = readFileSync(new URL("../src/net/generationAdmission.ts"
 const migrationSource = readFileSync(new URL("../convex/migrations.ts", import.meta.url), "utf8");
 const serverSource = readFileSync(new URL("../server/src/server.ts", import.meta.url), "utf8");
 const pvpSimSource = readFileSync(new URL("../src/sim/pvp.ts", import.meta.url), "utf8");
+const routerSource = readFileSync(new URL("../server/src/messageRouter.ts", import.meta.url), "utf8");
+const admissionClientSource = readFileSync(new URL("../server/src/generationAdmissionClient.ts", import.meta.url), "utf8");
 
 check("public recordRun and recordFloorProgress fail closed",
   (playersSource.match(/verified_receipt_required/g) ?? []).length >= 2);
@@ -123,6 +125,17 @@ check("legacy migration never upgrades missing PVP policy",
 check("dark foundation leaves PVP drafts and verified progression off",
   pvpSimSource.includes("draftEnabled: false")
   && serverSource.includes("if (!world || world.isPvp) return;"));
+check("Convex/browser ticket minter cannot emit the control-only probe purpose",
+  !ticketCoreSource.includes("pr:"));
+const probeBranch = routerSource.indexOf("auth.isPolicyAuthorityProbe === true");
+check("terminal policy parser acknowledgement precedes rollout, admission, and world binding",
+  probeBranch >= 0
+  && probeBranch < routerSource.indexOf("pvpPrivateEnabled")
+  && probeBranch < routerSource.indexOf("authorizeJoin(auth)")
+  && probeBranch < routerSource.indexOf("bindVerifiedJoin(conn"));
+check("admission client validates the closed response schema before authorization",
+  admissionClientSource.indexOf("parseGenerationAdmissionDecision(body)")
+  < admissionClientSource.indexOf("response.ok && decision.isAllowed"));
 
 process.stdout.write(`\n${passed} checks passed, ${failed} failed\n`);
 if (failed > 0) process.exit(1);

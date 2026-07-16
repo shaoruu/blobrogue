@@ -44,6 +44,8 @@ export interface Counters {
   publicDisabledRejected: number;
   roomFullRejected: number;
   admissionUnavailableRejected: number;
+  policyAuthorityProbeOk: number;
+  admissionMalformedResponses: number;
   // An older connection closed because the SAME verified identity joined the same world again
   // (two tabs / zombie socket). Growth here means players are running duplicate sessions.
   duplicateIdentityKicks: number;
@@ -78,6 +80,7 @@ export function newCounters(): Counters {
     policyRequiredRejected: 0, policyInvalidRejected: 0, policyMismatchRejected: 0,
     privateDisabledRejected: 0, publicDisabledRejected: 0, roomFullRejected: 0,
     admissionUnavailableRejected: 0,
+    policyAuthorityProbeOk: 0, admissionMalformedResponses: 0,
     duplicateIdentityKicks: 0,
     seatsReserved: 0, seatsExpired: 0, seatsDiscarded: 0, resumesOk: 0, resumesPrevToken: 0, resumesRejected: 0, resumesExpired: 0,
     offersExpired: 0,

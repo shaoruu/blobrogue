@@ -151,7 +151,12 @@ export interface LogQuery {
 export type MetricsSnapshot = Record<string, number>;
 
 // Depth actually achieved by a VERIFY probe — reported honestly (§4.6 of the spec).
-export type VerifyDepth = "http_only" | "ws_liveness" | "synthetic_join";
+export type VerifyDepth =
+  | "http_only"
+  | "ws_liveness"
+  | "synthetic_join"
+  | "policy_v2_parser"
+  | "policy_v2_parser+synthetic_join";
 
 export interface VerifyResult {
   ok: boolean;

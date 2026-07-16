@@ -1,8 +1,12 @@
 import {
   GENERATION_ADMISSION_TTL_MS,
   GENERATION_ADMISSION_VERSION,
+  parseGenerationAdmissionDecision,
 } from "../../src/net/generationAdmission.js";
-import type { GenerationAdmissionPayload } from "../../src/net/generationAdmission.js";
+import type {
+  AdmissionJson,
+  GenerationAdmissionPayload,
+} from "../../src/net/generationAdmission.js";
 import { verifyGenerationAdmissionProof } from "../../convex/generationAdmissionCore.js";
 import {
   GenerationAdmissionClient,
@@ -61,6 +65,12 @@ check(
   "expired admission proof rejects",
   await verifyGenerationAdmissionProof(secret, proof, payload.expiresAt + 1) === null,
 );
+const inheritedDecision = Object.create({
+  isAllowed: true,
+  code: "ok",
+}) as AdmissionJson;
+check("inherited/prototype admission fields reject",
+  parseGenerationAdmissionDecision(inheritedDecision) === null);
 
 const privatePayload: GenerationAdmissionPayload = {
   ...payload,
@@ -201,6 +211,110 @@ try {
 } finally {
   await gameServer.close();
   await new Promise<void>((resolve) => admissionServer.close(() => resolve()));
+}
+
+let strictResponse = { status: 200, body: JSON.stringify({ isAllowed: true, code: "ok" }) };
+const strictAdmissionServer = createServer(async (_request, response) => {
+  response.writeHead(strictResponse.status, { "content-type": "application/json" });
+  response.end(strictResponse.body);
+});
+await new Promise<void>((resolve) => strictAdmissionServer.listen(0, "127.0.0.1", resolve));
+const strictAddress = strictAdmissionServer.address();
+if (!strictAddress || typeof strictAddress === "string") {
+  throw new Error("strict admission test server did not bind");
+}
+const strictGameServer = await startTestServer({
+  receiptSecret: secret,
+  admissionEndpoint: `http://127.0.0.1:${strictAddress.port}/gs/admission`,
+});
+try {
+  const malformedCases = [
+    ["allow missing code", 200, '{"isAllowed":true}'],
+    ["allow null code", 200, '{"isAllowed":true,"code":null}'],
+    ["allow unexpected code", 200, '{"isAllowed":true,"code":"unexpected"}'],
+    ["array", 200, "[]"],
+    ["null", 200, "null"],
+    ["string", 200, '"ok"'],
+    ["number", 200, "1"],
+    ["allow extra key", 200, '{"isAllowed":true,"code":"ok","extra":1}'],
+    ["deny missing code", 200, '{"isAllowed":false}'],
+    ["malformed 403", 403, '{"isAllowed":false}'],
+    ["403 allow mismatch", 403, '{"isAllowed":true,"code":"ok"}'],
+    ["200 deny mismatch", 200, '{"isAllowed":false,"code":"membership_changed"}'],
+    ["prototype key", 200, '{"isAllowed":true,"code":"ok","__proto__":{"polluted":true}}'],
+    ["constructor key", 200, '{"isAllowed":true,"code":"ok","constructor":{"polluted":true}}'],
+    ["invalid json", 200, "not-json"],
+    ["malformed 500", 500, '{"isAllowed":true}'],
+  ] as const;
+  let index = 0;
+  for (const [label, status, body] of malformedCases) {
+    strictResponse = { status, body };
+    const code = `M${String(index++).padStart(3, "0")}`;
+    const worldId = `room:${code}:g1`;
+    const bot = new Bot({
+      url: strictGameServer.url,
+      secret: strictGameServer.secret,
+      playerId: `malformed-${code}`,
+      world: worldId,
+      kit: "gunner",
+      masteryLevel: 1,
+      isPetChoiceMade: true,
+      script: () => idle(),
+    });
+    bot.start();
+    const rejected = await waitUntil(
+      () => (bot.transport.lastError ?? "").includes("admission_unavailable"),
+      3_000,
+    );
+    check(`${label} fails closed before world creation`,
+      rejected && strictGameServer.server.getWorld(worldId) === undefined);
+    bot.stop();
+  }
+
+  strictResponse = {
+    status: 403,
+    body: JSON.stringify({ isAllowed: false, code: "membership_changed" }),
+  };
+  const denied = new Bot({
+    url: strictGameServer.url,
+    secret: strictGameServer.secret,
+    playerId: "known-denial",
+    world: "room:DENY:g1",
+    kit: "gunner",
+    masteryLevel: 1,
+    isPetChoiceMade: true,
+    script: () => idle(),
+  });
+  denied.start();
+  check("exact 403 known denial preserves its stable code without creating a world",
+    await waitUntil(() => (denied.transport.lastError ?? "").includes("membership_changed"), 3_000)
+    && strictGameServer.server.getWorld("room:DENY:g1") === undefined);
+  denied.stop();
+
+  strictResponse = {
+    status: 200,
+    body: JSON.stringify({ isAllowed: true, code: "ok" }),
+  };
+  const allowed = new Bot({
+    url: strictGameServer.url,
+    secret: strictGameServer.secret,
+    playerId: "strict-allow",
+    world: "room:GOOD:g1",
+    kit: "gunner",
+    masteryLevel: 1,
+    isPetChoiceMade: true,
+    script: () => idle(),
+  });
+  allowed.start();
+  check("exact 200 allow object is the sole positive shape",
+    await waitUntil(() => allowed.transport.isReady(), 3_000)
+    && strictGameServer.server.getWorld("room:GOOD:g1")?.playerCount === 1);
+  allowed.stop();
+  check("malformed admission responses increment the dedicated counter",
+    strictGameServer.server.health().counters.admissionMalformedResponses === malformedCases.length);
+} finally {
+  await strictGameServer.close();
+  await new Promise<void>((resolve) => strictAdmissionServer.close(() => resolve()));
 }
 
 process.stdout.write(`\n${passed} checks passed, ${failed} failed\n`);

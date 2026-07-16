@@ -68,12 +68,30 @@ ticket `v1`. A v1 ticket cannot enter PVP, and v2 cannot authorize co-op. Genera
 the `a2` envelope and MAC-binds `mode` and `pvpPolicy` with player, world, room, generation,
 loadout, expiry, and jti. Convex compares those values against one current durable room snapshot.
 
+The control-plane parser probe is a separate v2 domain with exact ordered claims
+`pid,exp,wld,pp,pr`: subject `synthetic-policy-v2`, world
+`verify-policy-v2:<16 lowercase hex>`, policy `private_draft_v1`, and purpose
+`policy_v2_parser`. The GS emits `authorityAck/policy_v2_parser` and closes before rollout flags,
+admission, reservation, registry, world, or player creation. Wrong purpose, subject, namespace,
+policy, version, signature, field set, or key order terminates as a rejection. Convex and browser
+ticket minters do not expose the purpose claim.
+
 The game server stores the verified policy immutably on its room runtime. Every later join and
 resume must present the same policy, and active bodies plus reserved reconnect seats share the
 four-player cap. `/version` exposes protocol 33, ticket `v1`/`v2`, admission `a2`, supported
-policies, and both dark rollout flags. The control synthetic remains a signed non-generation
-v1 join; it cannot authorize gameplay and verifies the deployed authority-parser contract through
-`/version`.
+policies, and both dark rollout flags. Control requires the exact policy catalog
+`["private_draft_v1"]`, the terminal v2 parser acknowledgement, and ordinary WS/snapshot
+liveness. The older signed v1 liveness synthetic remains deliberately separate: it creates an
+ephemeral non-generation world/body and follows the normal reconnect cleanup lifecycle, so it is
+not evidence of policy authority and is never used for the v2 parser gate.
+
+Admission responses are also closed: the only positive body is exactly
+`{"isAllowed":true,"code":"ok"}`. A negative body must be exactly
+`{"isAllowed":false,"code":<allowlisted code>}` with one of `room_not_active`,
+`generation_not_active`, `player_missing`, `membership_changed`, `policy_required`,
+`policy_invalid`, `policy_mismatch`, `private_disabled`, `public_disabled`, or `room_full`.
+Malformed JSON, extra or inherited keys, status/body disagreement, unknown codes, timeout, and
+5xx responses become local `admission_unavailable` and cannot bind a world.
 
 ## Rolling deployment order
 

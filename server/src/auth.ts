@@ -55,6 +55,7 @@ export interface TicketPayload {
   exp: number;  // unix seconds expiry
   wld?: string; // authorized world id
   pp?: string;  // canonical PVP room policy (v2 only)
+  pr?: string;  // terminal control-plane policy parser probe purpose (v2 only)
   nm?: string;  // display name
   cl?: number;  // cosmetic color index
   ht?: string;  // cosmetic hat id
@@ -104,12 +105,18 @@ export interface AuthResult {
   isSyntheticVerify?: boolean;
   ticketVersion?: 1 | 2;
   pvpPolicy?: PvpPolicyId;
+  isPolicyAuthorityProbe?: boolean;
   isDev?: boolean;
   reason?: string;
 }
 
 const NAME_MAX = 20;
 const COLOR_MAX = 15;
+export const POLICY_AUTHORITY_PROBE_SUBJECT = "synthetic-policy-v2";
+export const POLICY_AUTHORITY_PROBE_PURPOSE = "policy_v2_parser";
+export const POLICY_AUTHORITY_PROBE_WORLD_PREFIX = "verify-policy-v2:";
+const POLICY_AUTHORITY_PROBE_WORLD_RE = /^verify-policy-v2:[a-f0-9]{16}$/;
+const POLICY_AUTHORITY_PROBE_KEYS = "pid,exp,wld,pp,pr";
 
 // Cosmetic ids are short lowercase tokens (convex/cosmeticsCore.ts isCosmeticIdFormat) —
 // mirrored here rather than imported so the server keeps zero convex-source deps.
@@ -280,9 +287,31 @@ export function verifyTicket(cfg: AuthConfig, ticket: string, nowMs = Date.now()
   }
   const isPvpWorld = out.worldId !== undefined && isPvpWorldId(out.worldId);
   if (ticketVersion === 1) {
-    if (payload.pp !== undefined) return { ok: false, reason: "policy_invalid", worldId: out.worldId };
+    if (payload.pp !== undefined || payload.pr !== undefined) {
+      return { ok: false, reason: "policy_invalid", worldId: out.worldId };
+    }
     if (isPvpWorld) return { ok: false, reason: "policy_required", worldId: out.worldId };
   } else {
+    if (payload.pr !== undefined) {
+      if (payload.pr !== POLICY_AUTHORITY_PROBE_PURPOSE
+        || payload.pid !== POLICY_AUTHORITY_PROBE_SUBJECT
+        || out.worldId === undefined
+        || !POLICY_AUTHORITY_PROBE_WORLD_RE.test(out.worldId)) {
+        return { ok: false, reason: "policy_invalid", worldId: out.worldId };
+      }
+      if (payload.pp === undefined) {
+        return { ok: false, reason: "policy_required", worldId: out.worldId };
+      }
+      if (typeof payload.pp !== "string" || !isPvpPolicyId(payload.pp)) {
+        return { ok: false, reason: "policy_invalid", worldId: out.worldId };
+      }
+      if (Object.keys(payload).join(",") !== POLICY_AUTHORITY_PROBE_KEYS) {
+        return { ok: false, reason: "policy_invalid", worldId: out.worldId };
+      }
+      out.pvpPolicy = payload.pp;
+      out.isPolicyAuthorityProbe = true;
+      return out;
+    }
     if (!isPvpWorld) return { ok: false, reason: "policy_invalid", worldId: out.worldId };
     if (payload.pp === undefined) return { ok: false, reason: "policy_required", worldId: out.worldId };
     if (typeof payload.pp !== "string" || !isPvpPolicyId(payload.pp)) {

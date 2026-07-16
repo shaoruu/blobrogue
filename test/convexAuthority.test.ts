@@ -6,6 +6,10 @@ import type { RunCompletionPayload } from "../src/net/runReceipt.js";
 import { RUN_RECEIPT_VERSION } from "../src/net/runReceipt.js";
 import { mintRunCompletionReceipt } from "../server/src/runReceipt.js";
 import { PRIVATE_DRAFT_PVP_POLICY } from "../src/net/pvpPolicy.js";
+import {
+  parseGenerationAdmissionDecision,
+  type AdmissionJson,
+} from "../src/net/generationAdmission.js";
 
 const modules = import.meta.glob("../convex/**/*.{ts,js}");
 
@@ -400,17 +404,21 @@ describe("Convex run authority", () => {
       kitId: "gunner",
       petId: null,
     };
-    await expect(t.query(generationAdmission, args)).resolves.toEqual({
+    const allowedDecision = await t.query(generationAdmission, args);
+    expect(allowedDecision).toEqual({
       isAllowed: true,
       code: "ok",
     });
-    await expect(t.query(generationAdmission, {
+    expect(parseGenerationAdmissionDecision(allowedDecision as AdmissionJson)).toEqual(allowedDecision);
+    const deniedDecision = await t.query(generationAdmission, {
       ...args,
       kitId: "mender",
-    })).resolves.toEqual({
+    });
+    expect(deniedDecision).toEqual({
       isAllowed: false,
       code: "membership_changed",
     });
+    expect(parseGenerationAdmissionDecision(deniedDecision as AdmissionJson)).toEqual(deniedDecision);
     await expect(t.query(generationAdmission, {
       ...args,
       petId: "doggie",

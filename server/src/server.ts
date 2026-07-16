@@ -54,7 +54,7 @@ const MAX_CATCHUP = 20;
 const MAX_MALFORMED = 3;
 // Close codes that are part of the deliberate lifecycle — never grounds for a reconnect seat:
 // join rejects, game over, superseded connections, and explicit client leaves.
-const SEATLESS_CLOSE_CODES: ReadonlySet<number> = new Set([4001, 4008, 4009, 4010, 4011]);
+const SEATLESS_CLOSE_CODES: ReadonlySet<number> = new Set([4001, 4008, 4009, 4010, 4011, 4012]);
 
 interface PendingCompletion {
   runId: string;
@@ -122,6 +122,8 @@ export class GameServer {
       cfg.admissionEndpoint,
       cfg.receiptSecret,
       this.log,
+      fetch,
+      () => { this.metrics.counters.admissionMalformedResponses++; },
     );
     // The room factory picks the world MODE from the world IDENTITY: a pvp world id (minted only
     // for a pvp room) spins up a deathmatch world, everything else stays co-op. The mode is part

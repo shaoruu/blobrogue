@@ -28,6 +28,12 @@ import type { GenerationAdmissionDecision } from "../../src/net/generationAdmiss
 
 const DEFAULT_WORLD_ID = "arena-1";
 const OFFER_RESENDS = 40;
+export const POLICY_AUTHORITY_ACK = {
+  t: "authorityAck",
+  depth: "policy_v2_parser",
+  ticket: "v2",
+  policy: "private_draft_v1",
+} as const;
 // The room code a world id was minted from (worldIdForRoomCode), or null for non-room worlds
 // (the public default, dev worlds). Log/ops-facing only — binding always uses the full id.
 export function roomCodeOfWorldId(worldId: string): string | null {
@@ -152,6 +158,17 @@ export class MessageRouter {
         });
       }
       this.ctx.reject(conn, code, reason);
+      return;
+    }
+    if (auth.isPolicyAuthorityProbe === true) {
+      this.ctx.metrics.counters.policyAuthorityProbeOk++;
+      conn.log.info("policy parser authority probe accepted", {
+        depth: POLICY_AUTHORITY_ACK.depth,
+        ticket: POLICY_AUTHORITY_ACK.ticket,
+        pvpPolicy: POLICY_AUTHORITY_ACK.policy,
+      });
+      try { conn.ws.send(JSON.stringify(POLICY_AUTHORITY_ACK)); } catch { /* closing */ }
+      this.ctx.close(conn, 4012, "authority probe complete");
       return;
     }
     const isGenerationWorld = auth.worldId !== undefined
