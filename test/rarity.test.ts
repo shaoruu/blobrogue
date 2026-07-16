@@ -499,6 +499,8 @@ function envelopeGates(): void {
   check("midas pays in coins (the boost never comes free)", WEAPONS.midas.coinBoost !== undefined);
   check("phase pays in cadence + zero pierce", WEAPONS.phase.fireCd >= 0.5 && (WEAPONS.phase.basePierce ?? 0) === 0);
   check("vortex pays in raw damage (the pull is the payload)", WEAPONS.vortex.damage <= 2.5);
+  check("oddsmaker pays in outcome control (one authored verb per deterministic roll)",
+    WEAPONS.oddsmaker.gamble?.outcomes.length === 4);
 }
 
 // ---- shop: rarity pricing, the mystery pedestal, hidden wire identity ----
