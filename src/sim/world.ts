@@ -118,6 +118,7 @@ import {
   PREMIUM, CAPS, PHASE_NO_LOS_DAMAGE_MULT, coinChanceTaper, coopCoinGainMult, premiumMysteryLegendaryWeight,
 } from "./balance.js";
 import type { EnemyTier, AddPoolEntry, ResonanceFamily, GiantConst } from "./balance.js";
+import { giantRingGapCenter, giantRingGapStart, giantSpokeWheel } from "./giantGeometry.js";
 import { isControllerKind } from "./bestiary.js";
 import { biomeIndexForFloor } from "./biomes.js";
 import { resolveFloorDescriptor, floorHazardMutation, floorExtraElites, floorDashProfile } from "./floorRolls.js";
@@ -316,6 +317,9 @@ export interface PlayerSim {
   // is exactly what keeps a brief Wi-Fi drop from reading as a death. Solo/co-op/prediction
   // never set this.
   isAbsent: boolean;
+  warmthIdleSec: number;
+  warmthPathPx: number;
+  isWarmthChilled: boolean;
   // Seconds a teammate has been reviving this downed player (authoritative revive hold). 0 when
   // up or when no one is reviving. Solo never downs, so this stays 0.
   reviveProgress: number;
@@ -600,11 +604,9 @@ export interface WorldState {
   // floor. strikeEnemy truncates persistent damage past the window's budget.
   persistentBossWindows: Map<number, { t: number; used: number }>;
   // PALE THRONE warmth-drain (the giant SIGNATURE): the resolved per-tick params when a giant with
-  // warmth-drain is alive (else null), and the per-player stillness state (idle seconds + the ref
-  // position the displacement-to-thaw is measured from). Sim-internal — never on the wire; the
-  // client re-derives the local vignette + predicts the slow identically (resolveWarmthDrain).
+  // warmth-drain is alive (else null). Per-player timer/path/chill state lives on PlayerSim so the
+  // authoritative snapshot reconciles the vignette and predicted speed after delay or reconnect.
   warmthDrain: WarmthDrainParams | null;
-  warmthIdle: Map<PlayerId, { t: number; rx: number; ry: number }>;
   // Friendly-fire "playful bonk" per-ORDERED-pair cooldowns: `${shooterId}>${targetId}` ->
   // seconds left before that shooter may nudge that target again (A->B independent of B->A).
   // Sim-internal — never on the wire; entries self-expire and are cleared on every floor build.
@@ -673,7 +675,9 @@ export function createPlayer(id: PlayerId, x: number, y: number): PlayerSim {
     forkLink: null, penMarks: new Map(), penSkillCd: 0, penInputLock: 0,
     marginStore: null, sidewinderArcT: 0, sidewinderArcAim: 0,
     revealIcdT: 0, rememberMeArmed: true, disabledBlessing: null, lightSoloDashIcd: 0,
-    isDown: false, isAbsent: false, reviveProgress: 0, reviveBy: null, downsThisFloor: 0, isInteracting: false, rewindTicks: 0,
+    isDown: false, isAbsent: false, warmthIdleSec: 0, warmthPathPx: 0, isWarmthChilled: false,
+    reviveProgress: 0, reviveBy: null, downsThisFloor: 0, isInteracting: false, rewindTicks: 0,
+
     kills: 0, coins: 0, combo: 0, comboTimer: 0,
     ownedItemIds: [],
     weaponOfferHistory: createWeaponOfferHistory(),
@@ -804,7 +808,6 @@ export function createWorld(seed: number, floor: number, opts: WorldOptions = {}
     nextEffectId: 0,
     persistentBossWindows: new Map(),
     warmthDrain: null,
-    warmthIdle: new Map(),
     friendlyNudgeCd: new Map(),
     incomingHealWindows: new Map(),
     partyHealWindow: { tick: 0, hp: 0 },
@@ -1798,6 +1801,7 @@ export function setPlayerAbsence(w: WorldState, id: PlayerId, isAbsent: boolean)
   const p = w.players.get(id);
   if (!p || p.isAbsent === isAbsent) return;
   p.isAbsent = isAbsent;
+  resetPlayerWarmth(p);
   if (!isAbsent && !isPvp(w)) p.invuln = Math.max(p.invuln, C.PLAYER_SPAWN_GRACE);
 }
 
@@ -1902,7 +1906,7 @@ export function loadFloorIntoWorld(w: WorldState, floor: number, playerCountAtLo
   w.nextEffectId = 0;
   w.persistentBossWindows.clear();
   w.warmthDrain = null;
-  w.warmthIdle.clear();
+  for (const player of w.players.values()) resetPlayerWarmth(player);
   w.friendlyNudgeCd.clear();
   w.incomingHealWindows.clear();
   w.partyHealWindow = { tick: 0, hp: 0 };
@@ -2391,7 +2395,7 @@ function isWall(w: WorldState, px: number, py: number): boolean {
   return w.dungeon.tiles[ty * w.dungeon.w + tx] === 1;
 }
 
-function moveCircle(w: WorldState, x: number, y: number, r: number, dx: number, dy: number): [number, number] {
+export function moveCircle(w: WorldState, x: number, y: number, r: number, dx: number, dy: number): [number, number] {
   const nx = x + dx, ny = y + dy;
   if (!isWall(w, nx + Math.sign(dx) * r, y) && !blockedByProp(w, nx, y, r)) x = nx;
   if (!isWall(w, x, ny + Math.sign(dy) * r) && !blockedByProp(w, x, ny, r)) y = ny;
@@ -3624,6 +3628,24 @@ export function resolveWarmthDrain(enemies: readonly { kind: EnemyKind; isDead?:
   return null;
 }
 
+export function resetPlayerWarmth(player: PlayerSim): void {
+  player.warmthIdleSec = 0;
+  player.warmthPathPx = 0;
+  player.isWarmthChilled = false;
+}
+
+export function refreshWarmthDrain(w: WorldState): void {
+  const next = resolveWarmthDrain(w.enemies.map((enemy) => ({
+    kind: enemy.kind,
+    isDead: enemy.dead,
+    phase: enemy.boss?.phase ?? 0,
+  })));
+  if ((w.warmthDrain === null) !== (next === null)) {
+    for (const player of w.players.values()) resetPlayerWarmth(player);
+  }
+  w.warmthDrain = next;
+}
+
 export function isBossExposed(e: Enemy): boolean {
   return e.boss !== null && e.boss.exposed > 0;
 }
@@ -4087,7 +4109,8 @@ function updatePlayer(w: WorldState, p: PlayerSim, input: InputCmd, dt: number, 
   // PALE THRONE warmth-drain: standing still too long CHILLS the WALK (never the dash — always an
   // out, like the web slow). A per-player, tick-based idle timer, cleared by moving warmthClearDist.
   // 1 (a no-op) whenever no warmth-drain giant is live, so every other floor is byte-identical.
-  const warmthMult = warmthDrainMult(w, p, dt);
+  const isMoveIntentActive = input.moveX * input.moveX + input.moveY * input.moveY > 0.01;
+  const warmthMult = warmthDrainMult(w, p, isMoveIntentActive, dt, ev);
   const speed = PLAYER.moveSpeed * p.mods.moveSpeedMult * webSlowMult(w, p.x, p.y) * chargeSlow * phaseSurge * warmthMult;
   // Snap accumulated float dust to zero so a cooldown that is an exact multiple of the
   // tick (Second Wind Lv3: 0.35s at 60Hz) recovers on its true tick, not one late.
@@ -4131,8 +4154,11 @@ function updatePlayer(w: WorldState, p: PlayerSim, input: InputCmd, dt: number, 
   } else {
     mvx = ix * speed * dt; mvy = iy * speed * dt;
   }
+  const selfMoveX = p.x;
+  const selfMoveY = p.y;
   [p.x, p.y] = moveCircle(w, p.x, p.y, p.pr, mvx, 0);
   [p.x, p.y] = moveCircle(w, p.x, p.y, p.pr, 0, mvy);
+  recordWarmthPath(w, p, isMoveIntentActive, Math.hypot(p.x - selfMoveX, p.y - selfMoveY), ev);
   if (p.dashTime > 0 && w.props.length > 0) dashBreakProps(w, p, ev);
   // Sticky silk yields to the dash: every web the dash crosses is CLEARED — the dash
   // itself is the cost (designer contract), and a cleared lane is exactly the P3 bait.
@@ -11682,7 +11708,7 @@ function giantSeamLoop(w: WorldState, e: Enemy, dt: number, ev: SimEvent[], spec
       boss.addTimer = gc.seamExposeInterval; // re-expose a fresh set after the window plays out
       openBossWindow(e, gc.peelExpose, ev);
       ev.push({ t: "chargeCrash", x: e.x, y: e.y });
-      ev.push({ t: "cue", name: "bossSpawn", x: e.x, y: e.y, rate: 0.55, gain: 0.85, trauma: 0.12 });
+      ev.push({ t: "cue", name: `${spec.bodyKind}.peel`, x: e.x, y: e.y, rate: 1, gain: 0.85, trauma: 0.12 });
       return;
     }
     boss.seamLife -= dt;
@@ -11716,12 +11742,48 @@ function giantExposeSeams(w: WorldState, e: Enemy, ev: SimEvent[], spec: GiantSp
   const n = spec.seamCountFor(boss.phase, w.encounterPlayers);
   const hp = spec.seamHpForFloor(w.floor);
   boss.windowAddIds.length = 0;
-  // The shell cracks FACING the threatened player (always reachable), the arc widening per shell
-  // (P1 tight front → P2 half-wrap → P3 wide wrap: reposition, never a full orbit).
-  const facing = findTarget(w, e.x, e.y) ? Math.atan2(w.targetY - e.y, w.targetX - e.x) : 0;
   const arc = gc.seamArcByShell[Math.max(0, Math.min(gc.seamArcByShell.length - 1, boss.phase - 1))];
+  const livingPlayers = [...w.players.values()]
+    .filter((player) => !player.isDown && !player.isAbsent && player.hp > 0)
+    .sort((a, b) => a.id.localeCompare(b.id));
+  let bankFacings: number[] = [];
+  if ((gc.seamBanksMinPlayers ?? Infinity) <= livingPlayers.length) {
+    let anchorA = livingPlayers[0];
+    let anchorB = livingPlayers[1];
+    let bestDistance = -1;
+    for (let i = 0; i < livingPlayers.length; i++) {
+      for (let j = i + 1; j < livingPlayers.length; j++) {
+        const distance = Math.hypot(livingPlayers[i].x - livingPlayers[j].x, livingPlayers[i].y - livingPlayers[j].y);
+        if (distance > bestDistance) {
+          bestDistance = distance;
+          anchorA = livingPlayers[i];
+          anchorB = livingPlayers[j];
+        }
+      }
+    }
+    let facingA = Math.atan2(anchorA.y - e.y, anchorA.x - e.x);
+    let facingB = Math.atan2(anchorB.y - e.y, anchorB.x - e.x);
+    const separation = Math.atan2(Math.sin(facingB - facingA), Math.cos(facingB - facingA));
+    const minSeparation = gc.seamBankMinSeparationRad ?? 0;
+    if (Math.abs(separation) < minSeparation) {
+      const midpoint = facingA + separation / 2;
+      facingA = midpoint - minSeparation / 2;
+      facingB = midpoint + minSeparation / 2;
+    }
+    bankFacings = [facingA, facingB];
+  } else {
+    const facing = findTarget(w, e.x, e.y) ? Math.atan2(w.targetY - e.y, w.targetX - e.x) : 0;
+    bankFacings = [facing];
+  }
+
   for (let i = 0; i < n; i++) {
-    const ang = facing + (n > 1 ? (i / (n - 1) - 0.5) * arc : 0);
+    const bankIndex = bankFacings.length === 2 && i >= Math.ceil(n / 2) ? 1 : 0;
+    const bankStart = bankIndex === 0 ? 0 : Math.ceil(n / 2);
+    const bankCount = bankIndex === 0 ? Math.ceil(n / bankFacings.length) : Math.floor(n / bankFacings.length);
+    const bankOffset = i - bankStart;
+    const bankArc = arc / bankFacings.length;
+    const ang = bankFacings[bankIndex]
+      + (bankCount > 1 ? (bankOffset / (bankCount - 1) - 0.5) * bankArc : 0);
     const x = e.x + Math.cos(ang) * gc.seamRingDist;
     const y = e.y + Math.sin(ang) * gc.seamRingDist;
     if (!settleSpawnPoint(w, x, y, ENEMY_ARCHETYPES[spec.seamKind].radius)) continue;
@@ -11731,6 +11793,7 @@ function giantExposeSeams(w: WorldState, e: Enemy, ev: SimEvent[], spec: GiantSp
     seam.hp = seam.maxHp = hp;
     seam.spawnTimer = 0;
     seam.seq = e.id + 1; // the seam belongs to the giant that cracked it open
+    seam.aux = bankIndex + 1;
     w.enemies.push(seam);
     boss.windowAddIds.push(seam.id);
     ev.push({ t: "enemySpawn", eid: seam.id, kind: seam.kind, tier: seam.tier, x: seam.x, y: seam.y });
@@ -11777,7 +11840,13 @@ function giantWindup(w: WorldState, e: Enemy, dt: number, ev: SimEvent[], spec: 
     // P1 SEQUENCING axis: if this giant has a SECOND ring, hold in `active` to fire it after the
     // delay (the counter-offset ring whose gap is where the first's wall now is). Else recover now
     // (Gorge — single ring, byte-identical).
-    if (gc.ring2DelaySec !== undefined) { a.phase = "active"; a.time = 0; a.windup = 0; boss.spinCount = 0; }
+    if (gc.ring2DelaySec !== undefined) {
+      a.phase = "active";
+      a.time = 0;
+      a.windup = 0;
+      boss.spinCount = 0;
+      ev.push({ t: "cue", name: `${spec.bodyKind}.ring2Warn`, x: e.x, y: e.y, rate: 1, gain: 0.7, trauma: 0 });
+    }
     else enterRecover(e);
   } else if (a.move === "spew") { giantZones(w, e, ev, spec); enterRecover(e); }
   else { a.phase = "active"; a.time = 0; a.windup = 0; } // sweep: the multi-beat rotating spoke wheel
@@ -11817,10 +11886,8 @@ function giantActive(w: WorldState, e: Enemy, dt: number, ev: SimEvent[], spec: 
 function giantRing(w: WorldState, e: Enemy, ev: SimEvent[], spec: GiantSpec, ringIx: number): void {
   const boss = e.boss!;
   const gc = spec.C;
-  const baseGap = (boss.attackCount * 5) % gc.ringCount; // rotate the gap each commitment (deterministic)
-  const slotOffset = ringIx === 1 && gc.ring2GapOffsetSlots !== undefined ? gc.ring2GapOffsetSlots : 0;
-  const gapStart = (baseGap + slotOffset) % gc.ringCount;
-  const gapCenterAng = ((gapStart + gc.ringGap / 2) / gc.ringCount) * Math.PI * 2;
+  const gapStart = giantRingGapStart(boss.attackCount, ringIx, gc);
+  const gapCenterAng = giantRingGapCenter(boss.attackCount, ringIx, gc);
   for (let i = 0; i < gc.ringCount; i++) {
     const inGap = ((i - gapStart + gc.ringCount) % gc.ringCount) < gc.ringGap;
     if (inGap) continue; // the authored safe wedge
@@ -11912,7 +11979,7 @@ function giantPlantSlag(w: WorldState, x: number, y: number, spec: GiantSpec, dr
 function giantSpokes(w: WorldState, e: Enemy, emission: number, ev: SimEvent[], spec: GiantSpec): void {
   const boss = e.boss!;
   const gc = spec.C;
-  const wheel = emission * gc.spokeStep + boss.burstParity;
+  const wheel = giantSpokeWheel(emission, boss.burstParity, 0, gc);
   for (let i = 0; i < gc.spokeCount; i++) {
     if (i < gc.spokeGap) continue; // the moving safe wedge (fixed vs the wheel, so it rotates with it)
     const ang = wheel + (i / gc.spokeCount) * Math.PI * 2;
@@ -11925,7 +11992,7 @@ function giantSpokes(w: WorldState, e: Enemy, emission: number, ev: SimEvent[], 
   // pale.test.ts measures min ~40° every tick). Safe = ride the primary lane, dodge the crossings.
   if (gc.spoke2Step !== undefined) {
     const gap2 = gc.spoke2Gap ?? gc.spokeGap;
-    const wheel2 = emission * gc.spoke2Step + boss.burstParity; // spoke2Step is negative = counter-rotating
+    const wheel2 = giantSpokeWheel(emission, boss.burstParity, 1, gc);
     for (let i = 0; i < gc.spokeCount; i++) {
       if (i < gap2) continue; // the counter-sweep's (wider) moving wedge
       const ang = wheel2 + (i / gc.spokeCount) * Math.PI * 2;
@@ -11952,6 +12019,9 @@ function giantShellSlough(w: WorldState, e: Enemy, ev: SimEvent[], spec: GiantSp
   boss.addTimer = gc.seamExposeInterval; // the fresh shell re-exposes on the normal cadence
   boss.burstParity = (boss.burstParity + 1) & 1; // shift the spoke wheel's phase so P3 re-reads
   giantDropDebris(w, e, ev, spec);
+  if (boss.phase === 3) {
+    ev.push({ t: "cue", name: `${spec.bodyKind}.coreReveal`, x: e.x, y: e.y, rate: 1, gain: 0.9, trauma: 0.08 });
+  }
   ev.push({ t: "bossSlam", x: e.x, y: e.y });
 }
 
@@ -12394,14 +12464,48 @@ function dashClearSilk(w: WorldState, p: PlayerSim, ev: SimEvent[]): void {
 // accumulates; past warmthIdleSec the walk is ×warmthChillMult (the shipped CHILL_SLOW; a single
 // ×0.5, never stacking into a stun). Deterministic (position + dt, no rng). Returns 1 (a no-op)
 // unless a warmth-drain giant is live, so every non-giant floor's speed calc is byte-identical.
-function warmthDrainMult(w: WorldState, p: PlayerSim, dt: number): number {
+function warmthDrainMult(
+  w: WorldState,
+  p: PlayerSim,
+  isMoveIntentActive: boolean,
+  dt: number,
+  ev: SimEvent[],
+): number {
   const wd = w.warmthDrain;
-  if (!wd || p.isDown || p.isAbsent || p.hp <= 0) return 1;
-  let st = w.warmthIdle.get(p.id);
-  if (!st) { st = { t: 0, rx: p.x, ry: p.y }; w.warmthIdle.set(p.id, st); }
-  if (Math.hypot(p.x - st.rx, p.y - st.ry) >= wd.clearDist) { st.t = 0; st.rx = p.x; st.ry = p.y; }
-  else st.t += dt;
-  return st.t >= wd.idleSec ? wd.chillMult : 1;
+  if (!wd || p.isDown || p.isAbsent || p.hp <= 0) {
+    resetPlayerWarmth(p);
+    return 1;
+  }
+  const wasChilled = p.isWarmthChilled;
+  if (isMoveIntentActive) {
+    p.isWarmthChilled = p.warmthIdleSec >= wd.idleSec;
+  } else {
+    if (p.warmthIdleSec === 0) {
+      ev.push({ t: "cue", name: "pale.warmthWarn", x: p.x, y: p.y, rate: 1, gain: 0.5, trauma: 0 });
+    }
+    p.warmthPathPx = 0;
+    p.warmthIdleSec += dt;
+    p.isWarmthChilled = p.warmthIdleSec >= wd.idleSec;
+  }
+  if (!wasChilled && p.isWarmthChilled) {
+    ev.push({ t: "cue", name: "pale.warmthChill", x: p.x, y: p.y, rate: 1, gain: 0.65, trauma: 0 });
+  }
+  return p.isWarmthChilled ? wd.chillMult : 1;
+}
+
+function recordWarmthPath(
+  w: WorldState,
+  p: PlayerSim,
+  isMoveIntentActive: boolean,
+  selfDistance: number,
+  ev: SimEvent[],
+): void {
+  const wd = w.warmthDrain;
+  if (!wd || !isMoveIntentActive || selfDistance <= 0 || p.isDown || p.isAbsent || p.hp <= 0) return;
+  p.warmthPathPx += selfDistance;
+  if (p.warmthPathPx < wd.clearDist) return;
+  resetPlayerWarmth(p);
+  ev.push({ t: "cue", name: "pale.warmthClear", x: p.x, y: p.y, rate: 1, gain: 0.5, trauma: 0 });
 }
 
 function webSlowMult(w: WorldState, x: number, y: number): number {
@@ -13141,6 +13245,7 @@ function damagePlayer(
   ev.push({ t: "playerHurt", pid: p.id, x: p.x, y: p.y });
   if (p.hp <= 0) {
     p.hp = 0;
+    resetPlayerWarmth(p);
     p.chargeT = 0; // a held charge never survives going down
     // The banked REVIVE TOKEN (premium, cap 1): the lethal hit consumes it and the player
     // stands back up at the standard revive numbers — REVIVE.hp, the standard 1.0s
@@ -13868,7 +13973,10 @@ function stepPvpMatch(w: WorldState, ev: SimEvent[]): void {
 function endRun(w: WorldState, ev: SimEvent[]): void {
   if (w.isRunOver) return;
   w.isRunOver = true;
-  for (const other of w.players.values()) ev.push({ t: "gameOver", pid: other.id });
+  for (const other of w.players.values()) {
+    resetPlayerWarmth(other);
+    ev.push({ t: "gameOver", pid: other.id });
+  }
 }
 
 // The wipe (studio balance gate §6): the run ends only after EVERY connected player has
@@ -13974,6 +14082,8 @@ function updateRevives(w: WorldState, dt: number, ev: SimEvent[]): void {
         reviver.fireCd = 0;
         reviver.weaponFireCooldowns = {};
       }
+      resetPlayerWarmth(downed);
+
       ev.push({ t: "revive", pid: downed.id, by: reviver.id, x: downed.x, y: downed.y });
       downed.reviveBy = null;
     }
@@ -14269,11 +14379,7 @@ export function stepWorld(w: WorldState, inputs: Map<PlayerId, InputCmd>, dt: nu
   const ev: SimEvent[] = [];
   beginWorldTick(w);
 
-  w.warmthDrain = resolveWarmthDrain(w.enemies.map((e) => ({
-    kind: e.kind,
-    isDead: e.dead,
-    phase: e.boss ? e.boss.phase : 0,
-  })));
+  refreshWarmthDrain(w);
 
   if (isPvp(w)) {
     for (const id of [...w.players.keys()].sort()) {

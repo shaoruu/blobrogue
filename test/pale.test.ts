@@ -343,8 +343,8 @@ function telegraphGates(): void {
     `ring=${PALE.ringWindup} zone=${PALE.zoneWindup} spoke=${PALE.spokeWindup}`);
   check("the P1 ring leaves an authored GAP (a stand-in-the-gap safe wedge)", PALE.ringGap > 0 && PALE.ringGap < PALE.ringCount);
   check("the P3 spokes leave ONE moving safe wedge", PALE.spokeGap > 0 && PALE.spokeGap < PALE.spokeCount);
-  check("the P3 safe lane is rideable (< player walk speed 200px/s)",
-    (PALE.spokeStep / PALE.spokeInterval) * PALE.zoneRing < 200,
+  check("the P3 safe lane is rideable under worst warmth slow (<100px/s)",
+    (PALE.spokeStep / PALE.spokeInterval) * PALE.zoneRing < 100,
     `laneSpeed=${((PALE.spokeStep / PALE.spokeInterval) * PALE.zoneRing).toFixed(0)}px/s`);
   check("the P2 slag zones are hard-capped (a shrinking pocket, never a sealed floor)", PALE.zoneCap > 0);
 
@@ -417,8 +417,8 @@ function angleDiffDeg(a: number, b: number): number {
 
 function axisRingGates(): void {
   section("P1 axis — a SECOND counter-offset ring: sequence (dash gap A → gap B), each gap Gorge-width, never closes");
-  check("the second-ring axis is configured (gap offset 8 slots = half the ring, 0.4s behind)",
-    PALE.ring2GapOffsetSlots === 8 && PALE.ring2DelaySec === 0.4);
+  check("the second-ring axis is configured for a walkable adjacent transition (2 slots, 1.1s behind)",
+    PALE.ring2GapOffsetSlots === 2 && PALE.ring2DelaySec === 1.1);
   check("each ring KEEPS Gorge's gap width/count/speed (the 2nd ring is the difficulty, NOT a narrower gap)",
     PALE.ringGap === GORGE.ringGap && PALE.ringCount === GORGE.ringCount && PALE.ringSpeed === GORGE.ringSpeed);
   check("the windup/recover TIGHTEN but hold the guardrails (windup 0.7 > 0.6, recover 0.5 > 0.35)",
@@ -455,10 +455,8 @@ function axisRingGates(): void {
   if (ring0.length > 0 && ring1.length > 0) {
     const g0 = widestGap(ring0), g1 = widestGap(ring1);
     const offset = angleDiffDeg(g0.centerDeg, g1.centerDeg);
-    // 8 of 16 slots = HALF the ring = 180°: the gap you just dashed is a WALL on the next ring (the
-    // wedge is on the opposite side), so you MUST reposition — a genuine sequence, never one wedge.
-    check("the two gaps are OFFSET ~half the ring (the dashed gap becomes the next wall — a real sequence)",
-      offset >= 150, `offset=${offset.toFixed(0)}° (want ~180°)`);
+    check("the two gaps are distinctly offset while retaining a walkable overlap margin",
+      offset >= 40 && offset <= 50, `offset=${offset.toFixed(0)}° (want ~45°)`);
     check("each ring leaves a genuinely standable wedge (never fully closes)",
       g0.widthDeg > 40 && g1.widthDeg > 40, `gaps=${g0.widthDeg.toFixed(0)}°/${g1.widthDeg.toFixed(0)}°`);
   }
@@ -514,8 +512,9 @@ function axisSweepGates(): void {
   section("P3 axis — a COUNTER-ROTATING second sweep: the safe intersection drifts but NEVER fully closes (fairness)");
   check("the second-sweep axis is configured (counter-rotate = -spokeStep, opposite sign / same magnitude)",
     PALE.spoke2Step === -PALE.spokeStep);
-  check("speed is NOT cranked (spokeSpeed/step unchanged — the counter-rotation is the difficulty); windup/recover tighten",
-    PALE.spokeSpeed === GORGE.spokeSpeed && PALE.spokeStep === GORGE.spokeStep && PALE.spokeWindup === 0.7 && PALE.spokeRecover === 0.4);
+  check("projectile speed stays fixed while angular motion is slowed for worst-warmth navigation",
+    PALE.spokeSpeed === GORGE.spokeSpeed && PALE.spokeStep === 0.08 && PALE.spokeInterval === 0.2
+    && PALE.spokeWindup === 0.7 && PALE.spokeRecover === 0.4);
   check("the counter-sweep reuses the FULL SWEEP_ARC (gap = spokeGap; no widening needed — see below)",
     (PALE.spoke2Gap ?? PALE.spokeGap) === PALE.spokeGap);
 
@@ -566,7 +565,7 @@ function warmthDrainGates(): void {
     let clearedT = -1;
     for (let t = 0; t < 200; t++) {
       step(w, moveCmd(2000 + t, -1, 0));
-      if ((w.warmthIdle.get(LOCAL_ID)?.t ?? 1) === 0) { clearedT = t; break; }
+      if (p.warmthIdleSec === 0) { clearedT = t; break; }
     }
     x0 = p.x;
     for (let t = 0; t < 3; t++) step(w, moveCmd(3000 + t, -1, 0));
@@ -595,7 +594,7 @@ function warmthDrainGates(): void {
     boss.boss!.phase = 1;
     for (let t = 0; t < Math.ceil((PALE.warmthDrainIdleSec! + 0.5) / DT); t++) step(w, idle(t));
     check("warmth-drain is INACTIVE in P1/P2 (P3-ONLY — the prestige finale beat)",
-      w.warmthDrain === null && (w.warmthIdle.get(LOCAL_ID)?.t ?? 0) === 0);
+      w.warmthDrain === null && w.players.get(LOCAL_ID)!.warmthIdleSec === 0);
   }
 
   // Off a giant floor, warmth-drain is INERT (no pale giant → no chill → byte-identical movement).
@@ -603,7 +602,7 @@ function warmthDrainGates(): void {
   w2.isGodMode = true;
   for (let t = 0; t < Math.ceil((PALE.warmthDrainIdleSec! + 0.5) / DT); t++) stepWorld(w2, new Map([[LOCAL_ID, idle(t)]]), DT);
   check("warmth-drain is INERT off a giant floor (no warmth-drain giant → w.warmthDrain null)",
-    w2.warmthDrain === null && (w2.warmthIdle.get(LOCAL_ID)?.t ?? 0) === 0);
+    w2.warmthDrain === null && w2.players.get(LOCAL_ID)!.warmthIdleSec === 0);
 }
 
 function main(): void {

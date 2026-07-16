@@ -11,7 +11,7 @@
 import "./harness/domShim.js";
 import {
   WAVE_TELLS, WAVE_BOSS_PHASE, WAVE_BOSS_DEATH, WAVE_BOSS_ENTRANCE,
-  WAVE_PRIORITY, waveSpecOf, tellCuesFor, isWaveEventId,
+  WAVE_PRIORITY, waveSpecOf, tellCuesFor, isWaveEventId, bossWaveEvents,
 } from "../src/game/waveSpec.js";
 import type { WaveEventId, WaveSoundSpec, TellSnapshot } from "../src/game/waveSpec.js";
 import {
@@ -118,7 +118,7 @@ function manifestGates(): void {
   }
   check("every kind resolves EVERY hook its behavior verb declares", isOk);
   check("boss-grade kinds also carry bespoke entrance/phase/death maps",
-    (["boss", "marrow", "choir", "weaver", "gilded", "marshal", "toll"] as const).every(
+    (["boss", "marrow", "choir", "weaver", "gilded", "marshal", "toll", "gorge", "pale"] as const).every(
       (k) => WAVE_BOSS_ENTRANCE[k] !== undefined && WAVE_BOSS_PHASE[k] !== undefined && WAVE_BOSS_DEATH[k] !== undefined));
   check("every committed move of every kind is covered by tells (windup at minimum)",
     ALL_KINDS.every((kind) => ENEMY_MOVESET[kind].every((move) => {
@@ -145,6 +145,12 @@ const DE_FALLBACKED_ROWS: ReadonlySet<WaveEventId> = new Set<WaveEventId>([
   "choir.strikeWarn", "choir.swellFire", "choir.phase", "choir.death",
   "weaver.blinkDepart", "weaver.phase",
   "warden.prisonWarn", "warden.prisonClose", "warden.phase", "warden.death",
+  "gorge.entrance", "gorge.phase", "gorge.death", "gorge.ringWarn", "gorge.ring2Warn",
+  "gorge.ringImpact", "gorge.zoneWarn", "gorge.zoneActive", "gorge.spokeWarn",
+  "gorge.spokeActive", "gorge.exposed", "gorge.seamWarn", "gorge.seamBreak",
+  "pale.entrance", "pale.phase", "pale.death", "pale.ringWarn", "pale.ring2Warn",
+  "pale.ringImpact", "pale.zoneWarn", "pale.zoneActive", "pale.spokeWarn",
+  "pale.spokeActive", "pale.exposed", "pale.seamWarn", "pale.seamBreak",
 ]);
 
 function rowHygieneGates(): void {
@@ -327,12 +333,54 @@ function preloadGates(): void {
   })());
 }
 
+function giantIdentityGates(): void {
+  section("giant audio identity: Pale cold hooks are isolated from gold/Warden lineage");
+  const forbidden = /^(warden|gilded|weaver)\./;
+  const paleHooks = Object.values(BESTIARY_CUES.pale);
+  const paleSeamHooks = Object.values(BESTIARY_CUES.pale_seam);
+  const paleTells = Object.values(WAVE_TELLS.pale ?? {}).flatMap((tell) =>
+    [tell.windup, tell.lock, tell.active, tell.release, tell.impact, tell.recover].filter(
+      (event): event is WaveEventId => event !== undefined,
+    ));
+  const paleEvents = [
+    ...paleHooks,
+    ...paleSeamHooks,
+    ...paleTells,
+    ...bossWaveEvents("pale"),
+    "pale.peel",
+    "pale.coreReveal",
+    "pale.warmthWarn",
+    "pale.warmthChill",
+    "pale.warmthClear",
+  ] as WaveEventId[];
+  check("Pale uses its dedicated typed cold material", AUDIO_MATERIAL.pale === "pale" && AUDIO_MATERIAL.pale_seam === "pale");
+  check("every active Pale hook is kind-local", paleEvents.every((event) => event.startsWith("pale.")));
+  check("Pale resolves no gold/Gilded/Warden/Weaver event", paleEvents.every((event) => !forbidden.test(event)));
+  check("pending Pale files have no production fallback lineage",
+    paleEvents.every((event) => {
+      const spec = waveSpecOf(event);
+      return spec.fallback === undefined
+        && !String(spec.stem).includes("warden")
+        && !String(spec.stem).includes("gilded");
+    }));
+
+  const gorgeEvents = [
+    ...Object.values(BESTIARY_CUES.gorge),
+    ...Object.values(BESTIARY_CUES.gorge_seam),
+    ...bossWaveEvents("gorge"),
+  ];
+  check("Gorge retains a dedicated amber-giant material", AUDIO_MATERIAL.gorge === "giantAmber");
+  check("Gorge hooks stay amber-giant-local and never borrow Warden", gorgeEvents.every((event) =>
+    event.startsWith("gorge.") && !forbidden.test(event)));
+}
+
 function main(): void {
   manifestGates();
   rowHygieneGates();
   authorityGates();
   arbiterGates();
   preloadGates();
+  giantIdentityGates();
   process.stdout.write(`\n${passed} checks passed, ${failed} failed\n`);
   if (failed > 0) { process.stdout.write(`FAILURES:\n${failures.map((f) => "  - " + f).join("\n")}\n`); process.exit(1); }
   process.stdout.write("\nThe bestiary audio hook contract holds.\n");

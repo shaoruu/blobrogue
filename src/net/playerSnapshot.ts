@@ -41,6 +41,9 @@ export interface AuthoritativePlayerSnapshot {
   ownedItemIds: string[];
   mods: PlayerMods;
   isDown: boolean;
+  warmthIdleSec: number;
+  warmthPathPx: number;
+  isWarmthChilled: boolean;
   reviveProgress: number;
   reviveBy: PlayerId | null;
   kills: number;
@@ -199,6 +202,9 @@ export function projectPlayer(p: PlayerSim): AuthoritativePlayerSnapshot {
     ownedItemIds: p.ownedItemIds.slice(),
     mods: { ...p.mods },
     isDown: p.isDown,
+    warmthIdleSec: p.warmthIdleSec,
+    warmthPathPx: p.warmthPathPx,
+    isWarmthChilled: p.isWarmthChilled,
     reviveProgress: p.reviveProgress,
     reviveBy: p.reviveBy,
     kills: p.kills,
@@ -259,6 +265,9 @@ export function applyPlayerSnapshot(p: PlayerSim, s: AuthoritativePlayerSnapshot
   p.ownedItemIds = s.ownedItemIds.slice();
   Object.assign(p.mods, s.mods);
   p.isDown = s.isDown;
+  p.warmthIdleSec = s.warmthIdleSec;
+  p.warmthPathPx = s.warmthPathPx;
+  p.isWarmthChilled = s.isWarmthChilled;
   p.reviveProgress = s.reviveProgress;
   p.reviveBy = s.reviveBy;
   p.kills = s.kills;

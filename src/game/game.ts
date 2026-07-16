@@ -13,6 +13,7 @@ import { rollPvpDraftChoicesWith, itemById, itemDesc, itemLevelsOf, isPvpBlessin
 import type { PlayerMods, ItemDef } from "../sim/items.js";
 import { PLAYER, REVIVE, BOSS, MARROW, WEAVER, GILDED, GORGE, PALE, TIERS, ELITE_BULWARK, MARSHAL, ROLL_AFFIX, RESONANCE_FAMILIES, RESONANCE_TELEGRAPH_COLOR } from "../sim/balance.js";
 import type { GiantConst } from "../sim/balance.js";
+import { giantRingGapCenter, giantSafeIntersection, giantSpokeWheel } from "../sim/giantGeometry.js";
 import { petSpriteFor } from "./pets.js";
 import { drawPetFrame, PET_RENDER_SIZE } from "./petRenderer.js";
 import {
@@ -44,7 +45,7 @@ import { PartyGate } from "../net/partyGate.js";
 import type { ExpectedMember, PartyGateView } from "../net/partyGate.js";
 import { onlineHudLabel, netDetailsLine, reconnectOverlayCopy, BACK_ONLINE_TOAST, CONNECT_CANCEL_HINT, OFFER_EXPIRED_TOAST } from "../ui/onlineCopy.js";
 import type { OnlineExitReason, OnlinePhase } from "../ui/onlineCopy.js";
-import { applyItemToWorld, chooseBlessingInWorld, dismissBlessingOfferInWorld, applyMaxHpBonus, loadFloorIntoWorld, descend, devSpawnEnemy, devSpawnProp, devSpawnChest, acquireWeaponInWorld, isFloorCleared, isPvp, navDebugField, workerBuildSites, nearestShopSlot, isPlayerInCombat, rollBlessingChoicesInWorld, setPlayerKit, effectiveReviveRadius, effectiveReviveRate, grapplePreview, resolveWarmthDrain } from "../sim/world.js";
+import { applyItemToWorld, chooseBlessingInWorld, dismissBlessingOfferInWorld, applyMaxHpBonus, loadFloorIntoWorld, descend, devSpawnEnemy, devSpawnProp, devSpawnChest, acquireWeaponInWorld, isFloorCleared, isPvp, navDebugField, workerBuildSites, nearestShopSlot, isPlayerInCombat, rollBlessingChoicesInWorld, setPlayerKit, effectiveReviveRadius, effectiveReviveRate, grapplePreview, resolveWarmthDrain, spawnPlayerInWorld } from "../sim/world.js";
 import type { WorldState, PlayerSim, MeleeSwing, RemoteTarget } from "../sim/world.js";
 import { ULT, isRealKit, canCastUlt, KIT_META, MOMENTUM, OVERSHIELD, HEAL_PULSE, LIFEBLOOM } from "../sim/kits.js";
 import type { KitId } from "../sim/kits.js";
@@ -1041,11 +1042,6 @@ export class Game {
   private trauma = 0; // screen-shake trauma, 0..1
   private kickX = 0; private kickY = 0; // directional camera kick (recoil), render-only
   private hurtFlash = 0; // red hurt-vignette intensity, 0..1
-  // PALE THRONE warmth-drain telegraph (client render only): the local player's stillness time +
-  // the ref position it's measured from, mirroring the sim's per-player idle clock so the frost
-  // vignette RAMPS as you idle and clears the instant you move. The authoritative slow is sim-side.
-  private warmthIdleT = 0; private warmthRefX = 0; private warmthRefY = 0;
-
   private coop: CoopBridge | null = null;
   private profile: ProfileStats | null = null;
   private isStatsHeld = false;
@@ -1064,6 +1060,8 @@ export class Game {
   private isSandbox = false;   // arena floor + no auto-population (dev spawns by hand)
   private isGodMode = false;   // damagePlayer no-ops while true
   private isFlowDebug = false; // draw the pathfinding flow-field arrows over the floor
+  private isDevBossNameHidden = false;
+  private isDevHitRadiusVisible = false;
   private fps = 0;             // smoothed frames/sec, surfaced via devSnapshot()
 
   constructor(
@@ -2235,7 +2233,6 @@ export class Game {
     const ke = Math.min(1, dt * KICK_DECAY);
     this.kickX -= this.kickX * ke; this.kickY -= this.kickY * ke;
     if (this.hurtFlash > 0) this.hurtFlash = Math.max(0, this.hurtFlash - dt * HURT_FLASH_DECAY);
-    this.updateWarmthVignette(dt);
 
     this.checkFloorCleared();
 
@@ -2837,9 +2834,15 @@ export class Game {
       // (charger.crash, burrower.submerge/erupt, marrow.stompImpact / choir.strikeImpact,
       // weaver.latticeFire) — the old repitched library doubles are gone.
       case "chargeCrash":
-        this.spawnParticles(e.x, e.y, 10, "#c9a06a");
-        this.spawnSparks(e.x, e.y, 6, 0);
-        this.shockwaves.spawn(e.x, e.y, 10, 60, 0.3, "#ffd27a", 3);
+        {
+          const giant = this.world.enemies.find((enemy) =>
+            isGiantKind(enemy.kind) && Math.hypot(enemy.x - e.x, enemy.y - e.y) < 8);
+          const color = giant?.kind === "pale" ? "#bfeaff" : "#c9a06a";
+          const edge = giant?.kind === "pale" ? "#57b6ff" : "#ffd27a";
+          this.spawnParticles(e.x, e.y, giant ? 18 : 10, color);
+          this.spawnSparks(e.x, e.y, giant ? 10 : 6, 0);
+          this.shockwaves.spawn(e.x, e.y, 10, giant ? 92 : 60, 0.3, edge, 3);
+        }
         this.addTrauma(0.18);
         break;
       case "burrowDive":
@@ -3010,12 +3013,19 @@ export class Game {
         this.addFreeze(0.04);
         break;
       case "bossSlam":
-        this.sfxAt("enemyDeath", e.x, e.y, { rate: 0.5 });
-        this.spawnParticles(e.x, e.y, 22, "#ffd27a");
-        this.spawnSparks(e.x, e.y, 12, 0);
-        this.addDecal(e.x, e.y, "#ffb43b", BOSS_SLAM_RADIUS * 0.5, "splat");
-        this.shockwaves.spawn(e.x, e.y, 20, BOSS_SLAM_RADIUS * 1.25, 0.42, "#ffd27a", 6);
-        this.spawnDustRing(e.x, e.y, BOSS_SLAM_RADIUS * 0.55, 14, "#c9a06a");
+        {
+          const giant = this.world.enemies.find((enemy) =>
+            isGiantKind(enemy.kind) && Math.hypot(enemy.x - e.x, enemy.y - e.y) < 8);
+          if (giant === undefined) this.sfxAt("enemyDeath", e.x, e.y, { rate: 0.5 });
+          const bright = giant?.kind === "pale" ? "#bfeaff" : "#ffd27a";
+          const body = giant?.kind === "pale" ? "#57b6ff" : "#ffb43b";
+          const dust = giant?.kind === "pale" ? "#6b6f8a" : "#c9a06a";
+          this.spawnParticles(e.x, e.y, giant ? 30 : 22, bright);
+          this.spawnSparks(e.x, e.y, 12, 0);
+          this.addDecal(e.x, e.y, body, BOSS_SLAM_RADIUS * 0.5, "splat");
+          this.shockwaves.spawn(e.x, e.y, 20, BOSS_SLAM_RADIUS * 1.25, 0.42, bright, 6);
+          this.spawnDustRing(e.x, e.y, BOSS_SLAM_RADIUS * 0.55, giant ? 20 : 14, dust);
+        }
         this.addFreeze(FREEZE_HEAVY);
         this.addTrauma(TRAUMA_BOSS_SLAM);
         break;
@@ -3038,9 +3048,10 @@ export class Game {
         if (!(phaseKind !== undefined && waveAudio.bossPhase(phaseKind, e.x, e.y, e.eid))) {
           this.sfxAt("bossSpawn", e.x, e.y);
         }
+        const isPalePhase = phaseKind === "pale";
         this.addTrauma(TRAUMA_BOSS_FLOOR);
-        this.shockwaves.spawn(e.x, e.y, 30, 190, 0.55, "#ffb43b", 4);
-        this.flashScreen(255, 180, 59, 0.12, 2.8);
+        this.shockwaves.spawn(e.x, e.y, 30, 190, 0.55, isPalePhase ? "#bfeaff" : "#ffb43b", 4);
+        this.flashScreen(isPalePhase ? 87 : 255, isPalePhase ? 182 : 180, isPalePhase ? 255 : 59, 0.12, 2.8);
         break;
       }
       case "bossTransition":
@@ -4091,7 +4102,7 @@ export class Game {
       isParty: !this.isArena && this.mode !== "solo" && this.remotes().length > 0,
       isBossActive: !this.isArena && isBossActive,
       bossHpFrac,
-      bossName: boss ? bossDisplayName(boss.kind) : "",
+      bossName: boss && !this.isDevBossNameHidden ? bossDisplayName(boss.kind) : "",
       coopLabel,
       dashFill: 1 - this.dashCd / this.dashCooldown(),
       combo: this.combo,
@@ -5010,34 +5021,23 @@ export class Game {
     }
   }
 
-  // PALE THRONE warmth-drain telegraph: track the LOCAL player's stillness client-side (mirroring
-  // the sim's idle clock) so the frost vignette can RAMP the ~1.5s warning and clear on movement.
-  // Mode-agnostic (reads the rendered position + the active giant's params); the authoritative
-  // ×0.5 slow is sim-side (updatePlayer). Inert (and reset) whenever no warmth-drain giant is live.
-  private updateWarmthVignette(dt: number) {
-    const wd = this.isRunning ? resolveWarmthDrain(this.world.enemies.map((e) => ({ kind: e.kind, isDead: e.dead, phase: e.boss ? e.boss.phase : 0 }))) : null;
-    if (!wd || this.isDown || this.hp <= 0) { this.warmthIdleT = 0; this.warmthRefX = this.px; this.warmthRefY = this.py; return; }
-    if (Math.hypot(this.px - this.warmthRefX, this.py - this.warmthRefY) >= wd.clearDist) {
-      this.warmthIdleT = 0; this.warmthRefX = this.px; this.warmthRefY = this.py;
-    } else {
-      this.warmthIdleT += dt;
-    }
-  }
-
   // The cold frost vignette (the warmth-drain fairness tell): a cold-blue edge that RAMPS as the
   // idle timer climbs toward the chill, then holds + breathes once chilled (move ×0.5). Cold, never
   // amber — the Pale "blazing absence of warmth". A single screen effect (never ambient soup).
   private renderWarmthVignette() {
     const wd = this.isRunning ? resolveWarmthDrain(this.world.enemies.map((e) => ({ kind: e.kind, isDead: e.dead, phase: e.boss ? e.boss.phase : 0 }))) : null;
-    if (!wd || this.warmthIdleT <= 0) return;
+    if (!wd || this.p.warmthIdleSec <= 0) return;
     const { ctx, canvas } = this;
     const cx = canvas.width / 2, cy = canvas.height / 2;
-    const ramp = Math.min(1, this.warmthIdleT / wd.rampSec); // 0 → 1 over the warning
-    const chilled = this.warmthIdleT >= wd.idleSec;
-    const breath = chilled ? 0.06 + 0.05 * Math.sin(this.animClock * 3.4) : 0;
-    const alpha = ramp * 0.16 + breath;
+    const ramp = Math.min(1, this.p.warmthIdleSec / wd.rampSec);
+    const breath = this.p.isWarmthChilled ? 0.03 + 0.025 * Math.sin(this.animClock * 3.4) : 0;
+    const isSweepLive = this.world.enemies.some((enemy) =>
+      enemy.kind === "pale"
+      && enemy.attack.move === "sweep"
+      && (enemy.attack.phase === "windup" || enemy.attack.phase === "active"));
+    const alpha = (ramp * 0.1 + breath) * (isSweepLive ? 0.6 : 1);
     if (alpha <= 0.001) return;
-    const g = ctx.createRadialGradient(cx, cy, Math.min(cx, cy) * 0.5, cx, cy, Math.hypot(cx, cy));
+    const g = ctx.createRadialGradient(cx, cy, Math.min(cx, cy) * 0.7, cx, cy, Math.hypot(cx, cy));
     g.addColorStop(0, "rgba(191,234,255,0)");
     g.addColorStop(1, `rgba(87,182,255,${alpha})`); // #57b6ff cold-blue frost rim
     ctx.fillStyle = g;
@@ -6445,6 +6445,11 @@ export class Game {
       if (e.kind === "weaver" && isWindup && a.move === "pounce") { xf.sy -= 0.22 * a.windup; xf.sx += 0.14 * a.windup; }
       // The GIANT rumbles (a subtle tectonic swell) as its shell winds up to crack/slam/sweep.
       if (isGiantKind(e.kind) && isWindup && a.move !== "none") extra = 1 + a.windup * 0.06;
+      if (isGiantKind(e.kind) && isWindup && a.move === "roar") {
+        xf.sx += a.windup * 0.16;
+        xf.sy -= a.windup * 0.18;
+        xf.oy -= Math.sin(a.windup * Math.PI) * 10;
+      }
       // A white pulse on the sprite intensifies as the windup nears release.
       const pulse = 0.55 + 0.45 * Math.sin(anim.clock * 13);
       const telegraphFlash = isWindup ? a.windup * pulse * 0.85 : 0;
@@ -6501,6 +6506,30 @@ export class Game {
         const seamPulse = 0.6 + 0.4 * Math.sin(anim.clock * 7 + e.id);
         this.fxLayer("glow_round", mat.seamGlow, sx, sy, drawSize * (0.95 + 0.25 * seamPulse), drawSize * (0.95 + 0.25 * seamPulse), 0.5 + 0.4 * anim.flash, 0);
         this.fxLayer("core_dot", mat.seamDot, sx, sy, drawSize * 0.5, drawSize * 0.5, 0.85 * seamPulse, 0);
+        if (e.kind === "pale_seam" && e.aux > 0) {
+          ctx.save();
+          ctx.globalAlpha = 0.9;
+          ctx.strokeStyle = e.aux === 1 ? "#57b6ff" : "#e5f8ff";
+          ctx.lineWidth = e.aux === 1 ? 3 : 2;
+          ctx.setLineDash(e.aux === 1 ? AIM_SOLID : [4, 3]);
+          ctx.beginPath();
+          ctx.arc(sx, sy, drawSize * 0.62, e.aux === 1 ? -2.6 : -0.55, e.aux === 1 ? 2.6 : 5.73);
+          ctx.stroke();
+          ctx.setLineDash(AIM_SOLID);
+          ctx.restore();
+        }
+      }
+      if (this.isDevHitRadiusVisible && isGiantKind(e.kind)) {
+        ctx.save();
+        ctx.globalAlpha = 0.95;
+        ctx.strokeStyle = "#ff4d4d";
+        ctx.lineWidth = 2;
+        ctx.setLineDash([5, 4]);
+        ctx.beginPath();
+        ctx.arc(sx, sy, e.radius, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.setLineDash(AIM_SOLID);
+        ctx.restore();
       }
       // Decoys wear their fuse: the echo fades out, the knell blinks faster as it arms.
       if (e.kind === "echo" || e.kind === "knell") this.renderDecoyFuse(e, sx, sy, drawSize, anim.clock);
@@ -7691,7 +7720,7 @@ export class Game {
   // LOCKED tell draws a CRISP solid edge; the lock frame adds one bright snap-flash. Lingering
   // post-fire fill is dimmer. The caller only ever paints the DANGER area — safe pockets stay
   // clear floor (§R3).
-  private tgShape(pathFn: () => void, hue: string, o: { locked: boolean; dynamic: boolean; linger?: number; snapFlash?: number; fillAlpha?: number; dashed?: boolean; fillRule?: CanvasFillRule }): void {
+  private tgShape(pathFn: () => void, hue: string, o: { locked: boolean; dynamic: boolean; linger?: number; snapFlash?: number; fillAlpha?: number; dashed?: boolean; fillRule?: CanvasFillRule; edgeColor?: string }): void {
     const { ctx } = this;
     const linger = o.linger ?? 1;
     ctx.save();
@@ -7701,7 +7730,7 @@ export class Game {
     ctx.fill(o.fillRule ?? "nonzero");
     const soft = (o.dynamic && !o.locked) || (o.dashed ?? false);
     ctx.globalAlpha = (soft ? 0.5 : 0.9) * linger;
-    ctx.strokeStyle = TG_DANGER_EDGE;
+    ctx.strokeStyle = o.edgeColor ?? TG_DANGER_EDGE;
     ctx.lineWidth = soft ? 2 : 3.5;
     ctx.setLineDash(soft ? AIM_DASH : AIM_SOLID);
     ctx.beginPath(); pathFn(); ctx.stroke();
@@ -7716,7 +7745,7 @@ export class Game {
   }
 
   // 1. LANE (capsule): beams, lances, slab lanes, charges, recoil walls, dmg-husk shots.
-  private tgLane(sx: number, sy: number, angle: number, length: number, width: number, hue: string, o: { locked: boolean; dynamic: boolean; linger?: number; snapFlash?: number; back?: number; dashed?: boolean }): void {
+  private tgLane(sx: number, sy: number, angle: number, length: number, width: number, hue: string, o: { locked: boolean; dynamic: boolean; linger?: number; snapFlash?: number; back?: number; dashed?: boolean; fillAlpha?: number; edgeColor?: string }): void {
     const dx = Math.cos(angle), dy = Math.sin(angle), nx = -dy, ny = dx, hw = width / 2;
     const back = o.back ?? 0;
     const x0 = sx - dx * back, y0 = sy - dy * back, x1 = sx + dx * length, y1 = sy + dy * length;
@@ -7806,6 +7835,65 @@ export class Game {
       ctx.arc(sx, sy, outerR, 0, 6.28);
       ctx.arc(sx, sy, innerR, 0, 6.28, true);
     }, hue, { locked: true, dynamic: false, linger: o.linger, dashed: o.dashed, fillRule: "evenodd" });
+  }
+
+  private tgGappedRing(
+    sx: number,
+    sy: number,
+    innerR: number,
+    outerR: number,
+    gapCenter: number,
+    gapWidth: number,
+    hue: string,
+    isCounter: boolean,
+  ): void {
+    if (outerR <= innerR) return;
+    const { ctx } = this;
+    const start = gapCenter + gapWidth / 2;
+    const end = gapCenter - gapWidth / 2 + Math.PI * 2;
+    ctx.save();
+    ctx.globalAlpha = isCounter ? 0.1 : 0.16;
+    ctx.strokeStyle = hue;
+    ctx.lineWidth = outerR - innerR;
+    ctx.setLineDash(isCounter ? [7, 7] : AIM_SOLID);
+    ctx.beginPath();
+    ctx.arc(sx, sy, (innerR + outerR) / 2, start, end);
+    ctx.stroke();
+    ctx.globalAlpha = isCounter ? 0.78 : 0.92;
+    ctx.lineWidth = isCounter ? 2 : 3;
+    ctx.beginPath();
+    ctx.arc(sx, sy, innerR, start, end);
+    ctx.arc(sx, sy, outerR, start, end);
+    ctx.stroke();
+    ctx.setLineDash(AIM_SOLID);
+    ctx.restore();
+  }
+
+  private tgSafeIntersection(sx: number, sy: number, angle: number, width: number, radius: number): void {
+    const { ctx } = this;
+    const half = Math.max(0.08, width / 2);
+    const left = angle - half;
+    const right = angle + half;
+    ctx.save();
+    ctx.globalAlpha = 0.95;
+    ctx.strokeStyle = "#ffffff";
+    ctx.lineWidth = 3;
+    ctx.setLineDash([5, 4]);
+    ctx.beginPath();
+    ctx.arc(sx, sy, radius, left, right);
+    ctx.stroke();
+    for (const edge of [left, right]) {
+      const x = sx + Math.cos(edge) * radius;
+      const y = sy + Math.sin(edge) * radius;
+      const inward = edge + (edge === left ? 0.22 : -0.22);
+      ctx.beginPath();
+      ctx.moveTo(x, y);
+      ctx.lineTo(x + Math.cos(inward + Math.PI) * 13, y + Math.sin(inward + Math.PI) * 13);
+      ctx.lineTo(x + Math.cos(inward) * 13, y + Math.sin(inward) * 13);
+      ctx.stroke();
+    }
+    ctx.setLineDash(AIM_SOLID);
+    ctx.restore();
   }
 
   // 7. IMPACT_DISCS (set): debris / spew landing pools. Safe = the gaps between discs.
@@ -7985,32 +8073,50 @@ export class Game {
       // color (Gorge warm, Pale cold-blue), and the spoke geometry rides the per-giant constants.
       const gc = giantConstFor(e.kind);
       if (a.move === "slam") {
-        // P1 RADIAL — the expanding shockwave RING band (the live bullets carry the authored gap
-        // the player slots into; the debris blooms near it ride their own charge-hazard fuse).
+        const gapWidth = (gc.ringGap / gc.ringCount) * Math.PI * 2;
+        const ringIndex = isActive && e.boss?.spinCount === 0 && gc.ring2DelaySec !== undefined ? 1 : 0;
+        const gapCenter = giantRingGapCenter(e.boss?.attackCount ?? 0, ringIndex, gc);
         const outer = isActive ? 240 : 60 + 180 * wu;
-        this.tgRingBand(sx, sy, Math.max(TILE, outer - TILE), outer, hue, {});
+        this.tgGappedRing(
+          sx,
+          sy,
+          Math.max(TILE, outer - TILE),
+          outer,
+          gapCenter,
+          gapWidth,
+          ringIndex === 1 ? "#bfeaff" : hue,
+          ringIndex === 1,
+        );
+        if (ringIndex === 1) this.tgSafeIntersection(sx, sy, gapCenter, gapWidth, Math.max(90, outer - TILE));
       } else if (a.move === "spew") {
         // P2 ZONING — a "charging area-denial" ramp on the giant; the persistent slag pools
         // themselves (planted CLEAR of every player, then visible cinder) carry the exact
         // footprint, forming the shrinking safe area.
         this.tgRampFill(sx, sy, 90, wu, hue);
       } else if (a.move === "sweep") {
-        // P3 CONVERGENT — rotating spoke lanes with the moving safe wedge between them (the live
-        // bullets carry the exact rotating gap; the telegraph reads "rotating spokes incoming").
-        const rot = this.animClock * 0.9;
-        const shown = Math.max(1, gc.spokeCount - gc.spokeGap);
-        for (let i = 0; i < shown; i++) {
-          this.tgLane(sx, sy, rot + (i / gc.spokeCount) * 6.28, 240, TILE, hue, isActive ? fix : { locked: false, dynamic: false, dashed: true });
+        const emission = isActive ? Math.max(0, (e.boss?.spinCount ?? 1) - 1) : 0;
+        const parity = e.boss?.burstParity ?? 0;
+        const primary = giantSpokeWheel(emission, parity, 0, gc);
+        for (let i = gc.spokeGap; i < gc.spokeCount; i++) {
+          this.tgLane(sx, sy, primary + (i / gc.spokeCount) * Math.PI * 2, 240, TILE, hue, {
+            ...fix,
+            fillAlpha: 0.07,
+            edgeColor: hue,
+          });
         }
-        // P3 DUAL-READ axis (Pale): the COUNTER-rotating second sweep — draw its (wider-gap) lanes
-        // turning the OTHER way, so the "two moving gaps, safe spot at their drifting intersection"
-        // read is legible before the live bullets arrive.
         if (gc.spoke2Step !== undefined) {
           const gap2 = gc.spoke2Gap ?? gc.spokeGap;
-          const rot2 = -this.animClock * 0.9;
+          const counter = giantSpokeWheel(emission, parity, 1, gc);
           for (let i = gap2; i < gc.spokeCount; i++) {
-            this.tgLane(sx, sy, rot2 + (i / gc.spokeCount) * 6.28, 240, TILE, hue, isActive ? fix : { locked: false, dynamic: false, dashed: true });
+            this.tgLane(sx, sy, counter + (i / gc.spokeCount) * Math.PI * 2, 240, TILE, "#bfeaff", {
+              ...fix,
+              dashed: true,
+              fillAlpha: 0.035,
+              edgeColor: "#e5f8ff",
+            });
           }
+          const safe = giantSafeIntersection(emission, parity, gc);
+          if (safe !== null) this.tgSafeIntersection(sx, sy, safe.center, safe.width, 190);
         }
       }
       return;
@@ -9869,6 +9975,92 @@ export class Game {
     loadFloorIntoWorld(this.world, Math.max(1, Math.floor(floor)));
     this.loadFloorClient();
     this.hud.showBanner(floorBannerText(this.floor, { isBoss: isBossFloor(this.floor) }));
+  }
+
+  devSetupPaleCapture(players = 1, phase = 1): void {
+    this.devLoadRealFloor(75);
+    this.isDevBossNameHidden = true;
+    this.world.enemies = this.world.enemies.filter((enemy) => enemy.kind === "pale");
+    const boss = this.world.enemies[0];
+    if (boss === undefined || boss.boss === null) return;
+    while (this.world.players.size < Math.max(1, Math.min(4, players))) {
+      spawnPlayerInWorld(this.world, `pale-qa-${this.world.players.size}`);
+    }
+    const activePlayers = [...this.world.players.values()].slice(0, Math.max(1, Math.min(4, players)));
+    for (let index = 0; index < activePlayers.length; index++) {
+      const angle = (index / activePlayers.length) * Math.PI * 2 + Math.PI;
+      activePlayers[index].x = boss.x + Math.cos(angle) * 210;
+      activePlayers[index].y = boss.y + Math.sin(angle) * 210;
+    }
+    this.devSetPalePhase(phase);
+    this.devTeleport(activePlayers[0].x, activePlayers[0].y);
+    this.cam.x = boss.x - this.canvas.width / 2;
+    this.cam.y = boss.y - this.canvas.height / 2;
+  }
+
+  devSetPalePhase(phase: number): void {
+    const boss = this.world.enemies.find((enemy) => enemy.kind === "pale");
+    if (boss?.boss === null || boss === undefined) return;
+    const nextPhase = Math.max(1, Math.min(3, Math.floor(phase)));
+    boss.boss.phase = nextPhase;
+    boss.hp = nextPhase === 1
+      ? boss.maxHp
+      : nextPhase === 2
+        ? boss.maxHp * PALE.phaseAt[0]
+        : boss.maxHp * PALE.phaseAt[1];
+    boss.spawnTimer = 0;
+    boss.attack = {
+      phase: "windup",
+      time: nextPhase === 3 ? PALE.spokeWindup * 0.65 : PALE.ringWindup * 0.65,
+      move: nextPhase === 1 ? "slam" : nextPhase === 2 ? "spew" : "sweep",
+      windup: 0.65,
+      cooldown: 0,
+      lockedAngle: 0,
+      isAimLocked: false,
+      markX: boss.x,
+      markY: boss.y,
+    };
+    boss.boss.spinCount = 0;
+  }
+
+  devSetPaleBeat(beat: "ring2" | "sweepWindup" | "sweepActive" | "crackOff"): void {
+    const boss = this.world.enemies.find((enemy) => enemy.kind === "pale");
+    if (boss?.boss === null || boss === undefined) return;
+    if (beat === "ring2") {
+      boss.boss.phase = 1;
+      boss.boss.spinCount = 0;
+      boss.attack.phase = "active";
+      boss.attack.move = "slam";
+      boss.attack.time = PALE.ring2DelaySec * 0.5;
+      boss.attack.windup = 0;
+    } else if (beat === "sweepWindup" || beat === "sweepActive") {
+      boss.boss.phase = 3;
+      boss.boss.spinCount = beat === "sweepActive" ? 5 : 0;
+      boss.attack.phase = beat === "sweepActive" ? "active" : "windup";
+      boss.attack.move = "sweep";
+      boss.attack.time = beat === "sweepActive" ? PALE.spokeInterval * 4 : PALE.spokeWindup * 0.65;
+      boss.attack.windup = beat === "sweepActive" ? 0 : 0.65;
+    } else {
+      boss.attack.phase = "windup";
+      boss.attack.move = "roar";
+      boss.attack.time = PALE.roarDuration * 0.45;
+      boss.attack.windup = 0.45;
+      boss.boss.roar = { floorHp: boss.hp, queued: 0, queuedBy: null };
+    }
+  }
+
+  devSetPaleWarmth(isChilled: boolean): void {
+    this.p.warmthIdleSec = isChilled ? PALE.warmthDrainIdleSec : 0;
+    this.p.warmthPathPx = 0;
+    this.p.isWarmthChilled = isChilled;
+  }
+
+  devSetBossNameHidden(isHidden: boolean): void {
+    this.isDevBossNameHidden = isHidden;
+  }
+
+  devSetHitRadiusVisible(isVisible: boolean): void {
+    this.isDevHitRadiusVisible = isVisible;
   }
 
   devToggleFlowDebug(): boolean {
