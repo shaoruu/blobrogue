@@ -201,4 +201,7 @@ export interface PvpDamageTelemetryEvent {
   victimHp: number;
 }
 
-export type PvpTelemetryEvent = PvpDraftTelemetryEvent | PvpDamageTelemetryEvent;
+export type PvpTelemetryEvent =
+  | PvpDraftTelemetryEvent
+  | PvpDamageTelemetryEvent
+  | Extract<SimEvent, { t: "pvpMatchOver" }>;

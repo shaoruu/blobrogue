@@ -475,7 +475,8 @@ export class GameWorld implements RoomRuntime {
         || e.t === "pvpDraftOffered"
         || e.t === "pvpDraftPicked"
         || e.t === "pvpDraftResolved"
-        || e.t === "pvpDraftDelayed") {
+        || e.t === "pvpDraftDelayed"
+        || e.t === "pvpMatchOver") {
         this.pvpTelemetryThisTick.push(e);
       }
       if (e.t === "enemyKill" && e.by.length > 0 && isBossKind(e.kind)) {
