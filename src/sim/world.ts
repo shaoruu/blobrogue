@@ -4281,6 +4281,13 @@ function updateBullets(w: WorldState, dt: number, ev: SimEvent[]): void {
         continue;
       }
     }
+    if (b.isPaving === true && b.owner !== null) {
+      const owner = w.players.get(b.owner);
+      if (owner === undefined || owner.isAbsent) {
+        b.life = 0;
+        continue;
+      }
+    }
     // Anchor this tick's swept-collision segment BEFORE any steering/move. A wall bounce
     // resets the bullet to exactly this point, leaving that tick's segment degenerate —
     // a reflected round never sweeps backward through the wall it hit.
@@ -4400,6 +4407,7 @@ function isFriendlyNudgeProjectile(b: Bullet): boolean {
     && b.implode === undefined
     && b.isPersistent !== true
     && b.paintSpacing === undefined
+    && b.grapplePull === undefined
     && b.isSilk !== true;
 }
 
