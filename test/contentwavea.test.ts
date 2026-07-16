@@ -585,11 +585,11 @@ section("PATHMAKER party route budgets");
     (effect) => effect.kind === "zone" && effect.life > 0,
   );
   const paves = liveZones.filter((effect) => effect.isPaved);
-  check("4P +7-pellet held fire stays inside total48/path24 budgets",
-    liveZones.length <= 48 && paves.length <= 24);
-  check("fair owner admission caps every route owner at 12 zones",
+  check("4P +7-pellet held fire stays inside total48/path16 budgets",
+    liveZones.length <= 48 && paves.length <= 16);
+  check("fair owner admission caps every route owner at 8 zones",
     players.every((player) =>
-      paves.filter((effect) => effect.owner === player.id).length <= 12));
+      paves.filter((effect) => effect.owner === player.id).length <= 8));
   check("Pathmaker admission never evicts the separate Frostline family",
     frostBefore > 0
     && liveZones.some((effect) => !effect.isPaved && effect.fx === "frostline"));

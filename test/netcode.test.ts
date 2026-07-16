@@ -355,6 +355,8 @@ async function pvpOffenseLatchPredictionTests(): Promise<void> {
         px: serverPlayer.x,
         py: serverPlayer.y,
         chg: 0,
+        mode: "none",
+        outcome: "none",
       },
     },
   ];
@@ -384,11 +386,11 @@ async function remoteCombatAudioGateTests(): Promise<void> {
   const self = rig.pid; // "p1"
   const mate = "p2";
   const events: WireEvent[] = [
-    { id: 1, e: { t: "shot", pid: mate, weapon: "pistol", x: 10, y: 20, aim: 0, px: 10, py: 20, chg: 0 } },
+    { id: 1, e: { t: "shot", pid: mate, weapon: "pistol", x: 10, y: 20, aim: 0, px: 10, py: 20, chg: 0, mode: "none", outcome: "none" } },
     { id: 2, e: { t: "playerHurt", pid: mate, x: 10, y: 20 } },
     { id: 3, e: { t: "heal", pid: mate, x: 10, y: 20 } },
     { id: 4, e: { t: "pickup", pid: mate, kind: "coin", x: 10, y: 20 } },
-    { id: 5, e: { t: "shot", pid: self, weapon: "pistol", x: 5, y: 5, aim: 0, px: 5, py: 5, chg: 0 } },
+    { id: 5, e: { t: "shot", pid: self, weapon: "pistol", x: 5, y: 5, aim: 0, px: 5, py: 5, chg: 0, mode: "none", outcome: "none" } },
     // A NON-audible player-scoped event for a teammate must stay gated out (it drives the
     // owner's private UI, not shared audio) — proves the gate is selective, not a blanket pass.
     { id: 6, e: { t: "itemPicked", pid: mate, x: 10, y: 20, tint: "#fff" } },
