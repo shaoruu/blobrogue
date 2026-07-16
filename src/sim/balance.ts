@@ -1908,6 +1908,7 @@ interface GiantAxes {
   // seal the intersection (the fairness escape hatch — pale.test.ts asserts it never fully closes).
   readonly spoke2Step?: number;       // the counter-sweep's per-emission rotation (opposite sign)
   readonly spoke2Gap?: number;        // the counter-sweep's gap in slots (>= spokeGap; wider = sparser = fairer)
+  readonly spokeLife?: number;
   // The regional SIGNATURE — WARMTH-DRAIN (undefined = none, like Gorge). A per-player stillness
   // chill that punishes CAMPING: idle too long → move ×warmthDrainSlow, cleared by moving a real
   // distance, telegraphed by a ramping frost vignette. A SLOW, never damage; reuses CHILL_SLOW.
@@ -2133,7 +2134,7 @@ export const PALE = {
   zoneWindup: 0.7, zoneRecover: 0.5, zoneCount: 3, zoneRing: 150, zoneRadius: 30, zoneLife: 9.0, zoneCap: 10,
   // P3 CONVERGENT spokes — the counter-rotation is the difficulty. The wider gaps and slower
   // angular step preserve a continuous walk-only route while warmth-drain is at its ×0.5 worst.
-  spokeWindup: 0.7, spokeRecover: 0.4, spokeDuration: 3.0, spokeInterval: 0.2, spokeCount: 9, spokeGap: 4, spokeStep: 0.08, spokeSpeed: 250,
+  spokeWindup: 0.7, spokeRecover: 0.4, spokeDuration: 3.0, spokeInterval: 0.3, spokeCount: 9, spokeGap: 5, spokeStep: 0.06, spokeSpeed: 250,
   // The shared projectile glob (shape across all three patterns):
   globRadius: 8, globDamage: 1, globLife: 2.8,
   // ---- THE F75 MECHANICS STEP: one NEW READABLE AXIS per phase + the PALE cross-cutting SIGNATURE
@@ -2141,10 +2142,10 @@ export const PALE = {
   // the shared giant core switches each axis on because these fields are present, absent on Gorge).
   // Each is chosen to lower exposed-efficiency (add read/motion load), the proof metric. ----
   // P1 SEQUENCING — ring 1 releases into an immediately armed exact ring-2 footprint. The next
-  // gap is one gap-width around the rim and leaves enough time for the far edge of gap A to walk
+  // gap shifts one slot around the rim and leaves enough time for the far edge of gap A to walk
   // into gap B with margin; dash remains a rescue, never the required answer.
   ring2DelaySec: 1.1,
-  ring2GapOffsetSlots: 2,
+  ring2GapOffsetSlots: 1,
   seamBanksMinPlayers: 2,
   seamBankMinSeparationRad: Math.PI / 2,
   // P2 POSITIONING-OVER-TIME — each pool CREEPS outward ~1 tile / 1.5s (0.67 tiles/s) AND new pools
@@ -2155,7 +2156,8 @@ export const PALE = {
   // P3 DUAL-READ — a counter-rotating second wheel with the same readable rate and widened gap.
   // The time-integrated navigation gate owns the physical proof over persistent projectiles,
   // pools, debris, walls, player radius, and worst-case warmth slow.
-  spoke2Step: -0.08,
+  spoke2Step: -0.06,
+  spokeLife: 1.4,
   // THE PALE SIGNATURE — WARMTH-DRAIN (P3-ONLY, the prestige "the Pale turns on you" finale beat;
   // gated to the core-reveal phase in resolveWarmthDrain). Stay within ~½ tile for > warmthDrainIdleSec
   // → move ×warmthDrainSlow (the shipped CHILL_SLOW); clears the instant you move warmthDrainMoveClearTiles.

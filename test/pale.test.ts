@@ -417,8 +417,8 @@ function angleDiffDeg(a: number, b: number): number {
 
 function axisRingGates(): void {
   section("P1 axis — a SECOND counter-offset ring: sequence (dash gap A → gap B), each gap Gorge-width, never closes");
-  check("the second-ring axis is configured for a walkable adjacent transition (2 slots, 1.1s behind)",
-    PALE.ring2GapOffsetSlots === 2 && PALE.ring2DelaySec === 1.1);
+  check("the second-ring axis is configured for a walkable adjacent transition (1 slot, 1.1s behind)",
+    PALE.ring2GapOffsetSlots === 1 && PALE.ring2DelaySec === 1.1);
   check("each ring KEEPS Gorge's gap width/count/speed (the 2nd ring is the difficulty, NOT a narrower gap)",
     PALE.ringGap === GORGE.ringGap && PALE.ringCount === GORGE.ringCount && PALE.ringSpeed === GORGE.ringSpeed);
   check("the windup/recover TIGHTEN but hold the guardrails (windup 0.7 > 0.6, recover 0.5 > 0.35)",
@@ -456,7 +456,7 @@ function axisRingGates(): void {
     const g0 = widestGap(ring0), g1 = widestGap(ring1);
     const offset = angleDiffDeg(g0.centerDeg, g1.centerDeg);
     check("the two gaps are distinctly offset while retaining a walkable overlap margin",
-      offset >= 40 && offset <= 50, `offset=${offset.toFixed(0)}° (want ~45°)`);
+      offset >= 20 && offset <= 25, `offset=${offset.toFixed(0)}° (want ~22.5°)`);
     check("each ring leaves a genuinely standable wedge (never fully closes)",
       g0.widthDeg > 40 && g1.widthDeg > 40, `gaps=${g0.widthDeg.toFixed(0)}°/${g1.widthDeg.toFixed(0)}°`);
   }
@@ -513,7 +513,7 @@ function axisSweepGates(): void {
   check("the second-sweep axis is configured (counter-rotate = -spokeStep, opposite sign / same magnitude)",
     PALE.spoke2Step === -PALE.spokeStep);
   check("projectile speed stays fixed while angular motion is slowed for worst-warmth navigation",
-    PALE.spokeSpeed === GORGE.spokeSpeed && PALE.spokeStep === 0.08 && PALE.spokeInterval === 0.2
+    PALE.spokeSpeed === GORGE.spokeSpeed && PALE.spokeStep === 0.06 && PALE.spokeInterval === 0.3
     && PALE.spokeWindup === 0.7 && PALE.spokeRecover === 0.4);
   check("the counter-sweep reuses the FULL SWEEP_ARC (gap = spokeGap; no widening needed — see below)",
     (PALE.spoke2Gap ?? PALE.spokeGap) === PALE.spokeGap);

@@ -11986,7 +11986,7 @@ function giantSpokes(w: WorldState, e: Enemy, emission: number, ev: SimEvent[], 
   for (let i = 0; i < gc.spokeCount; i++) {
     if (i < gc.spokeGap) continue; // the moving safe wedge (fixed vs the wheel, so it rotates with it)
     const ang = wheel + (i / gc.spokeCount) * Math.PI * 2;
-    spawnEnemyBullet(w, e.x, e.y, ang, gc.spokeSpeed, gc.globRadius, gc.globDamage, spec.spokeColor, gc.globLife);
+    spawnEnemyBullet(w, e.x, e.y, ang, gc.spokeSpeed, gc.globRadius, gc.globDamage, spec.spokeColor, gc.spokeLife ?? gc.globLife);
   }
   // P3 DUAL-READ axis: a COUNTER-ROTATING second sweep (giants with spoke2Step only — Gorge has
   // none). It reuses the SWEEP_ARC (spokeCount slots, gap = spoke2Gap ?? spokeGap) counter-rotating
@@ -11999,7 +11999,7 @@ function giantSpokes(w: WorldState, e: Enemy, emission: number, ev: SimEvent[], 
     for (let i = 0; i < gc.spokeCount; i++) {
       if (i < gap2) continue; // the counter-sweep's (wider) moving wedge
       const ang = wheel2 + (i / gc.spokeCount) * Math.PI * 2;
-      spawnEnemyBullet(w, e.x, e.y, ang, gc.spokeSpeed, gc.globRadius, gc.globDamage, spec.spokeColor, gc.globLife);
+      spawnEnemyBullet(w, e.x, e.y, ang, gc.spokeSpeed, gc.globRadius, gc.globDamage, spec.spokeColor, gc.spokeLife ?? gc.globLife);
     }
   }
   if (emission === 0) ev.push({ t: "radialBurst", x: e.x, y: e.y });
