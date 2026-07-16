@@ -1,33 +1,28 @@
-const B64_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+import { decodeCanonicalBase64Url } from "../src/net/base64url.js";
 
-function decodeBase64Url(value: string): Uint8Array | null {
-  const normalized = value.replace(/-/g, "+").replace(/_/g, "/");
-  if (!/^[A-Za-z0-9+/]*$/.test(normalized)) return null;
-  const output: number[] = [];
-  let buffer = 0;
-  let bits = 0;
-  for (const character of normalized) {
-    const index = B64_ALPHABET.indexOf(character);
-    if (index < 0) return null;
-    buffer = (buffer << 6) | index;
-    bits += 6;
-    if (bits >= 8) {
-      bits -= 8;
-      output.push((buffer >> bits) & 0xff);
-    }
-  }
-  return new Uint8Array(output);
-}
+const MAX_ENVELOPE_LENGTH = 16 * 1024;
+const MAX_PAYLOAD_SEGMENT_LENGTH = 12 * 1024;
+const HMAC_SHA256_BYTES = 32;
+const HMAC_SHA256_BASE64URL_LENGTH = 43;
 
 export async function verifyHmacEnvelope(
   secret: string,
   envelope: string,
   prefix: string,
 ): Promise<Uint8Array | null> {
+  if (envelope.length === 0 || envelope.length > MAX_ENVELOPE_LENGTH) return null;
   const parts = envelope.split(".");
   if (parts.length !== 3 || parts[0] !== prefix) return null;
-  const payloadBytes = decodeBase64Url(parts[1]);
-  const signatureBytes = decodeBase64Url(parts[2]);
+  const payloadBytes = decodeCanonicalBase64Url(parts[1], {
+    maxEncodedLength: MAX_PAYLOAD_SEGMENT_LENGTH,
+    isNonEmpty: true,
+  });
+  const signatureBytes = decodeCanonicalBase64Url(parts[2], {
+    maxEncodedLength: HMAC_SHA256_BASE64URL_LENGTH,
+    isNonEmpty: true,
+    exactEncodedLength: HMAC_SHA256_BASE64URL_LENGTH,
+    exactDecodedLength: HMAC_SHA256_BYTES,
+  });
   if (!payloadBytes || !signatureBytes) return null;
   const encoder = new TextEncoder();
   const key = await crypto.subtle.importKey(

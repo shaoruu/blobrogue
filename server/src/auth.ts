@@ -30,6 +30,10 @@ import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { isPvpWorldId, isValidWorldId } from "../../src/net/protocol.js";
 import { isPvpPolicyId, type PvpPolicyId } from "../../src/net/pvpPolicy.js";
 import { isStrictJsonObject } from "../../src/net/strictJson.js";
+import {
+  decodeCanonicalBase64Url,
+  encodeBase64Url,
+} from "../../src/net/base64url.js";
 import { isKitId } from "../../src/sim/kits.js";
 
 export { isValidWorldId };
@@ -130,15 +134,8 @@ export function sanitizeDisplayName(raw: string): string | null {
   return cleaned.length > 0 ? cleaned : null;
 }
 
-function b64url(buf: Buffer): string {
-  return buf.toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-}
-function fromB64url(s: string): Buffer {
-  return Buffer.from(s.replace(/-/g, "+").replace(/_/g, "/"), "base64");
-}
-
-function sign(secret: string, body: string): string {
-  return b64url(createHmac("sha256", secret).update(body).digest());
+function sign(secret: string, body: string): Buffer {
+  return createHmac("sha256", secret).update(body).digest();
 }
 
 function canonicalPvpPayload(payload: TicketPayload): TicketPayload {
@@ -175,8 +172,8 @@ export function mintTicket(secret: string, playerId: string, ttlSecs = 120, nowM
   if (claims.pet !== undefined) payload.pt = claims.pet;
   if (claims.isPetChoiceMade !== undefined) payload.pc = claims.isPetChoiceMade;
   if (claims.isSyntheticVerify !== undefined) payload.sv = claims.isSyntheticVerify;
-  const body = "v1." + b64url(Buffer.from(JSON.stringify(payload), "utf8"));
-  return body + "." + sign(secret, body);
+  const body = "v1." + encodeBase64Url(Buffer.from(JSON.stringify(payload), "utf8"));
+  return body + "." + encodeBase64Url(sign(secret, body));
 }
 
 export function mintPvpTicket(
@@ -204,8 +201,8 @@ export function mintPvpTicket(
   if (claims.pet !== undefined) payload.pt = claims.pet;
   if (claims.isPetChoiceMade !== undefined) payload.pc = claims.isPetChoiceMade;
   if (claims.isSyntheticVerify !== undefined) payload.sv = claims.isSyntheticVerify;
-  const body = "v2." + b64url(Buffer.from(JSON.stringify(payload), "utf8"));
-  return body + "." + sign(secret, body);
+  const body = "v2." + encodeBase64Url(Buffer.from(JSON.stringify(payload), "utf8"));
+  return body + "." + encodeBase64Url(sign(secret, body));
 }
 
 export interface AuthConfig {
@@ -236,17 +233,29 @@ export function verifyTicket(cfg: AuthConfig, ticket: string, nowMs = Date.now()
     return { ok: false, reason: "bad_format" };
   }
   const ticketVersion = parts[0] === "v2" ? 2 : 1;
+  const payloadBytes = decodeCanonicalBase64Url(parts[1], {
+    maxEncodedLength: 464,
+    isNonEmpty: true,
+  });
+  const signatureBytes = decodeCanonicalBase64Url(parts[2], {
+    maxEncodedLength: 43,
+    isNonEmpty: true,
+    exactEncodedLength: 43,
+    exactDecodedLength: 32,
+  });
+  if (payloadBytes === null || signatureBytes === null) {
+    return { ok: false, reason: ticketVersion === 2 ? "policy_invalid" : "bad_format" };
+  }
   const body = parts[0] + "." + parts[1];
   const expected = sign(cfg.secret, body);
-  // Constant-time comparison to avoid signature-timing oracles.
-  const a = Buffer.from(expected);
-  const b = Buffer.from(parts[2]);
-  if (a.length !== b.length || !timingSafeEqual(a, b)) return { ok: false, reason: "bad_sig" };
+  if (expected.length !== signatureBytes.length || !timingSafeEqual(expected, signatureBytes)) {
+    return { ok: false, reason: "bad_sig" };
+  }
 
   let payload: TicketPayload;
   let payloadText: string;
   try {
-    payloadText = new TextDecoder("utf-8", { fatal: true }).decode(fromB64url(parts[1]));
+    payloadText = new TextDecoder("utf-8", { fatal: true }).decode(payloadBytes);
     if (!isStrictJsonObject(payloadText)) {
       return { ok: false, reason: ticketVersion === 2 ? "policy_invalid" : "bad_payload" };
     }

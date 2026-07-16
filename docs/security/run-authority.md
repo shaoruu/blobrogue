@@ -83,6 +83,14 @@ byte-for-byte equality with their locked-order `JSON.stringify` form, rejecting 
 reordered or escaped key spellings, noncanonical numbers, duplicate claims, and trailing tokens
 even under a valid HMAC. Admission a2 proofs use the same duplicate-aware structural scanner.
 
+Shared HMAC envelopes (`r1` receipts and `a2` admission proofs) also require canonical unpadded
+base64url on both payload and signature segments. The decoder accepts only `A-Z`, `a-z`, `0-9`,
+`_`, and `-`; rejects padding, whitespace, standard-base64 characters, Unicode, invalid lengths,
+and unused-tail-bit aliases; then re-encodes decoded bytes and requires exact string equality.
+HMAC-SHA256 signatures are exactly 32 decoded bytes and 43 encoded characters. Node receipt and
+ticket verification uses the same helper, while Web Crypto still verifies the MAC over the exact
+canonical `<prefix>.<payload>` text.
+
 The game server stores the verified policy immutably on its room runtime. Every later join and
 resume must present the same policy, and active bodies plus reserved reconnect seats share the
 four-player cap. `/version` exposes protocol 33, ticket `v1`/`v2`, admission `a2`, supported

@@ -14,6 +14,7 @@ import {
   type GenerationAdmissionPayload,
 } from "../src/net/generationAdmission.js";
 import { mintGenerationAdmissionProof } from "../server/src/generationAdmissionClient.js";
+import { encodeBase64Url } from "../src/net/base64url.js";
 
 const modules = import.meta.glob("../convex/**/*.{ts,js}");
 
@@ -281,7 +282,10 @@ describe("Convex run authority", () => {
         secret,
         receipt(playerId, "ABCD", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
       );
-      const tampered = `${signed.slice(0, -1)}${signed.endsWith("a") ? "b" : "a"}`;
+      const [prefix, payloadSegment, signatureSegment] = signed.split(".");
+      const tamperedPayload = Buffer.from(payloadSegment, "base64url");
+      tamperedPayload[0] ^= 0x01;
+      const tampered = `${prefix}.${encodeBase64Url(tamperedPayload)}.${signatureSegment}`;
       const rejected = await t.fetch("/gs/run-completion", {
         method: "POST",
         body: JSON.stringify({ receipt: tampered }),

@@ -88,6 +88,8 @@ const admissionClientSource = readFileSync(new URL("../server/src/generationAdmi
 const ticketAuthSource = readFileSync(new URL("../server/src/auth.ts", import.meta.url), "utf8");
 const deployControllerSource = readFileSync(new URL("../control/src/deployController.ts", import.meta.url), "utf8");
 const controlConfigSource = readFileSync(new URL("../control/src/config.ts", import.meta.url), "utf8");
+const hmacEnvelopeSource = readFileSync(new URL("../convex/hmacEnvelopeCore.ts", import.meta.url), "utf8");
+const receiptCoreSource = readFileSync(new URL("../convex/runReceiptCore.ts", import.meta.url), "utf8");
 
 check("public recordRun and recordFloorProgress fail closed",
   (playersSource.match(/verified_receipt_required/g) ?? []).length >= 2);
@@ -151,6 +153,14 @@ check("production control requires the parser secret before startup",
 check("lifecycle operations use authority verification and never diagnostic verification",
   (deployControllerSource.match(/verifyForDeploy\(\)/g) ?? []).length === 3
   && !deployControllerSource.includes("verifyDiagnostic"));
+check("shared Convex HMAC envelopes require canonical payload and 32-byte signatures",
+  hmacEnvelopeSource.includes("decodeCanonicalBase64Url(parts[1]")
+  && hmacEnvelopeSource.includes("decodeCanonicalBase64Url(parts[2]")
+  && hmacEnvelopeSource.includes("exactEncodedLength: HMAC_SHA256_BASE64URL_LENGTH")
+  && hmacEnvelopeSource.includes("exactDecodedLength: HMAC_SHA256_BYTES"));
+check("r1 and a2 payloads both require fatal UTF-8 and strict JSON",
+  receiptCoreSource.includes('new TextDecoder("utf-8", { fatal: true })')
+  && receiptCoreSource.includes("isStrictJsonObject(payloadText)"));
 
 process.stdout.write(`\n${passed} checks passed, ${failed} failed\n`);
 if (failed > 0) process.exit(1);
