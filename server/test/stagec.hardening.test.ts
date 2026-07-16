@@ -226,6 +226,9 @@ async function main(): Promise<void> {
         const world = s.server.getWorld();
         const pid = bot.serverId();
         const isPlayerPresent = world !== undefined && pid !== null && world.state.players.has(pid);
+        const connection = world === undefined || pid === null
+          ? undefined
+          : [...world.conns.values()].find((candidate) => candidate.playerId === pid);
         const handshakeDetail = JSON.stringify({
           isTransportReady: bot.transport.isReady(),
           transportStatus: bot.transport.getStatus(),
@@ -235,9 +238,14 @@ async function main(): Promise<void> {
           playerCount: world?.playerCount ?? 0,
           playerId: pid,
           isPlayerPresent,
+          isConnectionPresent: connection !== undefined,
         });
-        check("lossy bot joined before adversity was enabled", isJoined && isPlayerPresent, handshakeDetail);
-        if (!isJoined || world === undefined || pid === null || !isPlayerPresent) return;
+        check(
+          "lossy bot joined before adversity was enabled",
+          isJoined && isPlayerPresent && connection !== undefined,
+          handshakeDetail,
+        );
+        if (!isJoined || world === undefined || pid === null || !isPlayerPresent || connection === undefined) return;
 
         await bot.setNetworkConditions(lossyNet);
         const eventFloor = world.latestEventId();
@@ -246,14 +254,32 @@ async function main(): Promise<void> {
         enemy.hp = 1;
         world.state.bullets.push({ x: enemy.x, y: enemy.y, vx: 1, vy: 0, radius: 8, life: 1, friendly: true, owner: pid, damage: 5, color: "#fff", pierce: 0, hitList: null, isCrit: false });
 
+        const authoritativeKillEvents = () => world.eventsSince(eventFloor)
+          .filter((wire) => wire.e.t === "enemyKill" && wire.e.eid === enemy.id);
+        const authoritativeEventDetail = () => JSON.stringify(
+          world.eventsSince(eventFloor).map((wire) => ({
+            id: wire.id,
+            type: wire.e.t,
+            enemyId: wire.e.t === "enemyKill" ? wire.e.eid : null,
+          })),
+        );
         const isKillCommitted = await waitUntil(
-          () => world.eventsSince(eventFloor).some((wire) => wire.e.t === "enemyKill" && wire.e.eid === enemy.id),
+          () => authoritativeKillEvents().length >= 1,
           2000,
         );
-        const killEvent = world.eventsSince(eventFloor)
-          .find((wire) => wire.e.t === "enemyKill" && wire.e.eid === enemy.id);
-        check("authoritative kill event committed after 40% loss was enabled", isKillCommitted && killEvent !== undefined);
-        if (killEvent === undefined) return;
+        const committedKillEvents = authoritativeKillEvents();
+        check(
+          "authoritative kill event committed after 40% loss was enabled",
+          isKillCommitted,
+          authoritativeEventDetail(),
+        );
+        check(
+          "authoritative ring emitted the enemy kill exactly once",
+          committedKillEvents.length === 1,
+          authoritativeEventDetail(),
+        );
+        if (committedKillEvents.length !== 1) return;
+        const killEvent = committedKillEvents[0];
 
         const isDelivered = await waitUntil(
           () => bot.events.some((event) => event.t === "enemyKill" && event.eid === enemy.id),
@@ -262,16 +288,53 @@ async function main(): Promise<void> {
         check("kill event delivered despite 40% loss (reliable channel)", isDelivered);
 
         const isAcked = await waitUntil(
-          () => [...world.conns.values()].some(
-            (connection) => connection.playerId === pid && connection.ackedEventId >= killEvent.id,
-          ),
+          () => connection.ackedEventId >= killEvent.id,
           8000,
         );
         check("40% loss resend phase completed with a server ack", isAcked, `eventId=${killEvent.id}`);
 
         await bot.setNetworkConditions(noLossNet);
+        bot.flushTransportEvents();
+        const boundarySnapshotCount = bot.transport.snapsRecv;
+        const boundarySnapshotTick = bot.transport.getLatestSnapshot()?.tick ?? -1;
+        const boundaryInputSeq = connection.lastAppliedSeq;
+        const isPostDrainBoundaryObserved = await waitUntil(() => {
+          bot.flushTransportEvents();
+          const snapshot = bot.transport.getLatestSnapshot();
+          return bot.transport.snapsRecv > boundarySnapshotCount
+            && snapshot !== null
+            && snapshot.tick > boundarySnapshotTick
+            && connection.lastAppliedSeq > boundaryInputSeq
+            && connection.ackedEventId >= killEvent.id;
+        }, 3000);
+        check(
+          "post-drain no-loss snapshot and acknowledged input boundary observed",
+          isPostDrainBoundaryObserved,
+          JSON.stringify({
+            boundarySnapshotCount,
+            currentSnapshotCount: bot.transport.snapsRecv,
+            boundarySnapshotTick,
+            currentSnapshotTick: bot.transport.getLatestSnapshot()?.tick ?? null,
+            boundaryInputSeq,
+            currentInputSeq: connection.lastAppliedSeq,
+            acknowledgedEventId: connection.ackedEventId,
+            killEventId: killEvent.id,
+          }),
+        );
+
+        bot.flushTransportEvents();
+        const finalAuthoritativeKillEvents = authoritativeKillEvents();
+        check(
+          "authoritative ring still contains exactly one enemy kill after delivery and drain",
+          finalAuthoritativeKillEvents.length === 1,
+          authoritativeEventDetail(),
+        );
         const kills = bot.events.filter((event) => event.t === "enemyKill" && event.eid === enemy.id);
-        check("kill event delivered exactly once after queued lossy packets drained", kills.length === 1, `count=${kills.length}`);
+        check(
+          "kill event delivered exactly once after drain, flush, snapshot, and ack boundaries",
+          kills.length === 1,
+          `count=${kills.length}`,
+        );
       } finally {
         bot.stop();
       }

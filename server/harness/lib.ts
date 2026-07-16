@@ -190,6 +190,16 @@ export class Bot {
     await socket.setNetworkConditions(this.net);
   }
 
+  getPendingDownlinkDeliveryCount(): number {
+    return this.currentSocket?.getPendingDownlinkDeliveryCount() ?? 0;
+  }
+
+  flushTransportEvents(): void {
+    this.transport.advance(0);
+    const { events } = this.transport.poll();
+    for (const event of events) this.events.push(event);
+  }
+
   // Abruptly kill the live socket (no close handshake — a Wi-Fi drop). Optionally keep the
   // network down so reconnect attempts fail until restoreNetwork().
   dropConnection(keepDown = false): void {
