@@ -65,6 +65,29 @@ async function main(): Promise<void> {
     check(`${id} renders a bullet FX recipe`, probe.drawBulletFx(probeBullet(id), 0, 0));
   }
 
+  const signature = (bullet: Bullet): number => {
+    const ctx = canvas.getContext("2d");
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    probe.drawBulletFx(bullet, 160, 120);
+    const pixels = ctx.getImageData(120, 80, 80, 80).data;
+    let hash = 2166136261;
+    for (const channel of pixels) hash = Math.imul(hash ^ channel, 16777619);
+    return hash >>> 0;
+  };
+  const sluiceSignatures = new Set([
+    signature({ ...probeBullet("sluicegate"), sluiceMode: "flood" }),
+    signature({ ...probeBullet("sluicegate"), sluiceMode: "drain" }),
+  ]);
+  check("Sluice FLOOD and DRAIN are blind-distinct projectile silhouettes",
+    sluiceSignatures.size === 2);
+  const oddsmakerSignatures = new Set(
+    (["ricochet", "seeker", "blast", "pierce"] as const)
+      .map((oddsmakerOutcome) =>
+        signature({ ...probeBullet("oddsmaker"), oddsmakerOutcome })),
+  );
+  check("all four Oddsmaker outcomes are blind-distinct raster grammars",
+    oddsmakerSignatures.size === 4);
+
   process.stdout.write("\n[non-projectile weapons are justified exclusions (no traveling bullet)]\n");
   for (const id of nonProjectiles) {
     const w = WEAPONS[id];
