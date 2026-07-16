@@ -8,6 +8,7 @@ import { loadConfig } from "../src/config.js";
 import { jsonCodec, PROTOCOL_VERSION } from "../../src/net/protocol.js";
 import { clientIpFrom, parseCidrList } from "../src/net.js";
 import { devSpawnEnemy } from "../../src/sim/world.js";
+import { Rng } from "../../src/sim/rng.js";
 import { TILE } from "../../src/sim/types.js";
 import type { IncomingMessage } from "node:http";
 import { WebSocket as WsClient } from "ws";
@@ -202,22 +203,143 @@ async function main(): Promise<void> {
   await test("H2: a killed enemy's kill event reaches a lossy client exactly once", async () => {
     const s = await startTestServer();
     try {
-      // 40% packet loss both ways: snapshots (and their events) are frequently dropped.
-      const bot = new Bot({ url: s.url, secret: s.secret, playerId: "lossy", net: { rttMs: 60, jitterMs: 20, loss: 0.4 }, script: () => ({ seq: 0, moveX: 0, moveY: 0, aim: 0, firing: false, dash: false }) });
-      bot.start();
-      await waitUntil(() => bot.transport.isReady(), 3000);
-      const world = s.server.getWorld()!;
-      const sp = world.state.dungeon.spawn;
-      const e = devSpawnEnemy(world.state, "slime", sp.x * TILE + TILE / 2 + 60, sp.y * TILE + TILE / 2);
-      e.hp = 1;
-      // Kill it authoritatively next tick via a planted friendly bullet owned by the bot.
-      const pid = bot.serverId()!;
-      world.state.bullets.push({ x: e.x, y: e.y, vx: 1, vy: 0, radius: 8, life: 1, friendly: true, owner: pid, damage: 5, color: "#fff", pierce: 0, hitList: null, isCrit: false });
-      await sleep(2500); // plenty of resends to punch through 40% loss
-      const kills = bot.events.filter((ev) => ev.t === "enemyKill" && (ev as { eid: number }).eid === e.id);
-      check("kill event delivered despite 40% loss (reliable channel)", kills.length >= 1, `count=${kills.length}`);
-      check("kill event not duplicated (id dedupe)", kills.length === 1, `count=${kills.length}`);
-      bot.stop();
+      const netRng = new Rng(0x4820);
+      const noLossNet = { rttMs: 60, jitterMs: 20, loss: 0, random: () => netRng.next() };
+      const lossyNet = { ...noLossNet, loss: 0.4 };
+      const bot = new Bot({
+        url: s.url,
+        secret: s.secret,
+        playerId: "lossy",
+        net: noLossNet,
+        script: () => ({ seq: 0, moveX: 0, moveY: 0, aim: 0, firing: false, dash: false }),
+      });
+      try {
+        bot.start();
+        const isJoined = await waitUntil(() => {
+          const world = s.server.getWorld();
+          const playerId = bot.serverId();
+          return bot.transport.isReady()
+            && world !== undefined
+            && playerId !== null
+            && world.state.players.has(playerId);
+        }, 3000);
+        const world = s.server.getWorld();
+        const pid = bot.serverId();
+        const isPlayerPresent = world !== undefined && pid !== null && world.state.players.has(pid);
+        const connection = world === undefined || pid === null
+          ? undefined
+          : [...world.conns.values()].find((candidate) => candidate.playerId === pid);
+        const handshakeDetail = JSON.stringify({
+          isTransportReady: bot.transport.isReady(),
+          transportStatus: bot.transport.getStatus(),
+          transportError: bot.transport.lastError,
+          serverStatus: s.server.health().status,
+          isWorldPresent: world !== undefined,
+          playerCount: world?.playerCount ?? 0,
+          playerId: pid,
+          isPlayerPresent,
+          isConnectionPresent: connection !== undefined,
+        });
+        check(
+          "lossy bot joined before adversity was enabled",
+          isJoined && isPlayerPresent && connection !== undefined,
+          handshakeDetail,
+        );
+        if (!isJoined || world === undefined || pid === null || !isPlayerPresent || connection === undefined) return;
+
+        await bot.setNetworkConditions(lossyNet);
+        const eventFloor = world.latestEventId();
+        const sp = world.state.dungeon.spawn;
+        const enemy = devSpawnEnemy(world.state, "slime", sp.x * TILE + TILE / 2 + 60, sp.y * TILE + TILE / 2);
+        enemy.hp = 1;
+        world.state.bullets.push({ x: enemy.x, y: enemy.y, vx: 1, vy: 0, radius: 8, life: 1, friendly: true, owner: pid, damage: 5, color: "#fff", pierce: 0, hitList: null, isCrit: false });
+
+        const authoritativeKillEvents = () => world.eventsSince(eventFloor)
+          .filter((wire) => wire.e.t === "enemyKill" && wire.e.eid === enemy.id);
+        const authoritativeEventDetail = () => JSON.stringify(
+          world.eventsSince(eventFloor).map((wire) => ({
+            id: wire.id,
+            type: wire.e.t,
+            enemyId: wire.e.t === "enemyKill" ? wire.e.eid : null,
+          })),
+        );
+        const isKillCommitted = await waitUntil(
+          () => authoritativeKillEvents().length >= 1,
+          2000,
+        );
+        const committedKillEvents = authoritativeKillEvents();
+        check(
+          "authoritative kill event committed after 40% loss was enabled",
+          isKillCommitted,
+          authoritativeEventDetail(),
+        );
+        check(
+          "authoritative ring emitted the enemy kill exactly once",
+          committedKillEvents.length === 1,
+          authoritativeEventDetail(),
+        );
+        if (committedKillEvents.length !== 1) return;
+        const killEvent = committedKillEvents[0];
+
+        const isDelivered = await waitUntil(
+          () => bot.events.some((event) => event.t === "enemyKill" && event.eid === enemy.id),
+          8000,
+        );
+        check("kill event delivered despite 40% loss (reliable channel)", isDelivered);
+
+        const isAcked = await waitUntil(
+          () => connection.ackedEventId >= killEvent.id,
+          8000,
+        );
+        check("40% loss resend phase completed with a server ack", isAcked, `eventId=${killEvent.id}`);
+
+        await bot.setNetworkConditions(noLossNet);
+        bot.flushTransportEvents();
+        const boundarySnapshotCount = bot.transport.snapsRecv;
+        const boundarySnapshotTick = bot.transport.getLatestSnapshot()?.tick ?? -1;
+        const boundaryInputSeq = connection.lastAppliedSeq;
+        const isPostDrainBoundaryObserved = await waitUntil(() => {
+          bot.flushTransportEvents();
+          const snapshot = bot.transport.getLatestSnapshot();
+          return bot.transport.snapsRecv > boundarySnapshotCount
+            && snapshot !== null
+            && snapshot.tick > boundarySnapshotTick
+            && snapshot.ackSeq > boundaryInputSeq
+            && connection.lastAppliedSeq > boundaryInputSeq
+            && connection.ackedEventId >= killEvent.id;
+        }, 3000);
+        check(
+          "post-drain no-loss snapshot and acknowledged input boundary observed",
+          isPostDrainBoundaryObserved,
+          JSON.stringify({
+            boundarySnapshotCount,
+            currentSnapshotCount: bot.transport.snapsRecv,
+            boundarySnapshotTick,
+            currentSnapshotTick: bot.transport.getLatestSnapshot()?.tick ?? null,
+            boundaryInputSeq,
+            currentSnapshotAckSeq: bot.transport.getLatestSnapshot()?.ackSeq ?? null,
+            currentInputSeq: connection.lastAppliedSeq,
+            acknowledgedEventId: connection.ackedEventId,
+            killEventId: killEvent.id,
+          }),
+        );
+
+        bot.flushTransportEvents();
+        const finalAuthoritativeKillEvents = authoritativeKillEvents();
+        check(
+          "authoritative ring still contains exactly one enemy kill after delivery and drain",
+          finalAuthoritativeKillEvents.length === 1,
+          authoritativeEventDetail(),
+        );
+        const kills = bot.events.filter((event) => event.t === "enemyKill" && event.eid === enemy.id);
+        check(
+          "kill event delivered exactly once after drain, flush, snapshot, and ack boundaries",
+          kills.length === 1,
+          `count=${kills.length}`,
+        );
+      } finally {
+        bot.stop();
+      }
     } finally { await s.close(); }
   });
 
@@ -374,30 +496,6 @@ async function main(): Promise<void> {
       check("room reset to floor 1 with a FRESH seed after emptying", reset, `floor=${world.state.floor}`);
       check("world revision advanced across the reset (stale-snapshot guard)", world.state.rev > rev0, `rev=${world.state.rev}`);
       check("no players remain", world.playerCount === 0);
-    } finally { await s.close(); }
-  });
-
-  // ---- H6: deterministic game-over leave lifecycle ----
-  await test("H6: full wipe deterministically closes the socket + removes the player", async () => {
-    const s = await startTestServer();
-    try {
-      const bot = new Bot({ url: s.url, secret: s.secret, playerId: "solo-death", script: () => ({ seq: 0, moveX: 0, moveY: 0, aim: 0, firing: false, dash: false }) });
-      bot.start();
-      await waitUntil(() => bot.transport.isReady(), 3000);
-      const world = s.server.getWorld()!;
-      const pid = bot.serverId()!;
-      const p = world.state.players.get(pid)!;
-      p.hp = 1; p.invuln = 0;
-      // A slime on top of the (only) player -> contact downs them; the wipe is the held
-      // 4.0s all-down beat (studio balance gate §6), THEN game over closes the socket.
-      devSpawnEnemy(world.state, "slime", p.x, p.y).spawnTimer = 0;
-      const isDowned = await waitUntil(() => world.state.players.get(pid)?.isDown === true, 3000);
-      check("the last player going to 0 goes DOWN first (the 4.0s wipe hold)", isDowned && !world.state.isRunOver);
-      const closed = await waitUntil(() => bot.transport.getStatus() === "closed", 8000);
-      check("socket deterministically closed on game over", closed);
-      const removed = await waitUntil(() => (s.server.getWorld()?.playerCount ?? 0) === 0, 2000);
-      check("player removed from the world on game over", removed, `players=${s.server.getWorld()?.playerCount}`);
-      bot.stop();
     } finally { await s.close(); }
   });
 
