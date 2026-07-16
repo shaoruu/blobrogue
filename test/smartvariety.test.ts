@@ -11,7 +11,9 @@ import {
   rollWeaponOfferWithHistory,
 } from "../src/sim/weaponBag.js";
 import type { WeaponBag } from "../src/sim/weaponBag.js";
-import { ITEMS, MAX_ITEM_LEVEL, itemMaxLevel, rollItemChoicesWith } from "../src/sim/items.js";
+import {
+  ITEMS, MAX_ITEM_LEVEL, itemMaxLevel, normalItemsForCatalog, rollItemChoicesWith,
+} from "../src/sim/items.js";
 import {
   createWorld,
   buyFromShopInWorld,
@@ -30,6 +32,11 @@ import { generateDungeon } from "../src/sim/dungeon.js";
 import { PICKUP_WEAPONS, WEAPONS } from "../src/sim/weapons.js";
 import { Rng } from "../src/sim/rng.js";
 import type { WeaponId } from "../src/sim/types.js";
+import {
+  LEGACY_CONTENT_CATALOG_VERSION,
+  WAVE_A_CONTENT_CATALOG_VERSION,
+  contentCatalogFor,
+} from "../src/sim/contentCatalog.js";
 
 let passed = 0;
 let failed = 0;
@@ -79,6 +86,44 @@ section("catalog contracts");
   check("normal blessing rarities are exactly 9 common, 17 uncommon, 9 rare",
     counts.common === 9 && counts.uncommon === 17 && counts.rare === 9,
     JSON.stringify(counts));
+}
+
+section("owner-accepted catalog rate drift");
+{
+  const weaponRates = (version: 0 | 1, isLegendaryOpen: boolean): [number, number, number] => {
+    const pool = contentCatalogFor(version).pickupWeapons;
+    const common = pool.filter((id) => WEAPONS[id].rarity === "common").length * 10;
+    const rare = pool.filter((id) => WEAPONS[id].rarity === "rare").length * 5;
+    const legendary = isLegendaryOpen
+      ? pool.filter((id) => WEAPONS[id].rarity === "legendary").length
+      : 0;
+    const total = common + rare + legendary;
+    return [common / total * 100, rare / total * 100, legendary / total * 100];
+  };
+  const blessingRates = (version: 0 | 1): [number, number, number] => {
+    const pool = normalItemsForCatalog(version);
+    const common = pool.filter((item) => item.rarity === "common").length * 10;
+    const uncommon = pool.filter((item) => item.rarity === "uncommon").length * 6;
+    const rare = pool.filter((item) => item.rarity === "rare").length * 3;
+    const total = common + uncommon + rare;
+    return [common / total * 100, uncommon / total * 100, rare / total * 100];
+  };
+  const near = (actual: number, expected: number): boolean => Math.abs(actual - expected) < 0.0006;
+  const legacyOpen = weaponRates(LEGACY_CONTENT_CATALOG_VERSION, true);
+  const waveAOpen = weaponRates(WAVE_A_CONTENT_CATALOG_VERSION, true);
+  const legacyEarly = weaponRates(LEGACY_CONTENT_CATALOG_VERSION, false);
+  const waveAEarly = weaponRates(WAVE_A_CONTENT_CATALOG_VERSION, false);
+  const legacyBlessing = blessingRates(LEGACY_CONTENT_CATALOG_VERSION);
+  const waveABlessing = blessingRates(WAVE_A_CONTENT_CATALOG_VERSION);
+  check("open weapon C/R/L drift is exactly 47.393/49.763/2.844 → 47.414/49.569/3.017",
+    [47.393, 49.763, 2.844].every((expected, index) => near(legacyOpen[index], expected))
+    && [47.414, 49.569, 3.017].every((expected, index) => near(waveAOpen[index], expected)));
+  check("pre-F4 weapon C/R drift is exactly 48.780/51.220 → 48.889/51.111",
+    [48.780, 51.220].every((expected, index) => near(legacyEarly[index], expected))
+    && [48.889, 51.111].every((expected, index) => near(waveAEarly[index], expected)));
+  check("normal blessing C/U/R drift is exactly 38.043/48.913/13.043 → 41.096/46.575/12.329",
+    [38.043, 48.913, 13.043].every((expected, index) => near(legacyBlessing[index], expected))
+    && [41.096, 46.575, 12.329].every((expected, index) => near(waveABlessing[index], expected)));
 }
 
 section("weapon first pass and history-aware refills");

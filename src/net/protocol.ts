@@ -305,8 +305,11 @@ export const FIXED_DT = 1 / TICK_HZ; // 50ms authoritative step
 //   same-run reconnect restore. null on non-encounter floors. Additive + strict decode; a v33
 //   client rejects a snapshot carrying `enc` (validateSnap exact shape). Gorge arena path
 //   still clears via HP-death; custom completion rides enc.completed + isFloorCleared.
-// v35: PR #142 Wave A extends the closed WeaponId set and reconciles per-weapon cycle state
-//   (sgc/ogc/mds) on SelfWire. Batch0 `enc` remains; later Wave A commits add cat/wcd/isMds/rvb.
+// v35: PR #142 Wave A owns this coordinated cut on top of Batch0: closed WeaponId additions,
+//   immutable run catalog version (`cat`), per-weapon cooldowns/cycles (`wcd`/`sgc`/`ogc`),
+//   Sluice observer mode, Oddsmaker outcome, revive channel owner (`rvb`), and Muddy dash
+//   state (`isMds`). Batch0 `enc` remains on the snapshot. Later PvP/Pale work allocates the
+//   next version only when its own wire changes.
 export const PROTOCOL_VERSION = 35;
 
 // How long the server reserves a disconnected player's body (their seat) before the
