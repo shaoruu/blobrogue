@@ -264,7 +264,7 @@ function safetyTests(): void {
   const d = diffSnapshot(snapshotToWire(base), snapshotToWire(next), next.sseq, fullWorld(next));
   check("a delta advertises its baseline sseq so a client can refuse a gap", d.b === base.sseq && d.q === 7);
 
-  check("protocol version is current (v33: authority-plane hard cut)", PROTOCOL_VERSION === 33);
+  check("protocol version is current (v34: Wave A weapon cycles)", PROTOCOL_VERSION === 34);
 }
 
 function main(): void {

@@ -292,7 +292,8 @@ export const FIXED_DT = 1 / TICK_HZ; // 50ms authoritative step
 // v33: authority-plane hard cut. Guest capabilities, signed run receipts, and durable generation
 // admission require the coordinated client/Convex/GS rollout; stale clients get a terminal
 // refresh-required rejection instead of retrying through the reconnect grace.
-export const PROTOCOL_VERSION = 33;
+// v34: Wave A extends the closed WeaponId set and reconciles per-weapon cycle state.
+export const PROTOCOL_VERSION = 34;
 
 // How long the server reserves a disconnected player's body (their seat) before the
 // authoritative leave lifecycle applies. 90s per the studio balance gate's reconnect
@@ -343,6 +344,9 @@ export interface SelfWire {
   out: boolean;                // past the floor's down limit: unrevivable until the descent
   wpn: WeaponId;
   wpns: WeaponId[];            // authoritative owned-weapon inventory (validated equip source)
+  sgc: number;                  // Sluicegate cycle
+  ogc: number;                  // Oddsmaker cycle
+  mds: boolean;                 // muddy dash refund spent for the active dash
   items: string[];             // authoritative owned blessing/item ids (HUD strip)
   mods: PlayerMods;            // authoritative run mods (drives client prediction: speed/firerate/dash)
   coins: number; kills: number; combo: number; ct: number; // HUD readouts
@@ -1118,7 +1122,11 @@ function validateSelfWire(v: unknown): SelfWire {
     rev: num(o, "rev", 0, 1e4),
     out: boolOf(o, "out"),
     wpn: weaponOf(o, "wpn"),
-    wpns, items,
+    wpns,
+    sgc: intOf(o, "sgc", 0, Number.MAX_SAFE_INTEGER),
+    ogc: intOf(o, "ogc", 0, Number.MAX_SAFE_INTEGER),
+    mds: boolOf(o, "mds"),
+    items,
     mods: modsFromWire(obj(o.mods, "self.mods")),
     coins: num(o, "coins", 0, 1e9), kills: num(o, "kills", 0, 1e9),
     combo: num(o, "combo", 0, 1e9), ct: num(o, "ct", 0, 1e4),
@@ -1562,7 +1570,9 @@ export function selfWireFromSnapshot(s: AuthoritativePlayerSnapshot): SelfWire {
     x: s.x, y: s.y, hp: s.hp, mhp: s.maxHp, inv: s.invuln, dnv: s.dashInvuln,
     dcd: s.dashCd, dti: s.dashTime, ddx: s.dashDx, ddy: s.dashDy, fcd: s.fireCd, chg: s.chargeT, fng: s.fangCd,
     fac: s.facing, down: s.isDown, rev: s.reviveProgress, out: false, wpn: s.weapon,
-    wpns: s.ownedWeapons, items: s.ownedItemIds, mods: s.mods,
+    wpns: s.ownedWeapons,
+    sgc: s.weaponCycles.sluicegate, ogc: s.weaponCycles.oddsmaker, mds: s.isMuddyRefundSpent,
+    items: s.ownedItemIds, mods: s.mods,
     coins: s.coins, kills: s.kills, combo: s.combo, ct: s.comboTimer,
     bcl: s.hasClaimedBossChoice,
     php: s.premiumHpBuys, amc: s.isAmberCacheArmed, amw: s.amberWindfall, brt: s.isBlessingRerollArmed,
@@ -1583,7 +1593,10 @@ export function snapshotFromSelfWire(w: SelfWire): AuthoritativePlayerSnapshot {
     x: w.x, y: w.y, hp: w.hp, maxHp: w.mhp, invuln: w.inv, dashInvuln: w.dnv,
     dashCd: w.dcd, dashTime: w.dti, dashDx: w.ddx, dashDy: w.ddy, fireCd: w.fcd, chargeT: w.chg, fangCd: w.fng,
     facing: w.fac, isDown: w.down, reviveProgress: w.rev, weapon: w.wpn,
-    ownedWeapons: w.wpns.slice(), ownedItemIds: w.items.slice(), mods: modsFromWire(w.mods),
+    ownedWeapons: w.wpns.slice(),
+    weaponCycles: { sluicegate: w.sgc, oddsmaker: w.ogc },
+    isMuddyRefundSpent: w.mds,
+    ownedItemIds: w.items.slice(), mods: modsFromWire(w.mods),
     coins: w.coins, kills: w.kills, combo: w.combo, comboTimer: w.ct,
     hasClaimedBossChoice: w.bcl,
     premiumHpBuys: w.php, isAmberCacheArmed: w.amc, amberWindfall: w.amw, isBlessingRerollArmed: w.brt,
@@ -1819,7 +1832,7 @@ export function effectFromWire(w: EffectWire): Effect {
   const base = { id: w.id, owner, fx: w.fx, x: w.x, y: w.y, life: w.life, maxLife: w.max };
   switch (w.k) {
     case "zone":
-      return { ...base, kind: "zone", radius: w.r, chillRate: 0 };
+      return { ...base, kind: "zone", radius: w.r, chillRate: 0, isPaved: w.fx === "pathmaker" };
     case "wire":
       return { ...base, kind: "wire", x2: w.x2, y2: w.y2, width: w.r, arm: w.arm, damage: 0 };
     case "orbit":

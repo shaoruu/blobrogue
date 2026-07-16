@@ -39,6 +39,13 @@ export interface PlayerMods {
   burnChance: number;      // 0..1 chance a hit also ignites (each elemental cap 0.5)
   chillChance: number;     // 0..1 chance a hit also chills (slow → freeze)
   shockChance: number;     // 0..1 chance a hit also shocks (+dmg amp + arc)
+  selfKnockbackMult: number;
+  reclaimedBounceDamage: number;
+  muddyDashRefund: number;
+  comboWindowBonus: number;
+  beatFireRatePerTier: number;
+  reviveRadiusBonus: number;
+  reviveSpeedMult: number;
 }
 
 export function createMods(): PlayerMods {
@@ -67,6 +74,13 @@ export function createMods(): PlayerMods {
     burnChance: 0,
     chillChance: 0,
     shockChance: 0,
+    selfKnockbackMult: 1,
+    reclaimedBounceDamage: 0,
+    muddyDashRefund: 0,
+    comboWindowBonus: 0,
+    beatFireRatePerTier: 0,
+    reviveRadiusBonus: 0,
+    reviveSpeedMult: 1,
   };
 }
 
@@ -342,6 +356,42 @@ export const ITEMS: readonly ItemDef[] = [
     descs: ["+1 heart & +12% move speed.", "+2 hearts & +16% move speed.", "+2 hearts & +20% move speed."],
     glyph: "U", tint: "#ff6a6a", rarity: "common",
     apply: (m, l) => { m.maxHpBonus += lv([1, 2, 2], l); m.moveSpeedMult += lv([0.12, 0.16, 0.20], l); },
+  },
+  {
+    id: "hold_fast", name: "HOLD FAST",
+    descs: ["Weapon kick is reduced 30%.", "Weapon kick is reduced 45%.", "Weapon kick is reduced 60%."],
+    glyph: "|", tint: "#d6c7a1", rarity: "common",
+    apply: (m, l) => { m.selfKnockbackMult = Math.min(m.selfKnockbackMult, lv([0.70, 0.55, 0.40], l)); },
+  },
+  {
+    id: "nothing_wasted", name: "NOTHING WASTED",
+    descs: ["Plain rounds that miss reclaim one wall bounce at 35% damage.", "Plain rounds that miss reclaim one wall bounce at 50% damage.", "Plain rounds that miss reclaim one wall bounce at 65% damage."],
+    glyph: "\\", tint: "#e8e0c8", rarity: "uncommon",
+    apply: (m, l) => { m.reclaimedBounceDamage = Math.max(m.reclaimedBounceDamage, lv([0.35, 0.50, 0.65], l)); },
+  },
+  {
+    id: "second_breath_muddy", name: "SECOND BREATH MUDDY",
+    descs: ["Dashing through silk refunds 20% of that dash cooldown.", "Dashing through silk refunds 35% of that dash cooldown.", "Dashing through silk refunds 50% of that dash cooldown."],
+    glyph: "%", tint: "#9b7a55", rarity: "uncommon",
+    apply: (m, l) => { m.muddyDashRefund = Math.max(m.muddyDashRefund, lv([0.20, 0.35, 0.50], l)); },
+  },
+  {
+    id: "on_the_beat", name: "ON THE BEAT",
+    descs: ["Kills add 0.5s to the combo beat; each active tier grants +4% fire rate.", "Kills add 0.8s to the combo beat; each active tier grants +6% fire rate.", "Kills add 1.1s to the combo beat; each active tier grants +8% fire rate."],
+    glyph: "#", tint: "#efb85f", rarity: "rare",
+    apply: (m, l) => {
+      m.comboWindowBonus = Math.max(m.comboWindowBonus, lv([0.5, 0.8, 1.1], l));
+      m.beatFireRatePerTier = Math.max(m.beatFireRatePerTier, lv([0.04, 0.06, 0.08], l));
+    },
+  },
+  {
+    id: "shared_rope", name: "SHARED ROPE",
+    descs: ["Revive from 12px farther away and channel 15% faster.", "Revive from 20px farther away and channel 25% faster.", "Revive from 28px farther away and channel 35% faster."],
+    glyph: "&", tint: "#a8d7a0", rarity: "common",
+    apply: (m, l) => {
+      m.reviveRadiusBonus = Math.max(m.reviveRadiusBonus, lv([12, 20, 28], l));
+      m.reviveSpeedMult = Math.max(m.reviveSpeedMult, lv([1.15, 1.25, 1.35], l));
+    },
   },
   // ---- the premium CORE INFUSIONS (shop stock only — never in a blessing offer) ----
   // Single-stat bumps toward the existing raw caps: a FASTER route to the cap, never a

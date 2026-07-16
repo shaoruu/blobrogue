@@ -616,7 +616,7 @@ async function deltaEventDedupeTests(): Promise<void> {
 async function protocolUpgradeRejectTests(): Promise<void> {
   section("protocol rejection is terminal and never burns the reconnect grace");
   const beforeReady = await makeRig();
-  beforeReady.sock.deliver({ t: "error", code: "protocol", msg: "expected 33" });
+  beforeReady.sock.deliver({ t: "error", code: "protocol", msg: "expected 34" });
   beforeReady.sock.onclose?.({ code: 4001 });
   check("pre-world protocol rejection surfaces client_outdated",
     beforeReady.transport.getCloseKind() === "client_outdated");
@@ -625,7 +625,7 @@ async function protocolUpgradeRejectTests(): Promise<void> {
 
   const afterReady = await makeRig();
   afterReady.sock.deliver(afterReady.snap({ full: true }));
-  afterReady.sock.deliver({ t: "error", code: "protocol", msg: "expected 33" });
+  afterReady.sock.deliver({ t: "error", code: "protocol", msg: "expected 34" });
   afterReady.sock.onclose?.({ code: 4001 });
   check("mid-run protocol rejection is terminal too",
     afterReady.transport.getCloseKind() === "client_outdated");

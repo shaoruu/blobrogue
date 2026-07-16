@@ -70,14 +70,14 @@ section("catalog contracts");
     uncommon: normal.filter((item) => item.rarity === "uncommon").length,
     rare: normal.filter((item) => item.rarity === "rare").length,
   };
-  check("38 weapons include the pistol and 37 are pickup offers",
-    Object.keys(WEAPONS).length === 38
-    && PICKUP_WEAPONS.length === 37
+  check("42 weapons include the pistol and 41 are pickup offers",
+    Object.keys(WEAPONS).length === 42
+    && PICKUP_WEAPONS.length === 41
     && !PICKUP_WEAPONS.includes("pistol"));
-  check("34 blessings split into 30 normal and 4 premium cores",
-    ITEMS.length === 34 && normal.length === 30 && ITEMS.length - normal.length === 4);
-  check("normal blessing rarities are exactly 7 common, 15 uncommon, 8 rare",
-    counts.common === 7 && counts.uncommon === 15 && counts.rare === 8,
+  check("39 blessings split into 35 normal and 4 premium cores",
+    ITEMS.length === 39 && normal.length === 35 && ITEMS.length - normal.length === 4);
+  check("normal blessing rarities are exactly 9 common, 17 uncommon, 9 rare",
+    counts.common === 9 && counts.uncommon === 17 && counts.rare === 9,
     JSON.stringify(counts));
 }
 

@@ -85,7 +85,8 @@ export type CoverageKind =
   | "THRUST" | "SWEEP" | "AREA" | "CHAIN" | "TRACKING" | "RICOCHET"
   | "WIDE" | "BURST" | "FOCUSED"
   // Effect-wave coverage kinds: what the placed/worn/charged output does to space.
-  | "ARTILLERY" | "TRAP" | "ORBIT" | "TURRET" | "TETHER" | "GROUND";
+  | "ARTILLERY" | "TRAP" | "ORBIT" | "TURRET" | "TETHER" | "GROUND"
+  | "GRAPPLE" | "MODESHIFT" | "GAMBLE" | "PAVE";
 
 export interface WeaponCoverage {
   kind: CoverageKind;
@@ -117,6 +118,10 @@ function roleOf(w: Weapon): string {
   if (w.orbit !== undefined) return "OWN YOUR SPACE";
   if (w.sentry !== undefined) return "HOLD A SECOND LANE";
   if (w.tether !== undefined) return "REPOSITION THE THREAT";
+  if (w.grapple !== undefined) return "ANCHOR AND GRAPPLE";
+  if (w.modeShift !== undefined) return "SHIFT THE ROOM";
+  if (w.gamble !== undefined) return "GAMBLE THE PAYLOAD";
+  if (w.paint?.isPaving === true) return "CLEANSE AND PAVE";
   if (w.paint !== undefined) return "CUT THE ROOM IN TWO";
   if (w.lowHpBonus !== undefined) return "TRADE SAFETY FOR THE KILL";
   // The legendary wave's signature mechanics outrank the shared fields: the gimmick IS
@@ -178,6 +183,10 @@ function coverageOf(w: Weapon, pellets: number, spread: number): WeaponCoverage 
   if (w.orbit !== undefined) return { kind: "ORBIT", patternOrder: null };
   if (w.sentry !== undefined) return { kind: "TURRET", patternOrder: null };
   if (w.tether !== undefined) return { kind: "TETHER", patternOrder: null };
+  if (w.grapple !== undefined) return { kind: "GRAPPLE", patternOrder: null };
+  if (w.modeShift !== undefined) return { kind: "MODESHIFT", patternOrder: null };
+  if (w.gamble !== undefined) return { kind: "GAMBLE", patternOrder: null };
+  if (w.paint?.isPaving === true) return { kind: "PAVE", patternOrder: null };
   if (w.paint !== undefined) return { kind: "GROUND", patternOrder: null };
   if (w.blast !== undefined) return { kind: "AREA", patternOrder: null };
   if (w.nova !== undefined) return { kind: "AREA", patternOrder: null };
@@ -210,6 +219,10 @@ function mechanicsOf(w: Weapon, mods: PlayerMods): WeaponMechanic[] {
   }
   if (w.sentry !== undefined) m.push({ tag: "TURRET", text: "DEPLOYS A DESTRUCTIBLE TURRET", mag: w.sentry.hp });
   if (w.tether !== undefined) m.push({ tag: "TETHER", text: "REELS A TARGET IN; HEAVIES REEL YOU", mag: 1 });
+  if (w.grapple !== undefined) m.push({ tag: "GRAPPLE", text: "WALL HIT PULLS YOU TO THE ANCHOR", mag: w.grapple.pull });
+  if (w.modeShift !== undefined) m.push({ tag: "MODESHIFT", text: "ALTERNATES FLOOD FAN / DRAIN LANCE", mag: 2 });
+  if (w.gamble !== undefined) m.push({ tag: "GAMBLE", text: "ROLLS 1 OF 4 PAYLOAD VERBS", mag: w.gamble.outcomes.length });
+  if (w.paint?.isPaving === true) m.push({ tag: "PAVE", text: "CLEARS HOSTILE GROUND; PAVES FLOOR HAZARDS", mag: w.paint.radius });
   if (w.melee?.isThrust) m.push({ tag: "THRUST", text: "PIERCING THRUST", mag: 1 });
   if (w.chain !== undefined) m.push({ tag: "CHAIN", text: `CHAINS TO ${w.chain} MORE`, mag: w.chain });
   if (w.bounce !== undefined) m.push({ tag: "RICOCHET", text: w.bounce === 1 ? "RICOCHETS ONCE" : `RICOCHETS \u00d7${w.bounce}`, mag: w.bounce });

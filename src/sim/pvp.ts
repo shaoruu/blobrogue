@@ -29,7 +29,25 @@ export const pvpBlessingBlacklist = [
   "coin_magnet",
   "vitality",
   "juggernaut",
+  "hold_fast",
+  "nothing_wasted",
+  "second_breath_muddy",
+  "on_the_beat",
+  "shared_rope",
 ] as const;
+
+export const pvpUnsupportedWeaponIds: readonly WeaponId[] = [
+  "mooring_nail",
+  "sluicegate",
+  "oddsmaker",
+  "pathmaker",
+];
+
+const PVP_UNSUPPORTED_WEAPON_IDS = new Set<WeaponId>(pvpUnsupportedWeaponIds);
+
+export function isPvpWeaponSupported(id: WeaponId): boolean {
+  return !PVP_UNSUPPORTED_WEAPON_IDS.has(id);
+}
 
 // ---- PVP CONFIG (balancer + designer surface) ---------------------------------------------
 // Numbers are the balancer finals (2026-07-15): FIXED 100 HP + a global 1.78x scalar

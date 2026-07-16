@@ -421,7 +421,8 @@ function manifestGates(): void {
     ALL_WEAPONS.every((id) => ARSENAL[id].authority.every((ch) => KNOWN_AUTHORITY.includes(ch))));
   check("every effect weapon claims its effect channel",
     ([["snapwire", "effects:wire"], ["frostline", "effects:zone"], ["halo", "effects:orbit"],
-      ["sentry", "effects:sentry"], ["crook", "effects:tether"], ["breach", "chargeT"]] as Array<[WeaponId, AuthorityChannel]>)
+      ["sentry", "effects:sentry"], ["crook", "effects:tether"], ["breach", "chargeT"],
+      ["pathmaker", "effects:zone"]] as Array<[WeaponId, AuthorityChannel]>)
       .every(([id, ch]) => ARSENAL[id].authority.includes(ch)));
   // "coin-fed" (the Midas) keeps the INFINITE RESERVE contract: the run economy
   // AMPLIFIES the shot, never gates it — a broke trigger still fires.
@@ -448,6 +449,8 @@ function manifestGates(): void {
     wep.killShards !== undefined ? "reap" : "", wep.accel !== undefined ? "accel" : "",
     wep.coinBoost !== undefined ? "gilded" : "", wep.isPhase === true ? "phase" : "",
     wep.implode !== undefined ? "implode" : "",
+    wep.grapple !== undefined ? "grapple" : "", wep.modeShift !== undefined ? "modeshift" : "",
+    wep.gamble !== undefined ? "gamble" : "", wep.paint?.isPaving === true ? "pave" : "",
   ].filter((s) => s.length > 0).join("+") || "plain";
   const fingerprints = ALL_WEAPONS.map((id) => `${mechSig(WEAPONS[id])}|${ARSENAL[id].idealRange}|${ARSENAL[id].target}`);
   const dupes = fingerprints.filter((f, i) => fingerprints.indexOf(f) !== i);
