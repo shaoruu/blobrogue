@@ -865,6 +865,9 @@
         .loadout-confirm-loadout::after{ content:attr(data-short-name); font-size:var(--fs-xs); }
       }
       @media (max-width:360px){
+        .loadout-gate .loadout-head h1{ font-size:16px; line-height:1.15; letter-spacing:1px;
+          white-space:normal; }
+        .loadout-kit-grid{ grid-template-rows:repeat(4,auto); }
         .loadout-footer{ grid-template-columns:88px minmax(0,1fr); gap:8px; }
         .loadout-confirm-action{ font-size:var(--fs-2xs); letter-spacing:0; }
         .loadout-confirm-loadout::after{ font-size:var(--fs-2xs); letter-spacing:0; }

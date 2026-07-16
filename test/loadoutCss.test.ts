@@ -53,6 +53,11 @@ check("responsive shortName rules exist at 560px and 360px",
   && css.includes("content:attr(data-short-name)")
   && css.includes("@media (max-width:360px)")
   && css.includes("grid-template-columns:88px minmax(0,1fr)"));
+check("320px titles can fit or wrap without horizontal clipping",
+  css.includes(".loadout-gate .loadout-head h1{ font-size:16px")
+  && css.includes("white-space:normal"));
+check("320px kit cards use content-sized rows",
+  css.includes(".loadout-kit-grid{ grid-template-rows:repeat(4,auto); }"));
 check("action text never uses truncation",
   css.includes(".loadout-confirm-action{")
   && css.includes("white-space:nowrap")
