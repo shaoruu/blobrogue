@@ -57,11 +57,26 @@ check("320px titles can fit or wrap without horizontal clipping",
   css.includes(".loadout-gate .loadout-head h1{ font-size:16px")
   && css.includes("white-space:normal"));
 check("320px kit cards use content-sized rows",
-  css.includes(".loadout-kit-grid{ grid-template-rows:repeat(4,auto); }"));
+  css.includes("grid-template-rows:repeat(4,auto)"));
 check("action text never uses truncation",
   css.includes(".loadout-confirm-action{")
   && css.includes("white-space:nowrap")
   && css.includes("text-overflow:clip"));
+check("cards reserve independent identity, copy, and status rows",
+  css.includes("grid-template-rows:auto minmax(0,1fr) minmax(42px,auto)")
+  && css.includes(".loadout-card-header{")
+  && css.includes(".loadout-card-description{")
+  && css.includes(".loadout-card-state{"));
+check("pet rows size to content at desktop and mobile",
+  css.includes("grid-template-rows:repeat(2,minmax(min-content,auto))")
+  && css.includes("grid-template-rows:repeat(3,minmax(min-content,auto))"));
+check("pet status copy is never ellipsized or hidden",
+  css.includes(".loadout-card-state{")
+  && css.includes("min-height:42px")
+  && css.includes("overflow:visible")
+  && css.includes("text-overflow:clip"));
+check("mobile keeps the controller-aligned two-column pet grid",
+  css.includes(".loadout-pet-grid{ grid-template-columns:repeat(2,minmax(0,1fr))"));
 
 Reflect.set(globalThis, "window", dom.window);
 Reflect.set(globalThis, "document", dom.window.document);
