@@ -129,10 +129,11 @@ async function main(): Promise<void> {
     const world = createWorld(0xB102, 1, { isShared: true, skipLocalPlayer: true });
     const playerId = "p1";
     spawnPlayerInWorld(world, playerId);
-    let peer: WsClient | null = null;
+    let acceptPeer: (peer: WsClient) => void = () => {};
+    const peerPromise = new Promise<WsClient>((resolve) => { acceptPeer = resolve; });
     let isBootstrapSent = false;
     server.on("connection", (candidate) => {
-      peer = candidate;
+      acceptPeer(candidate);
       candidate.on("message", () => {
         if (isBootstrapSent) return;
         isBootstrapSent = true;
@@ -154,10 +155,10 @@ async function main(): Promise<void> {
     });
     try {
       bot.start();
-      const isReady = await waitUntil(() => bot.transport.isReady() && peer !== null, 2000);
+      const isReady = await waitUntil(() => bot.transport.isReady(), 2000);
       check("scripted bot reached a full-snapshot boundary", isReady);
-      const serverPeer = peer;
-      if (!isReady || serverPeer === null) return;
+      if (!isReady) return;
+      const serverPeer = await peerPromise;
 
       const sendEventSnapshot = (tick: number, event: WireEvent): void => {
         world.tick = tick;
