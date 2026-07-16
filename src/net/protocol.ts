@@ -298,7 +298,10 @@ export const FIXED_DT = 1 / TICK_HZ; // 50ms authoritative step
 // v33: authority-plane hard cut. Guest capabilities, signed run receipts, and durable generation
 // admission require the coordinated client/Convex/GS rollout; stale clients get a terminal
 // refresh-required rejection instead of retrying through the reconnect grace.
-// v34: Wave A extends the closed WeaponId set and reconciles per-weapon cycle state.
+// v34: PR #142 Wave A owns this coordinated cut: closed WeaponId additions, immutable run
+// catalog version, per-weapon cooldowns/cycles, Sluice observer mode, Oddsmaker outcome,
+// revive channel owner, and Muddy dash state. Pale PR #140 is v35 and rebases after this cut;
+// later PvP work allocates the next version only when its own wire changes.
 export const PROTOCOL_VERSION = 34;
 
 // How long the server reserves a disconnected player's body (their seat) before the

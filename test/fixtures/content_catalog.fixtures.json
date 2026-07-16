@@ -1,0 +1,16 @@
+{
+  "toolVersion": "weapon-bag-v1",
+  "seed": 20903,
+  "legacy": {
+    "catalogVersion": 0,
+    "sourceCommit": "e501819",
+    "pickupCount": 37,
+    "firstPass": ["singularity", "burst", "sword", "sentry", "cannon", "flamer", "sawnoff", "tracker", "cleaver", "rapid", "skipper", "vortex", "reaper", "halo", "longsword", "scrapper", "crook", "railgun", "swarm", "lastlight", "arcbolt", "tesla", "mortar", "snapwire", "frostline", "beam", "breach", "homing", "smg", "shotgun", "phase", "midas", "nailer", "ricochet", "cryobolt", "spear", "firebomb"]
+  },
+  "waveA": {
+    "catalogVersion": 1,
+    "sourceCommit": "c32a460",
+    "pickupCount": 41,
+    "firstPass": ["cleaver", "mooring_nail", "firebomb", "nailer", "oddsmaker", "phase", "frostline", "vortex", "ricochet", "burst", "rapid", "beam", "cryobolt", "smg", "lastlight", "arcbolt", "midas", "railgun", "snapwire", "swarm", "reaper", "pathmaker", "spear", "tracker", "mortar", "sawnoff", "sword", "sentry", "crook", "longsword", "halo", "tesla", "cannon", "shotgun", "skipper", "scrapper", "flamer", "homing", "singularity", "breach", "sluicegate"]
+  }
+}
