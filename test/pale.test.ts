@@ -513,7 +513,7 @@ function axisSweepGates(): void {
   check("the second-sweep axis is configured (counter-rotate = -spokeStep, opposite sign / same magnitude)",
     PALE.spoke2Step === -PALE.spokeStep);
   check("projectile speed stays fixed while angular motion is slowed for worst-warmth navigation",
-    PALE.spokeSpeed === GORGE.spokeSpeed && PALE.spokeStep === 0.04 && PALE.spokeInterval === 0.4
+    PALE.spokeSpeed === GORGE.spokeSpeed && PALE.spokeStep === 0.03 && PALE.spokeInterval === 0.2
     && PALE.spokeWindup === 0.7 && PALE.spokeRecover === 0.4);
   check("the counter-sweep reuses the FULL SWEEP_ARC (gap = spokeGap; no widening needed — see below)",
     (PALE.spoke2Gap ?? PALE.spokeGap) === PALE.spokeGap);

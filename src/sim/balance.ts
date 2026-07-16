@@ -2134,7 +2134,7 @@ export const PALE = {
   zoneWindup: 0.7, zoneRecover: 0.5, zoneCount: 3, zoneRing: 150, zoneRadius: 30, zoneLife: 9.0, zoneCap: 10,
   // P3 CONVERGENT spokes — the counter-rotation is the difficulty. The wider gaps and slower
   // angular step preserve a continuous walk-only route while warmth-drain is at its ×0.5 worst.
-  spokeWindup: 0.7, spokeRecover: 0.4, spokeDuration: 3.0, spokeInterval: 0.4, spokeCount: 9, spokeGap: 6, spokeStep: 0.04, spokeSpeed: 250,
+  spokeWindup: 0.7, spokeRecover: 0.4, spokeDuration: 3.0, spokeInterval: 0.2, spokeCount: 18, spokeGap: 12, spokeStep: 0.03, spokeSpeed: 250,
   // The shared projectile glob (shape across all three patterns):
   globRadius: 8, globDamage: 1, globLife: 2.8,
   // ---- THE F75 MECHANICS STEP: one NEW READABLE AXIS per phase + the PALE cross-cutting SIGNATURE
@@ -2156,8 +2156,8 @@ export const PALE = {
   // P3 DUAL-READ — a counter-rotating second wheel with the same readable rate and widened gap.
   // The time-integrated navigation gate owns the physical proof over persistent projectiles,
   // pools, debris, walls, player radius, and worst-case warmth slow.
-  spoke2Step: -0.04,
-  spokeLife: 1.0,
+  spoke2Step: -0.03,
+  spokeLife: 2.0,
   // THE PALE SIGNATURE — WARMTH-DRAIN (P3-ONLY, the prestige "the Pale turns on you" finale beat;
   // gated to the core-reveal phase in resolveWarmthDrain). Stay within ~½ tile for > warmthDrainIdleSec
   // → move ×warmthDrainSlow (the shipped CHILL_SLOW); clears the instant you move warmthDrainMoveClearTiles.

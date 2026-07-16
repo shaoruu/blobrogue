@@ -386,7 +386,12 @@ function assertCoverage(golden: PaleGolden): void {
     throw new Error("Pale golden did not naturally spawn the canonical 1220 HP boss");
   }
   if (golden.phaseEntries.map((entry) => entry.phase).join(",") !== "1,2,3") {
-    throw new Error(`Pale golden missed shell progression: ${JSON.stringify(golden.phaseEntries)}`);
+    throw new Error(`Pale golden missed shell progression: ${JSON.stringify({
+      phaseEntries: golden.phaseEntries,
+      earnedWindowsByPhase: golden.earnedWindowsByPhase,
+      completion: golden.completion,
+      ticks: golden.ticks,
+    })}`);
   }
   for (let index = 1; index < golden.phaseEntries.length; index++) {
     const entry = golden.phaseEntries[index];
