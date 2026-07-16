@@ -38,7 +38,13 @@ import { createWeaponBag } from "../sim/weaponBag.js";
 
 // A server blessing offer as surfaced to the game: the id must be echoed back with the choice
 // so the server can validate the answer against exactly this offer.
-export interface BlessingOffer { id: number; choices: string[] }
+export interface BlessingOffer {
+  id: number;
+  choices: string[];
+  k: "blessing" | "pvp_draft";
+  tr: "none" | "frag" | "time" | "dedup";
+  cb: boolean;
+}
 
 // Minimal socket surface (a subset shared by browser WebSocket and the `ws` package).
 export interface SocketLike {
@@ -552,7 +558,13 @@ export class WSTransport implements Transport {
       // only once so resends never re-prompt.
       if (msg.id > this.lastOfferId) {
         this.lastOfferId = msg.id;
-        this.pendingOffer = { id: msg.id, choices: msg.choices.slice() };
+        this.pendingOffer = {
+          id: msg.id,
+          choices: msg.choices.slice(),
+          k: msg.k,
+          tr: msg.tr,
+          cb: msg.cb,
+        };
       }
       return;
     }
@@ -697,7 +709,10 @@ export class WSTransport implements Transport {
     // have expired while we were away (its expiry event is pre-bootstrap backlog, skipped by
     // design), so it must not survive as a stale prompt — a still-live offer is re-sent by
     // the server within a tick.
-    if (snap.full) this.pendingOffer = null;
+    if (snap.full) {
+      this.pendingOffer = null;
+      this.lastOfferId = 0;
+    }
     const prevSnapAt = this.lastSnapAtForJitter;
     this.snapRecvAt = this.now();
     this.snapsRecv++;

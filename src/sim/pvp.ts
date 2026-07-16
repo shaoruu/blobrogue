@@ -41,6 +41,8 @@ export const pvpBlessingBlacklist = [
   "carry_the_light",
 ] as const;
 
+export type PvpDraftTrigger = "none" | "frag" | "time" | "dedup";
+
 export const pvpUnsupportedWeaponIds: readonly WeaponId[] = [
   "mooring_nail",
   "sluicegate",
@@ -101,34 +103,25 @@ export const PVP = {
   envKillCreditWindowSec: 2.0,
   // Two or more credited frags inside this window produce presentation-only chain juice.
   chainWindowSec: 5.0,
-  // Balance-layer switch: the draft system remains built, but physics-only playtests leave
-  // offer generation off until this is deliberately flipped.
-  draftEnabled: false,
-  // When enabled, a free draft arrives on either personal-frag cadence or match-clock cadence.
+  // A free draft arrives on either personal-frag cadence or active-match cadence. Runtime
+  // activation is room-policy authority in world.ts, never a mutable balance flag.
   draftEveryFrags: 3,
   draftEverySec: 45,
+  draftOfferSec: 60,
   draftChoices: 3,
   // The curated pool contains mechanics with a working PvP identity. Flat commons and every
   // sustain, low-HP, economy, dash-cooldown, and flat-EHP blessing stay out.
   blessingBlacklist: pvpBlessingBlacklist,
   blessingPool: [
-    "glass_cannon",
     "split_shot",
     "scattergun",
     "full_metal",
     "big_iron",
     "deadeye",
-    "incendiary_rounds",
-    "cryo_coating",
-    "static_charge",
-    "elementalist",
     "marksman",
     "heavy_rounds",
     "skirmisher",
     "executioner",
-    "overload",
-    "featherweight",
-    "frostbite",
     "core_damage",
     "core_fire",
     "core_move",
@@ -204,6 +197,7 @@ export function pvpMatchTimeTicks(): number { return Math.round(PVP.matchTimeSec
 export function pvpEnvKillCreditWindowTicks(): number { return Math.round(PVP.envKillCreditWindowSec * TICKS_PER_SECOND); }
 export function pvpChainWindowTicks(): number { return Math.round(PVP.chainWindowSec * TICKS_PER_SECOND); }
 export function pvpDraftEveryTicks(): number { return Math.round(PVP.draftEverySec * TICKS_PER_SECOND); }
+export function pvpDraftOfferTicks(): number { return Math.round(PVP.draftOfferSec * TICKS_PER_SECOND); }
 export function pvpSuddenDeathFinalTicks(): number { return Math.round(PVP.suddenDeathFinalSec * TICKS_PER_SECOND); }
 
 function pvpPlayerIdHash(id: PlayerId): number {

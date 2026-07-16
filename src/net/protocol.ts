@@ -30,7 +30,7 @@ import { LOCAL_ID } from "../sim/input.js";
 import type { PlayerId } from "../sim/input.js";
 import type { KitId } from "../sim/kits.js";
 import { isKitId } from "../sim/kits.js";
-import type { MatchPhase, MatchState } from "../sim/pvp.js";
+import type { MatchPhase, MatchState, PvpDraftTrigger } from "../sim/pvp.js";
 import { projectPlayer, applyPlayerSnapshot, modsFromWire } from "./playerSnapshot.js";
 import type { AuthoritativePlayerSnapshot } from "./playerSnapshot.js";
 import type { KeyedDelta, RemovalReason, SelfDelta, WireObject, WireValue } from "./snapshotDelta.js";
@@ -338,7 +338,12 @@ export const FIXED_DT = 1 / TICK_HZ; // 50ms authoritative step
 //   THE LAST NOTE). Enemy kinds `choirmaster` / `choir_pillar` ride via ENEMY_ARCHETYPES (no new
 //   EnemyWire fields). EncounterState flags (lastNotePhase / livePillarId / sheetSpanIndex /
 //   acousticShadowPillarId / silencedMask) ride Batch0's existing enc wire.
-export const PROTOCOL_VERSION = 39;
+// v40: policy-bound PVP private draft wire after Choirmaster v39. Snapshot wait rows and
+//   authoritative offer frames identify the draft surface/trigger/comeback state (offer k/tr/
+//   isComeback), and mode-gated draft/combat events carry offline balance telemetry. The strict
+//   join gate makes older clients terminally refresh instead of rendering a co-op offer surface
+//   against a live arena.
+export const PROTOCOL_VERSION = 40;
 
 
 // How long the server reserves a disconnected player's body (their seat) before the
@@ -496,6 +501,9 @@ export interface RosterWire {
 export interface WaitWire {
   pid: PlayerId;
   s: number;
+  k: "blessing" | "pvp_draft";
+  tr: PvpDraftTrigger;
+  cb: boolean;
 }
 
 // A snapshot event carries a monotonic id so the reliable-event channel can dedupe (client
@@ -770,7 +778,7 @@ export type ServerMsg =
   // `id` so it is idempotent: the server resends it (bounded) until the choice arrives or the
   // offer expires, and the client shows each id only once (no double prompt from resends). The
   // client replies with `chooseBlessing {offerId, choiceId}`; choice authority stays server-side.
-  | { t: "offer"; id: number; choices: string[] }
+  | { t: "offer"; id: number; choices: string[]; k: "blessing" | "pvp_draft"; tr: PvpDraftTrigger; cb: boolean }
   | { t: "error"; code: string; msg: string };
 
 // The complete snapshot message (a keyframe). The delta channel reconstructs one of these
@@ -1033,6 +1041,12 @@ const EVENT_SPECS: Record<SimEvent["t"], EventSpec> = {
   pvpShieldBreak: { scope: "pos", fields: { pid: "str", x: "num", y: "num" } },
   pvpSpawnAttackBlocked: { scope: "pid", fields: { pid: "str", x: "num", y: "num" } },
   pvpSuddenDeath: { scope: "global", fields: { leader: "str" } },
+  pvpDraftTriggered: { scope: "pid", fields: { pid: "str", source: "str", comeback: "bool", ordinal: "num", score: "num", leaderScore: "num" } },
+  pvpDraftOffered: { scope: "pid", fields: { pid: "str", source: "str", comeback: "bool", ordinal: "num", items: "str" } },
+  pvpDraftPicked: { scope: "pid", fields: { pid: "str", source: "str", comeback: "bool", ordinal: "num", item: "str", level: "num", latencyTicks: "num", hp: "num", score: "num", leaderScore: "num" } },
+  pvpDraftResolved: { scope: "pid", fields: { pid: "str", source: "str", ordinal: "num", outcome: "str", latencyTicks: "num" } },
+  pvpDraftDelayed: { scope: "pid", fields: { pid: "str", ordinal: "num", reason: "str", remainingTicks: "num" } },
+  pvpDamage: { scope: "global", fields: { by: "str", victim: "str", weapon: "str", damage: "num", victimHp: "num" } },
   pvpMatchOver: { scope: "global", fields: { winner: "str" } },
   // flash/trauma carry no position — rare, tiny, and safe to deliver globally.
   flash: { scope: "global", fields: { eid: "num" } },
@@ -1515,10 +1529,23 @@ function validateWireEvent(v: unknown): WireEvent {
 }
 
 const SEAT_STATES: Record<SeatState, true> = { on: true, away: true };
+const PVP_DRAFT_TRIGGERS: Record<PvpDraftTrigger, true> = {
+  none: true,
+  frag: true,
+  time: true,
+  dedup: true,
+};
+const OFFER_KINDS = { blessing: true, pvp_draft: true } as const;
 
 function validateWaitWire(v: unknown): WaitWire {
   const o = obj(v, "wait");
-  return { pid: shortStr(o, "pid", 64), s: num(o, "s", 0, 1e4) };
+  return {
+    pid: shortStr(o, "pid", 64),
+    s: num(o, "s", 0, 1e4),
+    k: inSet(OFFER_KINDS, o.k, "wait.k"),
+    tr: inSet(PVP_DRAFT_TRIGGERS, o.tr, "wait.tr"),
+    cb: boolOf(o, "cb"),
+  };
 }
 
 function validateRosterWire(v: unknown): RosterWire {
@@ -1703,7 +1730,14 @@ function decodeServerMsg(raw: string): ServerMsg {
         return c;
       });
       if (choices.length < 1 || choices.length > 8) throw new ProtocolError("bad offer size");
-      return { t: "offer", id: intOf(o, "id", 1, Number.MAX_SAFE_INTEGER), choices };
+      return {
+        t: "offer",
+        id: intOf(o, "id", 1, Number.MAX_SAFE_INTEGER),
+        choices,
+        k: inSet(OFFER_KINDS, o.k, "offer.k"),
+        tr: inSet(PVP_DRAFT_TRIGGERS, o.tr, "offer.tr"),
+        cb: boolOf(o, "cb"),
+      };
     }
     case "error":
       return { t: "error", code: shortStr(o, "code", 64), msg: typeof o.msg === "string" && o.msg.length <= 256 ? o.msg : "" };
@@ -2153,7 +2187,17 @@ export interface SnapshotOpts {
 function partyWait(w: WorldState): WaitWire[] {
   if (w.pendingBlessings.size === 0) return [];
   const out: WaitWire[] = [];
-  for (const [pid, left] of w.pendingBlessings) out.push({ pid, s: Math.max(0, Math.ceil(left)) });
+  for (const [pid, left] of w.pendingBlessings) {
+    const player = w.players.get(pid);
+    const isDraft = w.mode === "pvp" && player?.pvpDraftTrigger !== "none";
+    out.push({
+      pid,
+      s: Math.max(0, Math.ceil(left)),
+      k: isDraft ? "pvp_draft" : "blessing",
+      tr: isDraft ? player?.pvpDraftTrigger ?? "none" : "none",
+      cb: isDraft && (player?.pvpDraftTierBump ?? 0) > 0,
+    });
+  }
   out.sort((a, b) => a.pid.localeCompare(b.pid));
   return out;
 }

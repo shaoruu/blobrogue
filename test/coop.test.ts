@@ -360,7 +360,14 @@ async function headlessClientSpectateTests(): Promise<void> {
   check("a revivable body in range exposes the SEMANTIC action (data, not presentation)",
     preClaim !== null && preClaim.action === "revive" && preClaim.targetName === "s1" && preClaim.progress === null,
     JSON.stringify(preClaim));
-  sock.deliver({ t: "offer", id: 1, choices: ["glass_cannon", "hair_trigger", "split_shot"] });
+  sock.deliver({
+    t: "offer",
+    id: 1,
+    choices: ["glass_cannon", "hair_trigger", "split_shot"],
+    k: "blessing",
+    tr: "none",
+    cb: false,
+  });
   game.tick(1 / 60);
   check("a reward overlay flips the input context to blessing", game.input.context === "blessing", `ctx=${game.input.context}`);
   game.input.keyDown("w");

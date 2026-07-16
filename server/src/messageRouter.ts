@@ -14,7 +14,7 @@ import {
   PVP_PRIVATE_DISABLED_CODE,
   PVP_PUBLIC_DISABLED_CODE,
 } from "../../src/net/pvpFlag.js";
-import { PVP_POLICY_MAX_PLAYERS, pvpPolicyAccess } from "../../src/net/pvpPolicy.js";
+import { PRIVATE_DRAFT_PVP_POLICY, PVP_POLICY_MAX_PLAYERS, pvpPolicyAccess } from "../../src/net/pvpPolicy.js";
 import { mintResumeToken, resumeTokensEqual, verifyTicket, type AuthResult } from "./auth.js";
 import type { ServerConfig } from "./config.js";
 import type { Clock } from "./clock.js";
@@ -576,19 +576,30 @@ export class MessageRouter {
 
   private onChooseBlessing(conn: Conn, msg: Extract<ClientMsg, { t: "chooseBlessing" }>): void {
     if (!conn.authed || !conn.playerId || !conn.worldId) return;
+    const room = this.ctx.sessions.room(conn.worldId);
     // Valid ONLY against the live pending offer: matching offer id, unexpired, and a choice the
     // server itself put in that offer's set (anti-cheat gate — the client can never mint items).
     if (!conn.pendingOffer || msg.offerId !== conn.offerId) { this.ctx.metrics.counters.rejectedInputs++; return; }
-    if (this.ctx.clock.now() > conn.offerDeadline) {
+    // PVP offer lifetime is authoritative active-match time in the sim. It freezes through
+    // absence and insufficient-player pauses, so wall time must never expire it independently.
+    if (room?.pvpPolicy !== PRIVATE_DRAFT_PVP_POLICY && this.ctx.clock.now() > conn.offerDeadline) {
       conn.pendingOffer = null;
       conn.offerResendsLeft = 0;
+      conn.queue.length = 0;
+      conn.lastInput = null;
+      conn.starveTicks = 0;
       this.ctx.metrics.counters.rejectedInputs++;
       return;
     }
     if (!conn.pendingOffer.includes(msg.choiceId)) { this.ctx.metrics.counters.rejectedInputs++; return; }
-    const room = this.ctx.sessions.room(conn.worldId);
     if (!room) return;
-    if (room.applyBlessing(conn.playerId, msg.choiceId)) { conn.pendingOffer = null; conn.offerResendsLeft = 0; }
+    if (room.applyBlessing(conn.playerId, msg.choiceId)) {
+      conn.pendingOffer = null;
+      conn.offerResendsLeft = 0;
+      conn.queue.length = 0;
+      conn.lastInput = null;
+      conn.starveTicks = 0;
+    }
     else this.ctx.metrics.counters.rejectedInputs++;
   }
 }

@@ -163,12 +163,76 @@ try {
   if (world !== undefined) {
     for (const player of world.state.players.values()) {
       player.pvpDraftFrags = PVP.draftEveryFrags;
-      player.pvpNextDraftTick = world.state.tick;
+      player.pvpDraftActiveTicks = Math.round(PVP.draftEverySec * 20);
     }
   }
-  await new Promise<void>((resolve) => setTimeout(resolve, 200));
-  check("authority foundation leaves runtime drafts inert",
-    PVP.draftEnabled === false && world?.state.pendingBlessings.size === 0);
+  check("canonical room policy is the sole active draft runtime switch",
+    await waitUntil(() => world?.state.pendingBlessings.size === PVP_POLICY_MAX_PLAYERS, 2_000));
+  check("all same-tick offers are isolated three-choice sets",
+    bots.every((bot) => {
+      const offer = bot.transport.getPendingOfferPeek();
+      return offer?.k === "pvp_draft"
+        && offer.tr === "dedup"
+        && offer.choices.length === PVP.draftChoices
+        && new Set(offer.choices).size === PVP.draftChoices;
+    }));
+  const offers = bots.map((bot) => bot.transport.getPendingOfferPeek()!);
+  const rejectedBefore = server.server.health().counters.rejectedInputs;
+  bots[0].transport.sendChooseBlessing(offers[0].id + 1, offers[0].choices[0]);
+  const crossChoice = offers[1].choices.find((choice) => !offers[0].choices.includes(choice));
+  check("same-tick player offers have independently seeded sets", crossChoice !== undefined);
+  if (crossChoice !== undefined) {
+    bots[0].transport.sendChooseBlessing(offers[0].id, crossChoice);
+  }
+  check("stale and cross-player choices reject without clearing the owner offer",
+    await waitUntil(
+      () => server.server.health().counters.rejectedInputs >= rejectedBefore + 2,
+      2_000,
+    )
+    && world?.state.pendingBlessings.has(bots[0].transport.getSelfServerId() ?? "") === true);
+
+  bots[0].transport.sendChooseBlessing(offers[0].id, offers[0].choices[0]);
+  check("one valid pick clears only that player's offer",
+    await waitUntil(() => {
+      const pid = bots[0].transport.getSelfServerId();
+      return pid !== null
+        && world?.state.pendingBlessings.has(pid) === false
+        && (world?.state.pendingBlessings.size ?? 0) === PVP_POLICY_MAX_PLAYERS - 1;
+    }, 2_000));
+
+  const reconnectPid = bots[2].transport.getSelfServerId()!;
+  const reconnectOffer = offers[2];
+  const reconnectRemaining = world?.state.players.get(reconnectPid)?.pvpDraftOfferTicksLeft ?? 0;
+  bots[2].dropConnection(true);
+  check("disconnect freezes that chooser's remaining offer duration",
+    await waitUntil(() => world?.state.players.get(reconnectPid)?.isAbsent === true, 2_000)
+    && await waitUntil(
+      () => world?.state.players.get(reconnectPid)?.pvpDraftOfferTicksLeft === reconnectRemaining,
+      500,
+    ));
+  bots[2].restoreNetwork();
+  check("reconnect restores the exact same authoritative offer",
+    await waitUntil(() => {
+      const offer = bots[2].transport.getPendingOfferPeek();
+      return offer?.id === reconnectOffer.id
+        && offer.k === "pvp_draft"
+        && offer.choices.join(",") === reconnectOffer.choices.join(",");
+    }, 4_000));
+
+  const expiryPid = bots[3].transport.getSelfServerId()!;
+  const expiryPlayer = world?.state.players.get(expiryPid);
+  if (expiryPlayer !== undefined) expiryPlayer.pvpDraftOfferTicksLeft = 1;
+  check("expired PVP offer clears sim and connection state",
+    await waitUntil(() => {
+      const conn = [...(world?.conns.values() ?? [])].find((candidate) => candidate.playerId === expiryPid);
+      return world?.state.pendingBlessings.has(expiryPid) === false && conn?.pendingOffer === null;
+    }, 2_000));
+  bots[3].dropConnection(true);
+  await waitUntil(() => world?.state.players.get(expiryPid)?.isAbsent === true, 2_000);
+  bots[3].restoreNetwork();
+  check("expired offer never resurrects after a later reconnect",
+    await waitUntil(() => bots[3].transport.isReady(), 4_000)
+    && bots[3].transport.getPendingOfferPeek() === null);
 
   fifth.stop();
   sixth.stop();

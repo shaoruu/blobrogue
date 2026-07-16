@@ -260,7 +260,7 @@ AUTH_SETUP.md      operator steps to enable Google sign-in
 
 ## 7. Authoritative online play (the game server + the room lobby) — THE multiplayer path
 
-The protocol-v33 receipt, admission, migration, secret, and drain order is security-sensitive.
+The protocol-v34 draft/receipt/admission/migration/secret/drain order is security-sensitive.
 Follow [`docs/security/run-authority.md`](docs/security/run-authority.md) for every authority-plane
 rollout; do not infer that order from the general provisioning checklist above.
 

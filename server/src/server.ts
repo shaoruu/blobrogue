@@ -302,6 +302,9 @@ export class GameServer {
       conn.offerId++;
       conn.offerResendsLeft = OFFER_RESENDS;
       conn.offerDeadline = this.clock.now() + this.cfg.offerTtlMs;
+      conn.queue.length = 0;
+      conn.lastInput = null;
+      conn.starveTicks = 0;
     }
   }
 

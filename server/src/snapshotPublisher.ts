@@ -18,6 +18,7 @@ import type { ServerConfig } from "./config.js";
 import type { Metrics } from "./metrics.js";
 import type { Conn } from "./connection.js";
 import type { RoomRuntime, SnapshotPublisher } from "./ports.js";
+import { PRIVATE_DRAFT_PVP_POLICY } from "../../src/net/pvpPolicy.js";
 
 // The client's ack lags the server by ~1-3 ticks in steady state; beyond this many unacked
 // snapshots (a long stall / heavy loss) the accumulated delta stops being worth it and we send
@@ -238,7 +239,20 @@ export class WsSnapshotPublisher implements SnapshotPublisher {
     for (const conn of room.conns.values()) {
       if (conn.closing || !conn.pendingOffer || conn.offerResendsLeft <= 0) continue;
       conn.offerResendsLeft--;
-      try { conn.ws.send(this.codec.encodeServer({ t: "offer", id: conn.offerId, choices: conn.pendingOffer })); } catch { /* closing */ }
+      const player = conn.playerId === null ? undefined : room.state.players.get(conn.playerId);
+      const isDraft = room.pvpPolicy === PRIVATE_DRAFT_PVP_POLICY
+        && player !== undefined
+        && player.pvpDraftTrigger !== "none";
+      try {
+        conn.ws.send(this.codec.encodeServer({
+          t: "offer",
+          id: conn.offerId,
+          choices: conn.pendingOffer,
+          k: isDraft ? "pvp_draft" : "blessing",
+          tr: isDraft ? player?.pvpDraftTrigger ?? "none" : "none",
+          cb: isDraft && (player?.pvpDraftTierBump ?? 0) > 0,
+        }));
+      } catch { /* closing */ }
     }
   }
 

@@ -1528,7 +1528,10 @@ export class Game {
     // pick still pumps the authoritative stream: the server world keeps ticking under the
     // overlay, and the offer's TTL expiry must land NOW, not when the overlay closes.
     if (this.isPaused || this.isChoosing) {
-      if (this.isChoosing) this.pumpChoosingOnline();
+      if (this.isChoosing) {
+        this.pumpChoosingOnline();
+        this.blessing.tickGamepad();
+      }
       this.render();
       this.raf = requestAnimationFrame(this.loop);
       return;
@@ -1735,6 +1738,7 @@ export class Game {
     if (!this.isChoosing) return;
     this.blessing.hide();
     this.isChoosing = false;
+    this.input.releaseAll();
     this.syncInputContext();
     this.hud.showBanner(OFFER_EXPIRED_TOAST);
   }
@@ -3151,6 +3155,13 @@ export class Game {
         this.addTrauma(0.16);
         this.hud.showBanner("SUDDEN DEATH");
         break;
+      case "pvpDraftTriggered":
+      case "pvpDraftOffered":
+      case "pvpDraftPicked":
+      case "pvpDraftResolved":
+      case "pvpDraftDelayed":
+      case "pvpDamage":
+        break;
       case "pvpMatchOver":
         // Reliable, id-tagged (never lost): the winner hears the victory sting, everyone else
         // the light defeat cue. The ph->"over" observer edge is intentionally NOT a second
@@ -3384,6 +3395,7 @@ export class Game {
   private showLocalBlessingChoices(choices: ItemDef[]): void {
     this.isChoosing = true;
     this.isPaused = false;
+    this.input.releaseAll();
     this.syncInputContext();
     this.blessing.show(this.toBlessingCards(choices), (item) => {
       this.playBlessingPickSfx(item);
@@ -3391,9 +3403,10 @@ export class Game {
       if (events.length > 0) this.ownedItemDefs.push(item);
       this.handleSimEvents(events);
       this.isChoosing = false;
+      this.input.releaseAll();
       this.syncInputContext();
       this.last = performance.now();
-    });
+    }, { isDraft: this.isArena });
   }
 
   // The pick moment's sound: a fresh blessing chimes; a duplicate pick IS its Lv2/Lv3
@@ -3407,7 +3420,13 @@ export class Game {
   // the authoritative choice — the answer echoes the offer id so the server validates it against
   // exactly that offer, applies the mods, and reflects them via SelfWire; this client never
   // mutates its own run stats. Choices arrive as item ids we resolve to defs.
-  private offerServerBlessing(offer: { id: number; choices: string[] }) {
+  private offerServerBlessing(offer: {
+    id: number;
+    choices: string[];
+    k: "blessing" | "pvp_draft";
+    tr: "none" | "frag" | "time" | "dedup";
+    cb: boolean;
+  }) {
     const choices = offer.choices
       .map((id) => itemById(id))
       .filter((item): item is ItemDef =>
@@ -3416,15 +3435,17 @@ export class Game {
     if (choices.length === 0 || !this.wsTransport) return;
     this.isChoosing = true;
     this.isPaused = false;
+    this.input.releaseAll();
     this.choosingSinceTick = this.wsTransport.getLatestSnapshot()?.tick ?? 0;
     this.syncInputContext();
     this.blessing.show(this.toBlessingCards(choices), (item) => {
       this.playBlessingPickSfx(item);
       this.wsTransport?.sendChooseBlessing(offer.id, item.id);
       this.isChoosing = false;
+      this.input.releaseAll();
       this.syncInputContext();
       this.last = performance.now();
-    });
+    }, { isDraft: offer.k === "pvp_draft" });
   }
 
   // Card view of a choice set: each card shows the level the pick WOULD reach (an owned

@@ -83,7 +83,8 @@ import type {
 // v37: Wave B closed WeaponId + catalogVersion 2 (after Sever v36).
 // v38: PALE THRONE F75 giant closed enemy/prop kind sets + telegraph/warmth wire (after Wave B v37 / Sever v36).
 // v39: Batch2A Choirmaster F60 closed AttackMove `last_note` + choirmaster/choir_pillar kinds.
-export const SYNTHETIC_JOIN_PROTOCOL = 39;
+// v40: policy-bound PVP private draft wire (WaitWire/offer k+tr+isComeback) after Choirmaster v39.
+export const SYNTHETIC_JOIN_PROTOCOL = 40;
 export const SYNTHETIC_COOP_TICKET_ENVELOPE = "v1";
 export const SYNTHETIC_PVP_TICKET_ENVELOPE = "v2";
 export const SYNTHETIC_ADMISSION_ENVELOPE = "a2";
