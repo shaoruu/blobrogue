@@ -206,7 +206,7 @@ function eventPassthroughTests(): void {
 }
 
 function waveAStateTests(): void {
-  section("Wave A v34 state: cycles, catalog, mode, revive owner, and cooldowns delta exactly");
+  section("Wave A v35 state: cycles, catalog, mode, revive owner, and cooldowns delta exactly");
   const base = makeBaseSnap();
   base.cat = 0;
   const next = cloneSnap(base);
