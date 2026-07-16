@@ -59,6 +59,8 @@ export interface HudState {
   // Party coordination readout in the objective lane ("WAITING FOR 1/2 PLAYERS…" /
   // "WAITING AT EXIT…"); null hides it.
   waitLabel: string | null;
+  // Batch0 encounter HUD: progress/checkpoint/carrier (null = no encounter / arena boss bar wins).
+  encounter: { kind: string; progress: number; checkpoint: number; carrierId: string | null; completed: boolean } | null;
   dashFill: number; // 0..1 dash-meter fill, 1 = ready
   // Kill-chain combo (per-local-player). combo 0 hides the widget entirely.
   combo: number;      // current chain length
@@ -169,6 +171,14 @@ export function objectiveCopy(isCleared: boolean, enemiesLeft: number, isParty =
   if (isCleared) return isParty ? "FLOOR CLEAR \u00b7 MEET AT EXIT" : "FLOOR CLEAR \u00b7 GO DOWN";
   if (enemiesLeft <= 0) return "ENEMIES INCOMING\u2026";
   return `${enemiesLeft} ${enemiesLeft === 1 ? "ENEMY" : "ENEMIES"} LEFT`;
+}
+
+// Batch0 encounter objective readout (custom kinds). Arena leaves this empty — boss bar wins.
+export function encounterObjectiveCopy(enc: HudState["encounter"]): string | null {
+  if (!enc || enc.kind === "arena" || enc.kind === "none") return null;
+  if (enc.completed) return "OBJECTIVE COMPLETE";
+  const pct = Math.round(Math.max(0, Math.min(1, enc.progress)) * 100);
+  return `OBJECTIVE ${pct}% \u00b7 CP ${enc.checkpoint}`;
 }
 
 // ---- weapon card tooltip copy (pure — the DOM suite locks the formatting) ----
@@ -1619,7 +1629,7 @@ export class Hud {
       // The objective line ALWAYS leads with the floor (UI designer: "what floor am I on" is
       // answered where the eye already goes). During a boss it reads FLOOR N (the boss bar owns
       // the rest); the dev sandbox hides it. `what` is the state copy (enemy count / cleared).
-      let what = s.isObjectiveHidden ? "" : isBossActive ? "" : objectiveCopy(s.isCleared, s.enemiesLeft, s.isParty);
+      let what = s.isObjectiveHidden ? "" : isBossActive ? "" : (encounterObjectiveCopy(s.encounter) ?? objectiveCopy(s.isCleared, s.enemiesLeft, s.isParty));
       // The cleared copy starts with "FLOOR CLEAR ..." which would double the FLOOR N lead token;
       // drop that leading word so it reads "FLOOR N · CLEAR · GO DOWN".
       if (what.startsWith("FLOOR ")) what = what.slice("FLOOR ".length);

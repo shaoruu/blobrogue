@@ -82,7 +82,7 @@ function mkState(over: Partial<HudState> = {}): HudState {
     weaponCap: MAX_OWNED_WEAPONS,
     swap: null,
     isCleared: false, enemiesLeft: 3, isObjectiveHidden: false, isParty: false, isBossActive: false, bossHpFrac: 0, bossName: "",
-    coopLabel: null, waitLabel: null, dashFill: 1,
+    coopLabel: null, waitLabel: null, encounter: null, dashFill: 1,
     combo: 0, comboMult: 1, comboColor: "#fff", comboFrac: 0,
     items: [],
     party: [],

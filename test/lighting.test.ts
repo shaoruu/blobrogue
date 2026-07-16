@@ -135,9 +135,11 @@ function syntheticDungeon(): Dungeon {
   }
   return {
     w, h, tiles,
-    rooms: [
-      { x: 2, y: 2, w: 5, h: 7, cx: 4, cy: 5, kind: "normal", shape: "rect" },
-      { x: 9, y: 2, w: 5, h: 7, cx: 11, cy: 5, kind: "normal", shape: "rect" },
+    edges: [],
+      blueprint: null,
+      rooms: [
+      { id: 0, x: 2, y: 2, w: 5, h: 7, cx: 4, cy: 5, kind: "normal", shape: "rect" },
+      { id: 1, x: 9, y: 2, w: 5, h: 7, cx: 11, cy: 5, kind: "normal", shape: "rect" },
     ],
     spawn: { x: 4, y: 5 },
     exit: { x: 11, y: 5 },

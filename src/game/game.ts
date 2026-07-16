@@ -3968,6 +3968,7 @@ export class Game {
       // One coordination slot: an open blessing gate outranks exit staging (picks always
       // resolve before the descend, so the messages can never both apply).
       waitLabel: this.isArena ? null : this.blessingWaitLabel() ?? this.exitWaitLabel(),
+      encounter: this.encounterHud(),
       party: this.partyHud(),
       ult: this.ultHud(),
       sig: this.sigHud(),
@@ -3998,6 +3999,19 @@ export class Game {
   }
 
   // Teammate HP for the party HUD (spec §6, the Mender dependency): the live nameplate rows.
+  // Batch0: encounter progress for custom objective HUD. Arena returns null (boss bar wins).
+  private encounterHud(): HudState["encounter"] {
+    const enc = this.world.encounter;
+    if (!enc || enc.kind === "none" || enc.kind === "arena") return null;
+    return {
+      kind: enc.kind,
+      progress: enc.objectiveProgress,
+      checkpoint: enc.checkpoint,
+      carrierId: enc.carrierPlayerId,
+      completed: enc.completed,
+    };
+  }
+
   private partyHud(): HudState["party"] {
     if (this.mode === "solo" || this.isArena) return [];
     return this.remotes().map((r) => ({
