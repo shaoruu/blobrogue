@@ -77,6 +77,12 @@ const playersSource = readFileSync(new URL("../convex/players.ts", import.meta.u
 const roomsSource = readFileSync(new URL("../convex/rooms.ts", import.meta.url), "utf8");
 const ticketSource = readFileSync(new URL("../convex/gsTicket.ts", import.meta.url), "utf8");
 const receiptSource = readFileSync(new URL("../convex/runReceipt.ts", import.meta.url), "utf8");
+const schemaSource = readFileSync(new URL("../convex/schema.ts", import.meta.url), "utf8");
+const ticketCoreSource = readFileSync(new URL("../convex/gsTicketCore.ts", import.meta.url), "utf8");
+const admissionSource = readFileSync(new URL("../src/net/generationAdmission.ts", import.meta.url), "utf8");
+const migrationSource = readFileSync(new URL("../convex/migrations.ts", import.meta.url), "utf8");
+const serverSource = readFileSync(new URL("../server/src/server.ts", import.meta.url), "utf8");
+const pvpSimSource = readFileSync(new URL("../src/sim/pvp.ts", import.meta.url), "utf8");
 
 check("public recordRun and recordFloorProgress fail closed",
   (playersSource.match(/verified_receipt_required/g) ?? []).length >= 2);
@@ -95,6 +101,28 @@ check("receipt consumption is one-time and generation-bound",
   receiptSource.includes('withIndex("by_jti"')
   && receiptSource.includes('"receipt_replayed"')
   && receiptSource.includes('room.generationState !== "active"'));
+check("durable rooms carry only the canonical private PVP policy",
+  schemaSource.includes('pvpPolicy: v.optional(v.literal("private_draft_v1"))'));
+check("browser room creation cannot submit a policy claim",
+  !roomsSource.slice(
+    roomsSource.indexOf("export const create"),
+    roomsSource.indexOf("handler:", roomsSource.indexOf("export const create")),
+  ).includes("pvpPolicy"));
+check("room policy is never patched during start, reopen, leave, or heartbeat",
+  [...roomsSource.matchAll(/ctx\.db\.patch\([\s\S]*?\);/g)]
+    .every((match) => !match[0].includes("pvpPolicy")));
+check("PVP ticket v2 inserts policy immediately after world in fixed key order",
+  ticketCoreSource.includes('wld: claims.worldId,\n    pp: claims.pvpPolicy')
+  && ticketCoreSource.includes('const body = "v2."'));
+check("generation admission is the policy-bound a2 envelope",
+  admissionSource.includes('GENERATION_ADMISSION_PREFIX = "a2"')
+  && admissionSource.includes("pvpPolicy: PvpPolicyId | null"));
+check("legacy migration never upgrades missing PVP policy",
+  migrationSource.includes("Deliberately do not infer pvpPolicy")
+  && !/ctx\.db\.patch\([^)]*pvpPolicy/.test(migrationSource));
+check("dark foundation leaves PVP drafts and verified progression off",
+  pvpSimSource.includes("draftEnabled: false")
+  && serverSource.includes("if (!world || world.isPvp) return;"));
 
 process.stdout.write(`\n${passed} checks passed, ${failed} failed\n`);
 if (failed > 0) process.exit(1);

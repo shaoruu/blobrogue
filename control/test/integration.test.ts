@@ -8,7 +8,10 @@ import { WebSocket } from "ws";
 
 import {
   HttpGameServerProbe,
+  SYNTHETIC_ADMISSION_ENVELOPE,
+  SYNTHETIC_COOP_TICKET_ENVELOPE,
   SYNTHETIC_JOIN_PROTOCOL,
+  SYNTHETIC_PVP_TICKET_ENVELOPE,
   isSyntheticSpawnProtectionSelf,
 } from "../src/adapters/httpProbe.js";
 import { NodeTailReader } from "../src/adapters/tail.js";
@@ -42,6 +45,10 @@ export async function suite(t: TestRunner): Promise<void> {
   await t.suite("integration: real gs status + synthetic-join verify", async () => {
     t.check("synthetic join speaks the current game protocol", SYNTHETIC_JOIN_PROTOCOL === PROTOCOL_VERSION,
       `probe=${SYNTHETIC_JOIN_PROTOCOL} game=${PROTOCOL_VERSION}`);
+    t.check("synthetic authority probe expects v1 co-op, v2 PVP, and a2 admission",
+      SYNTHETIC_COOP_TICKET_ENVELOPE === "v1"
+      && SYNTHETIC_PVP_TICKET_ENVELOPE === "v2"
+      && SYNTHETIC_ADMISSION_ENVELOPE === "a2");
     t.check("control rejects missing or malformed v33 spawn protection self fields",
       isSyntheticSpawnProtectionSelf({ spo: 0, sge: 0, sse: 0, sgr: 0, ssh: 0, sfl: false })
       && !isSyntheticSpawnProtectionSelf({ spo: 0, sge: 0, sse: 0, sgr: 0, ssh: 0 })

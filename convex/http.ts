@@ -84,6 +84,8 @@ http.route({
       worldId: payload.worldId,
       roomCode: payload.roomCode,
       generation: payload.generation,
+      mode: payload.mode,
+      pvpPolicy: payload.pvpPolicy,
       kitId: payload.kitId,
       petId: payload.petId,
     });

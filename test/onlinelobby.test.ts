@@ -15,7 +15,13 @@ import type { ConvexClient } from "convex/browser";
 import { OnlineLobby } from "../src/net/onlineLobby.js";
 import { Session } from "../src/net/session.js";
 import { worldIdForRoomCode } from "../src/net/protocol.js";
-import { PvpDisabledError, PVP_DISABLED_CODE, PVP_DISABLED_MESSAGE, PVP_PUBLIC_ENABLED } from "../src/net/pvpFlag.js";
+import {
+  PvpDisabledError,
+  PVP_DISABLED_MESSAGE,
+  PVP_PRIVATE_DISABLED_CODE,
+  PVP_PUBLIC_DISABLED_CODE,
+  PVP_PUBLIC_ENABLED,
+} from "../src/net/pvpFlag.js";
 import type { RunLoadout } from "../src/net/kitSelection.js";
 
 let passed = 0, failed = 0;
@@ -258,7 +264,8 @@ async function main(): Promise<void> {
     let createErr: unknown = null;
     try { await lobby.create("pvp", LOADOUT); } catch (e) { createErr = e; }
     check("create('pvp') throws the typed PvpDisabledError", createErr instanceof PvpDisabledError);
-    check("...carrying the pvp_disabled code", createErr instanceof PvpDisabledError && createErr.code === PVP_DISABLED_CODE);
+    check("...carrying the private_disabled code",
+      createErr instanceof PvpDisabledError && createErr.code === PVP_PRIVATE_DISABLED_CODE);
     check("...and the clean player-facing copy", createErr instanceof Error && createErr.message === PVP_DISABLED_MESSAGE, PVP_DISABLED_MESSAGE);
     check("no rooms:create reached the backend for a pvp room", calls.every((c) => c.fn !== "rooms:create"), callNames(calls).join(" -> "));
     lobby.leave();
@@ -269,7 +276,8 @@ async function main(): Promise<void> {
     const qlobby = new OnlineLobby(qclient, new Session(qclient));
     let quickErr: unknown = null;
     try { await qlobby.quickPlay("pvp", LOADOUT); } catch (e) { quickErr = e; }
-    check("quickPlay('pvp') throws the typed PvpDisabledError", quickErr instanceof PvpDisabledError && quickErr.code === PVP_DISABLED_CODE);
+    check("quickPlay('pvp') throws the public-disabled PvpDisabledError",
+      quickErr instanceof PvpDisabledError && quickErr.code === PVP_PUBLIC_DISABLED_CODE);
     check("no rooms:quickPlay reached the backend for a pvp room", qcalls.every((c) => c.fn !== "rooms:quickPlay"), callNames(qcalls).join(" -> "));
     qlobby.leave();
 
@@ -281,7 +289,8 @@ async function main(): Promise<void> {
     const jlobby = new OnlineLobby(jclient, new Session(jclient));
     let joinErr: unknown = null;
     try { await jlobby.join("ABCD", LOADOUT); } catch (e) { joinErr = e; }
-    check("join() of a pvp room throws the typed PvpDisabledError (no co-op fallback)", joinErr instanceof PvpDisabledError && joinErr.code === PVP_DISABLED_CODE);
+    check("join() of a pvp room throws the private-disabled PvpDisabledError (no co-op fallback)",
+      joinErr instanceof PvpDisabledError && joinErr.code === PVP_PRIVATE_DISABLED_CODE);
     check("the lobby never adopted the pvp room (mode stays the co-op default)", jlobby.mode === "coop");
     jlobby.leave();
 

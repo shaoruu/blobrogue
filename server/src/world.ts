@@ -13,6 +13,7 @@ import { beginWorldTick, createWorld, stepPlayerPhase, stepWorldPhase, spawnPlay
 import type { KitId } from "../../src/sim/kits.js";
 import { PVP, pvpDraftSeed } from "../../src/sim/pvp.js";
 import type { WorldMode } from "../../src/sim/pvp.js";
+import type { PvpPolicyId } from "../../src/net/pvpPolicy.js";
 import type { WorldState } from "../../src/sim/world.js";
 import type { SimEvent } from "../../src/sim/events.js";
 import type { InputCmd, PlayerId } from "../../src/sim/input.js";
@@ -55,6 +56,7 @@ function intentToInput(i: InputIntent): InputCmd {
 
 export class GameWorld implements RoomRuntime {
   readonly id: string;
+  readonly pvpPolicy: PvpPolicyId | null;
   readonly state: WorldState;
   readonly conns = new Map<number, Conn>();
 
@@ -81,8 +83,18 @@ export class GameWorld implements RoomRuntime {
   private joinedAtFloor = new Map<PlayerId, number>();
   private bossKillsByPlayer = new Map<PlayerId, Set<string>>();
   private authIdentityByPlayer = new Map<PlayerId, string>();
-  constructor(id: string, seed: number = randomSeed(), arena = false, mode: WorldMode = "coop") {
+  constructor(
+    id: string,
+    seed: number = randomSeed(),
+    arena = false,
+    mode: WorldMode = "coop",
+    pvpPolicy: PvpPolicyId | null = null,
+  ) {
     this.id = id;
+    this.pvpPolicy = pvpPolicy;
+    if ((mode === "pvp") !== (pvpPolicy !== null)) {
+      throw new Error("world mode and PVP policy must agree");
+    }
     // Production: a REAL generated dungeon (isShared) with a FRESH random run seed — the server
     // alone owns the seed; clients rebuild geometry from the snapshot's authoritative seed/floor.
     // Measurement (arena=true): an OPEN sandbox arena so the load harness can move a probe in a

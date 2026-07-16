@@ -10,9 +10,17 @@
 //      color), and malformed claims reject rather than misroute
 // Run: npm run test:ticket (in server/).
 
-import { mintGsTicket, worldIdForRoomCode, type GsTicketClaims } from "../../convex/gsTicketCore.js";
-import { mintTicket, verifyTicket, type AuthConfig } from "../src/auth.js";
+import { createHmac } from "node:crypto";
+import {
+  mintGsTicket,
+  mintPvpGsTicket,
+  pvpWorldIdForRoomCode,
+  worldIdForRoomCode,
+  type GsTicketClaims,
+} from "../../convex/gsTicketCore.js";
+import { mintPvpTicket, mintTicket, verifyTicket, type AuthConfig } from "../src/auth.js";
 import { worldIdForRoomCode as clientWorldIdForRoomCode } from "../../src/net/protocol.js";
+import { PRIVATE_DRAFT_PVP_POLICY } from "../../src/net/pvpPolicy.js";
 
 let passed = 0, failed = 0;
 const failures: string[] = [];
@@ -22,6 +30,17 @@ function check(name: string, cond: boolean, detail = ""): void {
 }
 function section(name: string): void {
   process.stdout.write(`\n[${name}]\n`);
+}
+
+function signedEnvelope(
+  secret: string,
+  version: "v1" | "v2",
+  payload: Record<string, string | number | boolean>,
+): string {
+  const encoded = Buffer.from(JSON.stringify(payload), "utf8").toString("base64url");
+  const body = `${version}.${encoded}`;
+  const signature = createHmac("sha256", secret).update(body).digest("base64url");
+  return `${body}.${signature}`;
 }
 
 async function main(): Promise<void> {
@@ -157,6 +176,55 @@ async function main(): Promise<void> {
     check("world-claim swap rejects (sig no longer matches)", verifyTicket(cfg, `${head}.${swapped}.${ticket.split(".")[2]}`, now).ok === false);
   }
 
+  section("v2 PVP policy ticket is explicit, byte-locked, and fail-closed");
+  {
+    const claims = {
+      worldId: pvpWorldIdForRoomCode("wave", 7),
+      pvpPolicy: PRIVATE_DRAFT_PVP_POLICY,
+      name: "Arena Host",
+      colorIndex: 4,
+      kit: "gunner",
+      masteryLevel: 1,
+      isPetChoiceMade: true,
+    } as const;
+    const convexTicket = await mintPvpGsTicket(secret, "private-host", claims, 120, now);
+    const serverTicket = mintPvpTicket(secret, "private-host", claims, 120, now);
+    check("Convex and Node mint byte-identical v2 PVP tickets", convexTicket === serverTicket);
+    const verified = verifyTicket(cfg, convexTicket, now);
+    check("v2 binds exact world and canonical policy",
+      verified.ok
+      && verified.ticketVersion === 2
+      && verified.worldId === "pvp:room:WAVE:g7"
+      && verified.pvpPolicy === PRIVATE_DRAFT_PVP_POLICY);
+
+    const missingPolicy = mintTicket(secret, "legacy-pvp", 120, now, {
+      worldId: pvpWorldIdForRoomCode("wave", 7),
+    });
+    check("v1 can never enter policy-bound PVP", verifyTicket(cfg, missingPolicy, now).reason === "policy_required");
+
+    const base = {
+      pid: "private-host",
+      exp: Math.floor(now / 1000) + 120,
+      wld: "pvp:room:WAVE:g7",
+    };
+    check("v2 missing policy rejects",
+      verifyTicket(cfg, signedEnvelope(secret, "v2", base), now).reason === "policy_required");
+    check("v2 unknown policy rejects",
+      verifyTicket(cfg, signedEnvelope(secret, "v2", { ...base, pp: "future_public_v1" }), now).reason === "policy_invalid");
+    check("v2 co-op world plus PVP policy rejects",
+      verifyTicket(cfg, signedEnvelope(secret, "v2", {
+        ...base,
+        wld: "room:WAVE:g7",
+        pp: PRIVATE_DRAFT_PVP_POLICY,
+      }), now).reason === "policy_invalid");
+
+    const [version, encoded, signature] = convexTicket.split(".");
+    const payload = JSON.parse(Buffer.from(encoded, "base64url").toString("utf8")) as Record<string, string | number | boolean>;
+    const modified = Buffer.from(JSON.stringify({ ...payload, pp: "future_public_v1" }), "utf8").toString("base64url");
+    check("modified signed policy claim fails HMAC",
+      verifyTicket(cfg, `${version}.${modified}.${signature}`, now).reason === "bad_sig");
+  }
+
   section("adversarial tickets reject");
   {
     const good = await mintGsTicket(secret, "victim", 120, now);
@@ -165,7 +233,7 @@ async function main(): Promise<void> {
     // Forge a different pid over the original signature.
     const forgedPayload = Buffer.from(JSON.stringify({ pid: "attacker", exp: Math.floor(now / 1000) + 120 })).toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
     check("payload swap rejects (sig no longer matches)", verifyTicket(cfg, `${head}.${forgedPayload}.${sig}`, now).ok === false);
-    check("wrong version prefix rejects", verifyTicket(cfg, `v2.${payload}.${sig}`, now).ok === false);
+    check("changing only the envelope version rejects", verifyTicket(cfg, `v2.${payload}.${sig}`, now).ok === false);
     check("wrong secret rejects", verifyTicket({ secret: "other-secret", allowDev: false }, good, now).ok === false);
     const expired = await mintGsTicket(secret, "victim", 60, now - 120_000);
     const expRes = verifyTicket(cfg, expired, now);

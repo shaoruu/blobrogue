@@ -78,6 +78,9 @@ import type {
 // v32: shared spawn protection end ticks and held-offense arming feedback.
 // v33: authority-plane receipt/capability/generation admission hard cut.
 export const SYNTHETIC_JOIN_PROTOCOL = 33;
+export const SYNTHETIC_COOP_TICKET_ENVELOPE = "v1";
+export const SYNTHETIC_PVP_TICKET_ENVELOPE = "v2";
+export const SYNTHETIC_ADMISSION_ENVELOPE = "a2";
 
 interface SyntheticSpawnSelf {
   spo?: number;
@@ -194,6 +197,17 @@ export class HttpGameServerProbe implements GameServerProbe {
   }
 
   async verify(): Promise<VerifyResult> {
+    const authority = await this.getJson(`${this.cfg.baseUrl}/version`);
+    const isAuthorityCompatible = authority !== null
+      && authority.protocol === SYNTHETIC_JOIN_PROTOCOL
+      && authority.coopTicket === SYNTHETIC_COOP_TICKET_ENVELOPE
+      && authority.pvpTicket === SYNTHETIC_PVP_TICKET_ENVELOPE
+      && authority.admission === SYNTHETIC_ADMISSION_ENVELOPE
+      && authority.pvpPrivateEnabled === false
+      && authority.pvpPublicEnabled === false;
+    if (!isAuthorityCompatible) {
+      return { ok: false, depth: "http_only", detail: "authority_contract_mismatch" };
+    }
     const readiness = await this.readiness();
     if (!readiness.ready) return { ok: false, depth: "http_only", detail: readiness.detail };
 

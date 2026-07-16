@@ -5,7 +5,7 @@
 // also bind loopback and are not proxied to the internet.
 
 import { RESUME_GRACE_MS } from "../../src/net/protocol.js";
-import { PVP_PUBLIC_ENABLED } from "../../src/net/pvpFlag.js";
+import { PVP_PRIVATE_ENABLED, PVP_PUBLIC_ENABLED } from "../../src/net/pvpFlag.js";
 import { authConfigFromEnv, type AuthConfig } from "./auth.js";
 
 export interface ServerConfig {
@@ -56,12 +56,10 @@ export interface ServerConfig {
   // probe in a straight monotonic line for render-latency correlation. Production runs the real
   // dungeon (same stepWorld/tick/netcode); this only changes map geometry. Default off.
   arena: boolean;
-  // TEMP PVP kill switch (last line of defense). Defaults to the SHARED build flag
-  // PVP_PUBLIC_ENABLED (src/net/pvpFlag.ts) — the single source of truth — and is deliberately
-  // NOT env-configurable, so ops cannot drift it away from that coordinated flip. While false,
-  // the join path rejects any pvp world id (see messageRouter). Tests override it to exercise
-  // the (un-deleted) pvp plumbing when enabled.
+  // Independent outer rollout guards. Signed room policy remains mandatory even in tests that
+  // override one guard. Neither is env-configurable, so ops cannot bypass coordinated releases.
   pvpPublicEnabled: boolean;
+  pvpPrivateEnabled: boolean;
 }
 
 // Strict integer env parse: undefined/empty uses the default; anything else must be a finite
@@ -124,5 +122,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     arena: env.GS_ARENA === "1",
     // Mirrors the shared build flag (no env override by design — see the field doc).
     pvpPublicEnabled: PVP_PUBLIC_ENABLED,
+    pvpPrivateEnabled: PVP_PRIVATE_ENABLED,
   };
 }

@@ -14,9 +14,16 @@
 import { v } from "convex/values";
 import { action } from "./_generated/server";
 import { internal } from "./_generated/api";
-import { mintGsTicket, worldIdForRoomCode, pvpWorldIdForRoomCode, type GsTicketClaims } from "./gsTicketCore";
+import {
+  mintGsTicket,
+  mintPvpGsTicket,
+  worldIdForRoomCode,
+  pvpWorldIdForRoomCode,
+  type GsTicketClaims,
+  type PvpGsTicketClaims,
+} from "./gsTicketCore";
 import { isKitId, isKitUnlocked, masteryLevelForXp } from "./masteryCore";
-import { assertPvpModeAllowed } from "./pvpFlag";
+import { isPvpPolicyId } from "./pvpPolicy";
 
 const TICKET_TTL_SECS = 120;
 
@@ -50,14 +57,24 @@ export const mint = action({
     claims.kit = snapshot.kitId;
     if (snapshot.petId !== null) claims.pet = snapshot.petId;
     claims.isPetChoiceMade = true;
-    // TEMP kill switch: never mint a pvp-prefixed world id while PVP is disabled.
     const mode = snapshot.mode;
-    assertPvpModeAllowed(mode);
     claims.worldId = mode === "pvp"
       ? pvpWorldIdForRoomCode(snapshot.roomCode, snapshot.generation)
       : worldIdForRoomCode(snapshot.roomCode, snapshot.generation);
 
-    const ticket = await mintGsTicket(secret, playerId, TICKET_TTL_SECS, Date.now(), claims);
+    let ticket: string;
+    if (mode === "pvp") {
+      if (!isPvpPolicyId(snapshot.pvpPolicy ?? "")) throw new Error("policy_required");
+      ticket = await mintPvpGsTicket(
+        secret,
+        playerId,
+        { ...claims, worldId: claims.worldId, pvpPolicy: snapshot.pvpPolicy } satisfies PvpGsTicketClaims,
+        TICKET_TTL_SECS,
+        Date.now(),
+      );
+    } else {
+      ticket = await mintGsTicket(secret, playerId, TICKET_TTL_SECS, Date.now(), claims);
+    }
     return { ticket, playerId };
   },
 });

@@ -50,6 +50,31 @@ fresh guest row and capability pair while the account JWT is still present, then
 When a guest is merged into an existing account, active room references block the merge.
 Inactive host/presence references are rewired transactionally before the guest row is deleted.
 
+## Dark PVP room policy foundation
+
+PVP authorization is bound to one durable room field, `rooms.pvpPolicy`. The only policy
+recognized by this release is `private_draft_v1`: it requires `mode=pvp`, `isPublic=false`, and a
+maximum of four members. Co-op rooms must not carry a policy. Missing, unknown, or inconsistent
+policy never defaults, downgrades, or falls back; legacy PVP rows without policy remain
+inaccessible and the generation migration deliberately does not upgrade them.
+
+Convex chooses the canonical policy from a private-room intent. The browser cannot submit a
+policy value. Both private and public PVP rollout flags remain false, independently, so this
+foundation creates no production PVP path.
+
+Policy-bound PVP tickets use `v2` with fixed payload order
+`pid,exp,wld,pp,nm,cl,ht,fc,kt,ml,pt,pc,sv`; `pp` is the canonical policy id. Co-op remains on
+ticket `v1`. A v1 ticket cannot enter PVP, and v2 cannot authorize co-op. Generation admission is
+the `a2` envelope and MAC-binds `mode` and `pvpPolicy` with player, world, room, generation,
+loadout, expiry, and jti. Convex compares those values against one current durable room snapshot.
+
+The game server stores the verified policy immutably on its room runtime. Every later join and
+resume must present the same policy, and active bodies plus reserved reconnect seats share the
+four-player cap. `/version` exposes protocol 33, ticket `v1`/`v2`, admission `a2`, supported
+policies, and both dark rollout flags. The control synthetic remains a signed non-generation
+v1 join; it cannot authorize gameplay and verifies the deployed authority-parser contract through
+`/version`.
+
 ## Rolling deployment order
 
 This is a coordinated protocol-v33 hard cut, not a rolling mixed-version deploy.
@@ -74,6 +99,13 @@ only then permits reload.
 
 Old clients receive a terminal protocol or guest-capability rejection with refresh-required
 copy. They do not retry for the 90-second reconnect window and cannot strand a room.
+
+The policy foundation does not change the WebSocket join or snapshot shape, so
+`PROTOCOL_VERSION` remains 33. Ticket v2 and admission a2 are server-side envelope changes.
+Deploy Convex policy schema/query support before the matching game server, verify `/version`,
+and keep both PVP flags false. A later private-PVP rollout still requires a coordinated Convex,
+game-server, and client release; no flag may be enabled while either side reports an older
+authority contract.
 
 ## Migration and compatibility
 

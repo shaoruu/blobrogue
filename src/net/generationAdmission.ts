@@ -1,7 +1,8 @@
 import { parseGenerationWorldId } from "./runReceipt.js";
+import { validatePvpRoomPolicy, type PvpPolicyId } from "./pvpPolicy.js";
 
-export const GENERATION_ADMISSION_VERSION = 1;
-export const GENERATION_ADMISSION_PREFIX = "a1";
+export const GENERATION_ADMISSION_VERSION = 2;
+export const GENERATION_ADMISSION_PREFIX = "a2";
 export const GENERATION_ADMISSION_TTL_MS = 5_000;
 
 export interface GenerationAdmissionPayload {
@@ -11,6 +12,8 @@ export interface GenerationAdmissionPayload {
   worldId: string;
   roomCode: string;
   generation: number;
+  mode: "coop" | "pvp";
+  pvpPolicy: PvpPolicyId | null;
   kitId: string;
   petId: string | null;
   isPetChoiceMade: boolean;
@@ -32,6 +35,8 @@ export function isGenerationAdmissionPayload(payload: GenerationAdmissionPayload
     && payload.playerId.length <= 64
     && payload.roomCode === world.roomCode
     && payload.generation === world.generation
+    && payload.mode === (world.isPvp ? "pvp" : "coop")
+    && validatePvpRoomPolicy(payload.mode, false, payload.pvpPolicy) === null
     && /^[a-z0-9_]{1,24}$/.test(payload.kitId)
     && (payload.petId === null || /^[a-z0-9_]{1,24}$/.test(payload.petId))
     && payload.isPetChoiceMade === true

@@ -12,6 +12,7 @@ import type { PlayerId } from "../../src/sim/input.js";
 import type { KitId } from "../../src/sim/kits.js";
 import type { WireEvent } from "../../src/net/protocol.js";
 import type { RunReceiptParticipant } from "../../src/net/runReceipt.js";
+import type { PvpPolicyId } from "../../src/net/pvpPolicy.js";
 import type { Conn, InputIntent } from "./connection.js";
 import type { ServerConfig } from "./config.js";
 
@@ -53,6 +54,7 @@ export type TakeSeatResult =
 // players and advances it one fixed tick. GameWorld implements it; a Colyseus Room could too.
 export interface RoomRuntime {
   readonly id: string;
+  readonly pvpPolicy: PvpPolicyId | null;
   readonly state: WorldState;
   readonly conns: Map<number, Conn>;
   readonly playerCount: number;
@@ -130,14 +132,14 @@ export interface BlessingOfferRequest {
 // Session / lifecycle store: which room a connection belongs to, room creation + teardown. In
 // memory now; a Colyseus/matchmaking backend or Convex-backed store slots behind this later.
 export interface SessionStore {
-  ensureRoom(id: string): RoomRuntime;
+  ensureRoom(id: string, pvpPolicy: PvpPolicyId | null): RoomRuntime;
   room(id: string): RoomRuntime | undefined;
   isRetired(id: string): boolean;
   recoveredGenerationWorldIds?(): string[];
   rooms(): IterableIterator<RoomRuntime>;
   roomCount(): number;
   totalPlayers(): number;
-  bind(conn: Conn, roomId: string): RoomRuntime;
+  bind(conn: Conn, roomId: string, pvpPolicy: PvpPolicyId | null): RoomRuntime;
   // Register a RESUMED connection on its room (the seat already owns the player body — no
   // spawn). The caller has adopted the seat's playerId onto the conn.
   attach(conn: Conn, room: RoomRuntime): void;

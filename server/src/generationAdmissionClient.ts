@@ -51,6 +51,9 @@ export class GenerationAdmissionClient {
       });
       const decision = await response.json() as GenerationAdmissionDecision;
       if (response.ok && decision.isAllowed === true) return decision;
+      if (response.status >= 500) {
+        return { isAllowed: false, code: "admission_unavailable" };
+      }
       return {
         isAllowed: false,
         code: typeof decision.code === "string" ? decision.code : "admission_rejected",

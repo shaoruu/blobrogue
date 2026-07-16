@@ -5,6 +5,7 @@ import schema from "../convex/schema.js";
 import type { RunCompletionPayload } from "../src/net/runReceipt.js";
 import { RUN_RECEIPT_VERSION } from "../src/net/runReceipt.js";
 import { mintRunCompletionReceipt } from "../server/src/runReceipt.js";
+import { PRIVATE_DRAFT_PVP_POLICY } from "../src/net/pvpPolicy.js";
 
 const modules = import.meta.glob("../convex/**/*.{ts,js}");
 
@@ -59,6 +60,8 @@ const generationAdmission = makeFunctionReference<
     worldId: string;
     roomCode: string;
     generation: number;
+    mode: "coop" | "pvp";
+    pvpPolicy: typeof PRIVATE_DRAFT_PVP_POLICY | null;
     kitId: string;
     petId: string | null;
   },
@@ -89,6 +92,48 @@ const prepareSignOutGuest = makeFunctionReference<
     guestCapability?: string;
   }
 >("players:prepareSignOutGuest");
+const createRoom = makeFunctionReference<
+  "mutation",
+  {
+    clientId: string;
+    guestCapability?: string;
+    kind: "online";
+    mode: "coop" | "pvp";
+    kitId: string;
+    petId: string | null;
+    isKitChoiceMade: boolean;
+    isPetChoiceMade: boolean;
+  },
+  { roomId: string }
+>("rooms:create");
+const quickPlayRoom = makeFunctionReference<
+  "mutation",
+  {
+    clientId: string;
+    guestCapability?: string;
+    kind: "online";
+    mode: "coop" | "pvp";
+    kitId: string;
+    petId: string | null;
+    isKitChoiceMade: boolean;
+    isPetChoiceMade: boolean;
+  },
+  { roomId: string }
+>("rooms:quickPlay");
+const joinRoom = makeFunctionReference<
+  "mutation",
+  {
+    code: string;
+    clientId: string;
+    guestCapability?: string;
+    kind: "online";
+    kitId: string;
+    petId: string | null;
+    isKitChoiceMade: boolean;
+    isPetChoiceMade: boolean;
+  },
+  { roomId: string }
+>("rooms:join");
 
 function receipt(
   playerId: string,
@@ -350,6 +395,8 @@ describe("Convex run authority", () => {
       worldId: "room:ABCD:g1",
       roomCode: "ABCD",
       generation: 1,
+      mode: "coop" as const,
+      pvpPolicy: null,
       kitId: "gunner",
       petId: null,
     };
@@ -379,6 +426,140 @@ describe("Convex run authority", () => {
       isAllowed: false,
       code: "membership_changed",
     });
+  });
+
+  test("PVP admission requires exact durable policy and remains dark", async () => {
+    const { t, playerId, roomId } = await seedGeneration();
+    await t.run(async (ctx) => {
+      await ctx.db.patch(roomId, {
+        mode: "pvp",
+        pvpPolicy: PRIVATE_DRAFT_PVP_POLICY,
+      });
+    });
+    const args = {
+      playerId,
+      worldId: "pvp:room:ABCD:g1",
+      roomCode: "ABCD",
+      generation: 1,
+      mode: "pvp" as const,
+      pvpPolicy: PRIVATE_DRAFT_PVP_POLICY,
+      kitId: "gunner",
+      petId: null,
+    };
+    await expect(t.query(generationAdmission, args)).resolves.toEqual({
+      isAllowed: false,
+      code: "private_disabled",
+    });
+    await expect(t.query(generationAdmission, {
+      ...args,
+      pvpPolicy: null,
+    })).resolves.toEqual({
+      isAllowed: false,
+      code: "policy_mismatch",
+    });
+    await t.run(async (ctx) => {
+      await ctx.db.patch(roomId, { pvpPolicy: undefined });
+    });
+    await expect(t.query(generationAdmission, {
+      ...args,
+      pvpPolicy: null,
+    })).resolves.toEqual({
+      isAllowed: false,
+      code: "policy_required",
+    });
+    await t.run(async (ctx) => {
+      await ctx.db.patch(roomId, {
+        mode: "coop",
+        pvpPolicy: PRIVATE_DRAFT_PVP_POLICY,
+      });
+    });
+    await expect(t.query(generationAdmission, {
+      ...args,
+      worldId: "room:ABCD:g1",
+      mode: "coop",
+      pvpPolicy: PRIVATE_DRAFT_PVP_POLICY,
+    })).resolves.toEqual({
+      isAllowed: false,
+      code: "policy_invalid",
+    });
+  });
+
+  test("browser PVP intent cannot choose policy or bypass either dark rollout flag", async () => {
+    const { t } = await seedGeneration();
+    const args = {
+      clientId: "browser-a",
+      guestCapability: "guest-capability",
+      kind: "online" as const,
+      mode: "pvp" as const,
+      kitId: "gunner",
+      petId: null,
+      isKitChoiceMade: true,
+      isPetChoiceMade: true,
+    };
+    await expect(t.mutation(createRoom, args)).rejects.toMatchObject({
+      data: { code: "private_disabled" },
+    });
+    await expect(t.mutation(quickPlayRoom, args)).rejects.toMatchObject({
+      data: { code: "public_disabled" },
+    });
+    const rooms = await t.run(async (ctx) => await ctx.db.query("rooms").collect());
+    expect(rooms).toHaveLength(1);
+    expect(rooms[0].pvpPolicy).toBeUndefined();
+  });
+
+  test("concurrent online joins admit exactly four durable members", async () => {
+    const { t, roomId } = await seedGeneration();
+    const joiners = await t.run(async (ctx) => {
+      const now = Date.now();
+      const out: Array<{ clientId: string; token: string }> = [];
+      for (let index = 2; index <= 6; index++) {
+        const clientId = `cap-browser-${index}`;
+        const playerId = await ctx.db.insert("players", {
+          clientId,
+          name: `Cap ${index}`,
+          totalKills: 0,
+          deepestFloor: 0,
+          totalCoins: 0,
+          gamesPlayed: 0,
+          unlocks: [],
+          createdAt: now,
+          lastSeen: now,
+        });
+        const token = `cap-token-${index}`;
+        await ctx.db.insert("guestSessions", {
+          token,
+          refreshToken: `cap-refresh-${index}`,
+          clientId,
+          playerId,
+          scopes: ["profile", "room", "ticket", "economy"],
+          createdAt: now,
+          expiresAt: now + 60_000,
+          refreshExpiresAt: now + 120_000,
+        });
+        out.push({ clientId, token });
+      }
+      return out;
+    });
+    const results = await Promise.allSettled(joiners.map(({ clientId, token }) =>
+      t.mutation(joinRoom, {
+        code: "ABCD",
+        clientId,
+        guestCapability: token,
+        kind: "online",
+        kitId: "gunner",
+        petId: null,
+        isKitChoiceMade: true,
+        isPetChoiceMade: true,
+      })
+    ));
+    expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(3);
+    expect(results.filter((result) => result.status === "rejected")).toHaveLength(2);
+    const members = await t.run(async (ctx) =>
+      await ctx.db.query("presence").withIndex("by_room", (queryBuilder) =>
+        queryBuilder.eq("roomId", roomId)
+      ).collect()
+    );
+    expect(members.filter((member) => member.isDeparted !== true)).toHaveLength(4);
   });
 
   test("public client-authored progress mutations fail closed", async () => {
@@ -604,7 +785,7 @@ describe("Convex run authority", () => {
 
   test("legacy generation migration requires an explicit drained-world assertion", async () => {
     const t = convexTest(schema, modules);
-    const roomId = await t.run(async (ctx) => {
+    const { roomId, legacyPvpRoomId } = await t.run(async (ctx) => {
       const now = Date.now();
       const playerId = await ctx.db.insert("players", {
         clientId: "legacy-browser",
@@ -617,7 +798,7 @@ describe("Convex run authority", () => {
         createdAt: now,
         lastSeen: now,
       });
-      return await ctx.db.insert("rooms", {
+      const roomId = await ctx.db.insert("rooms", {
         code: "OLDX",
         kind: "online",
         mode: "coop",
@@ -630,14 +811,33 @@ describe("Convex run authority", () => {
         createdAt: now,
         lastActivity: now,
       });
+      const legacyPvpRoomId = await ctx.db.insert("rooms", {
+        code: "OLDP",
+        kind: "online",
+        mode: "pvp",
+        hostPlayerId: playerId,
+        seed: 2,
+        floor: 1,
+        status: "playing",
+        isPublic: false,
+        loadoutGeneration: 1,
+        createdAt: now,
+        lastActivity: now,
+      });
+      return { roomId, legacyPvpRoomId };
     });
     await expect(t.mutation(backfillGenerationState, {
       isLegacyWorldsDrained: false,
     })).rejects.toThrow();
     await expect(t.mutation(backfillGenerationState, {
       isLegacyWorldsDrained: true,
-    })).resolves.toBe(1);
-    const room = await t.run(async (ctx) => await ctx.db.get(roomId));
+    })).resolves.toBe(2);
+    const { room, legacyPvpRoom } = await t.run(async (ctx) => ({
+      room: await ctx.db.get(roomId),
+      legacyPvpRoom: await ctx.db.get(legacyPvpRoomId),
+    }));
     expect(room?.generationState).toBe("completed");
+    expect(legacyPvpRoom?.generationState).toBe("completed");
+    expect(legacyPvpRoom?.pvpPolicy).toBeUndefined();
   });
 });

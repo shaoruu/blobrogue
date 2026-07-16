@@ -2,7 +2,17 @@ import { internalQuery, mutation, query } from "./_generated/server";
 import { ConvexError, v } from "convex/values";
 import type { MutationCtx } from "./_generated/server";
 import type { Doc, Id } from "./_generated/dataModel";
-import { assertPvpModeAllowed } from "./pvpFlag";
+import {
+  PVP_PRIVATE_ENABLED,
+  PVP_PUBLIC_ENABLED,
+  assertPvpAccessAllowed,
+} from "./pvpFlag";
+import {
+  PRIVATE_DRAFT_PVP_POLICY,
+  PVP_POLICY_MAX_PLAYERS,
+  validatePvpRoomPolicy,
+  type PvpPolicyId,
+} from "./pvpPolicy";
 import { validateCombinedLoadout, validateKitDraft, validatePetDraft } from "./loadoutCore";
 import type { CombinedLoadoutInput, ConfirmedKitId, LoadoutValidation } from "./loadoutCore";
 import { evaluateLobbyStart } from "./lobbyLoadoutCore";
@@ -18,7 +28,6 @@ import { pvpWorldIdForRoomCode, worldIdForRoomCode } from "./gsTicketCore";
 
 const CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"; // no ambiguous O/0/I/1
 const CODE_LEN = 4;
-const MAX_PLAYERS = 4;                 // party cap (both kinds)
 const QUICKPLAY_STALE_MS = 45_000;     // ignore rooms with no activity for this long
 const ACTIVE_MEMBER_MS = 12_000;
 
@@ -96,6 +105,34 @@ type RoomMode = "coop" | "pvp";
 
 function modeOf(room: Doc<"rooms">): RoomMode {
   return room.mode ?? "coop";
+}
+
+function rejectPolicy(code: "policy_required" | "policy_invalid" | "policy_mismatch"): never {
+  throw new ConvexError({ code, message: "room policy is not valid for this arena" });
+}
+
+function assertRoomPolicy(room: Doc<"rooms">): PvpPolicyId | null {
+  const mode = modeOf(room);
+  const isPublic = room.isPublic === true;
+  if (mode === "pvp" && isPublic) assertPvpAccessAllowed(mode, "public");
+  const policy = room.pvpPolicy ?? null;
+  const rejection = validatePvpRoomPolicy(mode, isPublic, policy);
+  if (rejection !== null) rejectPolicy(rejection);
+  if (mode === "pvp") {
+    assertPvpAccessAllowed(mode, "private");
+    return policy as PvpPolicyId;
+  }
+  return null;
+}
+
+function privatePolicyForCreate(kind: RoomKind, mode: RoomMode): PvpPolicyId | null {
+  if (mode === "coop") return null;
+  if (kind !== "online") rejectPolicy("policy_invalid");
+  const policy = PRIVATE_DRAFT_PVP_POLICY;
+  const rejection = validatePvpRoomPolicy(mode, false, policy);
+  if (rejection !== null) rejectPolicy(rejection);
+  assertPvpAccessAllowed(mode, "private");
+  return policy;
 }
 
 function randomCode(): string {
@@ -211,10 +248,9 @@ export const create = mutation({
   },
   handler: async (ctx, args) => {
     const { clientId, guestCapability, playerId: requestedPlayerId, kind, mode, colorIndex } = args;
-    // TEMP kill switch (independent of the client UI): a pvp room can't be hosted while PVP is
-    // disabled, so a stale client with a cached bundle can't create one either. Co-op untouched.
-    assertPvpModeAllowed(mode);
     const roomKind = kind ?? "coop";
+    const roomMode = mode ?? "coop";
+    const pvpPolicy = privatePolicyForCreate(roomKind, roomMode);
     const player = await resolveRoomCaller(ctx, roomKind, clientId, guestCapability, requestedPlayerId);
     const playerId = player._id;
     const loadout = roomKind === "online" ? requireLoadout(player, loadoutInput(args)) : null;
@@ -223,7 +259,8 @@ export const create = mutation({
     const now = Date.now();
     const generation = 1;
     const roomId = await ctx.db.insert("rooms", {
-      code, kind: roomKind, mode: mode ?? "coop", hostPlayerId: playerId, seed, floor: 1,
+      code, kind: roomKind, mode: roomMode, pvpPolicy: pvpPolicy ?? undefined,
+      hostPlayerId: playerId, seed, floor: 1,
       status: "lobby", isPublic: false, loadoutGeneration: generation,
       generationState: roomKind === "online" ? "pending" : undefined,
       createdAt: now, lastActivity: now,
@@ -233,7 +270,7 @@ export const create = mutation({
     );
     if (effectiveLoadout) await persistLoadoutConvenience(ctx, player, effectiveLoadout);
     return {
-      roomId, code, seed, floor: 1, mode: mode ?? "coop",
+      roomId, code, seed, floor: 1, mode: roomMode, pvpPolicy,
       loadoutGeneration: generation,
       kitId: effectiveLoadout?.kitId,
       petId: effectiveLoadout?.petId,
@@ -263,16 +300,16 @@ export const join = mutation({
     const player = await resolveRoomCaller(ctx, wantKind, clientId, guestCapability, requestedPlayerId);
     const playerId = player._id;
     if (room.status === "ended") throw new Error("that game has ended");
-    // TEMP kill switch: the mode comes from the EXISTING room doc, so joining a pvp room (even
-    // one created before the switch flipped) is rejected while disabled. Co-op joins untouched.
-    assertPvpModeAllowed(modeOf(room));
+    const pvpPolicy = assertRoomPolicy(room);
     if (wantKind === "online") {
       // Online rooms enforce the party cap at join (classic co-op keeps its historical
       // quickPlay-only cap, unchanged).
       const members = await ctx.db.query("presence").withIndex("by_room", (q) => q.eq("roomId", room._id)).collect();
       const isMember = members.some((member) => member.playerId === playerId && member.isDeparted !== true);
       const activeCount = members.filter((member) => member.isDeparted !== true).length;
-      if (!isMember && activeCount >= MAX_PLAYERS) throw new Error("that room is full");
+      if (!isMember && activeCount >= PVP_POLICY_MAX_PLAYERS) {
+        throw new ConvexError({ code: "room_full", message: "that room is full" });
+      }
     }
     const loadout = wantKind === "online" ? requireLoadout(player, loadoutInput(args)) : null;
     const color = colorIndex ?? await smallestFreeColor(ctx, room._id);
@@ -287,7 +324,7 @@ export const join = mutation({
     // expectation + which ticket world the mint binds).
     return {
       roomId: room._id, code: room.code, seed: room.seed, floor: room.floor,
-      status: room.status, mode: modeOf(room), loadoutGeneration: generation,
+      status: room.status, mode: modeOf(room), pvpPolicy, loadoutGeneration: generation,
       kitId: effectiveLoadout?.kitId, petId: effectiveLoadout?.petId,
     };
   },
@@ -306,13 +343,14 @@ export const quickPlay = mutation({
   },
   handler: async (ctx, args) => {
     const { clientId, guestCapability, playerId: requestedPlayerId, kind, mode, colorIndex } = args;
-    // TEMP kill switch: quick-play into the pvp pool is closed while disabled (independent of
-    // the UI), so a stale client can neither join an open pvp room nor spin up a fresh one.
-    assertPvpModeAllowed(mode);
     const wantKind: RoomKind = kind ?? "coop";
+    const wantMode: RoomMode = mode ?? "coop";
+    if (wantMode === "pvp") {
+      assertPvpAccessAllowed(wantMode, "public");
+      rejectPolicy("policy_invalid");
+    }
     const player = await resolveRoomCaller(ctx, wantKind, clientId, guestCapability, requestedPlayerId);
     const playerId = player._id;
-    const wantMode: RoomMode = mode ?? "coop";
     const loadout = wantKind === "online" ? requireLoadout(player, loadoutInput(args)) : null;
     const now = Date.now();
 
@@ -333,7 +371,7 @@ export const quickPlay = mutation({
         .query("presence")
         .withIndex("by_room", (q) => q.eq("roomId", room._id))
         .collect();
-      if (players.filter((player) => player.isDeparted !== true).length >= MAX_PLAYERS) continue;
+      if (players.filter((player) => player.isDeparted !== true).length >= PVP_POLICY_MAX_PLAYERS) continue;
       // Join this one.
       const color = colorIndex ?? await smallestFreeColor(ctx, room._id);
       const generation = room.loadoutGeneration ?? 1;
@@ -388,6 +426,7 @@ export const get = query({
       floor: room.floor,
       status: room.status,
       mode: modeOf(room),
+      pvpPolicy: room.pvpPolicy ?? null,
       loadoutGeneration: room.loadoutGeneration ?? 1,
     };
   },
@@ -405,7 +444,7 @@ export const membership = query({
       .unique();
     if (!room || kindOf(room) !== "online" || room.status === "ended") {
       return {
-        isMember: false, mode: "coop" as RoomMode, isLoadoutConfirmed: false,
+        isMember: false, mode: "coop" as RoomMode, pvpPolicy: null, isLoadoutConfirmed: false,
         isRunLocked: false, loadoutGeneration: 1,
         kitId: null, petId: null,
       };
@@ -427,6 +466,7 @@ export const membership = query({
     return {
       isMember,
       mode: modeOf(room),
+      pvpPolicy: room.pvpPolicy ?? null,
       isRunLocked: room.status === "playing",
       loadoutGeneration: generation,
       isLoadoutConfirmed,
@@ -452,6 +492,13 @@ export const ticketSnapshot = internalQuery({
     }
     if (room.generationState !== "active") {
       throw new ConvexError({ code: "generation_not_active", message: "that run generation is not active" });
+    }
+    const pvpPolicy = assertRoomPolicy(room);
+    const members = await ctx.db.query("presence")
+      .withIndex("by_room", (queryBuilder) => queryBuilder.eq("roomId", room._id))
+      .collect();
+    if (members.filter((member) => member.isDeparted !== true).length > PVP_POLICY_MAX_PLAYERS) {
+      throw new ConvexError({ code: "room_full", message: "that room exceeds its player cap" });
     }
     const row = await ctx.db.query("presence")
       .withIndex("by_room_player", (queryBuilder) => (
@@ -482,6 +529,7 @@ export const ticketSnapshot = internalQuery({
       petId: row.loadoutPetId ?? null,
       roomCode: room.code,
       mode: modeOf(room),
+      pvpPolicy,
       generation,
     };
   },
@@ -493,6 +541,8 @@ export const generationAdmission = internalQuery({
     worldId: v.string(),
     roomCode: v.string(),
     generation: v.number(),
+    mode: v.union(v.literal("coop"), v.literal("pvp")),
+    pvpPolicy: v.union(v.literal("private_draft_v1"), v.null()),
     kitId: v.string(),
     petId: v.union(v.string(), v.null()),
   },
@@ -503,14 +553,30 @@ export const generationAdmission = internalQuery({
     if (!room || kindOf(room) !== "online" || room.status !== "playing") {
       return { isAllowed: false as const, code: "room_not_active" };
     }
+    const roomMode = modeOf(room);
+    const isPublic = room.isPublic === true;
+    const roomPolicy = room.pvpPolicy ?? null;
+    const policyRejection = validatePvpRoomPolicy(roomMode, isPublic, roomPolicy);
+    if (policyRejection !== null) {
+      return { isAllowed: false as const, code: policyRejection };
+    }
+    if (args.mode !== roomMode || args.pvpPolicy !== roomPolicy) {
+      return { isAllowed: false as const, code: "policy_mismatch" };
+    }
     const generation = room.loadoutGeneration ?? 1;
-    const expectedWorldId = modeOf(room) === "pvp"
+    const expectedWorldId = roomMode === "pvp"
       ? pvpWorldIdForRoomCode(room.code, generation)
       : worldIdForRoomCode(room.code, generation);
     if (room.generationState !== "active"
       || generation !== args.generation
       || expectedWorldId !== args.worldId) {
       return { isAllowed: false as const, code: "generation_not_active" };
+    }
+    const members = await ctx.db.query("presence")
+      .withIndex("by_room", (queryBuilder) => queryBuilder.eq("roomId", room._id))
+      .collect();
+    if (members.filter((member) => member.isDeparted !== true).length > PVP_POLICY_MAX_PLAYERS) {
+      return { isAllowed: false as const, code: "room_full" };
     }
     const playerId = args.playerId as Id<"players">;
     const player = await ctx.db.get(playerId);
@@ -529,9 +595,16 @@ export const generationAdmission = internalQuery({
       && row.loadoutKitId === args.kitId
       && (row.loadoutPetId ?? null) === args.petId;
     const isMember = isLoadoutCurrent && (room.isPublic === true || row?.isReady === true);
-    return isMember
-      ? { isAllowed: true as const, code: "ok" }
-      : { isAllowed: false as const, code: "membership_changed" };
+    if (!isMember) return { isAllowed: false as const, code: "membership_changed" };
+    if (roomMode === "pvp") {
+      if (isPublic && !PVP_PUBLIC_ENABLED) {
+        return { isAllowed: false as const, code: "public_disabled" };
+      }
+      if (!isPublic && !PVP_PRIVATE_ENABLED) {
+        return { isAllowed: false as const, code: "private_disabled" };
+      }
+    }
+    return { isAllowed: true as const, code: "ok" };
   },
 });
 
@@ -546,6 +619,7 @@ export const start = mutation({
   handler: async (ctx, { roomId, clientId, guestCapability, playerId }) => {
     const room = await ctx.db.get(roomId);
     if (!room) throw new Error("no such room");
+    assertRoomPolicy(room);
     const caller = await resolveRoomCaller(ctx, kindOf(room), clientId, guestCapability, playerId);
     if (room.hostPlayerId !== caller._id) throw new Error("only the host can start");
     if (room.status !== "lobby") {
@@ -765,6 +839,7 @@ export const reopen = mutation({
   handler: async (ctx, { roomId, clientId, guestCapability, playerId, generation }) => {
     const room = await ctx.db.get(roomId);
     if (!room) return { loadoutGeneration: 1, isReopened: false };
+    assertRoomPolicy(room);
     const currentGeneration = room.loadoutGeneration ?? 1;
     if (kindOf(room) === "online" && generation !== currentGeneration) {
       return { loadoutGeneration: currentGeneration, isReopened: false };

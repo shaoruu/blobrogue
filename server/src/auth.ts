@@ -27,7 +27,8 @@
 // worlds too. It is off by default — production requires a real signed ticket.
 
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
-import { isValidWorldId } from "../../src/net/protocol.js";
+import { isPvpWorldId, isValidWorldId } from "../../src/net/protocol.js";
+import { isPvpPolicyId, type PvpPolicyId } from "../../src/net/pvpPolicy.js";
 import { isKitId } from "../../src/sim/kits.js";
 
 export { isValidWorldId };
@@ -53,6 +54,7 @@ export interface TicketPayload {
   pid: string;  // authenticated playerId
   exp: number;  // unix seconds expiry
   wld?: string; // authorized world id
+  pp?: string;  // canonical PVP room policy (v2 only)
   nm?: string;  // display name
   cl?: number;  // cosmetic color index
   ht?: string;  // cosmetic hat id
@@ -82,6 +84,11 @@ export interface TicketClaims {
   isSyntheticVerify?: boolean;
 }
 
+export interface PvpTicketClaims extends TicketClaims {
+  worldId: string;
+  pvpPolicy: PvpPolicyId;
+}
+
 export interface AuthResult {
   ok: boolean;
   playerId?: string;
@@ -95,6 +102,8 @@ export interface AuthResult {
   pet?: string;         // format-validated cosmetic companion pet id (visual-only)
   isPetChoiceMade?: boolean;
   isSyntheticVerify?: boolean;
+  ticketVersion?: 1 | 2;
+  pvpPolicy?: PvpPolicyId;
   isDev?: boolean;
   reason?: string;
 }
@@ -143,6 +152,35 @@ export function mintTicket(secret: string, playerId: string, ttlSecs = 120, nowM
   return body + "." + sign(secret, body);
 }
 
+export function mintPvpTicket(
+  secret: string,
+  playerId: string,
+  claims: PvpTicketClaims,
+  ttlSecs = 120,
+  nowMs = Date.now(),
+): string {
+  if (!isPvpWorldId(claims.worldId) || !isPvpPolicyId(claims.pvpPolicy)) {
+    throw new Error("invalid PVP ticket policy");
+  }
+  const payload: TicketPayload = {
+    pid: playerId,
+    exp: Math.floor(nowMs / 1000) + ttlSecs,
+    wld: claims.worldId,
+    pp: claims.pvpPolicy,
+  };
+  if (claims.name !== undefined) payload.nm = claims.name;
+  if (claims.colorIndex !== undefined) payload.cl = claims.colorIndex;
+  if (claims.hat !== undefined) payload.ht = claims.hat;
+  if (claims.face !== undefined) payload.fc = claims.face;
+  if (claims.kit !== undefined) payload.kt = claims.kit;
+  if (claims.masteryLevel !== undefined) payload.ml = claims.masteryLevel;
+  if (claims.pet !== undefined) payload.pt = claims.pet;
+  if (claims.isPetChoiceMade !== undefined) payload.pc = claims.isPetChoiceMade;
+  if (claims.isSyntheticVerify !== undefined) payload.sv = claims.isSyntheticVerify;
+  const body = "v2." + b64url(Buffer.from(JSON.stringify(payload), "utf8"));
+  return body + "." + sign(secret, body);
+}
+
 export interface AuthConfig {
   secret: string | null; // GS_AUTH_SECRET; when null, real tickets cannot be verified
   allowDev: boolean;      // GS_ALLOW_DEV_AUTH=1 AND NODE_ENV!==production
@@ -161,12 +199,16 @@ export function verifyTicket(cfg: AuthConfig, ticket: string, nowMs = Date.now()
     const wld = at < 0 ? null : raw.slice(at + 1);
     if (pid.length < 1 || pid.length > 64) return { ok: false, reason: "bad_dev_id" };
     if (wld !== null && !isValidWorldId(wld)) return { ok: false, reason: "bad_world" };
+    if (wld !== null && isPvpWorldId(wld)) return { ok: false, reason: "policy_required" };
     return { ok: true, playerId: "dev:" + pid, isDev: true, ...(wld !== null ? { worldId: wld } : {}) };
   }
   if (!cfg.secret) return { ok: false, reason: "no_secret" };
 
   const parts = ticket.split(".");
-  if (parts.length !== 3 || parts[0] !== "v1") return { ok: false, reason: "bad_format" };
+  if (parts.length !== 3 || (parts[0] !== "v1" && parts[0] !== "v2")) {
+    return { ok: false, reason: "bad_format" };
+  }
+  const ticketVersion = parts[0] === "v2" ? 2 : 1;
   const body = parts[0] + "." + parts[1];
   const expected = sign(cfg.secret, body);
   // Constant-time comparison to avoid signature-timing oracles.
@@ -188,7 +230,7 @@ export function verifyTicket(cfg: AuthConfig, ticket: string, nowMs = Date.now()
 
   // Optional claims: a signed-but-malformed claim is a minter bug or tamper attempt — reject
   // outright rather than silently misrouting the player or trusting junk.
-  const out: AuthResult = { ok: true, playerId: payload.pid };
+  const out: AuthResult = { ok: true, playerId: payload.pid, ticketVersion };
   if (payload.wld !== undefined) {
     if (typeof payload.wld !== "string" || !isValidWorldId(payload.wld)) return { ok: false, reason: "bad_world" };
     out.worldId = payload.wld;
@@ -235,6 +277,18 @@ export function verifyTicket(cfg: AuthConfig, ticket: string, nowMs = Date.now()
       return { ok: false, reason: "bad_synthetic_verify" };
     }
     out.isSyntheticVerify = true;
+  }
+  const isPvpWorld = out.worldId !== undefined && isPvpWorldId(out.worldId);
+  if (ticketVersion === 1) {
+    if (payload.pp !== undefined) return { ok: false, reason: "policy_invalid", worldId: out.worldId };
+    if (isPvpWorld) return { ok: false, reason: "policy_required", worldId: out.worldId };
+  } else {
+    if (!isPvpWorld) return { ok: false, reason: "policy_invalid", worldId: out.worldId };
+    if (payload.pp === undefined) return { ok: false, reason: "policy_required", worldId: out.worldId };
+    if (typeof payload.pp !== "string" || !isPvpPolicyId(payload.pp)) {
+      return { ok: false, reason: "policy_invalid", worldId: out.worldId };
+    }
+    out.pvpPolicy = payload.pp;
   }
   return out;
 }
