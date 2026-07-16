@@ -11,7 +11,8 @@ import {
   type ServerMsg, type SnapMsg, type WireEvent,
 } from "../src/net/protocol.js";
 import {
-  diffSnapshot, applySnapshotDelta, snapshotToWire, type WorldLiveIds,
+  diffSnapshot, applySnapshotDelta, snapshotToWire, type WireObject, type WireValue,
+  type WorldLiveIds,
 } from "../src/net/snapshotDelta.js";
 import { createWorld, spawnPlayerInWorld, devSpawnEnemy } from "../src/sim/world.js";
 
@@ -204,6 +205,96 @@ function eventPassthroughTests(): void {
   check("reconstructed snapshot carries the same events + evTo", recon.events.length === 2 && recon.evTo === 6);
 }
 
+function waveAStateTests(): void {
+  section("Wave A v34 state: cycles, catalog, mode, revive owner, and cooldowns delta exactly");
+  const base = makeBaseSnap();
+  base.cat = 0;
+  const next = cloneSnap(base);
+  next.sseq = 2;
+  next.tick++;
+  next.cat = 1;
+  next.self!.sgc = 0x0ffffffe;
+  next.self!.ogc = 0x0fffffff;
+  next.self!.isMds = true;
+  next.self!.rvb = "pMate";
+  next.self!.wcd = next.self!.wpns.map((_, index) => index === 0 ? 0.375 : 0);
+  next.players[0].isDrain = true;
+  next.players[0].rvb = "pMe";
+  const delta = diffSnapshot(snapshotToWire(base), snapshotToWire(next), next.sseq, fullWorld(next));
+  check("catalog version rides the scalar delta", delta.sc.cat === 1);
+  check("owner Wave A fields ride one partial self patch",
+    delta.self !== undefined && "p" in delta.self
+    && delta.self.p.sgc === 0x0ffffffe
+    && delta.self.p.ogc === 0x0fffffff
+    && delta.self.p.isMds === true
+    && delta.self.p.rvb === "pMate"
+    && Array.isArray(delta.self.p.wcd));
+  check("observer next mode and revive owner ride the keyed player delta",
+    delta.pl?.u?.some((patch) => patch.isDrain === true && patch.rvb === "pMe") === true);
+  const reconstructed = roundTrip(base, next, fullWorld(next));
+  check("snapd encode/decode/apply/validate preserves exact Wave A state",
+    reconstructed.cat === 1
+    && reconstructed.self?.sgc === 0x0ffffffe
+    && reconstructed.self.ogc === 0x0fffffff
+    && reconstructed.self.isMds
+    && reconstructed.self.rvb === "pMate"
+    && reconstructed.self.wcd[0] === 0.375
+    && reconstructed.players[0].isDrain
+    && reconstructed.players[0].rvb === "pMe");
+
+  const final = cloneSnap(next);
+  final.sseq = 3;
+  final.tick++;
+  final.self!.sgc = 0;
+  final.self!.ogc = 0;
+  final.self!.isMds = false;
+  const dropped = diffSnapshot(snapshotToWire(next), snapshotToWire(final), final.sseq, fullWorld(final));
+  check("a dropped cycle delta names the unavailable baseline and must be refused",
+    dropped.b === next.sseq && dropped.b !== base.sseq);
+  const keyframe = validateSnap(snapshotToWire(final));
+  check("the next full keyframe exactly repairs stale cycle/display state",
+    keyframe.self?.sgc === 0 && keyframe.self.ogc === 0 && !keyframe.self.isMds);
+
+  const invalidValues: Array<[string, WireValue]> = [
+    ["max+1", 0x10000000],
+    ["safe integer max", Number.MAX_SAFE_INTEGER],
+    ["negative", -1],
+    ["float", 1.5],
+    ["null", null],
+    ["string", "1"],
+    ["boolean", true],
+    ["infinity", Infinity],
+    ["nan", NaN],
+  ];
+  for (const field of ["sgc", "ogc"] as const) {
+    for (const [label, value] of invalidValues) {
+      const raw = JSON.parse(JSON.stringify(snapshotToWire(base))) as WireObject;
+      const self = raw.self as WireObject;
+      self[field] = value;
+      let isRejected = false;
+      try { validateSnap(raw); } catch { isRejected = true; }
+      check(`${field} rejects ${label}`, isRejected);
+    }
+    const missing = JSON.parse(JSON.stringify(snapshotToWire(base))) as WireObject;
+    delete (missing.self as WireObject)[field];
+    let isMissingRejected = false;
+    try { validateSnap(missing); } catch { isMissingRejected = true; }
+    check(`${field} rejects missing`, isMissingRejected);
+  }
+
+  const oldSnapshot = JSON.parse(JSON.stringify(snapshotToWire(base))) as WireObject;
+  delete oldSnapshot.cat;
+  check("an old snapshot missing catalog version decodes legacy only",
+    validateSnap(oldSnapshot).cat === 0);
+  for (const value of [-1, 2, 1.5, null, "1", true] as WireValue[]) {
+    const raw = JSON.parse(JSON.stringify(snapshotToWire(base))) as WireObject;
+    raw.cat = value;
+    let isRejected = false;
+    try { validateSnap(raw); } catch { isRejected = true; }
+    check(`unknown catalog value ${String(value)} fails closed`, isRejected);
+  }
+}
+
 function safetyTests(): void {
   section("the delta decode is strict + crash-safe (fuzz-adjacent malformed frames)");
   // Raw JSON strings so non-finite numbers (1e999 -> Infinity) and an OWN "__proto__" key
@@ -272,6 +363,7 @@ function main(): void {
   tombstoneTests();
   additionAndSelfTests();
   eventPassthroughTests();
+  waveAStateTests();
   safetyTests();
   process.stdout.write(`\n${passed} checks passed, ${failed} failed\n`);
   if (failed > 0) { process.stdout.write(`FAILURES:\n${failures.map((f) => "  - " + f).join("\n")}\n`); process.exit(1); }

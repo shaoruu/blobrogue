@@ -926,6 +926,14 @@ function idealBossDps(id: WeaponId, isAtRisk: boolean): number {
   if (w.orbit) return (w.damage * coef) / w.orbit.rehit;
   if (w.tether) return (w.damage * coef) / w.fireCd;
   if (w.charge) return (w.damage * coef) / (w.fireCd + 0.1); // tap cycle: hold buys range, not rate
+  if (w.modeShift) {
+    const floodEff = 1 + Math.max(0, w.pellets - 1) * BOSS_NATIVE_PELLET_COEF;
+    const drain = w.modeShift.alternate;
+    const drainEff = 1 + Math.max(0, drain.pellets - 1) * BOSS_NATIVE_PELLET_COEF;
+    const floodDps = (w.damage * riskMult * floodEff * coef) / w.fireCd;
+    const drainDps = (drain.damage * riskMult * drainEff * coef) / w.fireCd;
+    return (floodDps + drainDps) / 2 + burnDot;
+  }
   const eff = 1 + Math.max(0, w.pellets - 1) * BOSS_NATIVE_PELLET_COEF;
   return (w.damage * riskMult * eff * coef) / w.fireCd + burnDot;
 }
@@ -938,6 +946,15 @@ function burstBossDps3s(id: WeaponId, isAtRisk: boolean): number {
   const eff = 1 + Math.max(0, w.pellets - 1) * BOSS_NATIVE_PELLET_COEF;
   const cycle = w.wire ? w.fireCd + w.wire.arm : w.sentry ? w.sentry.fireCd : w.orbit ? w.orbit.rehit : w.charge ? w.fireCd + 0.1 : w.fireCd;
   const shots = 1 + Math.floor(2.999 / cycle);
+  if (w.modeShift) {
+    const drain = w.modeShift.alternate;
+    const drainEff = 1 + Math.max(0, drain.pellets - 1) * BOSS_NATIVE_PELLET_COEF;
+    const floodDamage = w.damage * riskMult * eff * coef;
+    const drainDamage = drain.damage * riskMult * drainEff * coef;
+    let total = 0;
+    for (let shot = 0; shot < shots; shot++) total += shot % 2 === 0 ? floodDamage : drainDamage;
+    return total / 3;
+  }
   return (shots * w.damage * riskMult * eff * coef) / 3;
 }
 
@@ -945,6 +962,20 @@ function envelopeGates(): void {
   section("[REVIEW] envelope: canonical PU bands (boss sustained / burst / passive)");
   check("1 PU is the pistol: exactly 12.5 practical single-target DPS",
     PU_DPS === 12.5 && Math.abs(idealBossDps("pistol", false) - PU_DPS) < 1e-9);
+  {
+    const sluice = WEAPONS.sluicegate;
+    const coef = WEAPON_BOSS_COEF.sluicegate ?? 1;
+    const flood = sluice.damage
+      * (1 + (sluice.pellets - 1) * BOSS_NATIVE_PELLET_COEF)
+      * coef / sluice.fireCd / PU_DPS;
+    const drain = sluice.modeShift!.alternate.damage * coef / sluice.fireCd / PU_DPS;
+    const average = idealBossDps("sluicegate", false) / PU_DPS;
+    check("Sluicegate reports FLOOD .394 / DRAIN .628 / two-shot average .511 PU",
+      Math.abs(flood - 0.394) < 0.001
+      && Math.abs(drain - 0.628) < 0.001
+      && Math.abs(average - 0.511) < 0.001,
+      `${flood.toFixed(3)}/${drain.toFixed(3)}/${average.toFixed(3)}`);
+  }
   // Band assignment. Direct single-target-capable weapons hold the neutral band; pack/
   // swarm/control specialists are exempt from the FLOOR (their damage lives in rooms,
   // priced by their boss coefficients) but bound by the same ceiling; lob artillery
