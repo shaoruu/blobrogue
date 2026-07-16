@@ -5015,7 +5015,7 @@ export class Game {
   // Mode-agnostic (reads the rendered position + the active giant's params); the authoritative
   // ×0.5 slow is sim-side (updatePlayer). Inert (and reset) whenever no warmth-drain giant is live.
   private updateWarmthVignette(dt: number) {
-    const wd = this.isRunning ? resolveWarmthDrain(this.world.enemies.map((e) => ({ kind: e.kind, dead: e.dead, phase: e.boss ? e.boss.phase : 0 }))) : null;
+    const wd = this.isRunning ? resolveWarmthDrain(this.world.enemies.map((e) => ({ kind: e.kind, isDead: e.dead, phase: e.boss ? e.boss.phase : 0 }))) : null;
     if (!wd || this.isDown || this.hp <= 0) { this.warmthIdleT = 0; this.warmthRefX = this.px; this.warmthRefY = this.py; return; }
     if (Math.hypot(this.px - this.warmthRefX, this.py - this.warmthRefY) >= wd.clearDist) {
       this.warmthIdleT = 0; this.warmthRefX = this.px; this.warmthRefY = this.py;
@@ -5028,7 +5028,7 @@ export class Game {
   // idle timer climbs toward the chill, then holds + breathes once chilled (move ×0.5). Cold, never
   // amber — the Pale "blazing absence of warmth". A single screen effect (never ambient soup).
   private renderWarmthVignette() {
-    const wd = this.isRunning ? resolveWarmthDrain(this.world.enemies.map((e) => ({ kind: e.kind, dead: e.dead, phase: e.boss ? e.boss.phase : 0 }))) : null;
+    const wd = this.isRunning ? resolveWarmthDrain(this.world.enemies.map((e) => ({ kind: e.kind, isDead: e.dead, phase: e.boss ? e.boss.phase : 0 }))) : null;
     if (!wd || this.warmthIdleT <= 0) return;
     const { ctx, canvas } = this;
     const cx = canvas.width / 2, cy = canvas.height / 2;

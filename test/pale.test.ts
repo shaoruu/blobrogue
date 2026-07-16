@@ -34,8 +34,8 @@ const DT = 1 / 60;
 
 let passed = 0, failed = 0;
 const failures: string[] = [];
-function check(name: string, cond: boolean, detail = ""): void {
-  if (cond) { passed++; process.stdout.write(`  PASS ${name}${detail ? " — " + detail : ""}\n`); }
+function check(name: string, isPassing: boolean, detail = ""): void {
+  if (isPassing) { passed++; process.stdout.write(`  PASS ${name}${detail ? " — " + detail : ""}\n`); }
   else { failed++; failures.push(name + (detail ? " — " + detail : "")); process.stdout.write(`  FAIL ${name}${detail ? " — " + detail : ""}\n`); }
 }
 function section(name: string): void { process.stdout.write(`\n[${name}]\n`); }
@@ -73,7 +73,7 @@ function liveDebris(w: WorldState): Prop[] {
 }
 // The cover predicate (mirrors the sim's blockedByProp): a body of radius r cannot occupy a
 // point overlapping a standing prop — so a debris chunk BLOCKS movement where open floor would not.
-function propBlocksPoint(w: WorldState, x: number, y: number, r: number): boolean {
+function isPointBlockedByProp(w: WorldState, x: number, y: number, r: number): boolean {
   for (const p of w.props) {
     if (p.dead || p.breakT !== undefined || p.kind === "brazier") continue;
     if (Math.hypot(p.x - x, p.y - y) < p.radius + r) return true;
@@ -90,30 +90,31 @@ function pinGates(): void {
 
   const deepRoster: EnemyKind[] = ["marrow", "choir", "weaver", "gilded", "boss", "jet", "tithe", "quorum"];
   const seen = new Set<EnemyKind>();
-  let allPale = true, f50Gorge = true, f45Quorum = true, deterministic = true, noRepeat = true, neverGiant = true;
+  let isAllPale = true, isF50Gorge = true, isF45Quorum = true, isDeterministic = true;
+  let isWithoutRepeat = true, isGiantExcluded = true;
   for (let s = 0; s < 80; s++) {
     const seed = 0x5EED + s * 977;
-    if (bossKindForFloor(seed, 75) !== "pale") allPale = false;
-    if (bossKindForFloor(seed, 50) !== "gorge") f50Gorge = false; // the F50 gorge pin is untouched
-    if (bossKindForFloor(seed, 45) !== "quorum") f45Quorum = false; // the authored chain up to F45 is untouched
+    if (bossKindForFloor(seed, 75) !== "pale") isAllPale = false;
+    if (bossKindForFloor(seed, 50) !== "gorge") isF50Gorge = false; // the F50 gorge pin is untouched
+    if (bossKindForFloor(seed, 45) !== "quorum") isF45Quorum = false; // the authored chain up to F45 is untouched
     // Both giants (F50 gorge, F75 pale) are fixed set-pieces OUT of the seeded pool; the rotation
     // must stay deterministic and never repeat back-to-back (nor pick either giant).
     let prev: EnemyKind | null = "gorge";
     for (let floor = 55; floor <= 95; floor += 5) {
       const a = bossKindForFloor(seed, floor);
-      if (a !== bossKindForFloor(seed, floor)) deterministic = false;
-      if (a === null || a === prev) noRepeat = false;
-      if (floor !== PALE_FLOOR && (a === "gorge" || a === "pale")) neverGiant = false;
+      if (a !== bossKindForFloor(seed, floor)) isDeterministic = false;
+      if (a === null || a === prev) isWithoutRepeat = false;
+      if (floor !== PALE_FLOOR && (a === "gorge" || a === "pale")) isGiantExcluded = false;
       if (a !== null) seen.add(a);
       prev = a;
     }
   }
-  check("floor 75 returns pale for every seed (never a seeded rotation pick)", allPale);
-  check("the F50 gorge pin is unchanged (still gorge for every seed)", f50Gorge);
-  check("the authored chain up to F45 is untouched (F45 is still Quorum)", f45Quorum);
-  check("the deep rotation is a pure function of (seed, floor)", deterministic);
-  check("the deep rotation has no immediate repeats (nor against the giant pins)", noRepeat);
-  check("the seeded rotation NEVER picks a giant (both are fixed set-pieces, out of the pool)", neverGiant);
+  check("floor 75 returns pale for every seed (never a seeded rotation pick)", isAllPale);
+  check("the F50 gorge pin is unchanged (still gorge for every seed)", isF50Gorge);
+  check("the authored chain up to F45 is untouched (F45 is still Quorum)", isF45Quorum);
+  check("the deep rotation is a pure function of (seed, floor)", isDeterministic);
+  check("the deep rotation has no immediate repeats (nor against the giant pins)", isWithoutRepeat);
+  check("the seeded rotation NEVER picks a giant (both are fixed set-pieces, out of the pool)", isGiantExcluded);
   check("every seeded-roster boss still appears across F55-95 (variety survives the F75 pin)",
     deepRoster.every((k) => seen.has(k)), [...seen].join(","));
 
@@ -219,13 +220,13 @@ function guardGates(): void {
     boss.hp === hp0, `hp ${boss.hp}/${hp0}`);
 
   // Drive to the first seam exposure, destroy the whole set → the shell CRACKS → EXPOSED window.
-  let opened = false;
-  for (let t = 0; t < 60 * 12 && !opened; t++) {
+  let isWindowOpened = false;
+  for (let t = 0; t < 60 * 12 && !isWindowOpened; t++) {
     for (const s of liveSeams(w)) plantBullet(w, s.x, s.y, 9999);
     step(w, idle(t));
-    if (isBossExposed(boss)) opened = true;
+    if (isBossExposed(boss)) isWindowOpened = true;
   }
-  check("destroying the whole weak-point set PEELS the shell → opens the EXPOSED window", opened);
+  check("destroying the whole weak-point set PEELS the shell → opens the EXPOSED window", isWindowOpened);
   const hpBefore = boss.hp;
   plantBullet(w, boss.x, boss.y, 100000);
   step(w);
@@ -242,7 +243,7 @@ function guardGates(): void {
 // ---- the peeler driver: destroy seams (open windows) + burst the bared body ----
 
 interface PeelResult {
-  killed: boolean;
+  isKilled: boolean;
   seconds: number;
   phasesSeen: number[];
   spritePhaseMax: number;
@@ -250,13 +251,13 @@ interface PeelResult {
   debrisMax: number;
   crackBeats: number;
 }
-function peelPull(seed: number, canPeel: boolean, maxTicks = 60 * 150): PeelResult {
+function peelPull(seed: number, isPeelingEnabled: boolean, maxTicks = 60 * 150): PeelResult {
   const { w, boss } = paleArena(seed);
-  let killed = false;
+  let isKilled = false;
   const phasesSeen = new Set<number>();
   let peelWindows = 0, wasExposed = false, debrisMax = 0, crackBeats = 0, ticks = 0;
-  for (; ticks < maxTicks && !killed; ticks++) {
-    if (canPeel) {
+  for (; ticks < maxTicks && !isKilled; ticks++) {
+    if (isPeelingEnabled) {
       // The peel verb: destroy every exposed weak-point (this opens the window).
       for (const s of liveSeams(w)) plantBullet(w, s.x, s.y, 9999);
       // The bared body: burst it during the exposed window (bank-clamps per window).
@@ -267,7 +268,7 @@ function peelPull(seed: number, canPeel: boolean, maxTicks = 60 * 150): PeelResu
     }
     const evs = step(w, idle(ticks));
     for (const e of evs) {
-      if (e.t === "enemyKill" && e.kind === "pale") killed = true;
+      if (e.t === "enemyKill" && e.kind === "pale") isKilled = true;
       if (e.t === "chargeCrash") crackBeats++; // the peel crack cue
     }
     if (boss.boss) phasesSeen.add(boss.boss.phase);
@@ -276,7 +277,7 @@ function peelPull(seed: number, canPeel: boolean, maxTicks = 60 * 150): PeelResu
     debrisMax = Math.max(debrisMax, liveDebris(w).length);
   }
   return {
-    killed, seconds: ticks * DT, phasesSeen: [...phasesSeen].sort((a, b) => a - b),
+    isKilled, seconds: ticks * DT, phasesSeen: [...phasesSeen].sort((a, b) => a - b),
     spritePhaseMax: phasesSeen.size ? Math.max(...phasesSeen) : 0, peelWindows, debrisMax, crackBeats,
   };
 }
@@ -286,7 +287,7 @@ function peelPull(seed: number, canPeel: boolean, maxTicks = 60 * 150): PeelResu
 function peelPhaseGates(): void {
   section("multi-phase SHELL-PEEL: the 3 shells advance ONLY through peel windows; the fight is beatable");
   const r = peelPull(0x70C3, true);
-  check("a bot that PEELS (opens windows) KILLS the giant (the fight is beatable)", r.killed,
+  check("a bot that PEELS (opens windows) KILLS the giant (the fight is beatable)", r.isKilled,
     `ttk=${r.seconds.toFixed(1)}s`);
   check("it advanced through all THREE shell phases (stone → cracked → core)",
     r.phasesSeen.includes(1) && r.phasesSeen.includes(2) && r.phasesSeen.includes(3),
@@ -299,8 +300,8 @@ function peelPhaseGates(): void {
   // FAIL LOUD: a bot that CANNOT open windows (never peels) can NEVER kill the giant — the shell
   // is a true hard gate, so the body never takes damage. (Mirrors the multi-boss health gate.)
   const stuck = peelPull(0x70C4, false, 60 * 60);
-  check("a bot that CANNOT peel NEVER kills the giant (FAIL-LOUD: the shell is a true gate)", !stuck.killed,
-    `killed=${stuck.killed} phasesSeen=${stuck.phasesSeen.join(",")}`);
+  check("a bot that CANNOT peel NEVER kills the giant (FAIL-LOUD: the shell is a true gate)", !stuck.isKilled,
+    `killed=${stuck.isKilled} phasesSeen=${stuck.phasesSeen.join(",")}`);
   check("…and it never even leaves phase 1 (no body damage without a peel)", stuck.spritePhaseMax === 1,
     `maxPhase=${stuck.spritePhaseMax}`);
 }
@@ -313,7 +314,7 @@ function debrisGates(): void {
   check("shell debris chunks dropped during the fight (material evidence of the peel)", r.debrisMax > 0,
     `maxDebris=${r.debrisMax}`);
 
-  // The debris is real cover: a body cannot occupy it (propBlocksPoint), unlike open floor.
+  // The debris is real cover: a body cannot occupy it, unlike open floor.
   const { w, boss } = paleArena(0x70D6);
   let debris = liveDebris(w);
   for (let t = 0; t < 60 * 40 && debris.length === 0 && !boss.dead; t++) {
@@ -327,7 +328,7 @@ function debrisGates(): void {
     const d = debris[0];
     check("the debris is a destructible chunk (real HP — breakable cover)", d.hp > 0 && d.breakT === undefined);
     check("the debris BLOCKS movement (line-of-sight / movement cover) where open floor would not",
-      propBlocksPoint(w, d.x, d.y, 12) && !propBlocksPoint(w, d.x + 500, d.y + 500, 12));
+      isPointBlockedByProp(w, d.x, d.y, 12) && !isPointBlockedByProp(w, d.x + 500, d.y + 500, 12));
     check("the debris sits at the base, clear of the giant's hittable body",
       Math.hypot(d.x - boss.x, d.y - boss.y) > ENEMY_ARCHETYPES.pale.radius);
   }
@@ -352,16 +353,16 @@ function telegraphGates(): void {
   const { w, boss } = paleArena(0x70E7);
   // Capture the PRIMARY ring's shards on the first 0→>0 enemy-bullet transition (Pale fires a
   // SECOND ring ~0.45s later — see axisRingGates — so counting at recover would double it).
-  let sawWindup = false, ringShards = 0, bulletsBeforeActive = 0, prevEnemy = 0;
+  let isWindupSeen = false, ringShards = 0, bulletsBeforeActive = 0, prevEnemy = 0;
   for (let t = 0; t < 60 * 8 && ringShards === 0; t++) {
     const a = boss.attack;
-    if (a.move === "slam" && a.phase === "windup") { sawWindup = true; bulletsBeforeActive = w.bullets.filter((b) => !b.friendly).length; }
+    if (a.move === "slam" && a.phase === "windup") { isWindupSeen = true; bulletsBeforeActive = w.bullets.filter((b) => !b.friendly).length; }
     step(w, idle(t));
     const enemyNow = w.bullets.filter((b) => !b.friendly).length;
     if (a.move === "slam" && ringShards === 0 && prevEnemy === 0 && enemyNow > 0) ringShards = enemyNow;
     prevEnemy = enemyNow;
   }
-  check("the P1 ring telegraphs a windup BEFORE any shockwave fires", sawWindup && bulletsBeforeActive === 0);
+  check("the P1 ring telegraphs a windup BEFORE any shockwave fires", isWindupSeen && bulletsBeforeActive === 0);
   check("the fired ring omits a gap wedge (fewer shards than a full ring — the safe pocket)",
     ringShards > 0 && ringShards <= PALE.ringCount - PALE.ringGap, `shards=${ringShards} full=${PALE.ringCount}`);
 }
@@ -468,7 +469,7 @@ function axisRingGates(): void {
 function axisPoolGates(): void {
   section("P2 axis — MIGRATING pools: creep + churn so the safe floor drifts, capped ≤ ⅓ arena (never seals)");
   check("the pool-migration axis is configured (creep 0.67 tiles/s + churn)",
-    PALE.zoneSpreadTilesPerSec === 0.67 && PALE.zoneChurn === true);
+    PALE.zoneSpreadTilesPerSec === 0.67 && PALE.isZoneChurnEnabled === true);
   check("zoneCap stays 10 + zoneCount 3 (the DRIFT is the difficulty, not more pools); windup/recover tighten",
     PALE.zoneCap === 10 && PALE.zoneCount === 3 && PALE.zoneWindup === 0.7 && PALE.zoneRecover === 0.5);
 

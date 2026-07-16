@@ -1896,10 +1896,10 @@ interface GiantAxes {
   readonly ring2GapOffsetSlots?: number;  // the 2nd ring's gap offset from the 1st, in ring slots (~half the ring)
   // P2 POSITIONING-OVER-TIME axis — MIGRATING pools (undefined = static pools, like Gorge). Each
   // pool CREEPS outward from the giant (zoneSpreadTilesPerSec) AND new pools seed at the edge of
-  // the nearest-to-expiring one (zoneChurn) so the safe floor DRIFTS; the denial stays capped
+  // the nearest-to-expiring one (isZoneChurnEnabled) so the safe floor DRIFTS; the denial stays capped
   // (zoneCap ≤ ⅓ arena) so the pocket always survives.
   readonly zoneSpreadTilesPerSec?: number; // outward creep speed of each pool, in tiles/sec
-  readonly zoneChurn?: boolean;            // seed new pools at the edge of the nearest-to-expiring one (migrate, don't re-center)
+  readonly isZoneChurnEnabled?: boolean;   // seed new pools at the edge of the nearest-to-expiring one (migrate, don't re-center)
   // P3 DUAL-READ axis — a COUNTER-ROTATING second sweep (undefined = single sweep, like Gorge).
   // spoke2Step counter-rotates (opposite sign, same magnitude); the safe spot is the drifting
   // INTERSECTION of the two wedges. spoke2Gap widens the 2nd sweep's gap when a full pair would
@@ -2146,7 +2146,7 @@ export const PALE = {
   // seed at the edge of the nearest-to-expiring one (churn), so the safe floor MIGRATES; zoneCap 10
   // keeps total denial ≤ ⅓ arena (never seals the pocket — pale.test.ts asserts it).
   zoneSpreadTilesPerSec: 0.67,
-  zoneChurn: true,
+  isZoneChurnEnabled: true,
   // P3 DUAL-READ — a COUNTER-ROTATING second FULL sweep (spoke2Step = -spokeStep: opposite sign,
   // same magnitude; the difficulty is the counter-rotation, NOT speed). Safe = the drifting
   // INTERSECTION of the two wedges. FAIRNESS (the critical assert): with spokeGap 2 the two sweeps'

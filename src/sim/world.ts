@@ -3610,9 +3610,9 @@ const WARMTH_PHASE = 3;
 // else null. Pure over the enemy list (kind + boss phase) so the server (w.enemies) and the online
 // client (snapshot enemies) resolve the SAME slow — the web-slow precedent (the predicted walk must
 // feel the environmental slow the server applies). The phase gate keeps it P3-only in both.
-export function resolveWarmthDrain(enemies: readonly { kind: EnemyKind; dead?: boolean; phase: number }[]): WarmthDrainParams | null {
+export function resolveWarmthDrain(enemies: readonly { kind: EnemyKind; isDead?: boolean; phase: number }[]): WarmthDrainParams | null {
   for (const e of enemies) {
-    if (e.dead || e.phase !== WARMTH_PHASE) continue;
+    if (e.isDead || e.phase !== WARMTH_PHASE) continue;
     const gc = GIANT_SPEC[e.kind]?.C;
     if (gc && gc.warmthDrainIdleSec !== undefined && gc.warmthDrainSlow !== undefined && gc.warmthDrainMoveClearTiles !== undefined) {
       return {
@@ -11851,7 +11851,7 @@ function giantZones(w: WorldState, e: Enemy, ev: SimEvent[], spec: GiantSpec): v
   // seeds at the edge of the nearest-to-expiring pool so the field ROLLS forward instead of
   // re-centering on the party. spread = 0 (no drift) for Gorge, so its plant is byte-identical.
   const spread = gc.zoneSpreadTilesPerSec !== undefined ? gc.zoneSpreadTilesPerSec * TILE : 0;
-  if (gc.zoneChurn) {
+  if (gc.isZoneChurnEnabled) {
     const field = w.hazards.filter((h) => h.kind === "cinder" && h.life > 0).sort((a, b) => a.life - b.life);
     for (let i = 0; i < gc.zoneCount; i++) {
       let px: number, py: number;
@@ -14271,7 +14271,7 @@ export function stepWorld(w: WorldState, inputs: Map<PlayerId, InputCmd>, dt: nu
 
   w.warmthDrain = resolveWarmthDrain(w.enemies.map((e) => ({
     kind: e.kind,
-    dead: e.dead,
+    isDead: e.dead,
     phase: e.boss ? e.boss.phase : 0,
   })));
 
