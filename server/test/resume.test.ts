@@ -107,6 +107,9 @@ async function main(): Promise<void> {
       p.coins = 137; p.hp = 1.5; p.x += TILE; p.y += TILE / 2;
       p.ownedWeapons.push("tesla");
       p.ownedItemIds.push("it_dmg", "it_dmg");
+      p.weaponCycles.sluicegate = 17;
+      p.weaponCycles.oddsmaker = 29;
+      p.isMuddyRefundSpent = true;
       const wantX = p.x, wantY = p.y;
       const seedBefore = world.state.seed;
 
@@ -134,6 +137,7 @@ async function main(): Promise<void> {
           && self.hp === 1.5 && self.coins === 137
           && self.wpns.includes("tesla")
           && self.items.filter((it) => it === "it_dmg").length === 2
+          && self.sgc === 17 && self.ogc === 29 && self.mds
           && bot.transport.getLatestSnapshot()!.floor === 1
           && Math.abs(self.x - wantX) < 1 && Math.abs(self.y - wantY) < 1,
           `hp=${self?.hp} coins=${self?.coins}`);
