@@ -354,7 +354,7 @@ export interface SelfWire {
   wpns: WeaponId[];            // authoritative owned-weapon inventory (validated equip source)
   sgc: number;                  // Sluicegate cycle
   ogc: number;                  // Oddsmaker cycle
-  mds: boolean;                 // muddy dash refund spent for the active dash
+  isMds: boolean;               // muddy dash refund spent for the active dash
   items: string[];             // authoritative owned blessing/item ids (HUD strip)
   mods: PlayerMods;            // authoritative run mods (drives client prediction: speed/firerate/dash)
   coins: number; kills: number; combo: number; ct: number; // HUD readouts
@@ -1148,7 +1148,7 @@ function validateSelfWire(v: unknown): SelfWire {
     wpns,
     sgc: intOf(o, "sgc", 0, Number.MAX_SAFE_INTEGER),
     ogc: intOf(o, "ogc", 0, Number.MAX_SAFE_INTEGER),
-    mds: boolOf(o, "mds"),
+    isMds: boolOf(o, "isMds"),
     items,
     mods: modsFromWire(obj(o.mods, "self.mods")),
     coins: num(o, "coins", 0, 1e9), kills: num(o, "kills", 0, 1e9),
@@ -1613,7 +1613,7 @@ export function selfWireFromSnapshot(s: AuthoritativePlayerSnapshot): SelfWire {
     dcd: s.dashCd, dti: s.dashTime, ddx: s.dashDx, ddy: s.dashDy, fcd: s.fireCd, chg: s.chargeT, fng: s.fangCd,
     fac: s.facing, down: s.isDown, rev: s.reviveProgress, out: false, wpn: s.weapon,
     wpns: s.ownedWeapons,
-    sgc: s.weaponCycles.sluicegate, ogc: s.weaponCycles.oddsmaker, mds: s.isMuddyRefundSpent,
+    sgc: s.weaponCycles.sluicegate, ogc: s.weaponCycles.oddsmaker, isMds: s.isMuddyRefundSpent,
     items: s.ownedItemIds, mods: s.mods,
     coins: s.coins, kills: s.kills, combo: s.combo, ct: s.comboTimer,
     bcl: s.hasClaimedBossChoice,
@@ -1637,7 +1637,7 @@ export function snapshotFromSelfWire(w: SelfWire): AuthoritativePlayerSnapshot {
     facing: w.fac, isDown: w.down, reviveProgress: w.rev, weapon: w.wpn,
     ownedWeapons: w.wpns.slice(),
     weaponCycles: { sluicegate: w.sgc, oddsmaker: w.ogc },
-    isMuddyRefundSpent: w.mds,
+    isMuddyRefundSpent: w.isMds,
     ownedItemIds: w.items.slice(), mods: modsFromWire(w.mods),
     coins: w.coins, kills: w.kills, combo: w.combo, comboTimer: w.ct,
     hasClaimedBossChoice: w.bcl,
