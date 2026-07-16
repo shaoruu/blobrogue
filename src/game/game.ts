@@ -2353,6 +2353,9 @@ export class Game {
             : e.outcome === "blast" ? "#ffb43b"
               : e.outcome === "pierce" ? "#e8f0ff"
                 : w.color;
+        const muzzleParticleColor = e.outcome === "none" && e.mode === "none"
+          ? "#ffe6a0"
+          : outcomeColor;
         const playFireAudio = (gain = 1): void => {
           if (e.outcome !== "none") {
             waveAudio.cueAt(ODDSMAKER_OUTCOME_AUDIO[e.outcome], e.x, e.y);
@@ -2368,7 +2371,7 @@ export class Game {
         // is replayed POSITIONALLY — muzzle particles + tracer + a recoil punch on their
         // blob + spatial audio (quieter if far) — with NO local camera kick/trauma/muzzle.
         if (!this.isSelfPid(e.pid)) {
-          this.spawnParticles(e.x, e.y, w.muzzle, outcomeColor);
+          this.spawnParticles(e.x, e.y, w.muzzle, muzzleParticleColor);
           if (e.mode === "flood") {
             for (const offset of [-0.34, 0, 0.34]) {
               this.remoteTracers.push({ x: e.x, y: e.y, angle: e.aim + offset, life: 0.12, color: "#78cbd1", len: 28 });
@@ -2390,7 +2393,7 @@ export class Game {
         this.muzzle.t = MUZZLE_DUR; this.muzzle.x = e.x; this.muzzle.y = e.y; this.muzzle.angle = e.aim;
         this.muzzle.size = e.mode === "flood" ? w.muzzle + 2 : e.mode === "drain" ? 2 : w.muzzle;
         this.muzzle.color = outcomeColor;
-        this.spawnParticles(e.x, e.y, w.muzzle, outcomeColor);
+        this.spawnParticles(e.x, e.y, w.muzzle, muzzleParticleColor);
         if (SMOKY_WEAPONS.has(e.weapon)) this.spawnPuff(e.x, e.y, 3, "#c9b8a0");
         if (e.weapon !== "rapid" && e.weapon !== "flamer") this.spawnShell(e.px, e.py - 6, e.aim);
         // Semantic weapon-audio contract first (charge TIER releases are distinct stems,
