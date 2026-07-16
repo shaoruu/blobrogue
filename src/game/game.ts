@@ -5042,14 +5042,6 @@ export class Game {
     g.addColorStop(1, `rgba(87,182,255,${alpha})`); // #57b6ff cold-blue frost rim
     ctx.fillStyle = g;
     ctx.fillRect(0, 0, canvas.width, canvas.height);
-    // A brighter cold-white inner bloom once fully chilled — "you are freezing, move".
-    if (chilled) {
-      const g2 = ctx.createRadialGradient(cx, cy, Math.min(cx, cy) * 0.72, cx, cy, Math.hypot(cx, cy));
-      g2.addColorStop(0, "rgba(255,255,255,0)");
-      g2.addColorStop(1, `rgba(191,234,255,${0.10 + 0.05 * Math.sin(this.animClock * 3.4)})`);
-      ctx.fillStyle = g2;
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
-    }
   }
 
   private renderTiles() {

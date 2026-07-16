@@ -143,7 +143,7 @@ export const SELECTED_DEEP_TAKES = {
   resinDrip: ["amb/deep_resin_drip_r4_v1", "amb/deep_resin_drip_r4_v2", "amb/deep_resin_drip_r4_v3"],
 } as const;
 
-function pendingGiantSound(stem: string, priority = WAVE_PRIORITY.bossTell): WaveSoundSpec {
+function pendingGiantSound(stem: string, priority: number = WAVE_PRIORITY.bossTell): WaveSoundSpec {
   return {
     stem,
     variants: 1,

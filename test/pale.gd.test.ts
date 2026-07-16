@@ -101,6 +101,7 @@ function exposeSeams(world: WorldState, boss: Enemy, ids: PlayerId[]): void {
 function clearSeams(world: WorldState, ids: PlayerId[], seams: Enemy[]): void {
   for (const seam of seams) world.bullets.push(bullet(seam.x, seam.y, 9999));
   stepWorld(world, new Map(ids.map((id, index) => [id, command(100 + index)])), DT);
+  stepWorld(world, new Map(ids.map((id, index) => [id, command(200 + index)])), DT);
 }
 
 function angleDelta(a: number, b: number): number {
@@ -323,12 +324,20 @@ function sweepNavigationRun(players: number, seed: number): { isRouteOpen: boole
   stepWorld(world, new Map(ids.map((id, index) => [id, command(100 + index)])), DT);
   for (const player of world.players.values()) player.isAbsent = true;
 
-  const starts = [
-    { x: boss.x + 170, y: boss.y },
-    { x: boss.x - 170, y: boss.y },
-    { x: boss.x, y: boss.y + 210 },
-    { x: boss.x, y: boss.y - 210 },
-  ].map((point) => [point]);
+  const initialSafe = giantSafeIntersection(0, boss.boss!.burstParity, PALE);
+  if (initialSafe === null) throw new Error("Pale sweep has no initial safe intersection");
+  const starts: Point[][] = [];
+  for (const radius of [170, 210]) {
+    const bodyInset = Math.asin(Math.min(0.99, (18 + PALE.globRadius) / radius));
+    for (const offset of [-initialSafe.width / 2 + bodyInset + 0.04, 0, initialSafe.width / 2 - bodyInset - 0.04]) {
+      const point = {
+        x: boss.x + Math.cos(initialSafe.center + offset) * radius,
+        y: boss.y + Math.sin(initialSafe.center + offset) * radius,
+      };
+      if (!isDangerous(world, point, [], 18)) starts.push([point]);
+    }
+  }
+  if (starts.length < 3) throw new Error(`Pale sweep setup produced only ${starts.length} legal representative starts`);
   let minReachable = Number.POSITIVE_INFINITY;
   let isRouteOpen = true;
   const maxFrames = Math.ceil((PALE.spokeDuration + PALE.globLife + 0.5) / DT);

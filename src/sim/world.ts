@@ -3640,7 +3640,7 @@ export function refreshWarmthDrain(w: WorldState): void {
     isDead: enemy.dead,
     phase: enemy.boss?.phase ?? 0,
   })));
-  if ((w.warmthDrain === null) !== (next === null)) {
+  if (next === null || (w.warmthDrain === null) !== (next === null)) {
     for (const player of w.players.values()) resetPlayerWarmth(player);
   }
   w.warmthDrain = next;
@@ -11899,7 +11899,10 @@ function giantRing(w: WorldState, e: Enemy, ev: SimEvent[], spec: GiantSpec, rin
   if (ringIx === 0) {
     const debris = bossAddCapFor(gc.ringDebris, w.encounterPower);
     for (let i = 0; i < debris; i++) {
-      const off = (i - (debris - 1) / 2) * 0.32;
+      const side = i % 2 === 0 ? -1 : 1;
+      const layer = Math.floor(i / 2);
+      const gapHalf = (gc.ringGap / gc.ringCount) * Math.PI;
+      const off = side * (gapHalf + 0.24 + layer * 0.2);
       plantAffixCharge(w, e.x + Math.cos(gapCenterAng + off) * gc.ringDebrisDist, e.y + Math.sin(gapCenterAng + off) * gc.ringDebrisDist);
     }
   }
