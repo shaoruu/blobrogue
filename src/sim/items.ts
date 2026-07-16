@@ -10,6 +10,11 @@ import type { KitId } from "./kits.js";
 import { PVP } from "./pvp.js";
 import { blessingHistoryWeight, blessingSeenCount } from "./offerHistory.js";
 import type { BlessingOfferHistory } from "./offerHistory.js";
+import {
+  CURRENT_CONTENT_CATALOG_VERSION,
+  contentCatalogFor,
+} from "./contentCatalog.js";
+import type { ContentCatalogVersion } from "./contentCatalog.js";
 
 // The neutral run-stat modifiers. Every field starts at its identity value (1 for a
 // multiplier, 0 for an additive) so an un-blessed run behaves exactly as before.
@@ -429,6 +434,13 @@ export const ITEMS: readonly ItemDef[] = [
 // The stat cores the core-infusion pedestal may stock (the dash core prices higher —
 // see shopSlotPriceFor's dashCorePriceMult).
 export const CORE_ITEM_IDS: readonly string[] = ["core_damage", "core_fire", "core_move", "core_dash"];
+
+export function normalItemsForCatalog(
+  catalogVersion: ContentCatalogVersion = CURRENT_CONTENT_CATALOG_VERSION,
+): readonly ItemDef[] {
+  const allowed = new Set(contentCatalogFor(catalogVersion).normalBlessingIds);
+  return ITEMS.filter((item) => allowed.has(item.id));
+}
 
 // A player's cumulative levels from their pick history (an id's count IS its level).
 export function itemLevelsOf(ownedItemIds: readonly string[]): Map<string, number> {

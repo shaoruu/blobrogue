@@ -18,6 +18,7 @@ import type { ShopSlot, ShopSlotKind, ShopState } from "../sim/shop.js";
 import type {
   Enemy, Bullet, Prop, Pickup, Chest, Hazard, HazardKind, EnemyKind, WeaponId, AttackPhase,
   AttackMove, PropKind, PickupKind, ChestKind, Effect, EffectKind,
+  SluiceMode, OddsmakerOutcome,
 } from "../sim/types.js";
 import type { EnemyTier, ShopMode } from "../sim/balance.js";
 import type { PlayerMods } from "../sim/items.js";
@@ -34,6 +35,11 @@ import { projectPlayer, applyPlayerSnapshot, modsFromWire } from "./playerSnapsh
 import type { AuthoritativePlayerSnapshot } from "./playerSnapshot.js";
 import type { KeyedDelta, RemovalReason, SelfDelta, WireObject, WireValue } from "./snapshotDelta.js";
 import { isValidWorldId } from "./worldId.js";
+import {
+  LEGACY_CONTENT_CATALOG_VERSION,
+  isContentCatalogVersion,
+} from "../sim/contentCatalog.js";
+import type { ContentCatalogVersion } from "../sim/contentCatalog.js";
 
 export { modsFromWire } from "./playerSnapshot.js";
 
@@ -352,9 +358,11 @@ export interface SelfWire {
   out: boolean;                // past the floor's down limit: unrevivable until the descent
   wpn: WeaponId;
   wpns: WeaponId[];            // authoritative owned-weapon inventory (validated equip source)
+  wcd: number[];                // per-owned-weapon cooldowns aligned with wpns
   sgc: number;                  // Sluicegate cycle
   ogc: number;                  // Oddsmaker cycle
   isMds: boolean;               // muddy dash refund spent for the active dash
+  rvb: string;                  // revive channel owner ("" = none)
   items: string[];             // authoritative owned blessing/item ids (HUD strip)
   mods: PlayerMods;            // authoritative run mods (drives client prediction: speed/firerate/dash)
   coins: number; kills: number; combo: number; ct: number; // HUD readouts
@@ -403,6 +411,7 @@ export interface PlayerWire {
   hp: number; mhp: number;
   fac: number; aim: number;
   wpn: WeaponId; down: boolean;
+  isDrain: boolean; // Sluicegate's authoritative next-shot mode
   // Dash + invuln readout (v9), the same authoritative PlayerSim fields SelfWire carries:
   // dti > 0 marks an ACTIVE dash, ddx/ddy its direction, dnv the dash-iframe window, inv
   // the post-hit invuln. Observing clients render the dash (afterimages/dust/sfx/flicker)
@@ -418,6 +427,7 @@ export interface PlayerWire {
   sge: number;
   sse: number;
   rv: number;   // authoritative revive-channel progress on a DOWNED body (seconds)
+  rvb: string;  // authoritative reviver id ("" = no active channel)
   out: boolean; // past the floor's down limit — teammates stop offering the revive
   bcl: boolean; // has claimed this floor's boss weapon choice (gate §4 personal claim)
   ab: boolean;  // absent body — the seat is reserved for a reconnect (rendered as a ghost)
@@ -508,6 +518,8 @@ export interface BulletWire {
   x: number; y: number; vx: number; vy: number;
   r: number; friend: boolean; color: string;
   fx: WeaponId | null;
+  sm: SluiceMode | null;
+  go: OddsmakerOutcome | null;
 }
 
 // Shared world content: every client sees the SAME authoritative props/pickups/chests, so
@@ -670,6 +682,7 @@ export type ServerMsg =
       tok?: string;              // single-use resume token for THIS connection (full snaps
                                  // only) — presented on reconnect to reclaim the seat
       seed: number;              // authoritative run seed (client rebuilds the identical dungeon)
+      cat: ContentCatalogVersion;// authoritative immutable run content catalog
       floor: number;             // authoritative floor number (objective/HUD)
       pcl: number;               // co-op player count LOCKED at floor pull (1..4) — the client
                                  // resolves the identical floor descriptor (mutators/affixes) with
@@ -867,7 +880,13 @@ const EVENT_SPECS: Record<SimEvent["t"], EventSpec> = {
   // only the actor — a teammate's shot/swing/hurt/heal/pickup should be seen and heard
   // POSITIONALLY (the client branches self vs remote in handleSimEvent). They already carry
   // x,y, so interest filtering delivers them to observers within range.
-  shot: { scope: "pos", fields: { pid: "str", weapon: "str", x: "num", y: "num", aim: "num", px: "num", py: "num", chg: "num" } },
+  shot: {
+    scope: "pos",
+    fields: {
+      pid: "str", weapon: "str", x: "num", y: "num", aim: "num", px: "num", py: "num",
+      chg: "num", mode: "str", outcome: "str",
+    },
+  },
   meleeSwing: { scope: "pos", fields: { pid: "str", weapon: "str", x: "num", y: "num", aim: "num", bx: "num", by: "num" } },
   enemyHit: { scope: "pos", fields: { eid: "num", dmgX: "num", dmgY: "num", dmg: "num", crit: "bool", puffX: "num", puffY: "num", puffColor: "str", melee: "bool", closeShotgun: "bool", killed: "bool" } },
   thornsHit: { scope: "pos", fields: { eid: "num", x: "num", y: "num", radius: "num", dmg: "num", tint: "str" } },
@@ -889,6 +908,9 @@ const EVENT_SPECS: Record<SimEvent["t"], EventSpec> = {
   revive: { scope: "pos", fields: { pid: "str", by: "str", x: "num", y: "num" } },
   // Positional (v14): the playful friendly-fire bonk plays for everyone standing at it.
   friendlyNudge: { scope: "pos", fields: { shooterId: "str", targetId: "str", x: "num", y: "num", dirX: "num", dirY: "num" } },
+  grappleResolved: { scope: "pos", fields: { pid: "str", x: "num", y: "num", tx: "num", ty: "num", dx: "num", dy: "num" } },
+  blessingProc: { scope: "pos", fields: { pid: "str", item: "str", phase: "str", x: "num", y: "num" } },
+  reviveHandoff: { scope: "pos", fields: { pid: "str", from: "str", to: "str", isBoosted: "bool", x: "num", y: "num" } },
   pickup: { scope: "pos", fields: { pid: "str", kind: "str", x: "num", y: "num" } },
   lootDrop: { scope: "pos", fields: { x: "num", y: "num", color: "str" } },
   // Positional: the reveal moment plays for everyone standing at the pedestal, not only
@@ -1130,6 +1152,13 @@ function validateSelfWire(v: unknown): SelfWire {
     if (typeof it !== "string" || it.length > 48) throw new ProtocolError("bad self.items entry");
     return it;
   });
+  const wcd = arr(o.wcd, "self.wcd").map((value) => {
+    if (typeof value !== "number" || !Number.isFinite(value) || value < 0 || value > 1e4) {
+      throw new ProtocolError("bad self.wcd entry");
+    }
+    return value;
+  });
+  if (wcd.length !== wpns.length) throw new ProtocolError("bad self.wcd length");
   return {
     x: num(o, "x", -POS_LIMIT, POS_LIMIT), y: num(o, "y", -POS_LIMIT, POS_LIMIT),
     hp: num(o, "hp", 0, 1e6), mhp: num(o, "mhp", 0, 1e6),
@@ -1146,9 +1175,11 @@ function validateSelfWire(v: unknown): SelfWire {
     out: boolOf(o, "out"),
     wpn: weaponOf(o, "wpn"),
     wpns,
-    sgc: intOf(o, "sgc", 0, Number.MAX_SAFE_INTEGER),
-    ogc: intOf(o, "ogc", 0, Number.MAX_SAFE_INTEGER),
+    wcd,
+    sgc: intOf(o, "sgc", 0, 0x0fffffff),
+    ogc: intOf(o, "ogc", 0, 0x0fffffff),
     isMds: boolOf(o, "isMds"),
+    rvb: idRefOf(o, "rvb"),
     items,
     mods: modsFromWire(obj(o.mods, "self.mods")),
     coins: num(o, "coins", 0, 1e9), kills: num(o, "kills", 0, 1e9),
@@ -1203,6 +1234,7 @@ function validatePlayerWire(v: unknown): PlayerWire {
     hp: num(o, "hp", 0, 1e6), mhp: num(o, "mhp", 0, 1e6),
     fac: num(o, "fac", -1, 1), aim: num(o, "aim", -1000, 1000),
     wpn: weaponOf(o, "wpn"), down: boolOf(o, "down"),
+    isDrain: boolOf(o, "isDrain"),
     dti: num(o, "dti", -1e4, 1e4),
     ddx: num(o, "ddx", -8, 8), ddy: num(o, "ddy", -8, 8),
     dnv: num(o, "dnv", 0, 1e4),
@@ -1213,6 +1245,7 @@ function validatePlayerWire(v: unknown): PlayerWire {
     sge: intOf(o, "sge", 0, Number.MAX_SAFE_INTEGER),
     sse: intOf(o, "sse", 0, Number.MAX_SAFE_INTEGER),
     rv: num(o, "rv", 0, 1e4),
+    rvb: idRefOf(o, "rvb"),
     out: boolOf(o, "out"),
     bcl: boolOf(o, "bcl"),
     ab: boolOf(o, "ab"),
@@ -1254,11 +1287,17 @@ function validateBulletWire(v: unknown): BulletWire {
   const o = obj(v, "bullet");
   const fx = o.fx;
   if (fx !== null && !isWeaponId(fx)) throw new ProtocolError("bad bullet.fx");
+  const sm = o.sm === null ? null : inSet(["flood", "drain"] as const, o.sm, "bullet.sm");
+  const go = o.go === null
+    ? null
+    : inSet(["ricochet", "seeker", "blast", "pierce"] as const, o.go, "bullet.go");
   return {
     x: num(o, "x", -POS_LIMIT, POS_LIMIT), y: num(o, "y", -POS_LIMIT, POS_LIMIT),
     vx: num(o, "vx", -1e6, 1e6), vy: num(o, "vy", -1e6, 1e6),
     r: num(o, "r", 0, 1e4), friend: boolOf(o, "friend"), color: shortStr(o, "color", 32),
     fx: fx as WeaponId | null,
+    sm,
+    go,
   };
 }
 
@@ -1433,6 +1472,14 @@ function worldIdOf(o: Record<string, unknown>): string {
   return wid;
 }
 
+function catalogVersionOf(value: unknown): ContentCatalogVersion {
+  if (value === undefined) return LEGACY_CONTENT_CATALOG_VERSION;
+  if (typeof value !== "number" || !Number.isInteger(value) || !isContentCatalogVersion(value)) {
+    throw new ProtocolError("bad catalog version");
+  }
+  return value;
+}
+
 // Exhaustive validation of a COMPLETE snapshot object. Shared by the wire decode of a `snap`
 // frame and by the client's delta path (which reconstructs a complete snapshot from a baseline
 // + delta and runs it through here, so a delta ends up as strictly-validated as a keyframe).
@@ -1457,6 +1504,7 @@ export function validateSnap(o: Record<string, unknown>): Extract<ServerMsg, { t
     wait: arr(o.wait, "wait").map(validateWaitWire),
     ...(o.tok !== undefined ? { tok: shortStr(o, "tok", 64) } : {}),
     seed: intOf(o, "seed", -Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER),
+    cat: catalogVersionOf(o.cat),
     floor: intOf(o, "floor", 1, 1e6),
     pcl: intOf(o, "pcl", 1, 4),
     cleared: boolOf(o, "cleared"),
@@ -1613,7 +1661,9 @@ export function selfWireFromSnapshot(s: AuthoritativePlayerSnapshot): SelfWire {
     dcd: s.dashCd, dti: s.dashTime, ddx: s.dashDx, ddy: s.dashDy, fcd: s.fireCd, chg: s.chargeT, fng: s.fangCd,
     fac: s.facing, down: s.isDown, rev: s.reviveProgress, out: false, wpn: s.weapon,
     wpns: s.ownedWeapons,
+    wcd: s.ownedWeapons.map((weapon) => s.weaponFireCooldowns[weapon] ?? 0),
     sgc: s.weaponCycles.sluicegate, ogc: s.weaponCycles.oddsmaker, isMds: s.isMuddyRefundSpent,
+    rvb: s.reviveBy ?? "",
     items: s.ownedItemIds, mods: s.mods,
     coins: s.coins, kills: s.kills, combo: s.combo, ct: s.comboTimer,
     bcl: s.hasClaimedBossChoice,
@@ -1636,8 +1686,12 @@ export function snapshotFromSelfWire(w: SelfWire): AuthoritativePlayerSnapshot {
     dashCd: w.dcd, dashTime: w.dti, dashDx: w.ddx, dashDy: w.ddy, fireCd: w.fcd, chargeT: w.chg, fangCd: w.fng,
     facing: w.fac, isDown: w.down, reviveProgress: w.rev, weapon: w.wpn,
     ownedWeapons: w.wpns.slice(),
+    weaponFireCooldowns: Object.fromEntries(
+      w.wpns.flatMap((weapon, index) => w.wcd[index] > 0 ? [[weapon, w.wcd[index]]] : []),
+    ),
     weaponCycles: { sluicegate: w.sgc, oddsmaker: w.ogc },
     isMuddyRefundSpent: w.isMds,
+    reviveBy: w.rvb.length > 0 ? w.rvb : null,
     ownedItemIds: w.items.slice(), mods: modsFromWire(w.mods),
     coins: w.coins, kills: w.kills, combo: w.combo, comboTimer: w.ct,
     hasClaimedBossChoice: w.bcl,
@@ -1685,10 +1739,12 @@ export interface PlayerIdentity {
 export function toPlayerWire(p: PlayerSim, identity?: PlayerIdentity): PlayerWire {
   return {
     id: p.id, x: p.x, y: p.y, hp: p.hp, mhp: p.maxHp, fac: p.facing, aim: p.aimAngle, wpn: p.weapon, down: p.isDown,
+    isDrain: p.weaponCycles.sluicegate % 2 === 1,
     dti: p.dashTime, ddx: p.dashDx, ddy: p.dashDy, dnv: p.dashInvuln, inv: p.invuln,
     sgr: p.spawnGraceT, ssh: p.spawnShieldT,
     spo: p.spawnProtectionStartedTick, sge: p.spawnHardGraceEndsAtTick, sse: p.spawnShieldEndsAtTick,
     rv: p.reviveProgress,
+    rvb: p.reviveBy ?? "",
     out: isPlayerOut(p),
     bcl: p.hasClaimedBossChoice,
     ab: p.isAbsent,
@@ -1732,7 +1788,12 @@ export function toEnemyWire(e: Enemy): EnemyWire {
 }
 
 export function toBulletWire(b: Bullet): BulletWire {
-  return { x: b.x, y: b.y, vx: b.vx, vy: b.vy, r: b.radius, friend: b.friendly, color: b.color, fx: b.fx ?? null };
+  return {
+    x: b.x, y: b.y, vx: b.vx, vy: b.vy, r: b.radius,
+    friend: b.friendly, color: b.color, fx: b.fx ?? null,
+    sm: b.sluiceMode ?? null,
+    go: b.oddsmakerOutcome ?? null,
+  };
 }
 
 // Build a render-ready Enemy from a wire struct at an (interpolated) position. Scratch fields
@@ -1812,11 +1873,16 @@ export function toShopWire(s: ShopState, viewerId?: PlayerId): ShopWire {
     }),
   };
 }
-export function shopFromWire(w: ShopWire, selfServerId?: PlayerId | null): ShopState {
+export function shopFromWire(
+  w: ShopWire,
+  selfServerId?: PlayerId | null,
+  catalogVersion: ContentCatalogVersion = LEGACY_CONTENT_CATALOG_VERSION,
+): ShopState {
   // Field order mirrors buildShopState so a decoded shop is byte-identical to the sim's
   // on its wire projection (the shop suite locks toShopWire round-trips; a mystery
   // slot's hidden identity/twist are sim secrets and never reconstructable here).
   return {
+    catalogVersion,
     mode: w.md,
     keeperX: w.kx, keeperY: w.ky,
     slots: w.slots.map((s): ShopSlot => ({
@@ -1941,6 +2007,8 @@ export function bulletFromWire(b: BulletWire): Bullet {
     x: b.x, y: b.y, vx: b.vx, vy: b.vy, radius: b.r, life: 1, friendly: b.friend,
     owner: null, damage: 0, color: b.color, pierce: 0, hitList: null, isCrit: false,
     fx: b.fx ?? undefined,
+    sluiceMode: b.sm ?? undefined,
+    oddsmakerOutcome: b.go ?? undefined,
   };
 }
 
@@ -2089,6 +2157,7 @@ export function buildSnapshot(
     wait: partyWait(w),
     ...(opts.resumeToken !== undefined ? { tok: opts.resumeToken } : {}),
     seed: w.seed,
+    cat: w.catalogVersion,
     floor: w.floor,
     pcl: w.floorDescriptor.playerCountAtLock,
     cleared: isFloorCleared(w),

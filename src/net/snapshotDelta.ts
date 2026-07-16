@@ -62,7 +62,10 @@ export const WHOLE_LISTS = ["roster", "wait", "exr", "bullets", "shop", "match",
 
 // Top-level scalar fields diffed by value. `events`/`evTo`/`sseq` are handled out of band, and
 // the keyed/whole lists + `self` have their own channels, so they are excluded here.
-const SCALARS = ["tick", "rev", "ackSeq", "full", "over", "selfId", "wid", "seed", "floor", "pcl", "cleared", "tok"] as const;
+const SCALARS = [
+  "tick", "rev", "ackSeq", "full", "over", "selfId", "wid",
+  "seed", "cat", "floor", "pcl", "cleared", "tok",
+] as const;
 
 // The per-connection view of the authoritative world: which entity ids still EXIST (alive) so a
 // removal can be tagged "left" (filtered out) vs "gone" (truly despawned).

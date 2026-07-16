@@ -23,6 +23,7 @@ import { BlessingOverlay } from "../src/ui/blessing.js";
 import { installFxCapture, beginTick, takeTick } from "./harness/fxCapture.js";
 import { SCENARIOS, DT, type Scenario, type FrameInput } from "./scenarios.js";
 import { playerView, enemyView, bulletView, effectView, pickupView, propView, chestView, diffStreams, type TickSnapshot } from "./snapshot.js";
+import { LEGACY_CONTENT_CATALOG_VERSION } from "../src/sim/contentCatalog.js";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -42,7 +43,11 @@ function reset(game: any, s: Scenario): void {
   game.isSandbox = false;
   game.start({ mode: "solo", coop: null, profile: null });
   // Force the deterministic seed/floor by rebooting the transport's world.
-  game.transport.start(s.seed, s.floor, { isSandbox: false, isCoop: false });
+  game.transport.start(s.seed, s.floor, {
+    isSandbox: false,
+    isCoop: false,
+    catalogVersion: LEGACY_CONTENT_CATALOG_VERSION,
+  });
   game.world = game.transport.poll().state;
   game.seed = s.seed;
   game.ownedItemDefs = [];

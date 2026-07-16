@@ -43,7 +43,7 @@ import { PartyGate } from "../net/partyGate.js";
 import type { ExpectedMember, PartyGateView } from "../net/partyGate.js";
 import { onlineHudLabel, netDetailsLine, reconnectOverlayCopy, BACK_ONLINE_TOAST, CONNECT_CANCEL_HINT, OFFER_EXPIRED_TOAST } from "../ui/onlineCopy.js";
 import type { OnlineExitReason, OnlinePhase } from "../ui/onlineCopy.js";
-import { applyItemToWorld, chooseBlessingInWorld, dismissBlessingOfferInWorld, applyMaxHpBonus, loadFloorIntoWorld, descend, devSpawnEnemy, devSpawnProp, devSpawnChest, acquireWeaponInWorld, isFloorCleared, isPvp, navDebugField, workerBuildSites, nearestShopSlot, isPlayerInCombat, rollBlessingChoicesInWorld, setPlayerKit } from "../sim/world.js";
+import { applyItemToWorld, chooseBlessingInWorld, dismissBlessingOfferInWorld, applyMaxHpBonus, loadFloorIntoWorld, descend, devSpawnEnemy, devSpawnProp, devSpawnChest, acquireWeaponInWorld, isFloorCleared, isPvp, navDebugField, workerBuildSites, nearestShopSlot, isPlayerInCombat, rollBlessingChoicesInWorld, setPlayerKit, effectiveReviveRadius, effectiveReviveRate, grapplePreview } from "../sim/world.js";
 import type { WorldState, PlayerSim, MeleeSwing, RemoteTarget } from "../sim/world.js";
 import { ULT, isRealKit, canCastUlt, KIT_META, MOMENTUM, OVERSHIELD, HEAL_PULSE, LIFEBLOOM } from "../sim/kits.js";
 import type { KitId } from "../sim/kits.js";
@@ -75,7 +75,10 @@ import { audio, sfx } from "./audio.js";
 import type { SfxName, SfxOptions } from "./audio.js";
 import { waveAudio } from "./waveAudio.js";
 import type { WaveFramePlayer } from "./waveAudio.js";
-import { EXPEDITION_BAND_ENTRY_EVENT, WAVE_HAZARDS, WEAPON_AUDIO, STATUS_AUDIO } from "./waveSpec.js";
+import {
+  BLESSING_PROC_AUDIO, EXPEDITION_BAND_ENTRY_EVENT, ODDSMAKER_OUTCOME_AUDIO,
+  WAVE_HAZARDS, WEAPON_AUDIO, STATUS_AUDIO,
+} from "./waveSpec.js";
 import { pvpKillCue, pvpMatchOverCue, pvpFragStreakRate, pvpCountTickRate } from "./waveSpec.js";
 import type { WaveEventId } from "./waveSpec.js";
 import { PVP, pvpDraftSeed, pvpSpawnHardGraceTicks } from "../sim/pvp.js";
@@ -2345,33 +2348,56 @@ export class Game {
     switch (e.t) {
       case "shot": {
         const w = WEAPONS[e.weapon];
+        const outcomeColor = e.outcome === "ricochet" ? "#c98bff"
+          : e.outcome === "seeker" ? "#8affe0"
+            : e.outcome === "blast" ? "#ffb43b"
+              : e.outcome === "pierce" ? "#e8f0ff"
+                : w.color;
+        const playFireAudio = (gain = 1): void => {
+          if (e.outcome !== "none") {
+            waveAudio.cueAt(ODDSMAKER_OUTCOME_AUDIO[e.outcome], e.x, e.y);
+            return;
+          }
+          if (!waveAudio.weaponFired(e.weapon, { x: e.x, y: e.y, gain, beamKey: e.pid })) {
+            if (gain < 1) this.sfxAt(SHOOT_SFX[e.weapon], e.x, e.y, { ...SHOOT_SFX_OPTS[e.weapon], gain });
+            else sfx(SHOOT_SFX[e.weapon], SHOOT_SFX_OPTS[e.weapon]);
+          }
+        };
         // Online MP has ONE authoritative event stream: a teammate's shot arrives here too
         // (v14, "pos" scope). The local player gets the full juice; a REMOTE player's shot
         // is replayed POSITIONALLY — muzzle particles + tracer + a recoil punch on their
         // blob + spatial audio (quieter if far) — with NO local camera kick/trauma/muzzle.
         if (!this.isSelfPid(e.pid)) {
-          this.spawnParticles(e.x, e.y, w.muzzle, "#ffe6a0");
-          this.remoteTracers.push({ x: e.x, y: e.y, angle: e.aim, life: 0.12, color: this.remoteColorOf(e.pid) });
+          this.spawnParticles(e.x, e.y, w.muzzle, outcomeColor);
+          if (e.mode === "flood") {
+            for (const offset of [-0.34, 0, 0.34]) {
+              this.remoteTracers.push({ x: e.x, y: e.y, angle: e.aim + offset, life: 0.12, color: "#78cbd1", len: 28 });
+            }
+          } else {
+            this.remoteTracers.push({
+              x: e.x, y: e.y, angle: e.aim, life: 0.12,
+              color: e.mode === "drain" ? "#d9fbff" : outcomeColor,
+              len: e.mode === "drain" || e.outcome === "pierce" ? 64 : undefined,
+              isArc: e.outcome === "ricochet",
+            });
+          }
           const entry = this.remoteAnims.get(e.pid);
           if (entry) triggerRecoil(entry.anim);
-          if (!waveAudio.weaponFired(e.weapon, { x: e.x, y: e.y, gain: 0.4, beamKey: e.pid })) {
-            this.sfxAt(SHOOT_SFX[e.weapon], e.x, e.y, { ...SHOOT_SFX_OPTS[e.weapon], gain: 0.4 });
-          }
+          playFireAudio(0.4);
           break;
         }
         triggerRecoil(this.playerAnim, FIRE_RECOIL[e.weapon] * settings.effectiveRecoil);
-        this.muzzle.t = MUZZLE_DUR; this.muzzle.x = e.x; this.muzzle.y = e.y; this.muzzle.angle = e.aim; this.muzzle.size = w.muzzle; this.muzzle.color = w.color;
-        this.spawnParticles(e.x, e.y, w.muzzle, "#ffe6a0");
+        this.muzzle.t = MUZZLE_DUR; this.muzzle.x = e.x; this.muzzle.y = e.y; this.muzzle.angle = e.aim;
+        this.muzzle.size = e.mode === "flood" ? w.muzzle + 2 : e.mode === "drain" ? 2 : w.muzzle;
+        this.muzzle.color = outcomeColor;
+        this.spawnParticles(e.x, e.y, w.muzzle, outcomeColor);
         if (SMOKY_WEAPONS.has(e.weapon)) this.spawnPuff(e.x, e.y, 3, "#c9b8a0");
         if (e.weapon !== "rapid" && e.weapon !== "flamer") this.spawnShell(e.px, e.py - 6, e.aim);
         // Semantic weapon-audio contract first (charge TIER releases are distinct stems,
         // the risk payoff is a distinct stem), then manifest-bound weapons (Thumper lob,
         // Sunlance held-beam lifecycle), then the exact legacy sample.
-        if (!this.playSemanticFireAudio(e)) {
-          if (!waveAudio.weaponFired(e.weapon, { x: e.x, y: e.y })) {
-            sfx(SHOOT_SFX[e.weapon], SHOOT_SFX_OPTS[e.weapon]);
-          }
-        }
+        if (e.outcome !== "none") playFireAudio();
+        else if (!this.playSemanticFireAudio(e)) playFireAudio();
         this.addTrauma(FIRE_TRAUMA[e.weapon]);
         const kick = FIRE_KICK[e.weapon] * settings.effectiveRecoil;
         this.kickX += -Math.cos(e.aim) * kick;
@@ -2863,6 +2889,36 @@ export class Game {
       case "tetherHold":
         waveAudio.cueAt("crook.hold", e.x, e.y);
         break;
+      case "grappleResolved": {
+        const anchorLen = Math.hypot(e.tx - e.x, e.ty - e.y);
+        this.remoteTracers.push({
+          x: e.x, y: e.y, angle: Math.atan2(e.ty - e.y, e.tx - e.x),
+          life: 0.24, color: "#d6c7a1", len: anchorLen, isArc: true,
+        });
+        const travelLen = Math.hypot(e.dx - e.x, e.dy - e.y);
+        this.remoteTracers.push({
+          x: e.x, y: e.y, angle: Math.atan2(e.dy - e.y, e.dx - e.x),
+          life: 0.24, color: "#a8d7a0", len: travelLen,
+        });
+        this.spawnPuff(e.tx, e.ty, 5, "#d6c7a1");
+        break;
+      }
+      case "blessingProc": {
+        const eventId = BLESSING_PROC_AUDIO[e.item];
+        if (eventId !== undefined) waveAudio.cueAt(eventId, e.x, e.y);
+        if (this.isSelfPid(e.pid)) {
+          const item = itemById(e.item);
+          if (item !== undefined) this.spawnWorldLabel(e.x, e.y, item.name, item.tint);
+        }
+        this.spawnPuff(e.x, e.y, 3, itemById(e.item)?.tint ?? "#e8e0c8");
+        break;
+      }
+      case "reviveHandoff": {
+        if (e.to.length > 0 && (this.isSelfPid(e.to) || this.isSelfPid(e.pid))) {
+          this.spawnWorldLabel(e.x, e.y, e.isBoosted ? "SHARED ROPE" : "REVIVING", e.isBoosted ? "#a8d7a0" : "#8affc0");
+        }
+        break;
+      }
       case "statusApplied":
         // The SHARED status library: apply cues ride per-entity cooldowns; DoT ticks
         // stay silent by contract (burnTick below carries visuals only).
@@ -3875,9 +3931,9 @@ export class Game {
     const seen = new Set<string>();
     for (const r of this.coop.remotePlayers()) {
       if (!r.isDown) continue;
-      if (Math.hypot(this.px - r.x, this.py - r.y) < REVIVE.radius) {
+      if (Math.hypot(this.px - r.x, this.py - r.y) < effectiveReviveRadius(this.p)) {
         seen.add(r.playerId);
-        const held = (this.reviveHold.get(r.playerId) ?? 0) + dt;
+        const held = (this.reviveHold.get(r.playerId) ?? 0) + dt * effectiveReviveRate(this.p);
         this.reviveHold.set(r.playerId, held);
         this.spawnParticles(r.x, r.y, 1, "#8affc0");
         if (held >= REVIVE.channel) {
@@ -4059,11 +4115,14 @@ export class Game {
       let near: RemotePlayer | null = null;
       for (const r of this.remotes()) {
         if (!r.isDown || r.isOut) continue;
-        if (Math.hypot(this.px - r.x, this.py - r.y) > REVIVE.radius) continue;
+        if (Math.hypot(this.px - r.x, this.py - r.y) > effectiveReviveRadius(this.p)) continue;
         if (near === null || r.reviveProgress > near.reviveProgress) near = r;
       }
       if (near !== null) {
-        const isChanneling = near.reviveProgress > 0 && this.input.isInteractHeld;
+        const selfServerId = this.wsTransport?.getSelfServerId() ?? LOCAL_ID;
+        const isChanneling = near.reviveProgress > 0
+          && near.reviveBy === selfServerId
+          && this.input.isInteractHeld;
         return {
           action: "revive",
           targetName: near.name,
@@ -4613,6 +4672,7 @@ export class Game {
     this.renderBullets();
     this.renderEffectEntities(); // weapon effect bodies (sentries, orbit blades, tether chains)
     this.renderChargeMarker();   // the local Breach hold: charge ring + landing marker
+    this.renderGrapplePreview();
     this.renderTracers();
     this.renderRemotePlayers();
     this.renderPets(); // client-side cosmetic companions (follow/sit; never a sim entity)
@@ -6516,14 +6576,21 @@ export class Game {
           ctx.globalAlpha = 0.22 * fade;
           ctx.strokeStyle = tint;
           ctx.lineWidth = 1;
-          ctx.beginPath(); ctx.arc(sx, sy, e.radius * 0.92, 0, 6.28); ctx.stroke();
+          ctx.beginPath(); ctx.arc(sx, sy, isPaved ? e.radius : e.radius * 0.92, 0, 6.28); ctx.stroke();
           continue;
         }
         const mask = this.sprites.fxTinted(isPaved ? "pave_zone" : "frost_zone", tint)
           ?? (isPaved ? this.sprites.fxTinted("frost_zone", tint) : null);
         if (mask) {
+          ctx.save();
+          if (isPaved) {
+            ctx.beginPath();
+            ctx.arc(sx, sy, e.radius, 0, 6.28);
+            ctx.clip();
+          }
           ctx.globalAlpha = 0.5 * fade;
           ctx.drawImage(mask, sx - e.radius, sy - e.radius, e.radius * 2, e.radius * 2);
+          ctx.restore();
         } else {
           ctx.globalAlpha = 0.16 * fade;
           ctx.fillStyle = tint;
@@ -6531,7 +6598,7 @@ export class Game {
           ctx.globalAlpha = 0.4 * fade;
           ctx.strokeStyle = isPaved ? "#dff2d8" : "#cdeaff";
           ctx.lineWidth = 1.5;
-          ctx.beginPath(); ctx.arc(sx, sy, e.radius * 0.92, 0, 6.28); ctx.stroke();
+          ctx.beginPath(); ctx.arc(sx, sy, isPaved ? e.radius : e.radius * 0.92, 0, 6.28); ctx.stroke();
         }
       } else {
         const ax = e.x - cam.x, ay = e.y - cam.y;
@@ -6780,6 +6847,28 @@ export class Game {
     ctx.setLineDash([]);
     ctx.fillStyle = "#ffb06a";
     ctx.beginPath(); ctx.arc(mx, my, 3.5, 0, 6.28); ctx.fill();
+    ctx.restore();
+  }
+
+  private renderGrapplePreview() {
+    if (this.weapon !== "mooring_nail" || this.isDown || this.p.isAbsent) return;
+    const preview = grapplePreview(this.world, this.p, this.aimAngle);
+    if (preview === null) return;
+    const { ctx, renderCam: cam } = this;
+    ctx.save();
+    ctx.globalAlpha = 0.62;
+    ctx.strokeStyle = "#d6c7a1";
+    ctx.lineWidth = 1.5;
+    ctx.setLineDash([5, 4]);
+    ctx.beginPath();
+    ctx.moveTo(this.px - cam.x, this.py - cam.y);
+    ctx.lineTo(preview.anchorX - cam.x, preview.anchorY - cam.y);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.strokeStyle = "#a8d7a0";
+    ctx.beginPath();
+    ctx.arc(preview.destinationX - cam.x, preview.destinationY - cam.y, 7, 0, Math.PI * 2);
+    ctx.stroke();
     ctx.restore();
   }
 
@@ -8281,13 +8370,30 @@ export class Game {
         this.fxLayer("chain_link", color, bx, by, R * 4.5, R * 2.2, 0.55, angle);
         return this.fxLayer("slug", "#f1e6c8", bx, by, R * 5, R * 2.2, 1, angle);
       case "sluicegate":
-        this.fxLayer("glow_round", color, bx, by, R * 5.5, R * 5.5, 0.35, 0);
-        this.fxTrail("comet_trail", color, bx, by, trailLen * 0.75, R * 2.2, 0.55, angle);
-        return this.fxLayer("slug", "#d9fbff", bx, by, R * 3.2, R * 2.2, 0.9, angle);
+        if (b.sluiceMode === "drain") {
+          this.fxLayer("glow_round", "#d9fbff", bx, by, R * 4, R * 4, 0.35, 0);
+          this.fxTrail("beam_ray", "#d9fbff", bx, by, Math.max(trailLen, R * 14), R * 2, 0.85, angle);
+          return this.fxLayer("core_dot", "#ffffff", bx, by, R * 2, R * 2, 1, 0);
+        }
+        this.fxLayer("glow_round", color, bx, by, R * 6.5, R * 6.5, 0.4, 0);
+        this.fxTrail("comet_trail", color, bx, by, trailLen * 0.5, R * 3, 0.5, angle);
+        return this.fxLayer("slug", "#b9edf0", bx, by, R * 4, R * 3, 0.9, angle);
       case "oddsmaker":
-        this.fxLayer("glow_round", color, bx, by, R * 6, R * 6, 0.4, 0);
-        this.fxLayer("crackle", "#fff0bd", bx, by, R * 4, R * 4, 0.55, this.animClock * 8);
-        return this.fxLayer("slug", "#fff7dd", bx, by, R * 3.2, R * 3.2, 1, angle + Math.PI / 4);
+        if (b.oddsmakerOutcome === "ricochet") {
+          this.fxLayer("crackle", "#c98bff", bx, by, R * 5, R * 5, 0.8, this.animClock * 9);
+          return this.fxLayer("slug", "#fff7dd", bx, by, R * 3.4, R * 3.4, 1, angle + Math.PI / 4);
+        }
+        if (b.oddsmakerOutcome === "seeker") {
+          this.fxLayer("glow_round", "#8affe0", bx, by, R * 7, R * 7, 0.5, 0);
+          return this.fxTrail("comet_trail", "#8affe0", bx, by, Math.max(R * 7, trailLen), R * 4, 0.75, angle);
+        }
+        if (b.oddsmakerOutcome === "blast") {
+          this.fxLayer("smoke_puff", "#c9b8a0", bx - Math.cos(angle) * R * 2, by - Math.sin(angle) * R * 2, R * 4, R * 4, 0.4, 0);
+          this.fxLayer("glow_round", "#ffb43b", bx, by, R * 8, R * 8, 0.5, 0);
+          return this.fxLayer("slug", "#fff0bd", bx, by, R * 4.2, R * 4.2, 1, angle);
+        }
+        this.fxTrail("trail_streak", "#e8f0ff", bx, by, Math.max(trailLen, R * 10), R * 1.4, 0.8, angle);
+        return this.fxLayer("core_dot", "#ffffff", bx, by, R * 2.2, R * 2.2, 1, 0);
       case "pathmaker":
         this.fxLayer("frost", color, bx, by, R * 4.5, R * 4.5, 0.6, angle);
         this.fxTrail("trail_streak", color, bx, by, trailLen * 0.55, R * 1.8, 0.45, angle);
@@ -8484,7 +8590,7 @@ export class Game {
 
       if (!r.isDown && !r.isAbsent && !isArenaRespawning) {
         if (WEAPONS[r.weapon].melee) this.renderHeldMelee(sx, sy, r.aimAngle, r.weapon, 1, null);
-        else this.renderHeldWeapon(sx, sy, r.aimAngle, r.weapon, 1);
+        else this.renderHeldWeapon(sx, sy, r.aimAngle, r.weapon, 1, 0, r.isSluiceDrain);
       }
 
       ctx.fillStyle = color;
@@ -8834,7 +8940,10 @@ export class Game {
       // true sim center (psx/psy) — the weapon art is cosmetic and just follows the body.
       const bx = psx + xf.ox, by = psy + xf.oy;
       if (WEAPONS[this.weapon].melee) this.renderHeldMelee(bx, by, this.aimAngle, this.weapon, alpha, this.meleeSwing);
-      else this.renderHeldWeapon(bx, by, this.aimAngle, this.weapon, alpha, this.playerAnim.recoil);
+      else this.renderHeldWeapon(
+        bx, by, this.aimAngle, this.weapon, alpha, this.playerAnim.recoil,
+        this.p.weaponCycles.sluicegate % 2 === 1,
+      );
       this.renderPvpWeaponArming(
         psx,
         psy,
@@ -8861,14 +8970,14 @@ export class Game {
   private renderReviveRings() {
     if (this.mode === "solo" || !this.isRunning) return;
     const { ctx, renderCam: cam } = this;
-    const drawStandRing = (sx: number, sy: number) => {
+    const drawStandRing = (sx: number, sy: number, radius: number) => {
       ctx.save();
       ctx.globalAlpha = 0.22 + 0.08 * Math.sin(this.animClock * 3);
       ctx.strokeStyle = "#8affc0";
       ctx.lineWidth = 2;
       ctx.setLineDash(AIM_DASH);
       ctx.beginPath();
-      ctx.arc(sx, sy, REVIVE.radius, 0, 6.28);
+      ctx.arc(sx, sy, radius, 0, 6.28);
       ctx.stroke();
       ctx.restore();
     };
@@ -8898,6 +9007,20 @@ export class Game {
       ctx.restore();
       ctx.textAlign = "left";
     };
+    const drawRope = (x0: number, y0: number, x1: number, y1: number, isBoosted: boolean) => {
+      ctx.save();
+      ctx.globalAlpha = isBoosted ? 0.85 : 0.55;
+      ctx.strokeStyle = isBoosted ? "#a8d7a0" : "#8affc0";
+      ctx.lineWidth = isBoosted ? 2.5 : 1.5;
+      ctx.setLineDash([6, 4]);
+      ctx.beginPath();
+      ctx.moveTo(x0, y0);
+      ctx.lineTo(x1, y1);
+      ctx.stroke();
+      ctx.restore();
+    };
+    const selfServerId = this.wsTransport?.getSelfServerId() ?? LOCAL_ID;
+    const localReviveRadius = effectiveReviveRadius(this.p);
     for (const r of this.remotes()) {
       if (!r.isDown) continue;
       const sx = r.x - cam.x, sy = r.y - cam.y;
@@ -8911,8 +9034,12 @@ export class Game {
       // authoritative progress arc at the body; the input affordance (`E | REVIVE GF`)
       // lives in the bottom-left prompt cluster (UI Director hierarchy), so the copy
       // never doubles up over the fight.
-      if (!this.isDown) drawStandRing(sx, sy);
+      if (!this.isDown) drawStandRing(sx, sy, localReviveRadius);
       if (r.reviveProgress > 0) drawProgress(sx, sy, r.reviveProgress / REVIVE.channel);
+      if (!this.isDown && r.reviveBy === selfServerId) {
+        drawRope(this.px - cam.x, this.py - cam.y, sx, sy, this.p.mods.reviveSpeedMult > 1);
+        label(sx, sy, "REVIVING", this.p.mods.reviveSpeedMult > 1 ? "#dff2d8" : "#8affc0");
+      }
     }
     // The local downed body: the authoritative channel a teammate holds on us.
     if (this.isDown && this.p.reviveProgress > 0) {
@@ -8920,7 +9047,13 @@ export class Game {
       const sx = this.renderPrevX + (this.px - this.renderPrevX) * a - cam.x;
       const sy = this.renderPrevY + (this.py - this.renderPrevY) * a - cam.y;
       drawProgress(sx, sy, this.p.reviveProgress / REVIVE.channel);
-      label(sx, sy, "A TEAMMATE IS REVIVING YOU\u2026", "#8affc0");
+      const reviver = this.remotes().find((remote) => remote.playerId === this.p.reviveBy);
+      if (reviver) {
+        drawRope(reviver.x - cam.x, reviver.y - cam.y, sx, sy, false);
+        label(sx, sy, `${reviver.name.toUpperCase()} IS REVIVING YOU\u2026`, "#8affc0");
+      } else {
+        label(sx, sy, "A TEAMMATE IS REVIVING YOU\u2026", "#8affc0");
+      }
     }
   }
 
@@ -9022,8 +9155,9 @@ export class Game {
     const { ctx, canvas } = this;
     const cx = canvas.width / 2;
     const y = 118;
-    const reviver = this.remotes().find((r) => !r.isDown && !isReconnectingTeammate(r)
-      && Math.hypot(r.x - this.px, r.y - this.py) <= REVIVE.radius);
+    const reviver = this.p.reviveBy === null
+      ? undefined
+      : this.remotes().find((remote) => remote.playerId === this.p.reviveBy);
     const isSelfOut = this.wsTransport?.getLatestSnapshot()?.self?.out === true;
     ctx.save();
     ctx.textAlign = "center";
@@ -9199,7 +9333,15 @@ export class Game {
     firebomb: -0.10, tracker: -0.632, singularity: -0.653, vortex: -0.775,
   };
 
-  private renderHeldWeapon(cx: number, cy: number, aim: number, weapon: WeaponId, alpha: number, recoil = 0) {
+  private renderHeldWeapon(
+    cx: number,
+    cy: number,
+    aim: number,
+    weapon: WeaponId,
+    alpha: number,
+    recoil = 0,
+    isSluiceDrain = false,
+  ) {
     const img = this.sprites.heldWeapon(weapon) ?? this.sprites.heldWeapon("pistol");
     if (!img) return;
     const { ctx } = this;
@@ -9213,6 +9355,22 @@ export class Game {
     if (Math.abs(aim) > Math.PI / 2) ctx.scale(1, -1);
     ctx.drawImage(img, -d / 2, -d / 2, d, d);
     ctx.restore();
+    if (weapon === "sluicegate") {
+      const muzzleX = cx + Math.cos(aim) * 30;
+      const muzzleY = cy + Math.sin(aim) * 30;
+      if (isSluiceDrain) {
+        this.fxTrail("trail_streak", "#d9fbff", muzzleX, muzzleY, 22, 2.5, alpha * 0.8, aim);
+      } else {
+        for (const offset of [-0.32, 0, 0.32]) {
+          this.fxLayer(
+            "slug", "#78cbd1",
+            muzzleX + Math.cos(aim + offset) * 4,
+            muzzleY + Math.sin(aim + offset) * 4,
+            7, 3, alpha * 0.75, aim + offset,
+          );
+        }
+      }
+    }
   }
 
   // The held BLADE. Idle it points exactly at the cursor (live aim); during a swing it
@@ -9321,6 +9479,29 @@ export class Game {
       ctx.beginPath();
       ctx.arc(cx, cy, 2, 0, Math.PI * 2);
       ctx.stroke();
+      ctx.restore();
+      return;
+    }
+    if (this.weapon === "sluicegate") {
+      const isDrain = this.p.weaponCycles.sluicegate % 2 === 1;
+      ctx.strokeStyle = isDrain ? "#d9fbff" : "#78cbd1";
+      ctx.fillStyle = isDrain ? "#d9fbff" : "#78cbd1";
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      if (isDrain) {
+        ctx.moveTo(cx, cy - 14); ctx.lineTo(cx, cy + 14);
+        ctx.moveTo(cx - 3, cy - 8); ctx.lineTo(cx + 3, cy - 8);
+        ctx.moveTo(cx - 3, cy + 8); ctx.lineTo(cx + 3, cy + 8);
+      } else {
+        ctx.arc(cx, cy, 12, -2.25, -0.9);
+        ctx.moveTo(cx, cy); ctx.lineTo(cx - 9, cy - 8);
+        ctx.moveTo(cx, cy); ctx.lineTo(cx + 9, cy - 8);
+      }
+      ctx.stroke();
+      ctx.font = '700 8px "Silkscreen", monospace';
+      ctx.textAlign = "center";
+      ctx.fillText(isDrain ? "DRAIN" : "FLOOD", cx, cy + 25);
+      ctx.textAlign = "left";
       ctx.restore();
       return;
     }
