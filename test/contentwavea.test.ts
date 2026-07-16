@@ -948,6 +948,33 @@ section("global weapon-switch cadence invariant");
     (shots.get("mooring_nail") ?? 0) <= maxMooring
     && (shots.get("pathmaker") ?? 0) <= maxPathmaker,
     `mooring=${shots.get("mooring_nail") ?? 0}/${maxMooring} path=${shots.get("pathmaker") ?? 0}/${maxPathmaker}`);
+
+  const spamDps = new Map<WeaponId, number>();
+  for (const id of WAVE_A_WEAPONS) {
+    const sample = arena(0xD200 + id.length);
+    acquireWeaponInWorld(sample.world, sample.player.id, id);
+    let committedShots = 0;
+    const ticks = 120;
+    for (let tick = 0; tick < ticks; tick++) {
+      switchWeaponInWorld(sample.world, sample.player.id, id);
+      const events = stepWorld(
+        sample.world,
+        new Map([[sample.player.id, input(tick + 1, { firing: true })]]),
+        DT,
+      );
+      committedShots += events.filter((event) => event.t === "shot" && event.weapon === id).length;
+      switchWeaponInWorld(sample.world, sample.player.id, "pistol");
+    }
+    const perShot = id === "sluicegate"
+      ? (WEAPONS.sluicegate.damage * WEAPONS.sluicegate.pellets
+        + WEAPONS.sluicegate.modeShift!.alternate.damage) / 2
+      : WEAPONS[id].damage * WEAPONS[id].pellets;
+    spamDps.set(id, committedShots * perShot / (ticks * DT));
+    const authored = perShot / WEAPONS[id].fireCd;
+    check(`${id}: rapid swap/fire DPS stays within cadence plus one initial-shot tolerance`,
+      (spamDps.get(id) ?? Infinity) <= authored + perShot / (ticks * DT) + 1e-9,
+      `${(spamDps.get(id) ?? 0).toFixed(2)} vs ${authored.toFixed(2)}`);
+  }
 }
 
 section("snapshot, ownership, and PvP fail-closed policy");
