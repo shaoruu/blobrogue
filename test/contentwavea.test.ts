@@ -27,6 +27,7 @@ import type { PlayerMods } from "../src/sim/items.js";
 import { isPvpBlessingId } from "../src/sim/items.js";
 import { isPvpWeaponSupported, pvpUnsupportedWeaponIds } from "../src/sim/pvp.js";
 import { applyPlayerSnapshot, projectPlayer } from "../src/net/playerSnapshot.js";
+import { selfWireFromSnapshot, snapshotFromSelfWire } from "../src/net/protocol.js";
 import { heldWeaponSrc, weaponIconSrc } from "../src/game/assets.js";
 import "./harness/domShim.js";
 
@@ -375,6 +376,11 @@ section("snapshot, ownership, and PvP fail-closed policy");
     copy.weaponCycles.sluicegate === 17
     && copy.weaponCycles.oddsmaker === 29
     && copy.isMuddyRefundSpent);
+  const wireRoundTrip = snapshotFromSelfWire(selfWireFromSnapshot(projectPlayer(player)));
+  check("the compact protocol preserves Wave A cycle and blessing-proc state",
+    wireRoundTrip.weaponCycles.sluicegate === 17
+    && wireRoundTrip.weaponCycles.oddsmaker === 29
+    && wireRoundTrip.isMuddyRefundSpent);
 
   const pvp = createWorld(0xC101, 1, { mode: "pvp", isSandbox: true });
   const fighter = pvp.players.get(LOCAL_ID)!;
