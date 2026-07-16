@@ -130,7 +130,9 @@ import {
   SHOP_BUY_RANGE,
 } from "./shop.js";
 import type { ShopSlot, ShopSlotStatus, ShopState } from "./shop.js";
-import { createWeaponBag, drawWeaponFromBag, rollWeaponOfferWithHistory } from "./weaponBag.js";
+import {
+  createWeaponBag, drawWeaponFromBag, rollWeaponOfferWithHistory, weaponBagCatalogVersion,
+} from "./weaponBag.js";
 import type { WeaponBag } from "./weaponBag.js";
 import {
   createBlessingOfferHistory,
@@ -1747,6 +1749,9 @@ function buildArena(): Dungeon {
 // dash tuning — matches the server exactly (the descriptor is a pure function of
 // seed+floor+playerCountAtLock, and never rescales mid-floor on join/down/disconnect).
 export function loadFloorIntoWorld(w: WorldState, floor: number, playerCountAtLock?: number): void {
+  if (weaponBagCatalogVersion(w.weaponBag) !== w.catalogVersion) {
+    throw new Error("run catalog and weapon bag version diverged");
+  }
   w.floor = floor;
   w.rev++;
   w.encounterPlayers = playerCountAtLock !== undefined

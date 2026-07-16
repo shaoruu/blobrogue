@@ -25,7 +25,10 @@ import { TILE } from "../src/sim/types.js";
 import { WEAPONS, PICKUP_WEAPONS } from "../src/sim/weapons.js";
 import { ARSENAL } from "../src/sim/arsenal.js";
 import { REVIVE, WEAPON_RESONANCE } from "../src/sim/balance.js";
-import { FIRE_KNOCKBACK, WEAPON_KB } from "../src/sim/constants.js";
+import {
+  FIRE_KNOCKBACK, MAX_PAVE_ZONE_EFFECTS, MAX_PAVE_ZONES_PER_OWNER,
+  MAX_ZONE_EFFECTS, WEAPON_KB,
+} from "../src/sim/constants.js";
 import {
   ITEMS,
   createMods,
@@ -41,6 +44,7 @@ import {
 } from "../src/net/protocol.js";
 import { heldWeaponSrc, weaponIconSrc } from "../src/game/assets.js";
 import { createWeaponBag, drawWeaponFromBag } from "../src/sim/weaponBag.js";
+import type { WeaponBag } from "../src/sim/weaponBag.js";
 import {
   LEGACY_CONTENT_CATALOG_VERSION,
   WAVE_A_CONTENT_CATALOG_VERSION,
@@ -175,6 +179,14 @@ section("canonical roadmap and additive catalog migration");
     contentCatalogFor(WAVE_A_CONTENT_CATALOG_VERSION).pickupWeapons.length === fixture.waveA.pickupCount
     && JSON.stringify(waveADeal) === JSON.stringify(fixture.waveA.firstPass)
     && WAVE_A_WEAPONS.every((id) => waveADeal.includes(id)));
+  for (const version of [0, 1] as const) {
+    const bag = createWeaponBag(0xCA7105, version);
+    for (let draw = 0; draw < 9; draw++) drawWeaponFromBag(bag, new Set());
+    const restored = JSON.parse(JSON.stringify(bag)) as WeaponBag;
+    check(`catalog ${version}: replay serialization preserves exact bag/version/order`,
+      restored.catalogVersion === version
+      && drawWeaponFromBag(restored, new Set()) === drawWeaponFromBag(bag, new Set()));
+  }
 
   const legacyWorld = createWorld(0xCA7106, 1, {
     catalogVersion: LEGACY_CONTENT_CATALOG_VERSION,
@@ -384,6 +396,14 @@ section("SLUICEGATE — MODESHIFT");
   });
   check("a 4P-capable observer snapshot exposes DRAIN before the next pull",
     observedSnap.players.find((remote) => remote.id === shooter.id)?.isDrain === true);
+  fireOnce(observed, shooter);
+  const firedSnap = buildSnapshot(observed, "viewer", 0, [], 0, false, {
+    worldId: "sluice-observer",
+  });
+  check("observer bullet wire stamps the fired DRAIN mode while next mode flips to FLOOD",
+    firedSnap.bullets.length === 1
+    && firedSnap.bullets[0].sm === "drain"
+    && firedSnap.players.find((remote) => remote.id === shooter.id)?.isDrain === false);
 }
 
 section("ODDSMAKER — GAMBLE");
@@ -426,6 +446,14 @@ section("ODDSMAKER — GAMBLE");
   check("+7 projectiles share exactly one Oddsmaker payload decision",
     splitVolley.length === 8
     && new Set(splitVolley.map((bullet) => bullet.oddsmakerOutcome)).size === 1);
+  const oddWire = buildSnapshot(
+    splitWorld.world, splitWorld.player.id, 0, [], 0, false,
+    { worldId: "oddsmaker-outcome" },
+  );
+  check("Oddsmaker outcome enum survives bullet wire for observer classification",
+    oddWire.bullets.length === 8
+    && new Set(oddWire.bullets.map((bullet) => bullet.go)).size === 1
+    && oddWire.bullets[0].go !== null);
 
   const sequence = (order: readonly PlayerId[]): string => {
     const candidate = createWorld(0xA202, 1, { isShared: true, skipLocalPlayer: true, isSandbox: true });
@@ -553,6 +581,21 @@ section("PATHMAKER — CLEANSE / PAVE");
 
 section("PATHMAKER party route budgets");
 {
+  const singleShot = arena(0xA3EF);
+  singleShot.player.mods.extraPellets = 7;
+  acquireWeaponInWorld(singleShot.world, singleShot.player.id, "pathmaker");
+  fireOnce(singleShot.world, singleShot.player);
+  for (let tick = 0; tick < 90; tick++) {
+    stepWorld(
+      singleShot.world,
+      new Map([[singleShot.player.id, input(singleShot.world.tick + 1)]]),
+      DT,
+    );
+  }
+  check("+7 pellets share one eight-zone paving budget per committed shot",
+    singleShot.world.effects.filter((effect) =>
+      effect.kind === "zone" && effect.isPaved).length <= 8);
+
   const world = createWorld(0xA3F0, 1, {
     isShared: true, skipLocalPlayer: true, isSandbox: true,
   });
@@ -586,10 +629,13 @@ section("PATHMAKER party route budgets");
   );
   const paves = liveZones.filter((effect) => effect.isPaved);
   check("4P +7-pellet held fire stays inside total48/path16 budgets",
-    liveZones.length <= 48 && paves.length <= 16);
+    liveZones.length <= MAX_ZONE_EFFECTS && paves.length <= MAX_PAVE_ZONE_EFFECTS);
   check("fair owner admission caps every route owner at 8 zones",
     players.every((player) =>
-      paves.filter((effect) => effect.owner === player.id).length <= 8));
+      paves.filter((effect) => effect.owner === player.id).length <= MAX_PAVE_ZONES_PER_OWNER));
+  check("maximum simultaneous paved area is bounded per owner and party",
+    Math.round(MAX_PAVE_ZONES_PER_OWNER * Math.PI * 27 * 27) === 18322
+    && Math.round(MAX_PAVE_ZONE_EFFECTS * Math.PI * 27 * 27) === 36644);
   check("Pathmaker admission never evicts the separate Frostline family",
     frostBefore > 0
     && liveZones.some((effect) => !effect.isPaved && effect.fx === "frostline"));
