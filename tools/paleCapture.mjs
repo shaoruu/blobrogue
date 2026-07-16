@@ -60,6 +60,18 @@ for (const beat of ["sweepWindup", "sweepActive"]) {
   await page.close();
 }
 
+for (const players of [2, 4]) {
+  const page = await boot(players, 2);
+  await page.evaluate(() => {
+    window.__game.devSetPalePhase(2);
+    const boss = window.__game.devWorld().enemies.find((enemy) => enemy.kind === "pale");
+    if (boss?.boss) boss.boss.addTimer = 0;
+  });
+  await page.waitForTimeout(180);
+  await page.screenshot({ path: join(outDir, `pale-${players}p-dual-flanks.png`) });
+  await page.close();
+}
+
 for (const isChilled of [true, false]) {
   const page = await boot(1, 3);
   await page.evaluate((value) => {
