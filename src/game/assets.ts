@@ -234,6 +234,18 @@ SHEETS["gorge_seam.idle"] = { src: "/sprites/gorge_shell_core.png", fps: 2 };
 SHEETS["sever.idle"] = { src: "/sprites/weaver2_px.png", fps: 2 };
 SHEETS["sever_anchor.idle"] = { src: "/sprites/weaver2_px.png", fps: 2 };
 
+// PALE THRONE (F75 GIANT #2 — AD-LOCKED committed COLD-material art, wire never regenerate): three
+// single-frame SHELL states the renderer swaps off boss.phase, inheriting the Gorge peel-reveal
+// shape. "pale" is the base/idle body (pale_shell_stone, P1: frost-pale dark stone, dormant/cold);
+// pale_shell_cracked/core are the P2/P3 escalation swaps (cold-blue seams → cold-white/blue
+// crystalline throne-core). The core is a "blazing ABSENCE of warmth" (additive COLD glow, P3
+// only). pale_seam is the small cold weak-point crack-chunk, lit additively.
+SHEETS["pale.idle"] = { src: "/sprites/pale_shell_stone.png", fps: 2 };
+SHEETS["pale.attack"] = { src: "/sprites/pale_shell_stone.png", fps: 2 };
+SHEETS["pale_shell_cracked.idle"] = { src: "/sprites/pale_shell_cracked.png", fps: 2 };
+SHEETS["pale_shell_core.idle"] = { src: "/sprites/pale_shell_core.png", fps: 2 };
+SHEETS["pale_seam.idle"] = { src: "/sprites/pale_shell_core.png", fps: 2 };
+
 // Tintable bullet-FX primitives (public/sprites/fx). Authored pure white with all
 // intensity in the alpha channel so a single source-in fill recolors them and they
 // composite additively. Sizes are baked into the art; the renderer scales per bullet.
@@ -382,6 +394,12 @@ const SOURCES: Record<SpriteName, string> = {
   gorge_seam: "/sprites/gorge_shell_core.png",
   sever: "/sprites/weaver2_px.png",
   sever_anchor: "/sprites/weaver2_px.png",
+  // PALE THRONE (F75 GIANT — AD-LOCKED committed art): the cold shell states the renderer swaps
+  // off boss.phase (base "pale" = the stone/dormant shell), plus the small cold weak-point chunk.
+  pale: "/sprites/pale_shell_stone.png",
+  pale_shell_cracked: "/sprites/pale_shell_cracked.png",
+  pale_shell_core: "/sprites/pale_shell_core.png",
+  pale_seam: "/sprites/pale_shell_core.png",
   // PATCH — the Dealer NPC (studio coherence gate: warm amber salvage-hauler). ART GATE:
   // generated separately via the locked FAL recipe; until patch.png lands the renderer
   // shows the flagged placeholder silhouette (never procedural character art). Poses ship

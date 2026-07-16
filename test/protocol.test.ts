@@ -274,7 +274,7 @@ function serverRoundTripTests(): void {
 // who is actually there (the Sev-0 readout).
 function worldBindingWireTests(): void {
   section("v4: authoritative world id + roster are required, strict, and round-trip");
-  check("protocol version covers Wave B catalog 2 after Sever worldsplit (v37)", PROTOCOL_VERSION === 37, `v=${PROTOCOL_VERSION}`);
+  check("protocol version covers Pale Throne after Wave B catalog 2 / Sever worldsplit (v38)", PROTOCOL_VERSION === 38, `v=${PROTOCOL_VERSION}`);
   check("room code maps to its world id", worldIdForRoomCode(" abcd ") === "room:ABCD");
   check("room world ids pass the shared charset gate", isValidWorldId(worldIdForRoomCode("ZZZZ")) && isValidWorldId("arena-1"));
   check("junk world ids fail the shared charset gate", !isValidWorldId("room:../../etc") && !isValidWorldId(""));

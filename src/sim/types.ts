@@ -83,6 +83,12 @@ export type EnemyKind =
   //  - sever_anchor: resin ANCHOR tooth (mechanic body) — destroy 2 per checkpoint room to
   //    trap both exits and open the intercept damage window. Never a boss kind.
   | "sever" | "sever_anchor";
+  // PALE THRONE (F75 GIANT #2 — the Pale region cap): the SECOND giant, inheriting the Gorge
+  // shell-peel grammar EXACTLY (a ~192px STATIONARY front-facing set-piece pinned to floor 75,
+  // shared giant-encounter core), with the MATERIAL swapped to COLD warmth-drain (a blazing
+  // ABSENCE of warmth — cold-blue seams + a cold-white/blue crystalline throne-core — never
+  // amber). pale_seam is its cold weak-point, the peel-verb mechanic body (= gorge_seam).
+  | "pale" | "pale_seam";
 
 // Telegraphed-attack state machine. Committed attacks read as
 // CHASE -> WINDUP (telegraph, aim locks partway) -> ACTIVE -> RECOVER -> cooldown.
@@ -238,11 +244,11 @@ export interface BossState {
   // telegraphed pattern from FloorDescriptor.bossAffix). Sim-internal — never on the wire (the
   // affix expresses through the telegraphed "charge" hazards it blooms, which ride hzds).
   affixCd: number;
-  // ---- GORGE (F50 giant) shell-peel scratch (sim-internal; the wire needs none of it — the
-  // shell phase rides bph, the exposed remainder rides aux, the seam bodies ride their own
-  // EnemyWire). The exposure CADENCE reuses the generic addTimer (the giant runs no add drip);
-  // the live seam ids ride the shared windowAddIds list (the "kill all to open the window" set,
-  // exactly the Choir's fragment contract). This is the ONE gorge-specific field: ----
+  // ---- GIANT (F50 Gorge / F75 Pale Throne / F100 Unmaker) shell-peel scratch (sim-internal; the
+  // wire needs none of it — the shell phase rides bph, the exposed remainder rides aux, the seam
+  // bodies ride their own EnemyWire). The exposure CADENCE reuses the generic addTimer (the giant
+  // runs no add drip); the live seam ids ride the shared windowAddIds list (the "kill all to open
+  // the window" set, exactly the Choir's fragment contract). This is the ONE giant-specific field: ----
   // Seconds left before the current weak-point exposure RETRACTS unspent (the CORE's short
   // window is the execution test). 0 while the shell is sealed. Clearing the whole set before it
   // elapses cracks the shell → openBossWindow (peels re-seal + re-expose until the shell's HP
@@ -652,7 +658,10 @@ export type PropKind =
   // The GORGE giant's sloughed SHELL DEBRIS: a chunk of the peeled layer that piles at the
   // giant's base as material evidence AND reusable destructible cover (line-of-sight + movement
   // cover, like the marshal's shatter-crates / the Warden's clinker ring). Deterministic + cheap.
-  | "gorge_debris";
+  | "gorge_debris"
+  // The PALE THRONE giant's sloughed SHELL DEBRIS (F75) — the same cover primitive as gorge_debris,
+  // a chunk of the peeled cold-stone shell that piles at the giant's base.
+  | "pale_debris";
 
 export interface Prop {
   id: number;      // stable per-world id (client keys its cosmetic anim map by this)
@@ -704,6 +713,10 @@ export interface Hazard {
   // rides its parent husk's ROLE here (0 shield / 1 heal / 2 dmg) so the fair-ambush omen
   // can plant the tell before the body exists, then stamp the role when it resolves.
   spawnAux?: number;
+  // Per-hazard drift velocity (px/s), sim-internal — the PALE THRONE slag pools CREEP outward (the
+  // P2 motion axis). Undefined on every other hazard (static, unchanged); the drifted x/y ride the
+  // existing HazardWire x/y, so no new wire field. Set at plant, integrated in updateHazards.
+  vx?: number; vy?: number;
 }
 
 // Environmental FLOOR hazards — the depth-escalation danger layer, DISTINCT from the
@@ -876,6 +889,14 @@ export type SpriteName =
   | "gorge" | "gorge_shell_chitin" | "gorge_shell_core" | "gorge_seam"
   // SEVER (F55): placeholder art hooks only (reuse Weaver sheets) — no art generation this batch.
   | "sever" | "sever_anchor"
+  // PALE THRONE (F75 GIANT #2): the AD-LOCKED committed COLD-material art — three single-frame
+  // SHELL states swapped off boss.phase, inheriting the gorge peel-reveal shape. "pale" is the
+  // base/idle body (pale_shell_stone, P1: frost-pale petrified dark stone, dormant/cold);
+  // "pale_shell_cracked"/"pale_shell_core" are the P2/P3 escalation swaps (cold-blue seams glow
+  // through → brilliant cold-white/blue crystalline throne-core). The core is a "blazing ABSENCE
+  // of warmth" (additive COLD glow, P3 only) — never amber. "pale_seam" is the small cold
+  // weak-point crack-chunk, drawn small + additively lit as a peel target.
+  | "pale" | "pale_shell_cracked" | "pale_shell_core" | "pale_seam"
   | "patch"
   // Client-side cosmetic companion pets (META spec §3). A pure render key mapping to a
   // swappable placeholder asset; the sim never references it (pets are OUT of the sim). The

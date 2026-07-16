@@ -319,7 +319,18 @@ export const FIXED_DT = 1 / TICK_HZ; // 50ms authoritative step
 // v37: Content Wave B catalog `2` stacked on Sever v36 / Wave A catalog `1` — closed WeaponId
 //   additions (resonant_fork / red_pen / margin_call / sidewinder) and `cat` admitting version 2.
 //   Wave A fields remain on v35 semantics; Sever worldsplit wire remains on v36.
-export const PROTOCOL_VERSION = 37;
+// v38 (PALE THRONE F75 GIANT encounter — the SECOND giant, reusing the AD-locked Gorge shell-peel
+//   machinery via a shared giant-encounter core): two closed-set widenings, no new EnemyWire field.
+//   - TWO new enemy kinds ride the wire: `pale` (the F75 giant boss) and `pale_seam` (its cold
+//     tectonic weak-point — the peel-verb mechanic body). isEnemyKind keys off ENEMY_ARCHETYPES,
+//     so a v37 client rejects a snapshot carrying either.
+//   - a NEW PropKind `pale_debris` rides `props` (the giant's sloughed cold-shell cover). PROP_KINDS
+//     is a validated closed set, so a v37 client rejects it.
+//   - the giant needs NO new EnemyWire field — exactly like Gorge: its SHELL PHASE (stone/cracked/
+//     core) rides `bph` (boss.phase — the client swaps the shell sprite off it) and its GUARDED/
+//     EXPOSED state rides `aux` (the exposed remainder). The COLD material is a client-render/
+//     telegraph-color swap only (never on the wire). Compact by construction.
+export const PROTOCOL_VERSION = 38;
 
 // How long the server reserves a disconnected player's body (their seat) before the
 // authoritative leave lifecycle applies. 90s per the studio balance gate's reconnect
@@ -842,6 +853,7 @@ const PROP_KINDS: Record<PropKind, true> = {
   crate: true, pot: true, barrel: true, barrel_explosive: true, brazier: true,
   root_wall: true, silt_mound: true, clinker_brick: true, // worker constructions (ecology gate)
   gorge_debris: true, // the GORGE giant's sloughed shell cover (F50)
+  pale_debris: true, // the PALE THRONE giant's sloughed shell cover (F75)
 };
 const PICKUP_KINDS: Record<PickupKind, true> = { heart: true, coin: true, weapon: true };
 const SHOP_SLOT_KINDS: Record<ShopSlotKind, true> = {

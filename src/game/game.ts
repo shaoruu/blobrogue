@@ -11,7 +11,8 @@ import { WEAPONS, WEAPON_RARITY_COLOR, MYSTERY_COLOR } from "../sim/weapons.js";
 import { weaponDisplayStats, lowHpFrac } from "../sim/weaponStats.js";
 import { rollPvpDraftChoicesWith, itemById, itemDesc, itemLevelsOf, isPvpBlessingId, MAX_ITEM_LEVEL } from "../sim/items.js";
 import type { PlayerMods, ItemDef } from "../sim/items.js";
-import { PLAYER, REVIVE, BOSS, MARROW, WEAVER, GILDED, GORGE, TIERS, ELITE_BULWARK, MARSHAL, ROLL_AFFIX, RESONANCE_FAMILIES, RESONANCE_TELEGRAPH_COLOR } from "../sim/balance.js";
+import { PLAYER, REVIVE, BOSS, MARROW, WEAVER, GILDED, GORGE, PALE, TIERS, ELITE_BULWARK, MARSHAL, ROLL_AFFIX, RESONANCE_FAMILIES, RESONANCE_TELEGRAPH_COLOR } from "../sim/balance.js";
+import type { GiantConst } from "../sim/balance.js";
 import { petSpriteFor } from "./pets.js";
 import { drawPetFrame, PET_RENDER_SIZE } from "./petRenderer.js";
 import {
@@ -43,7 +44,7 @@ import { PartyGate } from "../net/partyGate.js";
 import type { ExpectedMember, PartyGateView } from "../net/partyGate.js";
 import { onlineHudLabel, netDetailsLine, reconnectOverlayCopy, BACK_ONLINE_TOAST, CONNECT_CANCEL_HINT, OFFER_EXPIRED_TOAST } from "../ui/onlineCopy.js";
 import type { OnlineExitReason, OnlinePhase } from "../ui/onlineCopy.js";
-import { applyItemToWorld, chooseBlessingInWorld, dismissBlessingOfferInWorld, applyMaxHpBonus, loadFloorIntoWorld, descend, devSpawnEnemy, devSpawnProp, devSpawnChest, acquireWeaponInWorld, isFloorCleared, isPvp, navDebugField, workerBuildSites, nearestShopSlot, isPlayerInCombat, rollBlessingChoicesInWorld, setPlayerKit, effectiveReviveRadius, effectiveReviveRate, grapplePreview } from "../sim/world.js";
+import { applyItemToWorld, chooseBlessingInWorld, dismissBlessingOfferInWorld, applyMaxHpBonus, loadFloorIntoWorld, descend, devSpawnEnemy, devSpawnProp, devSpawnChest, acquireWeaponInWorld, isFloorCleared, isPvp, navDebugField, workerBuildSites, nearestShopSlot, isPlayerInCombat, rollBlessingChoicesInWorld, setPlayerKit, effectiveReviveRadius, effectiveReviveRate, grapplePreview, resolveWarmthDrain } from "../sim/world.js";
 import type { WorldState, PlayerSim, MeleeSwing, RemoteTarget } from "../sim/world.js";
 import { ULT, isRealKit, canCastUlt, KIT_META, MOMENTUM, OVERSHIELD, HEAL_PULSE, LIFEBLOOM } from "../sim/kits.js";
 import type { KitId } from "../sim/kits.js";
@@ -564,7 +565,57 @@ const TG_ARENA_LEN = 1100;           // "full arena length" for beam/lance lanes
 // carry the read in 4p chaos, never hue alone; the aura ring (renderBossAura) is the low-sat
 // ambient twin of these.
 function tgFamilyHue(kind: EnemyKind): string {
-  return kind === "jet" ? "#5b63d6" : kind === "tithe" ? "#e6952f" : kind === "gorge" ? "#d9822c" : "#7fd6da";
+  return kind === "jet" ? "#5b63d6" : kind === "tithe" ? "#e6952f" : kind === "gorge" ? "#d9822c"
+    : kind === "pale" ? "#57b6ff" // PALE THRONE: COLD-blue telegraphs (never amber — the warmth-drain material)
+    : "#7fd6da";
+}
+
+// ---- THE GIANT MATERIAL (client render only — the ONE difference between the giants) ----
+// Every giant (Gorge F50 / Pale Throne F75 / — F100 Unmaker) runs the identical shell-peel
+// encounter (see world.ts updateGiant); the client dresses each in its own material. Gorge is the
+// warm AMBER slag (the players' stolen amber); Pale is COLD warmth-drain — cold-blue seams and a
+// cold-white/blue crystalline core ("a blazing ABSENCE of warmth"), pulled from the F75 manifest.
+// Pure presentation: nothing here touches the sim or the wire. The third giant is one more entry.
+interface GiantMaterial {
+  coreGlow: string;   // P3 bared-core additive bloom
+  coreDot: string;    // P3 bared-core hot center
+  seamGlow: string;   // weak-point crack-node bloom
+  seamDot: string;    // weak-point bright center
+  exposeHot: string;  // earned-window EXPOSED core blaze
+  guardRim: string;   // earned-window GUARDED shell rim (dim/sealed)
+  auraGuard: string;  // ground aura ring, guarded
+  auraExpose: string; // ground aura ring, exposed (drained)
+}
+const GIANT_MATERIAL: Readonly<Record<"gorge" | "pale", GiantMaterial>> = {
+  // GORGE (F50): molten amber — the ONE bright warm read on an enemy (unchanged, byte-for-byte).
+  gorge: {
+    coreGlow: "#ffb43b", coreDot: "#ffd166", seamGlow: "#ffb43b", seamDot: "#ffe6a6",
+    exposeHot: "#ffb43b", guardRim: "#6b6152", auraGuard: "#b06a28", auraExpose: "#7a5228",
+  },
+  // PALE THRONE (F75): cold warmth-drain — cold-blue seams (#57b6ff), a cold-white/blue core blaze
+  // (#bfeaff bloom over a #ffffff center), and a cold rime-slate guarded rim / cold-blue ground aura.
+  pale: {
+    coreGlow: "#bfeaff", coreDot: "#ffffff", seamGlow: "#57b6ff", seamDot: "#bfeaff",
+    exposeHot: "#bfeaff", guardRim: "#6b6f8a", auraGuard: "#2f6bb0", auraExpose: "#24456e",
+  },
+};
+
+// The giant boss bodies (Gorge/Pale) and their weak-point mechanic bodies — narrowing helpers so
+// the shared giant render (core glow, seam glow, guard/expose aura, telegraphs) keys off one place.
+function isGiantKind(kind: EnemyKind): kind is "gorge" | "pale" {
+  return kind === "gorge" || kind === "pale";
+}
+function isGiantSeamKind(kind: EnemyKind): kind is "gorge_seam" | "pale_seam" {
+  return kind === "gorge_seam" || kind === "pale_seam";
+}
+// The constants block driving a giant's telegraph geometry (spoke count/gap). Gorge & Pale share
+// these today; keyed per-kind so a future giant can tune them without a render edit.
+function giantConstFor(kind: "gorge" | "pale"): GiantConst {
+  return kind === "pale" ? PALE : GORGE;
+}
+// A giant weak-point's body kind maps to its giant's material (for the seam crack-node glow).
+function giantSeamMaterial(kind: "gorge_seam" | "pale_seam"): GiantMaterial {
+  return kind === "pale_seam" ? GIANT_MATERIAL.pale : GIANT_MATERIAL.gorge;
 }
 
 // The elite affix's ground-ring accent (derived from kind — the affix table is pure sim
@@ -639,6 +690,8 @@ const PROP_INTACT_IMG: Record<PropKind, PropSpriteName> = {
   root_wall: "root_wall_break", silt_mound: "silt_mound_break", clinker_brick: "clinker_brick_break",
   // The GORGE giant's shell debris reuses the silt-mound rubble art (a Sump chunk), amber-tinted.
   gorge_debris: "silt_mound_break",
+  // The PALE THRONE giant's shell debris reuses the same rubble art, cold-tinted (a cold-stone chunk).
+  pale_debris: "silt_mound_break",
 };
 // Break sheet per destructible kind (frames 1-2 = breaking). Brazier never breaks.
 const PROP_BREAK_SHEET: Record<PropKind, PropSpriteName | null> = {
@@ -646,11 +699,13 @@ const PROP_BREAK_SHEET: Record<PropKind, PropSpriteName | null> = {
   barrel_explosive: "barrel_explosive_break", brazier: null,
   root_wall: "root_wall_break", silt_mound: "silt_mound_break", clinker_brick: "clinker_brick_break",
   gorge_debris: "silt_mound_break",
+  pale_debris: "silt_mound_break",
 };
 const PROP_TINT: Record<PropKind, string> = {
   crate: "#c9a06a", pot: "#8fb8d6", barrel: "#b07a3c", barrel_explosive: "#ff8a3b", brazier: "#ffb43b",
   root_wall: "#86c06c", silt_mound: "#b8a888", clinker_brick: "#c9743f",
   gorge_debris: "#c77320", // warm amber slag (the giant's material — not the bright core amber)
+  pale_debris: "#2a5fa0", // cold slate-blue (the F75 giant's cold-stone shell — the amber→cold swap)
 };
 // Patch's station art hooks per slot kind (assets.ts PROP_SOURCES); flat primitives
 // stand in until the approved PNGs land.
@@ -986,6 +1041,10 @@ export class Game {
   private trauma = 0; // screen-shake trauma, 0..1
   private kickX = 0; private kickY = 0; // directional camera kick (recoil), render-only
   private hurtFlash = 0; // red hurt-vignette intensity, 0..1
+  // PALE THRONE warmth-drain telegraph (client render only): the local player's stillness time +
+  // the ref position it's measured from, mirroring the sim's per-player idle clock so the frost
+  // vignette RAMPS as you idle and clears the instant you move. The authoritative slow is sim-side.
+  private warmthIdleT = 0; private warmthRefX = 0; private warmthRefY = 0;
 
   private coop: CoopBridge | null = null;
   private profile: ProfileStats | null = null;
@@ -2176,6 +2235,7 @@ export class Game {
     const ke = Math.min(1, dt * KICK_DECAY);
     this.kickX -= this.kickX * ke; this.kickY -= this.kickY * ke;
     if (this.hurtFlash > 0) this.hurtFlash = Math.max(0, this.hurtFlash - dt * HURT_FLASH_DECAY);
+    this.updateWarmthVignette(dt);
 
     this.checkFloorCleared();
 
@@ -4702,6 +4762,7 @@ export class Game {
     this.renderBiomeVignette();
     this.screenFlash.render(ctx, canvas.width, canvas.height);
     this.renderHurtVignette();
+    this.renderWarmthVignette();
     this.renderDownOverlay();
     this.renderSpectateBanner();
     this.renderReticle();
@@ -4945,6 +5006,48 @@ export class Game {
       dg.addColorStop(0, `rgba(255,60,50,${0.42 * this.hurtFlash})`);
       dg.addColorStop(1, "rgba(255,60,50,0)");
       ctx.fillStyle = dg;
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+    }
+  }
+
+  // PALE THRONE warmth-drain telegraph: track the LOCAL player's stillness client-side (mirroring
+  // the sim's idle clock) so the frost vignette can RAMP the ~1.5s warning and clear on movement.
+  // Mode-agnostic (reads the rendered position + the active giant's params); the authoritative
+  // ×0.5 slow is sim-side (updatePlayer). Inert (and reset) whenever no warmth-drain giant is live.
+  private updateWarmthVignette(dt: number) {
+    const wd = this.isRunning ? resolveWarmthDrain(this.world.enemies.map((e) => ({ kind: e.kind, dead: e.dead, phase: e.boss ? e.boss.phase : 0 }))) : null;
+    if (!wd || this.isDown || this.hp <= 0) { this.warmthIdleT = 0; this.warmthRefX = this.px; this.warmthRefY = this.py; return; }
+    if (Math.hypot(this.px - this.warmthRefX, this.py - this.warmthRefY) >= wd.clearDist) {
+      this.warmthIdleT = 0; this.warmthRefX = this.px; this.warmthRefY = this.py;
+    } else {
+      this.warmthIdleT += dt;
+    }
+  }
+
+  // The cold frost vignette (the warmth-drain fairness tell): a cold-blue edge that RAMPS as the
+  // idle timer climbs toward the chill, then holds + breathes once chilled (move ×0.5). Cold, never
+  // amber — the Pale "blazing absence of warmth". A single screen effect (never ambient soup).
+  private renderWarmthVignette() {
+    const wd = this.isRunning ? resolveWarmthDrain(this.world.enemies.map((e) => ({ kind: e.kind, dead: e.dead, phase: e.boss ? e.boss.phase : 0 }))) : null;
+    if (!wd || this.warmthIdleT <= 0) return;
+    const { ctx, canvas } = this;
+    const cx = canvas.width / 2, cy = canvas.height / 2;
+    const ramp = Math.min(1, this.warmthIdleT / wd.rampSec); // 0 → 1 over the warning
+    const chilled = this.warmthIdleT >= wd.idleSec;
+    const breath = chilled ? 0.06 + 0.05 * Math.sin(this.animClock * 3.4) : 0;
+    const alpha = ramp * 0.16 + breath;
+    if (alpha <= 0.001) return;
+    const g = ctx.createRadialGradient(cx, cy, Math.min(cx, cy) * 0.5, cx, cy, Math.hypot(cx, cy));
+    g.addColorStop(0, "rgba(191,234,255,0)");
+    g.addColorStop(1, `rgba(87,182,255,${alpha})`); // #57b6ff cold-blue frost rim
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    // A brighter cold-white inner bloom once fully chilled — "you are freezing, move".
+    if (chilled) {
+      const g2 = ctx.createRadialGradient(cx, cy, Math.min(cx, cy) * 0.72, cx, cy, Math.hypot(cx, cy));
+      g2.addColorStop(0, "rgba(255,255,255,0)");
+      g2.addColorStop(1, `rgba(191,234,255,${0.10 + 0.05 * Math.sin(this.animClock * 3.4)})`);
+      ctx.fillStyle = g2;
       ctx.fillRect(0, 0, canvas.width, canvas.height);
     }
   }
@@ -6279,7 +6382,7 @@ export class Game {
       // "setpiece" at a glance and DOUBLES as the guard/expose read (saturated + swelling
       // while GUARDED, drained + desaturated while EXPOSED). State = the authoritative aux
       // flag off the wire, never authored client-side.
-      if (e.kind === "jet" || e.kind === "tithe" || e.kind === "quorum" || e.kind === "gorge") this.renderBossAura(e, sx, sy, drawSize);
+      if (e.kind === "jet" || e.kind === "tithe" || e.kind === "quorum" || isGiantKind(e.kind)) this.renderBossAura(e, sx, sy, drawSize);
       // The reworked boss attacks' authoritative footprints (reusable parametric primitives),
       // drawn on the ground plane UNDER the body during their windup + active beats.
       if (this.isBossTelegraphMove(e) && (isWindup || a.phase === "active")) this.renderBossTelegraph(e, sx, sy);
@@ -6307,6 +6410,11 @@ export class Game {
         // P1 "gorge" (rind, dim/cold) → P2 chitin (cracked, hot edges) → P3 core (molten reveal).
         const ph = e.boss?.phase ?? 1;
         spriteName = ph >= 3 ? "gorge_shell_core" : ph === 2 ? "gorge_shell_chitin" : "gorge";
+      } else if (e.kind === "pale") {
+        // The PALE THRONE giant swaps its cold SHELL by phase (same peel read as Gorge):
+        // P1 "pale" (stone, dormant/cold) → P2 cracked (cold-blue seams) → P3 core (cold-blaze reveal).
+        const ph = e.boss?.phase ?? 1;
+        spriteName = ph >= 3 ? "pale_shell_core" : ph === 2 ? "pale_shell_cracked" : "pale";
       } else if (e.kind === "tithe_slab" && e.hp <= e.maxHp * 0.5) {
         spriteName = "tithe_slab_cracked";
       } else if (e.kind === "tithe" && this.isEnemyExposed(e) && this.sprites.sheet("tithe_exposed", "idle") !== null) {
@@ -6336,7 +6444,7 @@ export class Game {
       if (e.kind === "gilded" && isWindup && (a.move === "sweep" || a.move === "roar")) extra = 1 + a.windup * 0.14;
       if (e.kind === "weaver" && isWindup && a.move === "pounce") { xf.sy -= 0.22 * a.windup; xf.sx += 0.14 * a.windup; }
       // The GIANT rumbles (a subtle tectonic swell) as its shell winds up to crack/slam/sweep.
-      if (e.kind === "gorge" && isWindup && a.move !== "none") extra = 1 + a.windup * 0.06;
+      if (isGiantKind(e.kind) && isWindup && a.move !== "none") extra = 1 + a.windup * 0.06;
       // A white pulse on the sprite intensifies as the windup nears release.
       const pulse = 0.55 + 0.45 * Math.sin(anim.clock * 13);
       const telegraphFlash = isWindup ? a.windup * pulse * 0.85 : 0;
@@ -6348,12 +6456,14 @@ export class Game {
       // (the procedural expose glow below carries the read meanwhile).
       if (e.kind === "jet" && this.isEnemyExposed(e)) this.compositeBodyOverlay("jet_expose", sx, sy, drawSize, facing, xf, extra, anim.clock);
 
-      // GORGE: the molten CORE (phase 3 only) is the ONE bright warm amber on an enemy — an
-      // additive warm glow blooms over the bared core (the dim rind/chitin shells stay cold).
-      if (e.kind === "gorge" && (e.boss?.phase ?? 1) >= 3) {
+      // GIANT CORE (phase 3 only): the bared core is the ONE bright material read on the body — an
+      // additive glow blooms over it (the dim earlier shells stay dark). Gorge = molten AMBER; Pale
+      // = a cold-white/blue crystalline blaze (a "blazing absence of warmth"). Same beat, per-giant hue.
+      if (isGiantKind(e.kind) && (e.boss?.phase ?? 1) >= 3) {
+        const mat = GIANT_MATERIAL[e.kind];
         const corePulse = 0.6 + 0.4 * Math.sin(anim.clock * 6);
-        this.fxLayer("glow_round", "#ffb43b", sx, sy, drawSize * 0.72 * corePulse, drawSize * 0.72 * corePulse, 0.5, 0);
-        this.fxLayer("core_dot", "#ffd166", sx, sy, drawSize * 0.3, drawSize * 0.3, 0.72 * corePulse, 0);
+        this.fxLayer("glow_round", mat.coreGlow, sx, sy, drawSize * 0.72 * corePulse, drawSize * 0.72 * corePulse, 0.5, 0);
+        this.fxLayer("core_dot", mat.coreDot, sx, sy, drawSize * 0.3, drawSize * 0.3, 0.72 * corePulse, 0);
       }
 
       // Elemental status overlays (burn ember glow / chill frost / freeze crust / shock crackle).
@@ -6383,13 +6493,14 @@ export class Game {
         const emberPulse = 0.6 + 0.4 * Math.sin(anim.clock * 9);
         this.fxLayer("glow_round", "#ff8a3b", sx, sy, drawSize * 1.1 * emberPulse, drawSize * 1.1 * emberPulse, 0.4, 0);
       }
-      // The GORGE's tectonic WEAK-POINT (seam): a hot amber crack-node — the molten core material
-      // showing through the shell. An additive glow over the small chunk reads "shoot me to peel";
-      // the hit flash brightens it, and the normal floating bar (below) reads the peel progress.
-      if (e.kind === "gorge_seam") {
+      // A GIANT's tectonic WEAK-POINT (seam): a crack-node showing the core material through the
+      // shell (Gorge hot amber / Pale cold blue). An additive glow over the small chunk reads
+      // "shoot me to peel"; the hit flash brightens it, and the floating bar (below) reads progress.
+      if (isGiantSeamKind(e.kind)) {
+        const mat = giantSeamMaterial(e.kind);
         const seamPulse = 0.6 + 0.4 * Math.sin(anim.clock * 7 + e.id);
-        this.fxLayer("glow_round", "#ffb43b", sx, sy, drawSize * (0.95 + 0.25 * seamPulse), drawSize * (0.95 + 0.25 * seamPulse), 0.5 + 0.4 * anim.flash, 0);
-        this.fxLayer("core_dot", "#ffe6a6", sx, sy, drawSize * 0.5, drawSize * 0.5, 0.85 * seamPulse, 0);
+        this.fxLayer("glow_round", mat.seamGlow, sx, sy, drawSize * (0.95 + 0.25 * seamPulse), drawSize * (0.95 + 0.25 * seamPulse), 0.5 + 0.4 * anim.flash, 0);
+        this.fxLayer("core_dot", mat.seamDot, sx, sy, drawSize * 0.5, drawSize * 0.5, 0.85 * seamPulse, 0);
       }
       // Decoys wear their fuse: the echo fades out, the knell blinks faster as it arms.
       if (e.kind === "echo" || e.kind === "knell") this.renderDecoyFuse(e, sx, sy, drawSize, anim.clock);
@@ -6410,7 +6521,7 @@ export class Game {
       // blazing core through the EXPOSED window (aux = the authoritative remainder —
       // the Warden's plate below renders its own gold flavor of the same read).
       if (e.kind === "weaver" || e.kind === "marrow" || e.kind === "choir"
-        || e.kind === "jet" || e.kind === "tithe" || e.kind === "quorum" || e.kind === "gorge") {
+        || e.kind === "jet" || e.kind === "tithe" || e.kind === "quorum" || isGiantKind(e.kind)) {
         this.renderEarnedWindow(e, sx, sy, drawSize);
       }
       // The fragment's tether: the authoritative source id rides aux; the line IS the lane.
@@ -7315,13 +7426,13 @@ export class Game {
 
   private renderEarnedWindow(e: Enemy, sx: number, sy: number, size: number) {
     const { ctx } = this;
-    const deep = e.kind === "jet" || e.kind === "tithe" || e.kind === "quorum" || e.kind === "gorge";
+    const deep = e.kind === "jet" || e.kind === "tithe" || e.kind === "quorum" || isGiantKind(e.kind);
     if (this.isEnemyExposed(e)) {
-      // EXPOSED — the guard is down: a blazing hot core reads "unload now". The deep bosses
-      // crack hot-amber (Tithe's slumped amber sacs run a touch lighter); the earlier
-      // earned-window bosses keep their own family tint.
+      // EXPOSED — the guard is down: a blazing core reads "unload now". The deep bosses crack
+      // hot-amber (Tithe's slumped amber sacs run a touch lighter; the PALE THRONE cracks COLD —
+      // its cold-white/blue core blaze); the earlier earned-window bosses keep their own tint.
       const pulse = 0.6 + 0.4 * Math.sin(this.animClock * 9);
-      const hot = deep ? (e.kind === "tithe" ? "#ffcf6a" : "#ffb43b") : ENEMY_ARCHETYPES[e.kind].tint;
+      const hot = deep ? (e.kind === "tithe" ? "#ffcf6a" : isGiantKind(e.kind) ? GIANT_MATERIAL[e.kind].exposeHot : "#ffb43b") : ENEMY_ARCHETYPES[e.kind].tint;
       this.fxLayer("glow_round", hot, sx, sy, size * 1.15 * pulse, size * 1.15 * pulse, 0.5, 0);
       this.fxLayer("core_dot", "#fff3c4", sx, sy, size * 0.42, size * 0.42, 0.75 * pulse, 0);
       return;
@@ -7367,13 +7478,13 @@ export class Game {
       ctx.restore();
       return;
     }
-    if (e.kind === "gorge") {
-      // GUARDED behind the shell: a dim, cold slate-stone rim (the sealed crust — the ONLY way
-      // through is peeling the weak-points). Deliberately NOT bright amber, so the P3 core glow
-      // stays the ONE bright warm amber on the enemy.
+    if (isGiantKind(e.kind)) {
+      // GUARDED behind the shell: a dim, sealed-crust rim (the ONLY way through is peeling the
+      // weak-points). Deliberately dim — Gorge a cold slate-stone, Pale a cold rime-slate — so the
+      // P3 core glow stays the ONE bright material read on the body.
       ctx.save();
       ctx.globalAlpha = 0.4 + 0.12 * Math.sin(this.animClock * 3);
-      ctx.strokeStyle = "#6b6152";
+      ctx.strokeStyle = GIANT_MATERIAL[e.kind].guardRim;
       ctx.lineWidth = 3;
       ctx.beginPath(); ctx.arc(sx, sy, size * 0.42, 0, 6.28); ctx.stroke();
       ctx.restore();
@@ -7395,8 +7506,9 @@ export class Game {
   private renderBossAura(e: Enemy, sx: number, sy: number, size: number) {
     const hue = e.kind === "jet" ? { guard: "#5b63c8", expose: "#6b7088" }
       : e.kind === "tithe" ? { guard: "#e0902f", expose: "#8a5a22" }
-      // GORGE: a dim warm-slag ground-ring (the sealed shell), draining as the peel window opens.
-      : e.kind === "gorge" ? { guard: "#b06a28", expose: "#7a5228" }
+      // GIANTS: a dim ground-ring (the sealed shell), draining as the peel window opens. Gorge is a
+      // warm slag ring; Pale is a cold-blue one (the warmth-drain material).
+      : isGiantKind(e.kind) ? { guard: GIANT_MATERIAL[e.kind].auraGuard, expose: GIANT_MATERIAL[e.kind].auraExpose }
       : { guard: "#eef0e2", expose: "#b9bcae" };
     const exposed = this.isEnemyExposed(e);
     const { ctx } = this;
@@ -7568,9 +7680,9 @@ export class Game {
     if (e.kind === "jet") return m === "mirror" || m === "tracer" || m === "rush" || m === "beam";
     if (e.kind === "tithe") return m === "slam" || m === "spew" || m === "hurl" || m === "radial" || m === "rip" || m === "build";
     if (e.kind === "quorum") return m === "beam" || m === "sweep" || m === "volley" || m === "radial";
-    // GORGE: the P1 ring (slam), P2 slag zones (spew) and P3 rotating spokes (sweep) each own a
-    // dedicated ground footprint (the roar crack-off is the transition beat, not a danger move).
-    if (e.kind === "gorge") return m === "slam" || m === "spew" || m === "sweep";
+    // GIANTS (Gorge/Pale): the P1 ring (slam), P2 slag zones (spew) and P3 rotating spokes (sweep)
+    // each own a dedicated ground footprint (the roar crack-off is the transition beat, not danger).
+    if (isGiantKind(e.kind)) return m === "slam" || m === "spew" || m === "sweep";
     return false;
   }
 
@@ -7868,7 +7980,10 @@ export class Game {
       return;
     }
 
-    if (e.kind === "gorge") {
+    if (isGiantKind(e.kind)) {
+      // GIANTS (Gorge/Pale) share the footprint; `hue` (tgFamilyHue) is already the giant's material
+      // color (Gorge warm, Pale cold-blue), and the spoke geometry rides the per-giant constants.
+      const gc = giantConstFor(e.kind);
       if (a.move === "slam") {
         // P1 RADIAL — the expanding shockwave RING band (the live bullets carry the authored gap
         // the player slots into; the debris blooms near it ride their own charge-hazard fuse).
@@ -7883,9 +7998,19 @@ export class Game {
         // P3 CONVERGENT — rotating spoke lanes with the moving safe wedge between them (the live
         // bullets carry the exact rotating gap; the telegraph reads "rotating spokes incoming").
         const rot = this.animClock * 0.9;
-        const shown = Math.max(1, GORGE.spokeCount - GORGE.spokeGap);
+        const shown = Math.max(1, gc.spokeCount - gc.spokeGap);
         for (let i = 0; i < shown; i++) {
-          this.tgLane(sx, sy, rot + (i / GORGE.spokeCount) * 6.28, 240, TILE, hue, isActive ? fix : { locked: false, dynamic: false, dashed: true });
+          this.tgLane(sx, sy, rot + (i / gc.spokeCount) * 6.28, 240, TILE, hue, isActive ? fix : { locked: false, dynamic: false, dashed: true });
+        }
+        // P3 DUAL-READ axis (Pale): the COUNTER-rotating second sweep — draw its (wider-gap) lanes
+        // turning the OTHER way, so the "two moving gaps, safe spot at their drifting intersection"
+        // read is legible before the live bullets arrive.
+        if (gc.spoke2Step !== undefined) {
+          const gap2 = gc.spoke2Gap ?? gc.spokeGap;
+          const rot2 = -this.animClock * 0.9;
+          for (let i = gap2; i < gc.spokeCount; i++) {
+            this.tgLane(sx, sy, rot2 + (i / gc.spokeCount) * 6.28, 240, TILE, hue, isActive ? fix : { locked: false, dynamic: false, dashed: true });
+          }
         }
       }
       return;

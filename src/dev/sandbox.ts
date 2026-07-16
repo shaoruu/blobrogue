@@ -46,10 +46,10 @@ const BOSS_AFFIXES: ReadonlyArray<readonly [BossAffixId, string]> = [
   ["emberwake", "Emberwake"], ["sundering", "Sundering"], ["amberrain", "Amberrain"],
 ];
 
-const PROP_KINDS: readonly PropKind[] = ["crate", "pot", "barrel", "barrel_explosive", "brazier", "root_wall", "silt_mound", "clinker_brick", "gorge_debris"];
+const PROP_KINDS: readonly PropKind[] = ["crate", "pot", "barrel", "barrel_explosive", "brazier", "root_wall", "silt_mound", "clinker_brick", "gorge_debris", "pale_debris"];
 const PROP_LABEL: Record<PropKind, string> = {
   crate: "Crate", pot: "Pot", barrel: "Barrel", barrel_explosive: "Boom Barrel", brazier: "Brazier",
-  root_wall: "Root Wall", silt_mound: "Silt Mound", clinker_brick: "Clinker Brick", gorge_debris: "Shell Debris",
+  root_wall: "Root Wall", silt_mound: "Silt Mound", clinker_brick: "Clinker Brick", gorge_debris: "Shell Debris", pale_debris: "Pale Shell Debris",
 };
 
 // Sprite filenames mostly follow WeaponId; melee uses its display-name art filenames.
