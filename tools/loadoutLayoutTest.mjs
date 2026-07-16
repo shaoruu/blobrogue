@@ -296,12 +296,20 @@ async function semanticFailures(page, step, isSelected = false) {
     const gate = document.querySelector(".loadout-gate");
     const cards = [...document.querySelectorAll(".loadout-card[role='radio']")];
     if (!(gate instanceof HTMLElement)) return ["missing loadout gate"];
-    if (cards.some((card) => card.getAttribute("aria-label")?.trim().length === 0)) {
+    if (cards.some((card) => !card.getAttribute("aria-label")?.trim())) {
       failures.push("a radio has an empty aria-label");
     }
     if (cards.some((card) => card.getBoundingClientRect().height < 44
       || card.getBoundingClientRect().width < 44)) {
       failures.push("a radio is smaller than 44px");
+    }
+    if (cards[0] instanceof HTMLElement) {
+      cards[0].focus();
+      const style = getComputedStyle(cards[0]);
+      if (style.outlineWidth !== "3px" || style.outlineStyle !== "solid") {
+        failures.push("focused radio does not expose the three-pixel focus ring");
+      }
+      if (style.touchAction !== "manipulation") failures.push("radio touch action is not manipulation");
     }
     if (currentStep === "kit") {
       if (cards.length !== 4 || cards.some((card) => card.getAttribute("aria-checked") !== "false")) {
@@ -350,6 +358,14 @@ async function semanticFailures(page, step, isSelected = false) {
   }, { currentStep: step, hasSelection: isSelected });
 }
 
+async function petCardSizes(page) {
+  return page.locator(".loadout-pet-grid").evaluate((grid) =>
+    [...grid.querySelectorAll(".loadout-card")].map((card) => {
+      const rect = card.getBoundingClientRect();
+      return [rect.width, rect.height];
+    }));
+}
+
 async function runViewport(browser, viewport) {
   const context = await browser.newContext({
     viewport,
@@ -375,8 +391,15 @@ async function runViewport(browser, viewport) {
   petBeforeResult.failures.push(...await semanticFailures(page, "pet"));
   results.push(petBeforeResult);
   await verifyNoShift(page, "pet-before");
+  const petSizesBeforeSelection = await petCardSizes(page);
   await page.click('.pet-option[data-pet="dragon"]');
   await settleLayout(page);
+  const petSizesAfterSelection = await petCardSizes(page);
+  if (petSizesBeforeSelection.length !== petSizesAfterSelection.length
+    || petSizesBeforeSelection.some((box, boxIndex) =>
+      box.some((value, valueIndex) => Math.abs(value - petSizesAfterSelection[boxIndex][valueIndex]) > 1))) {
+    throw new Error(`${viewport.width}x${viewport.height}: pet card geometry shifted after selection`);
+  }
   await capture(page, viewport, "pet");
   const petResult = { step: "pet", ...(await measureStep(page, "pet")) };
   petResult.failures.push(...await semanticFailures(page, "pet", true));
