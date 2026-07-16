@@ -106,6 +106,7 @@
     "test:arsenal": "tsx test/arsenal.test.ts",
     "arsenal:matrix": "tsx test/arsenal.test.ts --matrix",
     "test:contentwave": "tsx test/contentwave.test.ts",
+    "test:contentwavea": "tsx test/contentwavea.test.ts",
     "test:bundle": "npm run build && node tools/bundle_budget.mjs"
   },
   "devDependencies": {
