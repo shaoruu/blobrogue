@@ -76,6 +76,13 @@ admission, reservation, registry, world, or player creation. Wrong purpose, subj
 policy, version, signature, field set, or key order terminates as a rejection. Convex and browser
 ticket minters do not expose the purpose claim.
 
+Signed ticket payloads pass a bounded recursive JSON scanner before `JSON.parse`. It requires
+fatal UTF-8, one complete top-level object, valid JSON tokens and surrogate pairs, and unique
+decoded property names in every object scope. Policy v2 tickets additionally require
+byte-for-byte equality with their locked-order `JSON.stringify` form, rejecting whitespace,
+reordered or escaped key spellings, noncanonical numbers, duplicate claims, and trailing tokens
+even under a valid HMAC. Admission a2 proofs use the same duplicate-aware structural scanner.
+
 The game server stores the verified policy immutably on its room runtime. Every later join and
 resume must present the same policy, and active bodies plus reserved reconnect seats share the
 four-player cap. `/version` exposes protocol 33, ticket `v1`/`v2`, admission `a2`, supported
@@ -85,13 +92,20 @@ liveness. The older signed v1 liveness synthetic remains deliberately separate: 
 ephemeral non-generation world/body and follows the normal reconnect cleanup lifecycle, so it is
 not evidence of policy authority and is never used for the v2 parser gate.
 
+Production control startup requires `BRC_GS_SYNTHETIC_TICKET_SECRET`. Read-only
+`verifyDiagnostic()` may report HTTP or credential-free WS liveness in development.
+`verifyForDeploy()` fails with `policy_probe_secret_missing` without the secret and succeeds only
+at exact depth `policy_v2_parser+synthetic_join`. Deploy, restart, and rollback call only the
+authority-required method and independently reject every partial depth.
+
 Admission responses are also closed: the only positive body is exactly
 `{"isAllowed":true,"code":"ok"}`. A negative body must be exactly
 `{"isAllowed":false,"code":<allowlisted code>}` with one of `room_not_active`,
 `generation_not_active`, `player_missing`, `membership_changed`, `policy_required`,
 `policy_invalid`, `policy_mismatch`, `private_disabled`, `public_disabled`, or `room_full`.
-Malformed JSON, extra or inherited keys, status/body disagreement, unknown codes, timeout, and
-5xx responses become local `admission_unavailable` and cannot bind a world.
+Only HTTP 200 may carry the allow body, and only HTTP 403 may carry a known deny. Malformed JSON,
+extra or inherited keys, every other status/body pairing, unknown codes, timeout, and 5xx
+responses become local `admission_unavailable` and cannot bind a world.
 
 ## Rolling deployment order
 

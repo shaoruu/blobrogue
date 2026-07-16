@@ -18,7 +18,15 @@ import {
   worldIdForRoomCode,
   type GsTicketClaims,
 } from "../../convex/gsTicketCore.js";
-import { mintPvpTicket, mintTicket, verifyTicket, type AuthConfig } from "../src/auth.js";
+import {
+  POLICY_AUTHORITY_PROBE_PURPOSE,
+  POLICY_AUTHORITY_PROBE_SUBJECT,
+  POLICY_AUTHORITY_PROBE_WORLD_PREFIX,
+  mintPvpTicket,
+  mintTicket,
+  verifyTicket,
+  type AuthConfig,
+} from "../src/auth.js";
 import { worldIdForRoomCode as clientWorldIdForRoomCode } from "../../src/net/protocol.js";
 import { PRIVATE_DRAFT_PVP_POLICY } from "../../src/net/pvpPolicy.js";
 
@@ -38,6 +46,17 @@ function signedEnvelope(
   payload: Record<string, string | number | boolean>,
 ): string {
   const encoded = Buffer.from(JSON.stringify(payload), "utf8").toString("base64url");
+  const body = `${version}.${encoded}`;
+  const signature = createHmac("sha256", secret).update(body).digest("base64url");
+  return `${body}.${signature}`;
+}
+
+function signedRawEnvelope(
+  secret: string,
+  version: "v1" | "v2",
+  rawPayload: string,
+): string {
+  const encoded = Buffer.from(rawPayload, "utf8").toString("base64url");
   const body = `${version}.${encoded}`;
   const signature = createHmac("sha256", secret).update(body).digest("base64url");
   return `${body}.${signature}`;
@@ -223,6 +242,84 @@ async function main(): Promise<void> {
     const modified = Buffer.from(JSON.stringify({ ...payload, pp: "future_public_v1" }), "utf8").toString("base64url");
     check("modified signed policy claim fails HMAC",
       verifyTicket(cfg, `${version}.${modified}.${signature}`, now).reason === "bad_sig");
+  }
+
+  section("duplicate-aware canonical v2 payload contract");
+  {
+    const expires = Math.floor(now / 1000) + 120;
+    const fields = [
+      `"pid":${JSON.stringify(POLICY_AUTHORITY_PROBE_SUBJECT)}`,
+      `"exp":${expires}`,
+      `"wld":${JSON.stringify(`${POLICY_AUTHORITY_PROBE_WORLD_PREFIX}0123456789abcdef`)}`,
+      `"pp":${JSON.stringify(PRIVATE_DRAFT_PVP_POLICY)}`,
+      `"pr":${JSON.stringify(POLICY_AUTHORITY_PROBE_PURPOSE)}`,
+    ];
+    const keyIndex = new Map([
+      ["pid", 0],
+      ["exp", 1],
+      ["wld", 2],
+      ["pp", 3],
+      ["pr", 4],
+    ]);
+    const escapedKeys = new Map([
+      ["pid", "p\\u0069d"],
+      ["exp", "e\\u0078p"],
+      ["wld", "w\\u006cd"],
+      ["pp", "p\\u0070"],
+      ["pr", "p\\u0072"],
+    ]);
+    for (const key of ["pid", "exp", "wld", "pp", "pr"]) {
+      const index = keyIndex.get(key)!;
+      const canonicalField = fields[index];
+      const evilValue = key === "exp" ? "0" : '"evil"';
+      const evilField = `"${key}":${evilValue}`;
+      const sameField = canonicalField;
+      const escapedField = `"${escapedKeys.get(key)!}":${key === "exp" ? String(expires) : canonicalField.slice(canonicalField.indexOf(":") + 1)}`;
+      const variants = [
+        ["canonical-first evil-last", `{${fields.join(",")},${evilField}}`],
+        ["evil-first canonical-last", `{${evilField},${fields.join(",")}}`],
+        ["duplicate same value", `{${fields.join(",")},${sameField}}`],
+        ["escaped-equivalent duplicate", `{${escapedField},${fields.join(",")}}`],
+      ] as const;
+      for (const [label, raw] of variants) {
+        check(`${key}: ${label} rejects despite valid HMAC`,
+          verifyTicket(cfg, signedRawEnvelope(secret, "v2", raw), now).reason === "policy_invalid");
+      }
+    }
+
+    const canonicalRaw = `{${fields.join(",")}}`;
+    const structuralJunk = [
+      ["nested object", canonicalRaw.slice(0, -1) + ',"extra":{"pid":"nested","pid":"duplicate"}}'],
+      ["nested array", canonicalRaw.slice(0, -1) + ',"extra":[{"pp":"x","pp":"y"}]}'],
+      ["trailing token", canonicalRaw + " null"],
+      ["reordered keys", `{${[fields[1], fields[0], ...fields.slice(2)].join(",")}}`],
+      ["extra whitespace", `{ ${fields.join(",")} }`],
+    ] as const;
+    for (const [label, raw] of structuralJunk) {
+      check(`${label} rejects under canonical probe bytes`,
+        verifyTicket(cfg, signedRawEnvelope(secret, "v2", raw), now).reason === "policy_invalid");
+    }
+
+    const normalPvpRaw = Buffer.from(
+      mintPvpTicket(secret, "normal-v2", {
+        worldId: "pvp:room:NORM:g1",
+        pvpPolicy: PRIVATE_DRAFT_PVP_POLICY,
+        kit: "gunner",
+        masteryLevel: 1,
+        isPetChoiceMade: true,
+      }, 120, now).split(".")[1],
+      "base64url",
+    ).toString("utf8");
+    check("normal v2 PVP mint uses canonical bytes",
+      verifyTicket(cfg, signedRawEnvelope(secret, "v2", normalPvpRaw), now).ok);
+    check("normal v2 reordered bytes reject",
+      verifyTicket(
+        cfg,
+        signedRawEnvelope(secret, "v2", normalPvpRaw.replace('{"pid":', `{"exp":${expires},"pid":`).replace(`,"exp":${expires}`, "")),
+        now,
+      ).reason === "policy_invalid");
+    check("normal v2 whitespace bytes reject",
+      verifyTicket(cfg, signedRawEnvelope(secret, "v2", normalPvpRaw.replace("{", "{ ")), now).reason === "policy_invalid");
   }
 
   section("adversarial tickets reject");

@@ -240,7 +240,37 @@ export class HttpGameServerProbe implements GameServerProbe {
     }
   }
 
-  async verify(): Promise<VerifyResult> {
+  async verifyDiagnostic(): Promise<VerifyResult> {
+    const authorityFailure = await this.authorityFailure();
+    if (authorityFailure !== null) return authorityFailure;
+    const readiness = await this.readiness();
+    if (!readiness.ready) return { ok: false, depth: "http_only", detail: readiness.detail };
+    const wsResult = await this.probeWs();
+    return {
+      ok: wsResult.ok,
+      depth: wsResult.depth,
+      detail: wsResult.detail,
+    };
+  }
+
+  async verifyForDeploy(): Promise<VerifyResult> {
+    if (this.cfg.syntheticTicketSecret === null) {
+      return { ok: false, depth: "http_only", detail: "policy_probe_secret_missing" };
+    }
+    const authorityFailure = await this.authorityFailure();
+    if (authorityFailure !== null) return authorityFailure;
+    const readiness = await this.readiness();
+    if (!readiness.ready) return { ok: false, depth: "http_only", detail: readiness.detail };
+    const policyResult = await this.verifyPolicyParser();
+    if (!policyResult.ok || policyResult.depth !== "policy_v2_parser") return policyResult;
+    const wsResult = await this.probeWs();
+    if (!wsResult.ok || wsResult.depth !== "synthetic_join") {
+      return { ok: false, depth: wsResult.depth, detail: wsResult.detail ?? "synthetic_join_required" };
+    }
+    return { ok: true, depth: "policy_v2_parser+synthetic_join", detail: null };
+  }
+
+  private async authorityFailure(): Promise<VerifyResult | null> {
     const authority = await this.getJsonShaped<{ [key: string]: ProbeJson }>(
       `${this.cfg.baseUrl}/version`,
     );
@@ -248,19 +278,7 @@ export class HttpGameServerProbe implements GameServerProbe {
     if (!authorityValidation.isValid) {
       return { ok: false, depth: "http_only", detail: authorityValidation.detail };
     }
-    const readiness = await this.readiness();
-    if (!readiness.ready) return { ok: false, depth: "http_only", detail: readiness.detail };
-
-    if (this.cfg.syntheticTicketSecret !== null) {
-      const policyResult = await this.verifyPolicyParser();
-      if (!policyResult.ok) return policyResult;
-    }
-    const wsResult = await this.probeWs();
-    if (!wsResult.ok) return { ok: false, depth: "ws_liveness", detail: wsResult.detail };
-    if (wsResult.depth === "synthetic_join" && this.cfg.syntheticTicketSecret !== null) {
-      return { ok: true, depth: "policy_v2_parser+synthetic_join", detail: null };
-    }
-    return { ok: true, depth: "ws_liveness", detail: null };
+    return null;
   }
 
   async verifyPolicyParser(): Promise<VerifyResult> {

@@ -64,8 +64,8 @@ export class GenerationAdmissionClient {
         this.recordMalformed(response.status, payload);
         return { isAllowed: false, code: "admission_unavailable" };
       }
-      if (response.ok && decision.isAllowed) return decision;
-      if (response.status >= 400 && response.status < 500 && !decision.isAllowed) return decision;
+      if (response.status === 200 && decision.isAllowed) return decision;
+      if (response.status === 403 && !decision.isAllowed) return decision;
       this.recordMalformed(response.status, payload);
       return { isAllowed: false, code: "admission_unavailable" };
     } catch (error) {

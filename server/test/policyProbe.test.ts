@@ -36,6 +36,13 @@ function signedTicket(
   return `${body}.${signature}`;
 }
 
+function signedRawTicket(secret: string, rawPayload: string): string {
+  const encoded = Buffer.from(rawPayload, "utf8").toString("base64url");
+  const body = `v2.${encoded}`;
+  const signature = createHmac("sha256", secret).update(body).digest("base64url");
+  return `${body}.${signature}`;
+}
+
 interface ProbeResult {
   frame: { t?: string; code?: string; depth?: string };
   isClosed: boolean;
@@ -154,6 +161,25 @@ try {
     gameplayResult.frame.t === "error"
     && gameplayResult.frame.code === "policy_invalid"
     && server.server.getWorld("pvp:room:PROB:g1") === undefined);
+
+  const canonicalFields = [
+    `"pid":${JSON.stringify(canonical.pid)}`,
+    `"exp":${canonical.exp}`,
+    `"wld":${JSON.stringify(canonical.wld)}`,
+    `"pp":${JSON.stringify(canonical.pp)}`,
+    `"pr":${JSON.stringify(canonical.pr)}`,
+  ];
+  for (const duplicateField of canonicalFields) {
+    const duplicateResult = await sendProbe(
+      server.url,
+      signedRawTicket(server.secret, `{${canonicalFields.join(",")},${duplicateField}}`),
+    );
+    check(`signed duplicate ${duplicateField.slice(1, duplicateField.indexOf('"', 1))} claim cannot acknowledge or mutate`,
+      duplicateResult.frame.t === "error"
+      && duplicateResult.frame.code === "policy_invalid"
+      && server.server.health().worlds === 0
+      && admissionRequests === 0);
+  }
 } finally {
   await server.close();
   await new Promise<void>((resolve) => admissionServer.close(() => resolve()));

@@ -29,6 +29,7 @@
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { isPvpWorldId, isValidWorldId } from "../../src/net/protocol.js";
 import { isPvpPolicyId, type PvpPolicyId } from "../../src/net/pvpPolicy.js";
+import { isStrictJsonObject } from "../../src/net/strictJson.js";
 import { isKitId } from "../../src/sim/kits.js";
 
 export { isValidWorldId };
@@ -140,6 +141,25 @@ function sign(secret: string, body: string): string {
   return b64url(createHmac("sha256", secret).update(body).digest());
 }
 
+function canonicalPvpPayload(payload: TicketPayload): TicketPayload {
+  const canonical: TicketPayload = {
+    pid: payload.pid,
+    exp: payload.exp,
+    wld: payload.wld,
+    pp: payload.pp,
+  };
+  if (payload.nm !== undefined) canonical.nm = payload.nm;
+  if (payload.cl !== undefined) canonical.cl = payload.cl;
+  if (payload.ht !== undefined) canonical.ht = payload.ht;
+  if (payload.fc !== undefined) canonical.fc = payload.fc;
+  if (payload.kt !== undefined) canonical.kt = payload.kt;
+  if (payload.ml !== undefined) canonical.ml = payload.ml;
+  if (payload.pt !== undefined) canonical.pt = payload.pt;
+  if (payload.pc !== undefined) canonical.pc = payload.pc;
+  if (payload.sv !== undefined) canonical.sv = payload.sv;
+  return canonical;
+}
+
 // Mint a signed ticket valid for `ttlSecs`. Used by tests, the harness, and the local
 // dev-ticket endpoint — mirrors what the production Convex minter does, byte-for-byte
 // (payload keys in the FIXED order pid, exp, wld, nm, cl, ht, fc, kt, ml, pt, pc; see convex/gsTicketCore.ts).
@@ -224,10 +244,15 @@ export function verifyTicket(cfg: AuthConfig, ticket: string, nowMs = Date.now()
   if (a.length !== b.length || !timingSafeEqual(a, b)) return { ok: false, reason: "bad_sig" };
 
   let payload: TicketPayload;
+  let payloadText: string;
   try {
-    payload = JSON.parse(fromB64url(parts[1]).toString("utf8")) as TicketPayload;
+    payloadText = new TextDecoder("utf-8", { fatal: true }).decode(fromB64url(parts[1]));
+    if (!isStrictJsonObject(payloadText)) {
+      return { ok: false, reason: ticketVersion === 2 ? "policy_invalid" : "bad_payload" };
+    }
+    payload = JSON.parse(payloadText) as TicketPayload;
   } catch {
-    return { ok: false, reason: "bad_payload" };
+    return { ok: false, reason: ticketVersion === 2 ? "policy_invalid" : "bad_payload" };
   }
   if (typeof payload.pid !== "string" || payload.pid.length < 1 || payload.pid.length > 64) {
     return { ok: false, reason: "bad_pid" };
@@ -308,6 +333,16 @@ export function verifyTicket(cfg: AuthConfig, ticket: string, nowMs = Date.now()
       if (Object.keys(payload).join(",") !== POLICY_AUTHORITY_PROBE_KEYS) {
         return { ok: false, reason: "policy_invalid", worldId: out.worldId };
       }
+      const canonicalProbe = JSON.stringify({
+        pid: payload.pid,
+        exp: payload.exp,
+        wld: payload.wld,
+        pp: payload.pp,
+        pr: payload.pr,
+      });
+      if (payloadText !== canonicalProbe) {
+        return { ok: false, reason: "policy_invalid", worldId: out.worldId };
+      }
       out.pvpPolicy = payload.pp;
       out.isPolicyAuthorityProbe = true;
       return out;
@@ -315,6 +350,9 @@ export function verifyTicket(cfg: AuthConfig, ticket: string, nowMs = Date.now()
     if (!isPvpWorld) return { ok: false, reason: "policy_invalid", worldId: out.worldId };
     if (payload.pp === undefined) return { ok: false, reason: "policy_required", worldId: out.worldId };
     if (typeof payload.pp !== "string" || !isPvpPolicyId(payload.pp)) {
+      return { ok: false, reason: "policy_invalid", worldId: out.worldId };
+    }
+    if (payloadText !== JSON.stringify(canonicalPvpPayload(payload))) {
       return { ok: false, reason: "policy_invalid", worldId: out.worldId };
     }
     out.pvpPolicy = payload.pp;

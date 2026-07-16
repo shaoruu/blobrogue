@@ -85,6 +85,9 @@ const serverSource = readFileSync(new URL("../server/src/server.ts", import.meta
 const pvpSimSource = readFileSync(new URL("../src/sim/pvp.ts", import.meta.url), "utf8");
 const routerSource = readFileSync(new URL("../server/src/messageRouter.ts", import.meta.url), "utf8");
 const admissionClientSource = readFileSync(new URL("../server/src/generationAdmissionClient.ts", import.meta.url), "utf8");
+const ticketAuthSource = readFileSync(new URL("../server/src/auth.ts", import.meta.url), "utf8");
+const deployControllerSource = readFileSync(new URL("../control/src/deployController.ts", import.meta.url), "utf8");
+const controlConfigSource = readFileSync(new URL("../control/src/config.ts", import.meta.url), "utf8");
 
 check("public recordRun and recordFloorProgress fail closed",
   (playersSource.match(/verified_receipt_required/g) ?? []).length >= 2);
@@ -135,7 +138,19 @@ check("terminal policy parser acknowledgement precedes rollout, admission, and w
   && probeBranch < routerSource.indexOf("bindVerifiedJoin(conn"));
 check("admission client validates the closed response schema before authorization",
   admissionClientSource.indexOf("parseGenerationAdmissionDecision(body)")
-  < admissionClientSource.indexOf("response.ok && decision.isAllowed"));
+  < admissionClientSource.indexOf("response.status === 200 && decision.isAllowed"));
+check("admission client locks allow/deny to exact HTTP 200/403 pairs",
+  admissionClientSource.includes("response.status === 200 && decision.isAllowed")
+  && admissionClientSource.includes("response.status === 403 && !decision.isAllowed"));
+check("signed tickets scan duplicate-aware JSON and canonicalize policy v2 bytes",
+  ticketAuthSource.includes("isStrictJsonObject(payloadText)")
+  && ticketAuthSource.includes("payloadText !== canonicalProbe")
+  && ticketAuthSource.includes("payloadText !== JSON.stringify(canonicalPvpPayload(payload))"));
+check("production control requires the parser secret before startup",
+  controlConfigSource.includes('throw new Error("policy_probe_secret_missing")'));
+check("lifecycle operations use authority verification and never diagnostic verification",
+  (deployControllerSource.match(/verifyForDeploy\(\)/g) ?? []).length === 3
+  && !deployControllerSource.includes("verifyDiagnostic"));
 
 process.stdout.write(`\n${passed} checks passed, ${failed} failed\n`);
 if (failed > 0) process.exit(1);

@@ -193,7 +193,8 @@ export class FakeGameServerProbe implements GameServerProbe {
   metricsValue: MetricsSnapshot = { msgsIn: 0, msgsOut: 0 };
   worldsValue: WorldSummary[] = [{ id: "arena-1", players: 0, tick: 0, names: [], away: [] }];
   logsValue: LogRecord[] = [];
-  verifyValue: VerifyResult = { ok: true, depth: "synthetic_join", detail: null };
+  verifyDiagnosticValue: VerifyResult = { ok: true, depth: "ws_liveness", detail: null };
+  verifyForDeployValue: VerifyResult = { ok: true, depth: "policy_v2_parser+synthetic_join", detail: null };
   verifyDelayMs = 0; // hold the deploy across a real timer (makes lock contention deterministic)
   lifecycleCalls: GameServerLifecycleAction[] = [];
 
@@ -202,9 +203,12 @@ export class FakeGameServerProbe implements GameServerProbe {
   async metrics(): Promise<MetricsSnapshot> { return this.metricsValue; }
   async worlds(): Promise<WorldSummary[]> { return this.worldsValue; }
   async logs(_q: LogQuery): Promise<LogRecord[]> { return this.logsValue; }
-  async verify(): Promise<VerifyResult> {
+  async verifyDiagnostic(): Promise<VerifyResult> {
+    return this.verifyDiagnosticValue;
+  }
+  async verifyForDeploy(): Promise<VerifyResult> {
     if (this.verifyDelayMs > 0) await sleep(this.verifyDelayMs);
-    return this.verifyValue;
+    return this.verifyForDeployValue;
   }
   async lifecycle(action: GameServerLifecycleAction): Promise<AdminEffectResult> {
     this.lifecycleCalls.push(action);

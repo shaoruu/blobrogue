@@ -36,8 +36,11 @@ export class DefaultGameServerAdmin implements GameServerAdmin {
   logs(q: LogQuery): Promise<LogRecord[]> {
     return this.probe.logs(q);
   }
-  verify(): Promise<VerifyResult> {
-    return this.probe.verify();
+  verifyDiagnostic(): Promise<VerifyResult> {
+    return this.probe.verifyDiagnostic();
+  }
+  verifyForDeploy(): Promise<VerifyResult> {
+    return this.probe.verifyForDeploy();
   }
 
   drain(): Promise<AdminEffectResult> {

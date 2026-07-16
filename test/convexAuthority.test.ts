@@ -7,9 +7,13 @@ import { RUN_RECEIPT_VERSION } from "../src/net/runReceipt.js";
 import { mintRunCompletionReceipt } from "../server/src/runReceipt.js";
 import { PRIVATE_DRAFT_PVP_POLICY } from "../src/net/pvpPolicy.js";
 import {
+  GENERATION_ADMISSION_TTL_MS,
+  GENERATION_ADMISSION_VERSION,
   parseGenerationAdmissionDecision,
   type AdmissionJson,
+  type GenerationAdmissionPayload,
 } from "../src/net/generationAdmission.js";
+import { mintGenerationAdmissionProof } from "../server/src/generationAdmissionClient.js";
 
 const modules = import.meta.glob("../convex/**/*.{ts,js}");
 
@@ -434,6 +438,60 @@ describe("Convex run authority", () => {
       isAllowed: false,
       code: "membership_changed",
     });
+  });
+
+  test("admission HTTP endpoint emits only exact 200 allow and 403 deny pairs", async () => {
+    const { t, playerId } = await seedGeneration();
+    const secret = "admission-http-secret";
+    const previousReceiptSecret = process.env.GS_RECEIPT_SECRET;
+    const previousAuthSecret = process.env.GS_AUTH_SECRET;
+    process.env.GS_RECEIPT_SECRET = secret;
+    process.env.GS_AUTH_SECRET = "separate-auth-secret";
+    try {
+      const issuedAt = Date.now();
+      const payload: GenerationAdmissionPayload = {
+        version: GENERATION_ADMISSION_VERSION,
+        jti: "abcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdef",
+        playerId,
+        worldId: "room:ABCD:g1",
+        roomCode: "ABCD",
+        generation: 1,
+        mode: "coop",
+        pvpPolicy: null,
+        kitId: "gunner",
+        petId: null,
+        isPetChoiceMade: true,
+        issuedAt,
+        expiresAt: issuedAt + GENERATION_ADMISSION_TTL_MS,
+      };
+      const allowed = await t.fetch("/gs/admission", {
+        method: "POST",
+        body: JSON.stringify({ proof: mintGenerationAdmissionProof(secret, payload) }),
+      });
+      expect(allowed.status).toBe(200);
+      expect(await allowed.json()).toEqual({ isAllowed: true, code: "ok" });
+
+      await t.run(async (ctx) => {
+        const rows = await ctx.db.query("presence").collect();
+        await ctx.db.patch(rows[0]._id, { isDeparted: true });
+      });
+      const denied = await t.fetch("/gs/admission", {
+        method: "POST",
+        body: JSON.stringify({
+          proof: mintGenerationAdmissionProof(secret, {
+            ...payload,
+            jti: "1234567890abcdef1234567890abcdef1234567890abcdef",
+          }),
+        }),
+      });
+      expect(denied.status).toBe(403);
+      expect(await denied.json()).toEqual({ isAllowed: false, code: "membership_changed" });
+    } finally {
+      if (previousReceiptSecret === undefined) delete process.env.GS_RECEIPT_SECRET;
+      else process.env.GS_RECEIPT_SECRET = previousReceiptSecret;
+      if (previousAuthSecret === undefined) delete process.env.GS_AUTH_SECRET;
+      else process.env.GS_AUTH_SECRET = previousAuthSecret;
+    }
   });
 
   test("PVP admission requires exact durable policy and remains dark", async () => {

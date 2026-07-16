@@ -3,6 +3,7 @@ import {
   GENERATION_ADMISSION_VERSION,
   parseGenerationAdmissionDecision,
 } from "../../src/net/generationAdmission.js";
+import { createHmac } from "node:crypto";
 import type {
   AdmissionJson,
   GenerationAdmissionPayload,
@@ -65,6 +66,11 @@ check(
   "expired admission proof rejects",
   await verifyGenerationAdmissionProof(secret, proof, payload.expiresAt + 1) === null,
 );
+const duplicateAdmissionRaw = `${JSON.stringify(payload).slice(0, -1)},"jt\\u0069":"ffffffffffffffffffffffffffffffff"}`;
+const duplicateAdmissionBody = `a2.${Buffer.from(duplicateAdmissionRaw, "utf8").toString("base64url")}`;
+const duplicateAdmissionProof = `${duplicateAdmissionBody}.${createHmac("sha256", secret).update(duplicateAdmissionBody).digest("base64url")}`;
+check("signed admission proof rejects escaped-equivalent duplicate keys",
+  await verifyGenerationAdmissionProof(secret, duplicateAdmissionProof, now) === null);
 const inheritedDecision = Object.create({
   isAllowed: true,
   code: "ok",
@@ -213,8 +219,21 @@ try {
   await new Promise<void>((resolve) => admissionServer.close(() => resolve()));
 }
 
-let strictResponse = { status: 200, body: JSON.stringify({ isAllowed: true, code: "ok" }) };
+interface StrictAdmissionResponse {
+  status: number;
+  body: string;
+  delayMs: number;
+}
+
+let strictResponse: StrictAdmissionResponse = {
+  status: 200,
+  body: JSON.stringify({ isAllowed: true, code: "ok" }),
+  delayMs: 0,
+};
 const strictAdmissionServer = createServer(async (_request, response) => {
+  if (strictResponse.delayMs > 0) {
+    await new Promise<void>((resolve) => setTimeout(resolve, strictResponse.delayMs));
+  }
   response.writeHead(strictResponse.status, { "content-type": "application/json" });
   response.end(strictResponse.body);
 });
@@ -229,27 +248,51 @@ const strictGameServer = await startTestServer({
 });
 try {
   const malformedCases = [
-    ["allow missing code", 200, '{"isAllowed":true}'],
-    ["allow null code", 200, '{"isAllowed":true,"code":null}'],
-    ["allow unexpected code", 200, '{"isAllowed":true,"code":"unexpected"}'],
-    ["array", 200, "[]"],
-    ["null", 200, "null"],
-    ["string", 200, '"ok"'],
-    ["number", 200, "1"],
-    ["allow extra key", 200, '{"isAllowed":true,"code":"ok","extra":1}'],
-    ["deny missing code", 200, '{"isAllowed":false}'],
-    ["malformed 403", 403, '{"isAllowed":false}'],
-    ["403 allow mismatch", 403, '{"isAllowed":true,"code":"ok"}'],
-    ["200 deny mismatch", 200, '{"isAllowed":false,"code":"membership_changed"}'],
-    ["prototype key", 200, '{"isAllowed":true,"code":"ok","__proto__":{"polluted":true}}'],
-    ["constructor key", 200, '{"isAllowed":true,"code":"ok","constructor":{"polluted":true}}'],
-    ["invalid json", 200, "not-json"],
-    ["malformed 500", 500, '{"isAllowed":true}'],
+    ["allow missing code", 200, '{"isAllowed":true}', 0, true],
+    ["allow null code", 200, '{"isAllowed":true,"code":null}', 0, true],
+    ["allow unexpected code", 200, '{"isAllowed":true,"code":"unexpected"}', 0, true],
+    ["array", 200, "[]", 0, true],
+    ["null", 200, "null", 0, true],
+    ["string", 200, '"ok"', 0, true],
+    ["number", 200, "1", 0, true],
+    ["allow extra key", 200, '{"isAllowed":true,"code":"ok","extra":1}', 0, true],
+    ["deny missing code", 200, '{"isAllowed":false}', 0, true],
+    ["malformed 403", 403, '{"isAllowed":false}', 0, true],
+    ["403 allow mismatch", 403, '{"isAllowed":true,"code":"ok"}', 0, true],
+    ["200 deny mismatch", 200, '{"isAllowed":false,"code":"membership_changed"}', 0, true],
+    ["prototype key", 200, '{"isAllowed":true,"code":"ok","__proto__":{"polluted":true}}', 0, true],
+    ["constructor key", 200, '{"isAllowed":true,"code":"ok","constructor":{"polluted":true}}', 0, true],
+    ["invalid json", 200, "not-json", 0, true],
+    ["201 allow", 201, '{"isAllowed":true,"code":"ok"}', 0, true],
+    ["202 allow", 202, '{"isAllowed":true,"code":"ok"}', 0, true],
+    ["204 allow", 204, '{"isAllowed":true,"code":"ok"}', 0, true],
+    ["206 allow", 206, '{"isAllowed":true,"code":"ok"}', 0, true],
+    ["400 known deny", 400, '{"isAllowed":false,"code":"membership_changed"}', 0, true],
+    ["401 known deny", 401, '{"isAllowed":false,"code":"membership_changed"}', 0, true],
+    ["404 known deny", 404, '{"isAllowed":false,"code":"membership_changed"}', 0, true],
+    ["409 known deny", 409, '{"isAllowed":false,"code":"membership_changed"}', 0, true],
+    ["422 known deny", 422, '{"isAllowed":false,"code":"membership_changed"}', 0, true],
+    ["403 unknown deny", 403, '{"isAllowed":false,"code":"unexpected"}', 0, true],
+    ["200 unknown deny", 200, '{"isAllowed":false,"code":"unexpected"}', 0, true],
+    ["wrong false boolean", 200, '{"isAllowed":false,"code":"ok"}', 0, true],
+    ["wrong string isAllowed", 200, '{"isAllowed":"true","code":"ok"}', 0, true],
+    ["wrong number isAllowed", 200, '{"isAllowed":1,"code":"ok"}', 0, true],
+    ["wrong null isAllowed", 200, '{"isAllowed":null,"code":"ok"}', 0, true],
+    ["500 exact allow", 500, '{"isAllowed":true,"code":"ok"}', 0, true],
+    ["500 exact deny", 500, '{"isAllowed":false,"code":"membership_changed"}', 0, true],
+    ["502 exact allow", 502, '{"isAllowed":true,"code":"ok"}', 0, true],
+    ["502 exact deny", 502, '{"isAllowed":false,"code":"membership_changed"}', 0, true],
+    ["503 exact allow", 503, '{"isAllowed":true,"code":"ok"}', 0, true],
+    ["503 exact deny", 503, '{"isAllowed":false,"code":"membership_changed"}', 0, true],
+    ["actual timeout", 200, '{"isAllowed":true,"code":"ok"}', 2_700, false],
   ] as const;
   let index = 0;
-  for (const [label, status, body] of malformedCases) {
-    strictResponse = { status, body };
-    const code = `M${String.fromCharCode(65 + index++)}AA`;
+  let expectedMalformedResponses = 0;
+  const roomAlphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+  for (const [label, status, body, delayMs, isMalformedResponse] of malformedCases) {
+    strictResponse = { status, body, delayMs };
+    const code = `M${roomAlphabet[Math.floor(index / roomAlphabet.length)]}${roomAlphabet[index % roomAlphabet.length]}A`;
+    index++;
     const worldId = `room:${code}:g1`;
     const bot = new Bot({
       url: strictGameServer.url,
@@ -264,16 +307,18 @@ try {
     bot.start();
     const rejected = await waitUntil(
       () => (bot.transport.lastError ?? "").includes("admission_unavailable"),
-      3_000,
+      delayMs > 0 ? 4_000 : 3_000,
     );
     check(`${label} fails closed before world creation`,
       rejected && strictGameServer.server.getWorld(worldId) === undefined);
     bot.stop();
+    if (isMalformedResponse) expectedMalformedResponses++;
   }
 
   strictResponse = {
     status: 403,
     body: JSON.stringify({ isAllowed: false, code: "membership_changed" }),
+    delayMs: 0,
   };
   const denied = new Bot({
     url: strictGameServer.url,
@@ -294,6 +339,7 @@ try {
   strictResponse = {
     status: 200,
     body: JSON.stringify({ isAllowed: true, code: "ok" }),
+    delayMs: 0,
   };
   const allowed = new Bot({
     url: strictGameServer.url,
@@ -311,7 +357,7 @@ try {
     && strictGameServer.server.getWorld("room:GOOD:g1")?.playerCount === 1);
   allowed.stop();
   check("malformed admission responses increment the dedicated counter",
-    strictGameServer.server.health().counters.admissionMalformedResponses === malformedCases.length);
+    strictGameServer.server.health().counters.admissionMalformedResponses === expectedMalformedResponses);
 } finally {
   await strictGameServer.close();
   await new Promise<void>((resolve) => strictAdmissionServer.close(() => resolve()));

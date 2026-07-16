@@ -230,14 +230,14 @@ export async function suite(t: TestRunner): Promise<void> {
         },
         new NodeTailReader(),
       );
-      const mismatchResult = await mismatchProbe.verify();
+      const mismatchResult = await mismatchProbe.verifyForDeploy();
       t.check("advertised constants cannot hide a mismatched deployed policy catalog",
         !mismatchResult.ok
         && mismatchResult.depth === "http_only"
         && mismatchResult.detail === "pvp_policy_catalog_mismatch");
       await new Promise<void>((resolve) => mismatchedVersionServer.close(() => resolve()));
 
-      const verify = await probe.verify();
+      const verify = await probe.verifyForDeploy();
       t.check("full VERIFY requires parser acknowledgement plus ordinary synthetic liveness",
         verify.ok && verify.depth === "policy_v2_parser+synthetic_join",
         `ok=${verify.ok} depth=${verify.depth} detail=${verify.detail ?? ""}`);
@@ -291,8 +291,15 @@ export async function suite(t: TestRunner): Promise<void> {
         { baseUrl: `http://127.0.0.1:${gs.port}`, wsUrl: `ws://127.0.0.1:${gs.port}/ws`, logOutFile: null, syntheticTicketSecret: null, logTailMax: 100 },
         new NodeTailReader(),
       );
-      const verify = await probe.verify();
-      t.check("ws-liveness verify passes without game credentials", verify.ok && verify.depth === "ws_liveness", `ok=${verify.ok} depth=${verify.depth}`);
+      const diagnostic = await probe.verifyDiagnostic();
+      t.check("credential-free ws liveness remains diagnostic-only",
+        diagnostic.ok && diagnostic.depth === "ws_liveness",
+        `ok=${diagnostic.ok} depth=${diagnostic.depth}`);
+      const deployVerify = await probe.verifyForDeploy();
+      t.check("credential-free deploy verification fails closed",
+        !deployVerify.ok
+        && deployVerify.depth === "http_only"
+        && deployVerify.detail === "policy_probe_secret_missing");
     } finally {
       await gs.close();
     }

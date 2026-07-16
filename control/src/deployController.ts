@@ -17,6 +17,7 @@ import type {
   OperationRecord,
   OperationResult,
   OperationState,
+  VerifyResult,
 } from "./types.js";
 
 export interface OperationContext {
@@ -81,8 +82,8 @@ export class DeployController {
       await this.d.gameServer.restart();
 
       await this.transition(op, "verify", null);
-      const verify = await this.d.gameServer.verify();
-      if (!verify.ok) throw new Error(`verify_failed:${verify.detail ?? verify.depth}`);
+      const verify = await this.d.gameServer.verifyForDeploy();
+      this.requireAuthorityVerification(verify);
       op.transitions[op.transitions.length - 1].note = `ok:${verify.depth}`;
 
       await this.transition(op, "resume", (await this.d.gameServer.resume()).mode);
@@ -115,8 +116,8 @@ export class DeployController {
       await this.transition(op, "pm2_reload", "blobrogue-gs");
       await this.d.gameServer.restart();
       await this.transition(op, "verify", null);
-      const verify = await this.d.gameServer.verify();
-      if (!verify.ok) throw new Error(`verify_failed:${verify.detail ?? verify.depth}`);
+      const verify = await this.d.gameServer.verifyForDeploy();
+      this.requireAuthorityVerification(verify);
       op.transitions[op.transitions.length - 1].note = `ok:${verify.depth}`;
       await this.transition(op, "resume", (await this.d.gameServer.resume()).mode);
       await this.finishSuccess(op);
@@ -141,8 +142,8 @@ export class DeployController {
       await this.transition(op, "pm2_reload", "blobrogue-gs");
       await this.d.gameServer.restart();
       await this.transition(op, "verify", null);
-      const verify = await this.d.gameServer.verify();
-      if (!verify.ok) throw new Error(`verify_failed:${verify.detail ?? verify.depth}`);
+      const verify = await this.d.gameServer.verifyForDeploy();
+      this.requireAuthorityVerification(verify);
       op.transitions[op.transitions.length - 1].note = `ok:${verify.depth}`;
       await this.finishSuccess(op);
       return op;
@@ -270,6 +271,13 @@ export class DeployController {
       await fn();
     } catch (err) {
       this.d.log.error("compensation step failed", { reason: errMessage(err) });
+    }
+  }
+
+  private requireAuthorityVerification(verify: VerifyResult): void {
+    if (!verify.ok) throw new Error(`verify_failed:${verify.detail ?? verify.depth}`);
+    if (verify.depth !== "policy_v2_parser+synthetic_join") {
+      throw new Error(`verify_failed:authority_depth_required:${verify.depth}`);
     }
   }
 

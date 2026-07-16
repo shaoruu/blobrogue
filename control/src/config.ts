@@ -26,7 +26,7 @@ export interface ControlConfig {
   gsBaseUrl: string;
   gsWsUrl: string;
   gsLogOutFile: string | null;
-  gsSyntheticTicketSecret: string | null; // optional; enables full synthetic-join verify
+  gsSyntheticTicketSecret: string | null; // required in production; null permits diagnostics only
 }
 
 function intEnv(env: NodeJS.ProcessEnv, key: string, def: number): number {
@@ -49,6 +49,10 @@ function optEnv(env: NodeJS.ProcessEnv, key: string): string | null {
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): ControlConfig {
   const isProd = env.NODE_ENV === "production";
   const origins = (env.BRC_ALLOWED_ORIGINS ?? "").split(",").map((s) => s.trim()).filter((s) => s.length > 0);
+  const gsSyntheticTicketSecret = optEnv(env, "BRC_GS_SYNTHETIC_TICKET_SECRET");
+  if (isProd && gsSyntheticTicketSecret === null) {
+    throw new Error("policy_probe_secret_missing");
+  }
   return {
     host: strEnv(env, "BRC_HOST", "127.0.0.1"),
     port: intEnv(env, "BRC_PORT", 8091),
@@ -72,6 +76,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ControlConfig 
     gsBaseUrl: strEnv(env, "BRC_GS_BASE_URL", "http://127.0.0.1:8090"),
     gsWsUrl: strEnv(env, "BRC_GS_WS_URL", "ws://127.0.0.1:8090/ws"),
     gsLogOutFile: optEnv(env, "BRC_GS_LOG_OUT_FILE"),
-    gsSyntheticTicketSecret: optEnv(env, "BRC_GS_SYNTHETIC_TICKET_SECRET"),
+    gsSyntheticTicketSecret,
   };
 }
