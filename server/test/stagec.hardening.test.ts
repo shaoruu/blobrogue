@@ -304,6 +304,7 @@ async function main(): Promise<void> {
           return bot.transport.snapsRecv > boundarySnapshotCount
             && snapshot !== null
             && snapshot.tick > boundarySnapshotTick
+            && snapshot.ackSeq > boundaryInputSeq
             && connection.lastAppliedSeq > boundaryInputSeq
             && connection.ackedEventId >= killEvent.id;
         }, 3000);
@@ -316,6 +317,7 @@ async function main(): Promise<void> {
             boundarySnapshotTick,
             currentSnapshotTick: bot.transport.getLatestSnapshot()?.tick ?? null,
             boundaryInputSeq,
+            currentSnapshotAckSeq: bot.transport.getLatestSnapshot()?.ackSeq ?? null,
             currentInputSeq: connection.lastAppliedSeq,
             acknowledgedEventId: connection.ackedEventId,
             killEventId: killEvent.id,

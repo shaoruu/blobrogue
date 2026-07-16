@@ -130,15 +130,16 @@ async function runCase(iteration: number): Promise<void> {
     if (!isWipeHoldStarted) return;
 
     world.state.wipeTimer = WIPE_HOLD_SECONDS - FIXED_DT / 2;
+    const gameOverEvents = () => world.eventsSince(eventFloor)
+      .filter((wire) => wire.e.t === "gameOver" && wire.e.pid === playerId);
     const isAuthoritativeGameOver = await waitUntil(
-      () => connection.gameOver
-        && world.eventsSince(eventFloor).some(
-          (wire) => wire.e.t === "gameOver" && wire.e.pid === playerId,
-        ),
+      () => connection.gameOver && gameOverEvents().length >= 1,
       3000,
     );
-    const gameOverEvent = world.eventsSince(eventFloor)
-      .find((wire) => wire.e.t === "gameOver" && wire.e.pid === playerId);
+    const committedGameOverEvents = gameOverEvents();
+    const gameOverEvent = committedGameOverEvents.length === 1
+      ? committedGameOverEvents[0]
+      : undefined;
     const diagnostic = () => JSON.stringify({
       iteration,
       elapsedMs: Date.now() - startedAt,
@@ -151,6 +152,7 @@ async function runCase(iteration: number): Promise<void> {
       isDown: player.isDown,
       isAbsent: player.isAbsent,
       gameOverEventId: gameOverEvent?.id ?? null,
+      gameOverEventIds: committedGameOverEvents.map((event) => event.id),
       acknowledgedEventId: connection.ackedEventId,
       isConnectionClosing: connection.closing,
       isConnectionGameOver: connection.gameOver,
@@ -164,7 +166,12 @@ async function runCase(iteration: number): Promise<void> {
     });
     check(
       "wipe threshold commits the authoritative game-over event and close marker",
-      isAuthoritativeGameOver && gameOverEvent !== undefined,
+      isAuthoritativeGameOver,
+      diagnostic(),
+    );
+    check(
+      "authoritative game-over event is emitted exactly once",
+      committedGameOverEvents.length === 1,
       diagnostic(),
     );
     check(
