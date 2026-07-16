@@ -4301,7 +4301,9 @@ function updateBullets(w: WorldState, dt: number, ev: SimEvent[]): void {
     }
     b.x += b.vx * dt; b.y += b.vy * dt; b.life -= dt;
     const wallContact = b.friendly && b.isPhase !== true
-      ? firstWallContact(w, b.prevX, b.prevY, b.x, b.y)
+      ? b.grapplePull !== undefined
+        ? firstWallContact(w, b.prevX, b.prevY, b.x, b.y)
+        : isWall(w, b.x, b.y) ? { x: b.prevX, y: b.prevY } : null
       : null;
     // Ground-painting beads drop their authored zone at fixed travel spacing.
     if (b.friendly && b.paintSpacing !== undefined && b.paintDist !== undefined && !isWall(w, b.x, b.y)) {
