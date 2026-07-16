@@ -9,7 +9,12 @@
 // same seed + same inputs -> same drops on every client.
 
 import type { WeaponId, WeaponRarity } from "./types.js";
-import { PICKUP_WEAPONS, WEAPONS } from "./weapons.js";
+import { WEAPONS } from "./weapons.js";
+import {
+  CURRENT_CONTENT_CATALOG_VERSION,
+  contentCatalogFor,
+} from "./contentCatalog.js";
+import type { ContentCatalogVersion } from "./contentCatalog.js";
 import { Rng } from "./rng.js";
 import {
   createWeaponOfferHistory,
@@ -20,6 +25,7 @@ import type { WeaponOfferHistory } from "./offerHistory.js";
 
 export interface WeaponBag extends WeaponOfferHistory {
   seed: number;        // the run seed the shuffles derive from
+  catalogVersion: ContentCatalogVersion;
   order: WeaponId[];   // the undealt remainder of the current pass
   refills: number;     // completed passes
   weightedDraws: number;
@@ -29,10 +35,14 @@ export interface WeaponBag extends WeaponOfferHistory {
 // the bag can never perturb enemy/loot rolls, and vice versa.
 const BAG_SALT = 0x3b9a5e17;
 
-export function createWeaponBag(seed: number): WeaponBag {
+export function createWeaponBag(
+  seed: number,
+  catalogVersion: ContentCatalogVersion = CURRENT_CONTENT_CATALOG_VERSION,
+): WeaponBag {
   const history = createWeaponOfferHistory();
   const bag: WeaponBag = {
     seed,
+    catalogVersion,
     order: [],
     refills: 0,
     weightedDraws: 0,
@@ -46,7 +56,7 @@ export function createWeaponBag(seed: number): WeaponBag {
 // and every pass reshuffles differently so a long run doesn't loop one fixed order.
 function refillBag(bag: WeaponBag): void {
   const rng = new Rng((bag.seed ^ BAG_SALT) + bag.refills * 0x1f83d9ab);
-  const order = [...PICKUP_WEAPONS];
+  const order = [...contentCatalogFor(bag.catalogVersion).pickupWeapons];
   for (let i = order.length - 1; i > 0; i--) {
     const j = rng.int(0, i);
     [order[i], order[j]] = [order[j], order[i]];
@@ -104,6 +114,7 @@ export function rollWeaponOfferWithHistory(
 // legendary floor gate through `exclude`, whose skip-while-others-remain semantics
 // already guarantee a draw never hangs.
 export function drawWeaponFromBag(bag: WeaponBag, exclude: ReadonlySet<WeaponId>, rarity?: WeaponRarity): WeaponId {
+  const pickupWeapons = contentCatalogFor(bag.catalogVersion).pickupWeapons;
   if (bag.order.length > 0 && rarity !== undefined) {
     const fitsTier = (id: WeaponId): boolean => WEAPONS[id].rarity === rarity && !exclude.has(id);
     let idx = bag.order.findIndex((id) => fitsTier(id) && !bag.recentWeaponOffers.includes(id));
@@ -123,9 +134,9 @@ export function drawWeaponFromBag(bag: WeaponBag, exclude: ReadonlySet<WeaponId>
     + bag.weightedDraws * 0x6a09e667,
   );
   bag.weightedDraws++;
-  if ((bag.weightedDraws - 1) % PICKUP_WEAPONS.length === 0) bag.refills++;
+  if ((bag.weightedDraws - 1) % pickupWeapons.length === 0) bag.refills++;
   const tierPool = rarity === undefined
-    ? PICKUP_WEAPONS
-    : PICKUP_WEAPONS.filter((id) => WEAPONS[id].rarity === rarity);
+    ? pickupWeapons
+    : pickupWeapons.filter((id) => WEAPONS[id].rarity === rarity);
   return rollWeaponOfferWithHistory(tierPool, () => rng.next(), bag, exclude);
 }

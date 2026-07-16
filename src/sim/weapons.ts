@@ -1,6 +1,13 @@
-import type { Bullet, WeaponId, WeaponRarity, MysteryTwist } from "./types.js";
+import type {
+  Bullet, WeaponId, WeaponRarity, MysteryTwist, SluiceMode, OddsmakerOutcome,
+} from "./types.js";
 import type { PlayerId } from "./input.js";
 import type { Rng } from "./rng.js";
+import {
+  CURRENT_CONTENT_CATALOG_VERSION,
+  contentCatalogFor,
+} from "./contentCatalog.js";
+import type { ContentCatalogVersion } from "./contentCatalog.js";
 import {
   BOSS_EXTRA_PELLET_COEF, BOSS_NATIVE_PELLET_COEF, WEAPON_BOSS_COEF,
   WEAPON_RARITY_WEIGHT, LEGENDARY_MIN_FLOOR, BOSS_CHEST_LEGENDARY_MULT, MYSTERY,
@@ -99,15 +106,14 @@ export interface ModeShiftSpec {
   };
 }
 
-export type GambleOutcome = "ricochet" | "seeker" | "blast" | "pierce";
-
 export interface GambleSpec {
-  outcomes: readonly GambleOutcome[];
+  outcomes: readonly OddsmakerOutcome[];
 }
 
 export const WEAPON_CYCLE_IDS = ["sluicegate", "oddsmaker"] as const;
 export type WeaponCycleId = typeof WEAPON_CYCLE_IDS[number];
 export type WeaponCycles = Record<WeaponCycleId, number>;
+export type WeaponFireCooldowns = Partial<Record<WeaponId, number>>;
 
 export function createWeaponCycles(): WeaponCycles {
   return { sluicegate: 0, oddsmaker: 0 };
@@ -505,7 +511,7 @@ export const WEAPONS: Record<WeaponId, Weapon> = {
     id: "oddsmaker", name: "ODDSMAKER", rarity: "legendary", fireCd: 0.4, speed: 600, life: 1.1,
     damage: 3.3, pellets: 1, spread: 0, bulletRadius: 6, color: "#efb85f", muzzle: 3,
     gamble: { outcomes: ["ricochet", "seeker", "blast", "pierce"] },
-    special: "GAMBLE — every shot independently rolls a ricochet, seeker, blast, or piercing payload.",
+    special: "GAMBLE — every shot independently rolls a ricochet, seeker, blast, or piercing payload; repeats are possible.",
   },
   pathmaker: {
     id: "pathmaker", name: "PATHMAKER", rarity: "rare", fireCd: 0.18, speed: 340, life: 1.15,
@@ -518,16 +524,8 @@ export const WEAPONS: Record<WeaponId, Weapon> = {
 export const DEFAULT_WEAPON: WeaponId = "pistol";
 
 // Weapons that can appear as floor pickups (the pistol is the always-owned default).
-export const PICKUP_WEAPONS: readonly WeaponId[] = [
-  "shotgun", "rapid", "smg", "cannon", "burst", "ricochet", "homing", "tesla",
-  "sawnoff", "railgun", "nailer", "flamer", "mortar", "beam",
-  "sword", "longsword", "spear",
-  "lastlight", "breach", "snapwire", "frostline", "halo", "sentry", "crook",
-  "reaper", "swarm", "midas", "phase", "vortex",
-  "cleaver", "scrapper", "skipper", "arcbolt", "cryobolt", "firebomb", "tracker",
-  "singularity",
-  "mooring_nail", "sluicegate", "oddsmaker", "pathmaker",
-];
+export const PICKUP_WEAPONS: readonly WeaponId[] =
+  contentCatalogFor(CURRENT_CONTENT_CATALOG_VERSION).pickupWeapons;
 
 // The legendary tier of the pickup pool (derived once — gates and premium rolls read it).
 export const LEGENDARY_WEAPONS: readonly WeaponId[] =
@@ -551,7 +549,13 @@ export interface RarityRollOpts {
   legendaryWeight?: number;
 }
 
-export function rollWeaponRarity(rand: () => number, floor: number, opts: RarityRollOpts = {}): WeaponRarity {
+export function rollWeaponRarity(
+  rand: () => number,
+  floor: number,
+  opts: RarityRollOpts = {},
+  catalogVersion: ContentCatalogVersion = CURRENT_CONTENT_CATALOG_VERSION,
+): WeaponRarity {
+  const pickupWeapons = contentCatalogFor(catalogVersion).pickupWeapons;
   const isLegendaryOpen = opts.isMystery === true || floor >= LEGENDARY_MIN_FLOOR;
   const tiers: WeaponRarity[] = ["common", "rare", "legendary"];
   const weightOf = (tier: WeaponRarity): number => {
@@ -560,7 +564,7 @@ export function rollWeaponRarity(rand: () => number, floor: number, opts: Rarity
       : tier === "legendary" && opts.isMystery ? MYSTERY.legendaryWeight
       : tier === "legendary" && opts.isPremium ? WEAPON_RARITY_WEIGHT.legendary * BOSS_CHEST_LEGENDARY_MULT
       : WEAPON_RARITY_WEIGHT[tier];
-    return perWeapon * PICKUP_WEAPONS.filter((id) => WEAPONS[id].rarity === tier).length;
+    return perWeapon * pickupWeapons.filter((id) => WEAPONS[id].rarity === tier).length;
   };
   let total = 0;
   for (const tier of tiers) total += weightOf(tier);
@@ -640,6 +644,10 @@ export interface ShotSpec {
   isPaving?: boolean;
   grapplePull?: number;
   reclaimedBounceDamage?: number;
+  paintZonesLeft?: number;
+  shotSeq?: number;
+  sluiceMode?: SluiceMode;
+  oddsmakerOutcome?: OddsmakerOutcome;
 }
 
 const CRIT_COLOR = "#fff3c4";
@@ -672,8 +680,9 @@ export function fire(spec: ShotSpec, x: number, y: number, aim: number, rng: Rng
         ? homing * HOMING_SPLIT.extraTurnRateMult
         : undefined;
     }
-    const t = spec.pellets === 1 ? 0 : (i / (spec.pellets - 1)) - 0.5;
-    const jitter = (rng.next() - 0.5) * (spec.spread * 0.3);
+    const isAnchorPellet = spec.grapplePull !== undefined && i === 0;
+    const t = spec.pellets === 1 || isAnchorPellet ? 0 : (i / (spec.pellets - 1)) - 0.5;
+    const jitter = isAnchorPellet ? 0 : (rng.next() - 0.5) * (spec.spread * 0.3);
     const a = aim + t * spec.spread + jitter;
     const isCrit = spec.critChance > 0 && rng.next() < spec.critChance;
     shots.push({
@@ -689,6 +698,7 @@ export function fire(spec: ShotSpec, x: number, y: number, aim: number, rng: Rng
       pierce: spec.pierce,
       hitList: null,
       isCrit,
+      enemyHits: 0,
       critX: isCrit ? spec.critMult : 1,
       bossCoef: pelletBossCoef,
       fx: spec.fx,
@@ -715,6 +725,10 @@ export function fire(spec: ShotSpec, x: number, y: number, aim: number, rng: Rng
       isPaving: spec.isPaving,
       grapplePull: spec.grapplePull,
       reclaimedBounceDamage: spec.reclaimedBounceDamage,
+      paintZonesLeft: spec.paintZonesLeft,
+      shotSeq: spec.shotSeq,
+      sluiceMode: spec.sluiceMode,
+      oddsmakerOutcome: spec.oddsmakerOutcome,
     });
   }
   return shots;

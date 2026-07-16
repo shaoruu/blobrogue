@@ -145,6 +145,10 @@ export const NOVA_FUSE = 0.22;
 // Hard world bounds: effects ride every snapshot unfiltered (like hazards), so the sim
 // caps each family — the wire and the frame stay bounded no matter how a build stacks.
 export const MAX_ZONE_EFFECTS = 48;      // oldest chill zones fade early past the cap
+export const MAX_PAVE_ZONE_EFFECTS = 24;
+export const MAX_PAVE_ZONES_PER_OWNER = 12;
+export const MAX_PAVE_ZONES_PER_SHOT = 8;
+export const GRAPPLE_SWEEP_STEP = 4;
 export const EFFECT_TICK = 0.1;          // shared cadence for zone chill + sentry contact
 export const ORBIT_RING_EASE = 10;       // 1/s the halo ring eases toward its target radius
 export const SENTRY_CONTACT_CD = 0.4;    // seconds between enemy-contact chews on a sentry

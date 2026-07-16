@@ -560,6 +560,42 @@ export const WAVE_SOUNDS = {
     stem: "sfx/pathmaker_fire", variants: 1, takes: [], gain: 0.55, bus: "sfx",
     priority: WAVE_PRIORITY.weapon, jitter: 0, spatial: true,
   },
+  "oddsmaker.ricochet": {
+    stem: "sfx/oddsmaker_ricochet", variants: 1, takes: [], gain: 0.7, bus: "sfx",
+    priority: WAVE_PRIORITY.weapon, jitter: 0, spatial: true,
+  },
+  "oddsmaker.seeker": {
+    stem: "sfx/oddsmaker_seeker", variants: 1, takes: [], gain: 0.7, bus: "sfx",
+    priority: WAVE_PRIORITY.weapon, jitter: 0, spatial: true,
+  },
+  "oddsmaker.blast": {
+    stem: "sfx/oddsmaker_blast", variants: 1, takes: [], gain: 0.75, bus: "sfx",
+    priority: WAVE_PRIORITY.weapon, jitter: 0, spatial: true,
+  },
+  "oddsmaker.pierce": {
+    stem: "sfx/oddsmaker_pierce", variants: 1, takes: [], gain: 0.7, bus: "sfx",
+    priority: WAVE_PRIORITY.weapon, jitter: 0, spatial: true,
+  },
+  "blessing.holdFast": {
+    stem: "sfx/blessing_hold_fast", variants: 1, takes: [], gain: 0.35, bus: "sfx",
+    priority: WAVE_PRIORITY.impact, jitter: 0, spatial: true,
+  },
+  "blessing.nothingWasted": {
+    stem: "sfx/blessing_nothing_wasted", variants: 1, takes: [], gain: 0.4, bus: "sfx",
+    priority: WAVE_PRIORITY.impact, jitter: 0, spatial: true,
+  },
+  "blessing.muddy": {
+    stem: "sfx/blessing_muddy", variants: 1, takes: [], gain: 0.35, bus: "sfx",
+    priority: WAVE_PRIORITY.impact, jitter: 0, spatial: true,
+  },
+  "blessing.onBeat": {
+    stem: "sfx/blessing_on_beat", variants: 1, takes: [], gain: 0.35, bus: "sfx",
+    priority: WAVE_PRIORITY.impact, jitter: 0, spatial: true,
+  },
+  "blessing.sharedRope": {
+    stem: "sfx/blessing_shared_rope", variants: 1, takes: [], gain: 0.4, bus: "sfx",
+    priority: WAVE_PRIORITY.impact, jitter: 0, spatial: true,
+  },
   "mortarDetonate": {
     stem: "sfx/thumper_impact_v1", variants: 1, gain: 0.9, bus: "sfx", priority: WAVE_PRIORITY.impact,
     jitter: 0.05, spatial: true,
@@ -1907,6 +1943,21 @@ export const STATUS_AUDIO: Readonly<Record<string, WaveEventId>> = {
   shock: "status.shockApply",
   freeze: "status.freeze",
   freezeBreak: "status.freezeBreak",
+};
+
+export const ODDSMAKER_OUTCOME_AUDIO = {
+  ricochet: "oddsmaker.ricochet",
+  seeker: "oddsmaker.seeker",
+  blast: "oddsmaker.blast",
+  pierce: "oddsmaker.pierce",
+} as const satisfies Readonly<Record<string, WaveEventId>>;
+
+export const BLESSING_PROC_AUDIO: Readonly<Record<string, WaveEventId>> = {
+  hold_fast: "blessing.holdFast",
+  nothing_wasted: "blessing.nothingWasted",
+  second_breath_muddy: "blessing.muddy",
+  on_the_beat: "blessing.onBeat",
+  shared_rope: "blessing.sharedRope",
 };
 
 export const BEAM_WEAPON_ID = "beam";

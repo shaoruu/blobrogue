@@ -724,7 +724,7 @@ export const ARSENAL: Record<WeaponId, WeaponManifestEntry> = {
     },
     idealRange: "mid", target: "pack",
     strength: "Every outcome edits the room differently: bank, seek, blast, or pierce.",
-    weakness: "No outcome can be demanded twice; a poor roll against the current shape costs the full cycle.",
+    weakness: "No outcome can be demanded; repeats are possible, and a poor roll costs the full cycle.",
     resource: "none", status: "none",
     modifiers: "Standard shot modifiers apply; the four equally weighted payload verbs remain authored.",
     audio: "shootOddsmaker",

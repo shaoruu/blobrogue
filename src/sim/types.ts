@@ -368,6 +368,8 @@ export type WeaponId =
 // Drop-quality tier. Drives drop weighting (legendaries are genuinely rare and gated off
 // the earliest floors), the pickup/hotbar/tooltip rarity treatment, and shop pricing.
 export type WeaponRarity = "common" | "rare" | "legendary";
+export type SluiceMode = "flood" | "drain";
+export type OddsmakerOutcome = "ricochet" | "seeker" | "blast" | "pierce";
 
 // A mystery pickup's baked reveal twist: a small buff or a small drawback rolled at spawn
 // (deterministic from the seed), so opening one is a real gamble — never a dead result.
@@ -534,6 +536,11 @@ export interface Bullet {
   isPaving?: boolean;
   grapplePull?: number;
   reclaimedBounceDamage?: number;
+  paintZonesLeft?: number;
+  shotSeq?: number;
+  enemyHits?: number;
+  sluiceMode?: SluiceMode;
+  oddsmakerOutcome?: OddsmakerOutcome;
   // Elemental status a bullet stamps on the enemy it hits (see applyBulletStatuses).
   // Undefined on plain rounds; the value is the status duration in seconds.
   burn?: number;           // seconds of burn DoT the round applies
@@ -740,11 +747,13 @@ export interface RemotePlayer {
   facing: number;
   hp: number; maxHp: number;
   weapon: WeaponId;
+  isSluiceDrain: boolean;
   floor: number;
   isDown: boolean;
   // Authoritative revive-channel progress on THIS (downed) player, in seconds — drives the
   // reviver-side progress ring. 0 when up / not being revived / on the legacy co-op path.
   reviveProgress: number;
+  reviveBy: PlayerId | null;
   // Past the floor's down limit (gate §1): down AND unrevivable until the descent rescue —
   // teammates stop being prompted to revive. Always false on the legacy co-op path.
   isOut: boolean;

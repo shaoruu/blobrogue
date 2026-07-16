@@ -8,14 +8,20 @@
 // remote-hurt) are presence-driven CLIENT-only and are NOT SimEvents in Stage A.
 
 import type { PlayerId } from "./input.js";
-import type { WeaponId, EnemyKind, PickupKind, PropKind, FloorHazardKind } from "./types.js";
+import type {
+  WeaponId, EnemyKind, PickupKind, PropKind, FloorHazardKind, SluiceMode, OddsmakerOutcome,
+} from "./types.js";
 import type { ShopSlotKind } from "./shop.js";
 
 export type SimEvent =
   // combat — player
   // chg: the released charge fraction (0..1) on hold-release weapons, 0 on everything
   // else — the client picks the TIER release cue (distinct stems, never pitch tiers).
-  | { t: "shot"; pid: PlayerId; weapon: WeaponId; x: number; y: number; aim: number; px: number; py: number; chg: number }
+  | {
+    t: "shot"; pid: PlayerId; weapon: WeaponId; x: number; y: number; aim: number;
+    px: number; py: number; chg: number;
+    mode: SluiceMode | "none"; outcome: OddsmakerOutcome | "none";
+  }
   | { t: "meleeSwing"; pid: PlayerId; weapon: WeaponId; x: number; y: number; aim: number; bx: number; by: number }
   // combat — enemy damage
   | { t: "enemyHit"; eid: number; dmgX: number; dmgY: number; dmg: number; crit: boolean; puffX: number; puffY: number; puffColor: string; melee: boolean; closeShotgun: boolean; killed: boolean }
@@ -41,6 +47,9 @@ export type SimEvent =
   // (server-authoritative), plus the comedic bonk FX every nearby client replays. dir is
   // the (normalized) bullet vector the nudge pushes along; x,y is the contact point.
   | { t: "friendlyNudge"; shooterId: PlayerId; targetId: PlayerId; x: number; y: number; dirX: number; dirY: number }
+  | { t: "grappleResolved"; pid: PlayerId; x: number; y: number; tx: number; ty: number; dx: number; dy: number }
+  | { t: "blessingProc"; pid: PlayerId; item: string; phase: string; x: number; y: number }
+  | { t: "reviveHandoff"; pid: PlayerId; from: PlayerId; to: PlayerId; isBoosted: boolean; x: number; y: number }
   // pickups / loot
   | { t: "pickup"; pid: PlayerId; kind: PickupKind; x: number; y: number }
   | { t: "lootDrop"; x: number; y: number; color: string }
