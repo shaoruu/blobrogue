@@ -529,7 +529,7 @@ function eventScopeTests(): void {
     // v14: a networked player's combat FX are POSITIONAL (delivered to nearby observers,
     // not only the actor), so a teammate's shot/hurt is seen + heard where it happens.
     [{ t: "playerHurt", pid: "p7", x: 1, y: 2 }, "pos"],
-    [{ t: "shot", pid: "p7", weapon: "pistol", x: 1, y: 2, aim: 0, px: 1, py: 2, chg: 0 }, "pos"],
+    [{ t: "shot", pid: "p7", weapon: "pistol", x: 1, y: 2, aim: 0, px: 1, py: 2, chg: 0, mode: "none", outcome: "none" }, "pos"],
     [{ t: "heal", pid: "p7", x: 1, y: 2 }, "pos"],
     [{ t: "pickup", pid: "p7", kind: "coin", x: 1, y: 2 }, "pos"],
     [{ t: "friendlyNudge", shooterId: "p7", targetId: "p8", x: 1, y: 2, dirX: 1, dirY: 0 }, "pos"],
