@@ -17,13 +17,20 @@ import type { Bullet, EnemyKind, WeaponId } from "../src/sim/types.js";
 import {
   BOSS_EXTRA_PELLET_COEF, BOSS_NATIVE_PELLET_COEF, WEAPON_BOSS_COEF, BOSS_VULN_CAP,
 } from "../src/sim/balance.js";
-import { itemById, createMods, recomputeMods, rollItemChoicesWith } from "../src/sim/items.js";
+import {
+  itemById, createMods, recomputeMods, normalItemsForCatalog, rollItemChoicesWith,
+} from "../src/sim/items.js";
 import type { PlayerMods } from "../src/sim/items.js";
-import { WEAPONS, PICKUP_WEAPONS } from "../src/sim/weapons.js";
+import { WEAPONS } from "../src/sim/weapons.js";
 import { Rng } from "../src/sim/rng.js";
 import { OVERDRIVE, ULT, ticksToSec } from "../src/sim/kits.js";
 import type { KitId } from "../src/sim/kits.js";
 import * as C from "../src/sim/constants.js";
+import {
+  CURRENT_CONTENT_CATALOG_VERSION,
+  contentCatalogFor,
+} from "../src/sim/contentCatalog.js";
+import type { ContentCatalogVersion } from "../src/sim/contentCatalog.js";
 
 export const DT = 1 / 60;
 
@@ -252,8 +259,10 @@ export function practicalBossDps(id: WeaponId, mods: PlayerMods): number {
 export const GOD_BUILD_COUNT = 100_000;
 export const GOD_PICK_COUNTS = [4, 8, 9, 12] as const;
 
-export function godBuildArsenal(): WeaponId[] {
-  return [...PICKUP_WEAPONS, "pistol"];
+export function godBuildArsenal(
+  catalogVersion: ContentCatalogVersion = CURRENT_CONTENT_CATALOG_VERSION,
+): WeaponId[] {
+  return [...contentCatalogFor(catalogVersion).pickupWeapons, "pistol"];
 }
 
 export interface LegalBuild {
@@ -263,14 +272,18 @@ export interface LegalBuild {
   mods: PlayerMods;
 }
 
-export function forEachLegalBuild(cb: (build: LegalBuild) => void): void {
+export function forEachLegalBuild(
+  cb: (build: LegalBuild) => void,
+  catalogVersion: ContentCatalogVersion = CURRENT_CONTENT_CATALOG_VERSION,
+): void {
   const rng = new Rng(0x60D5EED);
-  const arsenal = godBuildArsenal();
+  const arsenal = godBuildArsenal(catalogVersion);
+  const eligibleItems = normalItemsForCatalog(catalogVersion);
   for (let i = 0; i < GOD_BUILD_COUNT; i++) {
     const owned: string[] = [];
     const picks = GOD_PICK_COUNTS[i % GOD_PICK_COUNTS.length];
     for (let n = 0; n < picks; n++) {
-      const choices = rollItemChoicesWith(3, () => rng.next(), owned);
+      const choices = rollItemChoicesWith(3, () => rng.next(), owned, { eligibleItems });
       if (choices.length === 0) break;
       owned.push(choices[rng.int(0, choices.length - 1)].id);
     }
