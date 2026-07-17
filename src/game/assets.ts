@@ -230,6 +230,9 @@ SHEETS["gorge.attack"] = { src: "/sprites/gorge_shell_rind.png", fps: 2 };
 SHEETS["gorge_shell_chitin.idle"] = { src: "/sprites/gorge_shell_chitin.png", fps: 2 };
 SHEETS["gorge_shell_core.idle"] = { src: "/sprites/gorge_shell_core.png", fps: 2 };
 SHEETS["gorge_seam.idle"] = { src: "/sprites/gorge_shell_core.png", fps: 2 };
+// SEVER F55 — art hooks only (placeholder Weaver sheets); no generation this batch.
+SHEETS["sever.idle"] = { src: "/sprites/weaver2_px.png", fps: 2 };
+SHEETS["sever_anchor.idle"] = { src: "/sprites/weaver2_px.png", fps: 2 };
 
 // Tintable bullet-FX primitives (public/sprites/fx). Authored pure white with all
 // intensity in the alpha channel so a single source-in fill recolors them and they
@@ -377,6 +380,8 @@ const SOURCES: Record<SpriteName, string> = {
   gorge_shell_chitin: "/sprites/gorge_shell_chitin.png",
   gorge_shell_core: "/sprites/gorge_shell_core.png",
   gorge_seam: "/sprites/gorge_shell_core.png",
+  sever: "/sprites/weaver2_px.png",
+  sever_anchor: "/sprites/weaver2_px.png",
   // PATCH — the Dealer NPC (studio coherence gate: warm amber salvage-hauler). ART GATE:
   // generated separately via the locked FAL recipe; until patch.png lands the renderer
   // shows the flagged placeholder silhouette (never procedural character art). Poses ship

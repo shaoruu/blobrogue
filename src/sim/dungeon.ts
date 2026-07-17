@@ -752,26 +752,64 @@ export function generateDungeon(seed: number, floor: number): Dungeon {
   const last = chain[chain.length - 1];
   sealUnreachable(c, { x: first.cx, y: first.cy });
 
-  // Boss-floor 'arena' blueprint: spawn/objective = final arena room; the grand approach
-  // edge (last chain edge) is the chase path and already carved at width 3.
+  // Boss-floor encounter blueprint.
+  // - F50 Gorge (and other arena bosses): spawn/objective = final arena; grand approach width≥3.
+  // - F55 Sever (Batch1 OWNER LOCK): structureKind 'hunt' — spawn in an APPROACH room (not
+  //   last-arena-only); 3 checkpoint rooms along the chain; chaseEdgeIds = ≥2 chain edges of
+  //   width≥3 so Sever flees through explicit RoomEdges.
   let blueprint: EncounterBlueprint | null = null;
   if (bossArena !== null) {
-    const spawnRoomId = last.id;
-    const approachIdx = edges.length > 0 ? chain.length - 2 : -1; // chain edge index == rooms-1-1
-    // Chain edges were pushed first (indices 0..chain.length-2); the approach is the last of those.
-    const chaseEdgeIds: number[] = [];
-    if (chain.length >= 2) {
-      const approachEdge = edges.find((e) => !e.isShortcut && e.a === chain[chain.length - 2].id && e.b === last.id)
-        ?? edges.find((e) => !e.isShortcut && e.b === chain[chain.length - 2].id && e.a === last.id);
-      if (approachEdge) chaseEdgeIds.push(edges.indexOf(approachEdge));
+    const isHuntFloor = floor === 55; // SEVER_FLOOR — keep literal to avoid enemies↔dungeon cycle
+    if (isHuntFloor && chain.length >= 4) {
+      // Checkpoints: approach mid-band rooms (not spawn, not final exit-only). Prefer last 4 rooms.
+      const n = chain.length;
+      const cp0 = chain[Math.max(1, n - 4)].id;
+      const cp1 = chain[Math.max(1, n - 3)].id;
+      const cp2 = chain[Math.max(1, n - 2)].id;
+      const spawnRoomId = cp0;
+      const chaseEdgeIds: number[] = [];
+      const wantPairs = [[cp0, cp1], [cp1, cp2], [cp2, last.id]];
+      for (const [a, b] of wantPairs) {
+        let ei = edges.findIndex((e) => !e.isShortcut && ((e.a === a && e.b === b) || (e.a === b && e.b === a)));
+        if (ei < 0) ei = edges.findIndex((e) => (e.a === a && e.b === b) || (e.a === b && e.b === a));
+        if (ei >= 0) {
+          // Guarantee ≥3-wide authored flee route (boss body sized for it).
+          if (edges[ei].width < 3) edges[ei].width = 3;
+          chaseEdgeIds.push(ei);
+        }
+      }
+      // Ensure at least 2 chase edges if graph is thin.
+      if (chaseEdgeIds.length < 2) {
+        for (let i = 0; i < edges.length && chaseEdgeIds.length < 2; i++) {
+          if (!edges[i].isShortcut && chaseEdgeIds.indexOf(i) < 0) {
+            if (edges[i].width < 3) edges[i].width = 3;
+            chaseEdgeIds.push(i);
+          }
+        }
+      }
+      blueprint = {
+        structureKind: "hunt",
+        spawnRoomId,
+        objectiveRoomIds: [cp0, cp1, cp2],
+        chaseEdgeIds,
+      };
+    } else {
+      const spawnRoomId = last.id;
+      const approachIdx = edges.length > 0 ? chain.length - 2 : -1;
+      const chaseEdgeIds: number[] = [];
+      if (chain.length >= 2) {
+        const approachEdge = edges.find((e) => !e.isShortcut && e.a === chain[chain.length - 2].id && e.b === last.id)
+          ?? edges.find((e) => !e.isShortcut && e.b === chain[chain.length - 2].id && e.a === last.id);
+        if (approachEdge) chaseEdgeIds.push(edges.indexOf(approachEdge));
+      }
+      blueprint = {
+        structureKind: "arena",
+        spawnRoomId,
+        objectiveRoomIds: [spawnRoomId],
+        chaseEdgeIds,
+      };
+      void approachIdx;
     }
-    blueprint = {
-      structureKind: "arena",
-      spawnRoomId,
-      objectiveRoomIds: [spawnRoomId],
-      chaseEdgeIds,
-    };
-    void approachIdx;
   }
 
   return {

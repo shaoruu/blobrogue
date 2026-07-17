@@ -1990,6 +1990,46 @@ export function gorgeSeamCountFor(phase: number, players: number): number {
   return Math.min(GORGE.seamCap, base + (p - 1) * GORGE.seamPerPlayer);
 }
 
+// ---- SEVER (F55 HUNT/INTERCEPT — WORLDSPLIT signature) ----
+// Batch1 OWNER LOCK: true chase through connected rooms. Timings LOCKED at 20Hz:
+//   1.5s plant/tell → 1.2s moving fracture → 3.0s reel-back punish (±1 tick).
+// ONE isBossKind core; resin anchors are mechanic bodies (never boss kinds).
+// Reuses Batch0 EncounterState (hunt) + RoomEdge flee graph. Escape never fails the run.
+export const SEVER = {
+  baseHp: 620,
+  baseHpFloor: 55,
+  phaseAt: [0.66, 0.33] as readonly number[],
+  phaseFloor: [0.58, 0.25] as readonly number[],
+  guardMult: 0.22,
+  windowBankFrac: 0.28,
+  contactDamage: 2,
+  entranceGrace: 1.2,
+  attackCd: [0, 2.6, 2.4, 2.2] as readonly number[],
+  // WORLDSPLIT timings (seconds) — authoritative at TICK_HZ=20; tests allow ±1 tick.
+  worldsplitPlant: 1.5,
+  worldsplitFracture: 1.2,
+  worldsplitPunish: 3.0,
+  // Flee / intercept
+  pressureRadius: 220,
+  fleeSpeedMult: 1.35,
+  escapeMeterMax: 3,          // escapes before route worsens (soft fail, never wipe)
+  anchorsPerCheckpoint: 2,    // trap both exits of a checkpoint room
+  anchorHp: 28,
+  interceptWindow: 3.0,       // earned damage window after both anchors break
+  roarDuration: 1.0,
+  roarDamageReduction: 0.35,
+  roarBulletClearRadius: 64,
+} as const;
+
+export function severHpForFloor(floor: number): number {
+  return anchoredBossHp(SEVER.baseHp, SEVER.baseHpFloor, floor);
+}
+
+export function severAnchorHpForFloor(floor: number): number {
+  return Math.max(1, anchoredBossHp(SEVER.anchorHp, SEVER.baseHpFloor, floor));
+}
+
+
 // ---- §5f the F10 MINIBOSS GAUNTLET (corrected gate §3, exact formula) ----
 // Three sequential CAPTAINS derived from calibrated Marrow HP — commander round10(.28×),
 // elite round10(.32×), brute round10(.40×), total 1.00× — with 5s intermissions after

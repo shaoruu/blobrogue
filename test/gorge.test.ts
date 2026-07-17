@@ -82,35 +82,37 @@ function propBlocksPoint(w: WorldState, x: number, y: number, r: number): boolea
 // ---- 1. F50 pin + the seeded rotation behind it ----
 
 function pinGates(): void {
-  section("F50 is ALWAYS the gorge giant (a fixed set-piece), F55+ rotation intact behind it");
+  section("F50 is ALWAYS the gorge giant (a fixed set-piece); F55 Sever pin; F60+ rotation intact");
   check("GORGE_FLOOR is 50", GORGE_FLOOR === 50);
   check("gorge is a boss kind (HP bar, chest, danger-end, HP scaling)", isBossKind("gorge"));
 
   const deepRoster: EnemyKind[] = ["marrow", "choir", "weaver", "gilded", "boss", "jet", "tithe", "quorum"];
   const seen = new Set<EnemyKind>();
-  let allGorge = true, f45Quorum = true, deterministic = true, noRepeat = true, neverGorge = true;
+  let allGorge = true, f45Quorum = true, allSever = true, deterministic = true, noRepeat = true, neverGorge = true;
   for (let s = 0; s < 80; s++) {
     const seed = 0x5EED + s * 977;
     if (bossKindForFloor(seed, 50) !== "gorge") allGorge = false;
     if (bossKindForFloor(seed, 45) !== "quorum") f45Quorum = false; // the authored chain up to F45 is untouched
-    // F50 is the gorge; the seeded rotation resumes at F55 and must never repeat back-to-back
-    // (nor pick the gorge, which is out of the pool).
-    let prev: EnemyKind | null = "gorge";
-    for (let floor = 55; floor <= 95; floor += 5) {
+    if (bossKindForFloor(seed, 55) !== "sever") allSever = false; // Batch1 Sever pin
+    // F50 gorge + F55 Sever are fixed; seeded rotation resumes at F60 and must never repeat
+    // back-to-back (nor pick the gorge, which is out of the pool).
+    let prev: EnemyKind | null = "sever";
+    for (let floor = 60; floor <= 95; floor += 5) {
       const a = bossKindForFloor(seed, floor);
       if (a !== bossKindForFloor(seed, floor)) deterministic = false;
       if (a === null || a === prev) noRepeat = false;
-      if (a === "gorge") neverGorge = false;
+      if (a === "gorge" || a === "sever") neverGorge = false;
       if (a !== null) seen.add(a);
       prev = a;
     }
   }
   check("floor 50 returns gorge for every seed (never a seeded rotation pick)", allGorge);
   check("the authored chain up to F45 is untouched (F45 is still Quorum)", f45Quorum);
-  check("F55+ deep rotation is a pure function of (seed, floor)", deterministic);
-  check("F55+ has no immediate repeats (nor against the F50 gorge override)", noRepeat);
-  check("the seeded rotation NEVER picks the gorge (it is a fixed set-piece, out of the pool)", neverGorge);
-  check("every seeded-roster boss still appears across F55-95 (variety survives the F50 pin)",
+  check("floor 55 returns sever for every seed (Batch1 fixed hunt set-piece)", allSever);
+  check("F60+ deep rotation is a pure function of (seed, floor)", deterministic);
+  check("F60+ has no immediate repeats (nor against the F55 Sever pin)", noRepeat);
+  check("the seeded rotation NEVER picks gorge/sever (fixed set-pieces, out of the pool)", neverGorge);
+  check("every seeded-roster boss still appears across F60-95 (variety survives the pins)",
     deepRoster.every((k) => seen.has(k)), [...seen].join(","));
 
   // The floor planner spawns the gorge (centered) at F50 with its full pool.

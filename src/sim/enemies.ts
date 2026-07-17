@@ -5,11 +5,11 @@ import { Rng } from "./rng.js";
 import { biomeIndexForFloor } from "./biomes.js";
 import {
   TIERS, BIOME_PRESSURE, BOSS, MARROW, CHOIR, WEAVER, GILDED, GAUNTLET,
-  JET, TITHE, QUORUM, GORGE,
+  JET, TITHE, QUORUM, GORGE, SEVER,
   MINIBOSS, ELITE_BULWARK, ELITE_COST_CAP, ENVELOPE, LIVE_CAPS, activeMoverCapFor,
   floorHpMult, floorSpeedMult, floorThreat, activeThreatCap, roundHalfToEven,
   bossHpForFloor, marrowHpForFloor, choirHpForFloor, weaverHpForFloor, gildedHpForFloor,
-  jetHpForFloor, titheHpForFloor, quorumHpForFloor, gorgeHpForFloor,
+  jetHpForFloor, titheHpForFloor, quorumHpForFloor, gorgeHpForFloor, severHpForFloor,
   captainHpForFloor, bossHpFracFor,
   coopMobHpMult, coopBossHpMult, coopThreatMult, coopKbResistMult,
   MAX_COMPLEX_PER_ROOM, BRUTE_ELITE_COMBO_FLOOR,
@@ -386,6 +386,19 @@ export const ENEMY_ARCHETYPES: Record<EnemyKind, EnemyArchetype> = {
     radius: 13, drawSize: 34, alpha: 1, tint: "#ffcf6b", kbResist: 100,
     baseHp: GORGE.seamHp, baseSpeed: 0, touchDamage: 0, threat: 0.25,
   },
+  // SEVER (F55 HUNT/INTERCEPT): ONE chase core (isBossKind). Flees through RoomEdges;
+  // signature WORLDSPLIT. Placeholder art reuses Weaver sheets (hooks only).
+  sever: {
+    kind: "sever", sprite: "sever", movement: "boss", isPhasing: false,
+    radius: 28, drawSize: 72, alpha: 1, tint: "#c8b4ff", kbResist: 40,
+    baseHp: severHpForFloor(SEVER.baseHpFloor), baseSpeed: 95, touchDamage: SEVER.contactDamage, threat: 0,
+  },
+  // Resin ANCHOR tooth — mechanic body (trap both checkpoint exits). Never a boss kind.
+  sever_anchor: {
+    kind: "sever_anchor", sprite: "sever_anchor", movement: "drift", isPhasing: false,
+    radius: 14, drawSize: 36, alpha: 1, tint: "#e8d6ff", kbResist: 100,
+    baseHp: SEVER.anchorHp, baseSpeed: 0, touchDamage: 0, threat: 0.25,
+  },
 };
 
 // Which archetypes each tier may inhabit: swarms are small fast bodies, brutes are the
@@ -425,6 +438,7 @@ export const ELITE_AFFIXES: Readonly<Record<EnemyKind, EliteAffix>> = {
   tithe_tribute: "brace", quorum_splinter: "brace", // surplus adds never roll elite
   jet_echo: "brace", // JET's mirror echo is a summon-only reflection, never an elite roll
   gorge: "brace", gorge_seam: "brace", // the giant + its weak-points never roll elite
+  sever: "brace", sever_anchor: "brace", // Sever + resin anchors never roll elite
 };
 
 export function eliteAffixOf(kind: EnemyKind): EliteAffix {
@@ -439,7 +453,7 @@ export function isBossFloor(floor: number): boolean {
 // Only the three FIGHT bodies are boss kinds (chest drop, danger-end, HP scaling, the
 // HUD bar). The Tithe's slab and the Quorum husks are satellite/mechanic bodies, never
 // boss kinds themselves.
-const BOSS_KINDS: readonly EnemyKind[] = ["boss", "marrow", "choir", "weaver", "gilded", "jet", "tithe", "quorum", "gorge"];
+const BOSS_KINDS: readonly EnemyKind[] = ["boss", "marrow", "choir", "weaver", "gilded", "jet", "tithe", "quorum", "gorge", "sever"];
 
 export function isBossKind(kind: EnemyKind): boolean {
   return BOSS_KINDS.indexOf(kind) !== -1;
@@ -459,6 +473,7 @@ const BOSS_DISPLAY_NAME: Readonly<Partial<Record<EnemyKind, string>>> = {
   tithe: "The Tithe",
   quorum: "Quorum",
   gorge: "The Gorge",
+  sever: "Sever",
 };
 
 export function bossDisplayName(kind: EnemyKind): string {
@@ -488,6 +503,7 @@ export const BOSS_KIN: Readonly<Partial<Record<EnemyKind, EnemyKind>>> = {
   // The GORGE giant summons NO adds itself (its threat is space-control patterns, not chasing);
   // this kin is only the approach-room escort the floor scatters (the Sump hoard).
   gorge: "skeleton",
+  sever: "bat", // approach escort only; Sever summons no chase adds itself
 };
 
 // The F10 Arena Gauntlet floor (curriculum §2): sequential authored minibosses instead of
@@ -535,19 +551,28 @@ export function minibossHpForFloor(kind: EnemyKind, floor: number): number {
 // never repeats the F30 Choir finale).
 export function bossKindForFloor(seed: number, floor: number): EnemyKind | null {
   // F50 is the GORGE GIANT — a FIXED set-piece (the Sump cap), NOT part of the seeded deep
-  // rotation. The special-case is a pure early return, so it never touches the RNG: the seeded
-  // ladder below (F55+) is byte-identical to before this override — deepBossIndex still walks
-  // from the F45 Quorum finale, so F55's "no immediate repeats" reads exactly as it always did
-  // (F55 trivially never repeats the gorge, which the rotation can't pick).
+  // rotation. Pure early return (no RNG touch).
   if (floor === GORGE_FLOOR) return "gorge";
+  // F55 is SEVER — FIXED HUNT/INTERCEPT set-piece (Batch1 OWNER LOCK). Also an early return so
+  // the seeded deep rotation (F60+) stays deterministic. deepBossIndex step 0 still treats the
+  // F45 Quorum as predecessor; F55's Sever pin simply skips the first rotation slot that used
+  // to live at F55 (now F60 is step 0 of the deep walk — see SEVER_FLOOR comment).
+  if (floor === SEVER_FLOOR) return "sever";
   const ladder = Math.floor(floor / BOSS_EVERY);
   if (ladder <= AUTHORED_BOSS_LADDER.length) return AUTHORED_BOSS_LADDER[Math.max(1, ladder) - 1];
-  return DEEP_BOSS_ROSTER[deepBossIndex(seed, ladder - AUTHORED_BOSS_LADDER.length - 1)];
+  // Deep rotation resumes at F60 (= first seeded step after authored chain + Gorge + Sever pins).
+  // step = ladder - authoredLen - 1 (Gorge consumed the old F50 slot) - 1 (Sever consumes F55).
+  const deepStep = ladder - AUTHORED_BOSS_LADDER.length - 1 - 1;
+  if (deepStep < 0) return DEEP_BOSS_ROSTER[deepBossIndex(seed, 0)];
+  return DEEP_BOSS_ROSTER[deepBossIndex(seed, deepStep)];
 }
 
 // The floor the GORGE giant caps (the Sump). Kept as a named constant so the F75 Pale Throne /
 // F100 Unmaker giants (which inherit this LOCKED template) slot in the same way.
 export const GORGE_FLOOR = 50;
+
+// F55 SEVER HUNT/INTERCEPT (Batch1 OWNER LOCK) — fixed set-piece, not seeded rotation.
+export const SEVER_FLOOR = 55;
 
 // Walk the seeded ladder from the top so "no immediate repeats" is well-defined and
 // deterministic at any depth (each step rerolls, shifting off the previous pick). Step 0
@@ -576,6 +601,7 @@ export function enemyHpForFloor(kind: EnemyKind, floor: number): number {
     case "tithe": return titheHpForFloor(floor);
     case "quorum": return quorumHpForFloor(floor);
     case "gorge": return gorgeHpForFloor(floor);
+    case "sever": return severHpForFloor(floor);
     default: return roundHalfToEven(ENEMY_ARCHETYPES[kind].baseHp * floorHpMult(floor));
   }
 }
@@ -686,6 +712,7 @@ const BOSS_ENTRANCE_GRACE: Readonly<Partial<Record<EnemyKind, number>>> = {
   weaver: WEAVER.entranceGrace, gilded: GILDED.entranceGrace,
   jet: JET.entranceGrace, tithe: TITHE.entranceGrace, quorum: QUORUM.entranceGrace,
   gorge: GORGE.entranceGrace,
+  sever: SEVER.entranceGrace,
 };
 
 // The summoner bosses run a cadence add drip; the Choir's timer paces its earned-window
@@ -1150,12 +1177,15 @@ export function spawnFloorEnemies(dungeon: Dungeon, seed: number, floor: number,
 
   if (isBossFloor(floor)) {
     // The floor's boss lives in the last room (next to the exit), with a few of its own
-    // kin for company (slimes under the King, skeletons under MARROW, ghosts under the
-    // Choir, bats under the Weaver, shielders under the Gilded Warden).
+    // kin for company — EXCEPT Sever F55, which spawns in the hunt blueprint's approach room
+    // (Batch1: spawn ≠ forced last-arena-only).
     const active: Enemy[] = [];
     const bossKind = bossKindForFloor(seed, floor) ?? "boss";
     const minionKind: EnemyKind = BOSS_KIN[bossKind] ?? "slime";
-    const bossRoom = roomCount - 1;
+    const bpSpawn = dungeon.blueprint?.spawnRoomId;
+    const bossRoom = (bossKind === "sever" && bpSpawn !== undefined && bpSpawn >= 0 && bpSpawn < roomCount)
+      ? bpSpawn
+      : roomCount - 1;
     // pointInRoom is called unconditionally (it advances the seeded RNG the same way for every
     // boss). The GORGE giant is a STATIONARY set-piece that must anchor at the arena CENTER so
     // its radial rings/spokes have symmetric dodge space on every side (a wall-hugged giant would

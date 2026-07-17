@@ -96,6 +96,9 @@ export const AIMED_MOVES: Readonly<Record<AttackMove, boolean>> = {
   // Tithe's two-stage spew is a lobbed area pattern that keeps its body facing.
   tracer: true, beam: true, hurl: true, spew: false,
   rip: false, // the rotating debris wheel keeps its body facing (fixed spin, not aimed)
+  // Batch1 Sever F55: WORLDSPLIT is a planted fracture lane — body keeps travel facing
+  // through plant/fracture/punish (aim is encoded in the fracture geometry, not pose).
+  worldsplit: false,
 };
 
 // The renderer-facing pose contract: everything a draw pass (or the AD's sheet set)

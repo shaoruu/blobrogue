@@ -71,6 +71,7 @@ export const ENEMY_WAVE: Readonly<Record<EnemyKind, EnemyWave>> = {
   // GORGE (F50 giant) is boss-grade; its tectonic weak-point is a Wave-B mechanic body (a
   // summon, never in a common deck — like the Weaver's knot).
   gorge: "boss", gorge_seam: "B",
+  sever: "boss", sever_anchor: "B",
 };
 
 // Topology workers: bodies whose commitment EDITS the room (persistent destructible
@@ -101,6 +102,7 @@ export const WAVE_B_SYNTHESIS: Readonly<Partial<Record<EnemyKind, readonly Enemy
   quorum_splinter: ["skeleton"],       // the aggressor-chaser verb, a role-echo shard
   jet_echo: ["spitter"],               // the ranged warn/lock/fire verb, turned into your own reflection
   gorge_seam: ["caskbellows"],         // the locked-lane shoot-this-target lesson, made a tectonic weak-point (like the knot/sac)
+  sever_anchor: ["caskbellows"],       // shoot-this-target resin tooth (intercept trap)
 };
 
 // Biome specialists (the capacity envelope's third bucket): archetypes whose identity
@@ -306,6 +308,8 @@ export const ENEMY_MOVESET: Readonly<Record<EnemyKind, readonly AttackMove[]>> =
   // telegraphed danger-move), so they add no move here; its weak-point body commits nothing.
   gorge: ["slam", "spew", "sweep", "roar"],
   gorge_seam: [],
+  sever: ["worldsplit", "roar"],
+  sever_anchor: [],
 };
 
 // ---- the directional-art contract (QA render manifest) ----
@@ -373,6 +377,8 @@ export const SPRITE_CONTRACT: Readonly<Record<EnemyKind, SpriteContract>> = {
   // the decoy (idle-loop) contract like the other mechanic bodies.
   gorge: "mass",
   gorge_seam: "decoy",
+  sever: "directional_walk", // placeholder: reuses Weaver walk sheets
+  sever_anchor: "decoy",
 };
 
 // ---- band helpers (the 5-floor intro-cadence unit) ----

@@ -80,6 +80,7 @@ export const AUDIO_BEHAVIOR: Readonly<Record<EnemyKind, AudioBehavior>> = {
   tithe_tribute: "hunt", quorum_splinter: "hunt", // surplus adds: simple chasers
   jet_echo: "kite", // the reflection warns, locks, and fires ONE salvo (ranged-hold grammar)
   gorge: "boss", gorge_seam: "decoy", // the F50 giant + its planted weak-point (decoy grammar)
+  sever: "boss", sever_anchor: "decoy",
 };
 
 // ---- body materials ----
@@ -130,6 +131,7 @@ export const AUDIO_MATERIAL: Readonly<Record<EnemyKind, AudioMaterial>> = {
   // Weaver's lattice mechanic-body rows (chitin, like the Tithe slab) — until the audio director's
   // bespoke giant stems land (half-time footfall + colossal downbeat; see the manifest).
   gorge: "gold", gorge_seam: "chitin",
+  sever: "gold", sever_anchor: "chitin",
 };
 
 // SAME-MATERIAL fallback law: until a row's generated stem lands, its declared fallback
@@ -307,6 +309,12 @@ export const BESTIARY_CUES: Readonly<Record<EnemyKind, Readonly<Record<string, W
     recover: "warden.exposed", entrance: "gilded.entrance", phase: "warden.phase", special: "warden.glyphWarn", death: "warden.death",
   },
   gorge_seam: { fuse: "weaver.latticeWarn", toll: "weaver.latticeFire" },
+  // SEVER F55 — PLACEHOLDER (Weaver bank); display-facing name WORLDSPLIT.
+  sever: {
+    windup: "weaver.blinkTell", lock: "weaver.latticeWarn", active: "weaver.blinkDepart", impact: "weaver.blinkArriveStrike",
+    recover: "weaver.recover", entrance: "weaver.entrance", phase: "weaver.phase", special: "weaver.latticeFire", death: "weaver.death",
+  },
+  sever_anchor: { fuse: "weaver.latticeWarn", toll: "weaver.latticeFire" },
 };
 
 export function bestiaryCue(kind: EnemyKind, hook: string): WaveEventId | null {
