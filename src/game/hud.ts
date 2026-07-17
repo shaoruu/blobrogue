@@ -188,6 +188,11 @@ export function encounterObjectiveCopy(enc: HudState["encounter"]): string | nul
     const pip = enc.carrierId ? " \u25cf" : "";
     return `THE LAST NOTE \u00b7 SILENCE ${pct}% \u00b7 PHRASE ${enc.checkpoint}${pip}`;
   }
+  // Undertow F65 escape: story name THE RIVER COMES BACK on the objective lane.
+  if (enc.kind === "escape") {
+    const pip = enc.carrierId ? " \u25cf" : "";
+    return `THE RIVER COMES BACK \u00b7 ESCAPE ${pct}% \u00b7 CP ${enc.checkpoint}${pip}`;
+  }
 
   return `OBJECTIVE ${pct}% \u00b7 CP ${enc.checkpoint}`;
 }

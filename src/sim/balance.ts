@@ -307,6 +307,7 @@ export const AMBER_EARN = {
 export const BOSS_KINDS = [
   "boss", "marrow", "weaver", "gilded", "choir", "jet", "tithe", "quorum",
   "choirmaster",
+  "undertow",
 ] as const;
 
 export function isBossKindId(kind: string): boolean {
@@ -2118,6 +2119,52 @@ export function choirmasterHpForFloor(floor: number): number {
 export function choirPillarHpForFloor(floor: number): number {
   return Math.max(1, anchoredBossHp(CHOIRMASTER.pillarHp, CHOIRMASTER.baseHpFloor, floor));
 }
+// ---- UNDERTOW (F65 STEAL/ESCAPE — THE RIVER COMES BACK signature) ----
+// Batch2B OWNER LOCK: reverse-floor pursuit (structureKind 'escape'). Timings LOCKED at 20Hz:
+//   1.6s full-width flood tell → 1.2s advancing front through current room → 3.5s forced-manifestation punish (±1 tick).
+// ONE isBossKind undertow when manifested; warm_pulse / relief_vent / flood front = mechanic entities.
+// Success = deposit Warm Pulse in highlighted relief vent before front arrives → openBossWindow(3.5).
+// Survival = drop Pulse + shelter in marked alcove (no window). Failure = capped hit+KB; never wipe.
+// BLACK_TIDE retired — story name THE RIVER COMES BACK everywhere (wire: river_comes_back).
+// BALANCER_TODO: Quill owns final HP/TTK/bank — provisional calibration only.
+export const UNDERTOW = {
+  baseHp: 720, // BALANCER_TODO
+  baseHpFloor: 65,
+  phaseAt: [0.66, 0.33] as readonly number[],
+  phaseFloor: [0.58, 0.25] as readonly number[],
+  guardMult: 0.24, // BALANCER_TODO
+  windowBankFrac: 0.26, // BALANCER_TODO
+  contactDamage: 2,
+  entranceGrace: 1.4,
+  attackCd: [0, 3.0, 2.7, 2.4] as readonly number[],
+  // THE RIVER COMES BACK timings (seconds) — authoritative at TICK_HZ=20; tests allow ±1 tick.
+  riverTell: 1.6,
+  riverFront: 1.2,
+  riverPunish: 3.5,
+  // Escape / Pulse / vents
+  pressureRadius: 240,
+  floodSpeed: 140,          // front advance (px/s) along current room/edge
+  pulsePickupGrace: 1.5,    // seconds after carrier leave before Pulse is world-pickup
+  ventHp: 1,                // deposit target — contact/interact, not a DPS sponge
+  pulseHp: 1,
+  ventsPerRoute: 3,         // relief vents along reverse journey
+  alcoveHalfWidth: 28,      // marked shelter radius for survival
+  riverFrontDamage: 2,      // soft capped failure hit
+  riverFrontKb: 180,
+  roarDuration: 1.0,
+  roarDamageReduction: 0.35,
+  roarBulletClearRadius: 72,
+  manifestHpFrac: 0.0,      // manifested body uses full undertow HP pool
+} as const;
+
+export function undertowHpForFloor(floor: number): number {
+  return anchoredBossHp(UNDERTOW.baseHp, UNDERTOW.baseHpFloor, floor);
+}
+
+export function undertowVentHpForFloor(floor: number): number {
+  return Math.max(1, anchoredBossHp(UNDERTOW.ventHp, UNDERTOW.baseHpFloor, floor));
+}
+
 // ---- PALE THRONE (F75 GIANT #2 — the Pale region cap; the SECOND giant, reusing the AD-LOCKED
 // Gorge shell-peel template EXACTLY via the shared giant-encounter core) ----
 // A colossal ~192px STATIONARY front-facing set-piece PINNED to floor 75, mechanically IDENTICAL

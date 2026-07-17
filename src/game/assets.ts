@@ -238,6 +238,12 @@ SHEETS["sever_anchor.idle"] = { src: "/sprites/weaver2_px.png", fps: 2 };
 SHEETS["choirmaster.idle"] = { src: "/sprites/choir_idle.png", fps: 6 };
 SHEETS["choirmaster.attack"] = { src: "/sprites/choir_attack.png", fps: 10 };
 SHEETS["choir_pillar.idle"] = { src: "/sprites/choir.png", fps: 2 };
+// UNDERTOW F65 — placeholder Weaver/Choir art (hooks only; no generation this batch).
+// Display-facing signature THE RIVER COMES BACK; stems use undertow.river* pattern.
+registerDirectionalSet("undertow", { walkFps: 6, fileBase: "weaver2_px" });
+SHEETS["warm_pulse.idle"] = { src: "/sprites/choir.png", fps: 4 };
+SHEETS["relief_vent.idle"] = { src: "/sprites/weaver2_px.png", fps: 2 };
+SHEETS["flood_front.idle"] = { src: "/sprites/choir.png", fps: 2 };
 
 // PALE THRONE (F75 GIANT #2 — AD-LOCKED committed COLD-material art, wire never regenerate): three
 // single-frame SHELL states the renderer swaps off boss.phase, inheriting the Gorge peel-reveal
@@ -401,6 +407,10 @@ const SOURCES: Record<SpriteName, string> = {
   sever_anchor: "/sprites/weaver2_px.png",
   choirmaster: "/sprites/choir.png",
   choir_pillar: "/sprites/choir.png",
+  undertow: "/sprites/weaver2_px.png",
+  warm_pulse: "/sprites/choir.png",
+  relief_vent: "/sprites/weaver2_px.png",
+  flood_front: "/sprites/choir.png",
   // PALE THRONE (F75 GIANT — AD-LOCKED committed art): the cold shell states the renderer swaps
   // off boss.phase (base "pale" = the stone/dormant shell), plus the small cold weak-point chunk.
   pale: "/sprites/pale_shell_stone.png",

@@ -89,6 +89,13 @@ export type EnemyKind =
   //  - choir_pillar: resonating pillar (mechanic body) in a linked lobe — silence the CURRENT
   //    live pillar to advance the phrase; wrong/dormant wakes pressure, never a wipe.
   | "choirmaster" | "choir_pillar"
+  // UNDERTOW (F65 STEAL/ESCAPE — Batch2B OWNER LOCK): ONE isBossKind when manifested.
+  // Reverse-floor pursuit (structureKind 'escape'). Signature THE RIVER COMES BACK
+  // (wire: "river_comes_back"). BLACK_TIDE retired — never revive.
+  //  - warm_pulse: carried Warm Pulse prop (mechanic body / world-pickup) — steal then deposit.
+  //  - relief_vent: highlighted deposit / relief vent along the reverse route (mechanic).
+  //  - flood_front: untargetable advancing flood marker (mechanic, never a second boss core).
+  | "undertow" | "warm_pulse" | "relief_vent" | "flood_front"
   // PALE THRONE (F75 GIANT #2 — the Pale region cap): the SECOND giant, inheriting the Gorge
   // shell-peel grammar EXACTLY (a ~192px STATIONARY front-facing set-piece pinned to floor 75,
   // shared giant-encounter core), with the MATERIAL swapped to COLD warmth-drain (a blazing
@@ -157,7 +164,11 @@ export type AttackMove =
   // HOLLOW CHOIRMASTER F60 signature — THE LAST NOTE: 1.6s silent inhale/gesture →
   // directional pressure sheet advances ~0.7s per linked span → 4.0s voiceless punish.
   // Display name THE LAST NOTE; wire id is the closed AttackMove.
-  | "last_note";
+  | "last_note"
+  // UNDERTOW F65 signature — THE RIVER COMES BACK: 1.6s flood tell → 1.2s advancing front →
+  // 3.5s punish window. Display name THE RIVER COMES BACK; wire id is the closed AttackMove.
+  // BLACK_TIDE retired — never revive.
+  | "river_comes_back";
 
 // Grouped so the whole attack subsystem lives in one cohesive place per enemy
 // (allocated once at spawn, never per frame).
@@ -913,6 +924,9 @@ export type SpriteName =
   // of warmth" (additive COLD glow, P3 only) — never amber. "pale_seam" is the small cold
   // weak-point crack-chunk, drawn small + additively lit as a peel target.
   | "pale" | "pale_shell_cracked" | "pale_shell_core" | "pale_seam"
+  // UNDERTOW (F65): placeholder art hooks only (reuse Weaver/Choir sheets) — no art generation.
+  // Signature display THE RIVER COMES BACK; mechanic bodies warm_pulse / relief_vent / flood_front.
+  | "undertow" | "warm_pulse" | "relief_vent" | "flood_front"
   | "patch"
   // Client-side cosmetic companion pets (META spec §3). A pure render key mapping to a
   // swappable placeholder asset; the sim never references it (pets are OUT of the sim). The

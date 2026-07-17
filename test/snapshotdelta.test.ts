@@ -355,7 +355,7 @@ function safetyTests(): void {
   const d = diffSnapshot(snapshotToWire(base), snapshotToWire(next), next.sseq, fullWorld(next));
   check("a delta advertises its baseline sseq so a client can refuse a gap", d.b === base.sseq && d.q === 7);
 
-  check("protocol version is current (v40: PVP private draft wire after Choirmaster v39)", PROTOCOL_VERSION === 40);
+  check("protocol version is current (v41: Undertow river_comes_back after Choirmaster)", PROTOCOL_VERSION === 41);
 }
 
 function main(): void {

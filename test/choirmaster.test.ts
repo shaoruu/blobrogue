@@ -10,7 +10,7 @@ import type { WorldState } from "../src/sim/world.js";
 import type { InputCmd } from "../src/sim/input.js";
 import { LOCAL_ID } from "../src/sim/input.js";
 import {
-  bossKindForFloor, CHOIRMASTER_FLOOR, SEVER_FLOOR, GORGE_FLOOR, PALE_FLOOR, isBossKind,
+  bossKindForFloor, CHOIRMASTER_FLOOR, SEVER_FLOOR, GORGE_FLOOR, UNDERTOW_FLOOR, PALE_FLOOR, isBossKind,
 } from "../src/sim/enemies.js";
 import { CHOIRMASTER } from "../src/sim/balance.js";
 import { generateDungeon, roomIdAt } from "../src/sim/dungeon.js";
@@ -46,11 +46,12 @@ function pinGates(): void {
   check("LAST NOTE inhale 1.6", CHOIRMASTER.lastNoteInhale === 1.6);
   check("LAST NOTE span 0.7", CHOIRMASTER.lastNoteSpan === 0.7);
   check("LAST NOTE punish 4.0", CHOIRMASTER.lastNotePunish === 4.0);
-  check("PROTOCOL_VERSION is 40 (PVP private draft after Choirmaster v39)", PROTOCOL_VERSION === 40);
+  check("PROTOCOL_VERSION is 41 (Undertow river_comes_back after Choirmaster)", PROTOCOL_VERSION === 41);
   for (const seed of [0x51a9eb0b, 0xC0FFEE, 42, 0xDEAD]) {
     check(`seed ${seed.toString(16)} F50=gorge`, bossKindForFloor(seed, GORGE_FLOOR) === "gorge");
     check(`seed ${seed.toString(16)} F55=sever`, bossKindForFloor(seed, SEVER_FLOOR) === "sever");
     check(`seed ${seed.toString(16)} F60=choirmaster`, bossKindForFloor(seed, CHOIRMASTER_FLOOR) === "choirmaster");
+    check(`seed ${seed.toString(16)} F65=undertow`, bossKindForFloor(seed, UNDERTOW_FLOOR) === "undertow");
     check(`seed ${seed.toString(16)} F75=pale`, bossKindForFloor(seed, PALE_FLOOR) === "pale");
   }
 }
