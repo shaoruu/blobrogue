@@ -4,7 +4,7 @@ import type { Enemy, EnemyKind, Bullet, Particle, DmgNumber, Pickup, WeaponId, A
 import { floorHazardPhaseAt, floorHazardPhaseFrac, RIFT_PULL_RADIUS } from "../sim/hazards.js";
 import type { FloorHazardPhase } from "../sim/hazards.js";
 import { Rng, randomSeed } from "../sim/rng.js";
-import { Sprites, TileSet, playerColor, playerColorOr, NEUTRAL_PLAYER_COLOR, FRAME, heroBodySprite } from "./assets.js";
+import { Sprites, TileSet, playerColor, playerColorOr, NEUTRAL_PLAYER_COLOR, FRAME, heroBodySprite, HELD_ART_ANGLE } from "./assets.js";
 import type { SpriteName, SheetClip, TileName, FxName, PropSpriteName } from "./assets.js";
 import { ENEMY_ARCHETYPES, isBossFloor, isBossKind, isGauntletFloor, eliteAffixOf, bossDisplayName } from "../sim/enemies.js";
 import { WEAPONS, WEAPON_RARITY_COLOR, MYSTERY_COLOR } from "../sim/weapons.js";
@@ -9658,15 +9658,6 @@ export class Game {
   // slightly on fire by recoil. Weapons without art fall back to the pistol overlay; if
   // even that isn't loaded yet it simply draws nothing. Melee never comes through here —
   // blades have their own aim-tracking, arc-sweeping path (renderHeldMelee).
-  // Per-weapon correction for guns whose ART is drawn on a diagonal (barrel not along +X).
-  // renderHeldWeapon rotates the sprite by (aim - artAngle) so the drawn barrel lands on the
-  // true aim — otherwise a 45deg-authored gun shoots ~45deg off its muzzle. Measured from the
-  // sprite's long axis; horizontally-authored guns (pistol/shotgun/...) need no entry (0).
-  private static readonly HELD_ART_ANGLE: Partial<Record<WeaponId, number>> = {
-    cleaver: -0.382, scrapper: -0.52, skipper: -0.557, arcbolt: -0.621, cryobolt: -0.487,
-    firebomb: -0.10, tracker: -0.632, singularity: -0.653, vortex: -0.775,
-  };
-
   private renderHeldWeapon(
     cx: number,
     cy: number,
@@ -9685,7 +9676,7 @@ export class Game {
     ctx.globalAlpha = alpha;
     ctx.translate(cx + Math.cos(aim) * anchor, cy + Math.sin(aim) * anchor);
     // Cancel the sprite's baked-in diagonal so the barrel points at the true aim.
-    ctx.rotate(aim - (Game.HELD_ART_ANGLE[weapon] ?? 0));
+    ctx.rotate(aim - (HELD_ART_ANGLE[weapon] ?? 0));
     if (Math.abs(aim) > Math.PI / 2) ctx.scale(1, -1);
     ctx.drawImage(img, -d / 2, -d / 2, d, d);
     ctx.restore();
