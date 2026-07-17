@@ -92,3 +92,6 @@ content-wave-c-audio-gen/
 ## waveSpec wiring
 For each stem with variants > 1: set `stem: "sfx/<stem>"`, `variants: N`, **remove** `takes: []` so `takeStemsOf` derives `_v1.._vN`.
 For variants == 1: set `stem: "sfx/<stem>_v1"`, `variants: 1`, remove `takes: []`.
+
+## PR
+- https://github.com/shaoruu/blobrogue/pull/173 (`ian/wave-c-gun-audio-0d28`)
