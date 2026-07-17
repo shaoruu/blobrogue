@@ -2416,7 +2416,7 @@ async function main(): Promise<void> {
     const kennel = byClass(overlay, "camp-kennel")[0];
     check("kennel lists all eight companions (original pack + pack #2)",
       kennel !== undefined
-      && ["Doggie", "Cat", "Baby Dragon", "Baby Slime", "Ember Fox", "Hollow Owlet", "Glow Mothling", "Rolly"].every((name) =>
+      && ["Doggie", "Cat", "Baby Dragon", "Baby Slime", "Wick", "Pebble", "Clatter", "Nullfin"].every((name) =>
         byClass(kennel, "camp-card").some((card) => textOf(card).includes(name))));
     const thumbs = byClass(overlay, "camp-card-thumb").filter((thumb) => thumb.tagName === "CANVAS");
     check("every Kennel pet card has a shared-render thumbnail canvas",
