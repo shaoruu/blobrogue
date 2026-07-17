@@ -1,0 +1,494 @@
+{
+  "schema_version": 1,
+  "build_id": "wake_procession_selected_remaster_2026_07_16",
+  "batch": "wake-procession-v1-selected",
+  "family": "wake_the_last_procession",
+  "story_name": "THE LAST PROCESSION",
+  "ear_gate_verdict": "SHIP_SELECTED_REMASTER_V1",
+  "ship_approved": true,
+  "notes": "Selected+remaster superseding #171. Canonical unversioned stems. DROP front_v3 + fail_v1. Denser lock_regen_v6 \u22640.35s. Onset trim ~8ms on front/blocker_highlight/punish/death. Mix: highpass+loudnorm+alimiter peak<0.89. BierPulse sparse one-shot. NIGHTFALL_PROCESSION retired forever.",
+  "retired_names": [
+    "NIGHTFALL_PROCESSION",
+    "NIGHTFALL PROCESSION"
+  ],
+  "rejected_takes": [
+    "front_v3",
+    "fail_v1",
+    "lock sparse (~87% silence)"
+  ],
+  "mix_contract": {
+    "af": "highpass=f=35,loudnorm=I={-14|-16|-18}:TP=-2.5:LRA=11,alimiter=limit=0.85",
+    "peak_max": 0.89,
+    "channels": "mono"
+  },
+  "selected_takes": [
+    {
+      "event": "wake.processionEntrance",
+      "shipped": "wake_procession_entrance.ogg",
+      "take": "entrance (sole)",
+      "duration": 1.5,
+      "peak": 0.7482,
+      "silence_pct": 28.8,
+      "onset_ms": 9.0
+    },
+    {
+      "event": "wake.processionPhase",
+      "shipped": "wake_procession_phase.ogg",
+      "take": "phase (sole)",
+      "duration": 1.3,
+      "peak": 0.7378,
+      "silence_pct": 46.8,
+      "onset_ms": 9.0
+    },
+    {
+      "event": "wake.processionDeath",
+      "shipped": "wake_procession_death.ogg",
+      "take": "death (sole) + onset trim",
+      "duration": 2.4,
+      "peak": 0.7663,
+      "silence_pct": 21.6,
+      "onset_ms": 9.0
+    },
+    {
+      "event": "wake.processionTell",
+      "shipped": "wake_procession_tell.ogg",
+      "take": "tell_v2 (rej v1)",
+      "duration": 1.5,
+      "peak": 0.7422,
+      "silence_pct": 41.9,
+      "onset_ms": 9.0
+    },
+    {
+      "event": "wake.processionLock",
+      "shipped": "wake_procession_lock.ogg",
+      "take": "lock_regen_v6 denser \u22640.35s (rej sparse lock)",
+      "duration": 0.355,
+      "peak": 0.7157,
+      "silence_pct": 49.4,
+      "onset_ms": 12.0
+    },
+    {
+      "event": "wake.processionFront",
+      "shipped": "wake_procession_front.ogg",
+      "take": "front_v1 (DROP front_v3) + onset trim",
+      "duration": 0.849,
+      "peak": 0.7424,
+      "silence_pct": 54.6,
+      "onset_ms": 9.0
+    },
+    {
+      "event": "wake.processionPunish",
+      "shipped": "wake_procession_punish.ogg",
+      "take": "punish (sole) + onset trim",
+      "duration": 0.878,
+      "peak": 0.7223,
+      "silence_pct": 65.8,
+      "onset_ms": 15.0
+    },
+    {
+      "event": "wake.processionRecover",
+      "shipped": "wake_procession_recover.ogg",
+      "take": "recover (sole)",
+      "duration": 0.754,
+      "peak": 0.736,
+      "silence_pct": 43.8,
+      "onset_ms": 9.0
+    },
+    {
+      "event": "wake.processionFail",
+      "shipped": "wake_procession_fail.ogg",
+      "take": "fail_v2 (DROP fail_v1)",
+      "duration": 0.549,
+      "peak": 0.7427,
+      "silence_pct": 32.5,
+      "onset_ms": 9.0
+    },
+    {
+      "event": "wake.processionBierPulse",
+      "shipped": "wake_procession_bier_pulse.ogg",
+      "take": "bier_pulse_v1",
+      "duration": 0.399,
+      "peak": 0.7419,
+      "silence_pct": 11.9,
+      "onset_ms": 9.0
+    },
+    {
+      "event": "wake.processionBierAdvance",
+      "shipped": "wake_procession_bier_advance.ogg",
+      "take": "bier_advance_v1",
+      "duration": 0.549,
+      "peak": 0.5751,
+      "silence_pct": 25.4,
+      "onset_ms": 9.0
+    },
+    {
+      "event": "wake.processionBlockerHighlight",
+      "shipped": "wake_procession_blocker_highlight.ogg",
+      "take": "blocker_highlight_v1 + onset trim",
+      "duration": 0.367,
+      "peak": 0.7079,
+      "silence_pct": 51.7,
+      "onset_ms": 15.0
+    },
+    {
+      "event": "wake.processionBlockerBreak",
+      "shipped": "wake_procession_blocker_break.ogg",
+      "take": "blocker_break_v2 denser",
+      "duration": 0.549,
+      "peak": 0.7449,
+      "silence_pct": 48.4,
+      "onset_ms": 9.0
+    },
+    {
+      "event": "wake.processionThreshold",
+      "shipped": "wake_procession_threshold.ogg",
+      "take": "threshold (sole)",
+      "duration": 0.649,
+      "peak": 0.7658,
+      "silence_pct": 32.6,
+      "onset_ms": 9.0
+    },
+    {
+      "event": "wake.processionShelter",
+      "shipped": "wake_procession_shelter.ogg",
+      "take": "shelter (sole)",
+      "duration": 0.399,
+      "peak": 0.74,
+      "silence_pct": 50.0,
+      "onset_ms": 15.0
+    },
+    {
+      "event": "wake.processionShadowWarn",
+      "shipped": "wake_procession_shadow_warn.ogg",
+      "take": "shadow_warn_v1",
+      "duration": 0.704,
+      "peak": 0.7343,
+      "silence_pct": 19.3,
+      "onset_ms": 9.0
+    }
+  ],
+  "selected_by_event": {
+    "wake.processionEntrance": [
+      "public/audio/boss/wake_procession_entrance.ogg"
+    ],
+    "wake.processionPhase": [
+      "public/audio/boss/wake_procession_phase.ogg"
+    ],
+    "wake.processionDeath": [
+      "public/audio/boss/wake_procession_death.ogg"
+    ],
+    "wake.processionTell": [
+      "public/audio/boss/wake_procession_tell.ogg"
+    ],
+    "wake.processionLock": [
+      "public/audio/boss/wake_procession_lock.ogg"
+    ],
+    "wake.processionFront": [
+      "public/audio/boss/wake_procession_front.ogg"
+    ],
+    "wake.processionPunish": [
+      "public/audio/boss/wake_procession_punish.ogg"
+    ],
+    "wake.processionRecover": [
+      "public/audio/boss/wake_procession_recover.ogg"
+    ],
+    "wake.processionFail": [
+      "public/audio/boss/wake_procession_fail.ogg"
+    ],
+    "wake.processionBierPulse": [
+      "public/audio/boss/wake_procession_bier_pulse.ogg"
+    ],
+    "wake.processionBierAdvance": [
+      "public/audio/boss/wake_procession_bier_advance.ogg"
+    ],
+    "wake.processionBlockerHighlight": [
+      "public/audio/boss/wake_procession_blocker_highlight.ogg"
+    ],
+    "wake.processionBlockerBreak": [
+      "public/audio/boss/wake_procession_blocker_break.ogg"
+    ],
+    "wake.processionThreshold": [
+      "public/audio/boss/wake_procession_threshold.ogg"
+    ],
+    "wake.processionShelter": [
+      "public/audio/boss/wake_procession_shelter.ogg"
+    ],
+    "wake.processionShadowWarn": [
+      "public/audio/boss/wake_procession_shadow_warn.ogg"
+    ]
+  },
+  "selected_files": [
+    {
+      "event": "wake.processionEntrance",
+      "ogg": "public/audio/boss/wake_procession_entrance.ogg",
+      "mp3": "public/audio/boss/wake_procession_entrance.mp3",
+      "ogg_sha256": "9005853e099b8001c2a5d9b5ce05f6438f80fd071d9229bce5f33f345b8c619f",
+      "mp3_sha256": "c9a97b416e49568e3f639cc659685ed7be485083d6a2448949ecddfd95e2384d",
+      "duration": 1.5,
+      "gain": 0.9,
+      "stem": "boss/wake_procession_entrance",
+      "mean_db": -19.4,
+      "max_db": -2.5,
+      "peak": 0.7482,
+      "silence_pct": 28.8,
+      "onset_ms": 9.0,
+      "source_take": "entrance (sole)",
+      "lufs_target": -14
+    },
+    {
+      "event": "wake.processionPhase",
+      "ogg": "public/audio/boss/wake_procession_phase.ogg",
+      "mp3": "public/audio/boss/wake_procession_phase.mp3",
+      "ogg_sha256": "da06b39afa31bbe87b96851a2cb3b7939dc15e526476ca587f8a18deaddaa96f",
+      "mp3_sha256": "00a6d524687251ce171eb5efded4d065a3a8375cffc2904baf1782dc2a81c09e",
+      "duration": 1.3,
+      "gain": 0.92,
+      "stem": "boss/wake_procession_phase",
+      "mean_db": -13.2,
+      "max_db": -2.6,
+      "peak": 0.7378,
+      "silence_pct": 46.8,
+      "onset_ms": 9.0,
+      "source_take": "phase (sole)",
+      "lufs_target": -14
+    },
+    {
+      "event": "wake.processionDeath",
+      "ogg": "public/audio/boss/wake_procession_death.ogg",
+      "mp3": "public/audio/boss/wake_procession_death.mp3",
+      "ogg_sha256": "f9fb22fe0ddea77026b06c859fd5bcf4462b263faf698ca215bcb66ba27da99f",
+      "mp3_sha256": "c491bb494d98d7de85c69d161cc2cfcbbede9e8a9c019ab6b73f8b7eb9832f63",
+      "duration": 2.4,
+      "gain": 1.0,
+      "stem": "boss/wake_procession_death",
+      "mean_db": -18.6,
+      "max_db": -2.3,
+      "peak": 0.7663,
+      "silence_pct": 21.6,
+      "onset_ms": 9.0,
+      "source_take": "death (sole) + onset trim",
+      "lufs_target": -14
+    },
+    {
+      "event": "wake.processionTell",
+      "ogg": "public/audio/boss/wake_procession_tell.ogg",
+      "mp3": "public/audio/boss/wake_procession_tell.mp3",
+      "ogg_sha256": "afebaad9e6a16b6493994fbd5ecf928b2ff3f5c85608cb0ab8c9032bc511a36a",
+      "mp3_sha256": "cf39330cf95e5caf7536bdf8f31c30da770e51d96746e8f63ba81ab7e5c32f9e",
+      "duration": 1.5,
+      "gain": 0.88,
+      "stem": "boss/wake_procession_tell",
+      "mean_db": -18.1,
+      "max_db": -2.6,
+      "peak": 0.7422,
+      "silence_pct": 41.9,
+      "onset_ms": 9.0,
+      "source_take": "tell_v2 (rej v1)",
+      "lufs_target": -16
+    },
+    {
+      "event": "wake.processionLock",
+      "ogg": "public/audio/boss/wake_procession_lock.ogg",
+      "mp3": "public/audio/boss/wake_procession_lock.mp3",
+      "ogg_sha256": "8f8df3eb4df018ebd6e14ab3943ebd0de5026d2266562a0dd96a11350b753a4c",
+      "mp3_sha256": "6224dbe980228daec67023d856e8afe094c81438a90b13ccbbf6b66b441344d6",
+      "duration": 0.355,
+      "gain": 1.0,
+      "stem": "boss/wake_procession_lock",
+      "mean_db": -20.9,
+      "max_db": -2.9,
+      "peak": 0.7157,
+      "silence_pct": 49.4,
+      "onset_ms": 12.0,
+      "source_take": "lock_regen_v6 denser \u22640.35s (rej sparse lock)",
+      "lufs_target": -16
+    },
+    {
+      "event": "wake.processionFront",
+      "ogg": "public/audio/boss/wake_procession_front.ogg",
+      "mp3": "public/audio/boss/wake_procession_front.mp3",
+      "ogg_sha256": "5b3fc65265a0afc3bf993dc17f114f8807d75621935905ba850e80ae4891bca8",
+      "mp3_sha256": "501796f0d5306cfd490adf1d7b4f07deda25243a10a7cbc54002482a2673aebe",
+      "duration": 0.849,
+      "gain": 0.9,
+      "stem": "boss/wake_procession_front",
+      "mean_db": -20.0,
+      "max_db": -2.6,
+      "peak": 0.7424,
+      "silence_pct": 54.6,
+      "onset_ms": 9.0,
+      "source_take": "front_v1 (DROP front_v3) + onset trim",
+      "lufs_target": -16
+    },
+    {
+      "event": "wake.processionPunish",
+      "ogg": "public/audio/boss/wake_procession_punish.ogg",
+      "mp3": "public/audio/boss/wake_procession_punish.mp3",
+      "ogg_sha256": "6e91621f95215e8edce1120015508d6c8f3a1ad42d42dc5873c8acfe798fa2e1",
+      "mp3_sha256": "d1f672f49089a3044e55af1d24230fea0df63e3e050ad8ce3535a5dbcfd174d3",
+      "duration": 0.878,
+      "gain": 0.95,
+      "stem": "boss/wake_procession_punish",
+      "mean_db": -27.9,
+      "max_db": -2.8,
+      "peak": 0.7223,
+      "silence_pct": 65.8,
+      "onset_ms": 15.0,
+      "source_take": "punish (sole) + onset trim",
+      "lufs_target": -16
+    },
+    {
+      "event": "wake.processionRecover",
+      "ogg": "public/audio/boss/wake_procession_recover.ogg",
+      "mp3": "public/audio/boss/wake_procession_recover.mp3",
+      "ogg_sha256": "b4761ae0a87ac4fa043ac9f1071aa404e84d9e758ba0971164e334b3f093e7e4",
+      "mp3_sha256": "e680fca192951a2ff9d09a3bcf10dfab8912bc40bfd298af7b2048114bcac332",
+      "duration": 0.754,
+      "gain": 0.78,
+      "stem": "boss/wake_procession_recover",
+      "mean_db": -18.9,
+      "max_db": -2.7,
+      "peak": 0.736,
+      "silence_pct": 43.8,
+      "onset_ms": 9.0,
+      "source_take": "recover (sole)",
+      "lufs_target": -16
+    },
+    {
+      "event": "wake.processionFail",
+      "ogg": "public/audio/boss/wake_procession_fail.ogg",
+      "mp3": "public/audio/boss/wake_procession_fail.mp3",
+      "ogg_sha256": "3ab95f3e19c7a5432009784623353fc973799be110b00bb0d15d41017da93d32",
+      "mp3_sha256": "b56e47f308da5861c4d0b9fb0ae69fc78cac5e2d9ecf37e5f4e94fa6cd07b0d3",
+      "duration": 0.549,
+      "gain": 0.84,
+      "stem": "boss/wake_procession_fail",
+      "mean_db": -17.2,
+      "max_db": -2.6,
+      "peak": 0.7427,
+      "silence_pct": 32.5,
+      "onset_ms": 9.0,
+      "source_take": "fail_v2 (DROP fail_v1)",
+      "lufs_target": -16
+    },
+    {
+      "event": "wake.processionBierPulse",
+      "ogg": "public/audio/boss/wake_procession_bier_pulse.ogg",
+      "mp3": "public/audio/boss/wake_procession_bier_pulse.mp3",
+      "ogg_sha256": "6961c8463b889c3f65f473c4fccd4294ee0dbac35c166dc6e0cb51be5d3b4df7",
+      "mp3_sha256": "a1bce3be203480c79be06dcb9910ac93f42296b0276ef30a8f7033dd28754838",
+      "duration": 0.399,
+      "gain": 0.38,
+      "stem": "boss/wake_procession_bier_pulse",
+      "mean_db": -16.9,
+      "max_db": -2.6,
+      "peak": 0.7419,
+      "silence_pct": 11.9,
+      "onset_ms": 9.0,
+      "source_take": "bier_pulse_v1",
+      "lufs_target": -18
+    },
+    {
+      "event": "wake.processionBierAdvance",
+      "ogg": "public/audio/boss/wake_procession_bier_advance.ogg",
+      "mp3": "public/audio/boss/wake_procession_bier_advance.mp3",
+      "ogg_sha256": "bc1d325f7f265d333203b9a4b8426734438237e62f479f11df562122b3fe8172",
+      "mp3_sha256": "058f5e33d274a2bf236f67fc9cb90b11c9d36591f901b2a67dfab3ef55508f5a",
+      "duration": 0.549,
+      "gain": 0.52,
+      "stem": "boss/wake_procession_bier_advance",
+      "mean_db": -18.1,
+      "max_db": -4.8,
+      "peak": 0.5751,
+      "silence_pct": 25.4,
+      "onset_ms": 9.0,
+      "source_take": "bier_advance_v1",
+      "lufs_target": -18
+    },
+    {
+      "event": "wake.processionBlockerHighlight",
+      "ogg": "public/audio/boss/wake_procession_blocker_highlight.ogg",
+      "mp3": "public/audio/boss/wake_procession_blocker_highlight.mp3",
+      "ogg_sha256": "12d5bfdc3fdb43f9c65b56ee416c18e29bd37f2f9465c4ec8192de7d935001f5",
+      "mp3_sha256": "bcdc2818983b85c5182b1abbc1ff9513553b90e09b89e8cbbed1176866181c41",
+      "duration": 0.367,
+      "gain": 0.7,
+      "stem": "boss/wake_procession_blocker_highlight",
+      "mean_db": -21.0,
+      "max_db": -3.0,
+      "peak": 0.7079,
+      "silence_pct": 51.7,
+      "onset_ms": 15.0,
+      "source_take": "blocker_highlight_v1 + onset trim",
+      "lufs_target": -16
+    },
+    {
+      "event": "wake.processionBlockerBreak",
+      "ogg": "public/audio/boss/wake_procession_blocker_break.ogg",
+      "mp3": "public/audio/boss/wake_procession_blocker_break.mp3",
+      "ogg_sha256": "f2f12b44940b03750172d22bd1577e1e8e542eecb911b1a7bf3f483ca4aa3479",
+      "mp3_sha256": "f48b231bd3c79c0bbaa29deaf7803513713d1625a580b18d52a9d1d8130a0133",
+      "duration": 0.549,
+      "gain": 0.78,
+      "stem": "boss/wake_procession_blocker_break",
+      "mean_db": -22.2,
+      "max_db": -2.6,
+      "peak": 0.7449,
+      "silence_pct": 48.4,
+      "onset_ms": 9.0,
+      "source_take": "blocker_break_v2 denser",
+      "lufs_target": -16
+    },
+    {
+      "event": "wake.processionThreshold",
+      "ogg": "public/audio/boss/wake_procession_threshold.ogg",
+      "mp3": "public/audio/boss/wake_procession_threshold.mp3",
+      "ogg_sha256": "80ad8e65edb533ee5664a27be8d67827f3ad39ed0a7ef717aa8ec70bc19c5816",
+      "mp3_sha256": "2234db2730cd25e897a07430a0af76d56eb79fd731f919b0a529da0cbdf0b8d8",
+      "duration": 0.649,
+      "gain": 0.8,
+      "stem": "boss/wake_procession_threshold",
+      "mean_db": -19.0,
+      "max_db": -2.3,
+      "peak": 0.7658,
+      "silence_pct": 32.6,
+      "onset_ms": 9.0,
+      "source_take": "threshold (sole)",
+      "lufs_target": -16
+    },
+    {
+      "event": "wake.processionShelter",
+      "ogg": "public/audio/boss/wake_procession_shelter.ogg",
+      "mp3": "public/audio/boss/wake_procession_shelter.mp3",
+      "ogg_sha256": "5c89e0d4182b8aa215dfa49ad24b1080c624bbc9a47e6d565a74280833aaa6f8",
+      "mp3_sha256": "9c5481e40477130ce309a46d2d587f5ad39ff0b5d545f17279befcf15ded13a0",
+      "duration": 0.399,
+      "gain": 0.55,
+      "stem": "boss/wake_procession_shelter",
+      "mean_db": -21.4,
+      "max_db": -2.6,
+      "peak": 0.74,
+      "silence_pct": 50.0,
+      "onset_ms": 15.0,
+      "source_take": "shelter (sole)",
+      "lufs_target": -16
+    },
+    {
+      "event": "wake.processionShadowWarn",
+      "ogg": "public/audio/boss/wake_procession_shadow_warn.ogg",
+      "mp3": "public/audio/boss/wake_procession_shadow_warn.mp3",
+      "ogg_sha256": "e2e30a85b673241792adf2e169ae5c63849ba8a89b990824ac89e266656ec903",
+      "mp3_sha256": "1aec5100effd1d26b1423a4126f54c0765befef2f8e1e923605540cbadeaad9e",
+      "duration": 0.704,
+      "gain": 0.74,
+      "stem": "boss/wake_procession_shadow_warn",
+      "mean_db": -12.4,
+      "max_db": -2.7,
+      "peak": 0.7343,
+      "silence_pct": 19.3,
+      "onset_ms": 9.0,
+      "source_take": "shadow_warn_v1",
+      "lufs_target": -16
+    }
+  ]
+}

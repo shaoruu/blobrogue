@@ -13656,7 +13656,7 @@ function wakeMaybeBeginProcession(w: WorldState, e: Enemy, ev: SimEvent[]): bool
   wakeSetOutcome(w, e, "pending");
   enc.flags.processionPhase = "tell";
   wakeHighlightBlockerFor(w, enc, Number(enc.flags.thresholdIndex));
-  ev.push({ t: "cue", name: "wake.procession.tell", x: e.x, y: e.y, rate: 0.65, gain: 0.7, trauma: 0.05 });
+  // tell/lock/front ride WAVE_TELLS (wake.last_procession) — no duplicate sim cue.
   return true;
 }
 
@@ -13682,7 +13682,7 @@ function wakeProcessionStep(w: WorldState, e: Enemy, dt: number, ev: SimEvent[])
       a.time = 0;
       a.windup = 1;
       if (enc) enc.flags.processionPhase = "front";
-      ev.push({ t: "cue", name: "wake.procession.front", x: e.x, y: e.y, rate: 0.9, gain: 0.65, trauma: 0.04 });
+      // front voiced by WAVE_TELLS active → wake.processionFront
     }
     return;
   }
