@@ -1571,6 +1571,7 @@ export const WEAPON_RESONANCE: Readonly<Record<WeaponId, ResonanceFamily>> = {
   cleaver: "lance", scrapper: "rapid", skipper: "spread", arcbolt: "arc",
   cryobolt: "rapid", firebomb: "lob", tracker: "arc", singularity: "lob",
   mooring_nail: "lance", sluicegate: "spread", oddsmaker: "arc", pathmaker: "lob",
+  resonant_fork: "spread", red_pen: "lance", margin_call: "rapid", sidewinder: "arc",
 };
 
 export function weaponResonanceFamily(id: WeaponId): ResonanceFamily {
@@ -2178,6 +2179,13 @@ export const WEAPON_BOSS_COEF: Readonly<Partial<Record<WeaponId, number>>> = {
   sluicegate: 0.65,
   oddsmaker: 0.75,
   pathmaker: 0.55,
+  // Wave B (Quill FINAL): the fire-time base coefficient is the weapon's PRIMARY channel;
+  // secondary channels (red_pen snap 0.65, margin copy 0.60) are re-priced in their own
+  // fire paths in world.ts.
+  resonant_fork: 0.7,
+  red_pen: 0.85,
+  margin_call: 0.9,
+  sidewinder: 0.55,
 };
 
 // ---- §6 power budget: raw caps (temporary per-run blessings) ----

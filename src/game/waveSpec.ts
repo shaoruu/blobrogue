@@ -560,6 +560,50 @@ export const WAVE_SOUNDS = {
     stem: "sfx/pathmaker_fire", variants: 1, takes: [], gain: 0.55, bus: "sfx",
     priority: WAVE_PRIORITY.weapon, jitter: 0, spatial: true,
   },
+  "shootResonantFork": {
+    stem: "sfx/resonant_fork_fire", variants: 1, takes: [], gain: 0.65, bus: "sfx",
+    priority: WAVE_PRIORITY.weapon, jitter: 0, spatial: true,
+  },
+  "shootRedPen": {
+    stem: "sfx/red_pen_fire", variants: 1, takes: [], gain: 0.6, bus: "sfx",
+    priority: WAVE_PRIORITY.weapon, jitter: 0, spatial: true,
+  },
+  "shootMarginCall": {
+    stem: "sfx/margin_call_fire", variants: 1, takes: [], gain: 0.7, bus: "sfx",
+    priority: WAVE_PRIORITY.weapon, jitter: 0, spatial: true,
+  },
+  "shootSidewinder": {
+    stem: "sfx/sidewinder_fire", variants: 1, takes: [], gain: 0.6, bus: "sfx",
+    priority: WAVE_PRIORITY.weapon, jitter: 0, spatial: true,
+  },
+  "red_pen.snap": {
+    stem: "sfx/red_pen_snap", variants: 1, takes: [], gain: 0.75, bus: "sfx",
+    priority: WAVE_PRIORITY.weapon, jitter: 0, spatial: true,
+  },
+  "resonant_fork.link": {
+    stem: "sfx/resonant_fork_link", variants: 1, takes: [], gain: 0.5, bus: "sfx",
+    priority: WAVE_PRIORITY.impact, jitter: 0, spatial: true,
+  },
+  "blessing.crosscurrent": {
+    stem: "sfx/blessing_crosscurrent", variants: 1, takes: [], gain: 0.4, bus: "sfx",
+    priority: WAVE_PRIORITY.impact, jitter: 0, spatial: true,
+  },
+  "blessing.warmRound": {
+    stem: "sfx/blessing_warm_round", variants: 1, takes: [], gain: 0.4, bus: "sfx",
+    priority: WAVE_PRIORITY.impact, jitter: 0, spatial: true,
+  },
+  "blessing.knownByTouch": {
+    stem: "sfx/blessing_known_by_touch", variants: 1, takes: [], gain: 0.35, bus: "sfx",
+    priority: WAVE_PRIORITY.impact, jitter: 0, spatial: true,
+  },
+  "blessing.rememberMe": {
+    stem: "sfx/blessing_remember_me", variants: 1, takes: [], gain: 0.5, bus: "sfx",
+    priority: WAVE_PRIORITY.impact, jitter: 0, spatial: true,
+  },
+  "blessing.carryTheLight": {
+    stem: "sfx/blessing_carry_the_light", variants: 1, takes: [], gain: 0.4, bus: "sfx",
+    priority: WAVE_PRIORITY.impact, jitter: 0, spatial: true,
+  },
   "oddsmaker.ricochet": {
     stem: "sfx/oddsmaker_ricochet", variants: 1, takes: [], gain: 0.7, bus: "sfx",
     priority: WAVE_PRIORITY.weapon, jitter: 0, spatial: true,
@@ -1845,6 +1889,10 @@ export const WAVE_WEAPON_FIRE: Readonly<Record<string, WaveEventId>> = {
   sluicegate: "shootSluicegate",
   oddsmaker: "shootOddsmaker",
   pathmaker: "shootPathmaker",
+  resonant_fork: "shootResonantFork",
+  red_pen: "shootRedPen",
+  margin_call: "shootMarginCall",
+  sidewinder: "shootSidewinder",
 };
 
 // ---- the WEAPON AUDIO CONTRACT: semantic states -> manifest rows -----------------------
@@ -1933,6 +1981,10 @@ export const WEAPON_AUDIO: Readonly<Record<string, Partial<Record<WeaponAudioSta
   sluicegate: { equip: "weapon.equip", release: "shootSluicegate" },
   oddsmaker: { equip: "weapon.equip", release: "shootOddsmaker" },
   pathmaker: { equip: "weapon.equip", release: "shootPathmaker" },
+  resonant_fork: { equip: "weapon.equip", release: "shootResonantFork" },
+  red_pen: { equip: "weapon.equip", release: "shootRedPen" },
+  margin_call: { equip: "weapon.equip", release: "shootMarginCall" },
+  sidewinder: { equip: "weapon.equip", release: "shootSidewinder" },
 };
 
 // The shared status library (apply on FIRST application, break on state exit; DoT ticks
@@ -1958,6 +2010,11 @@ export const BLESSING_PROC_AUDIO: Readonly<Record<string, WaveEventId>> = {
   second_breath_muddy: "blessing.muddy",
   on_the_beat: "blessing.onBeat",
   shared_rope: "blessing.sharedRope",
+  crosscurrent: "blessing.crosscurrent",
+  last_warm_round: "blessing.warmRound",
+  known_by_touch: "blessing.knownByTouch",
+  remember_me: "blessing.rememberMe",
+  carry_the_light: "blessing.carryTheLight",
 };
 
 export const BEAM_WEAPON_ID = "beam";
