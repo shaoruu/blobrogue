@@ -35,7 +35,7 @@ Baselines (Wave A+B, locked — for combo audit):
 | `lamplighter` | RELIGHT | `light_edit` | common | **0.34** | **~0.40** |
 | `faultlink` | LINK / SHARE | `link` | legendary | **0.978** | envelope: sustained ≤**1.15** / specialist ≤**1.35** / 3s burst ≤**1.60** |
 
-Gun rarity ladder unchanged: C10 / R5 / L1. Wave C guns: **1C / 2R / 1L** — Lamplighter **common**; Hushiron / Backtalk rare; Faultlink legendary. Lamplighter common = Quill one-step pool-health adjust (**Rook FINAL accepted**).
+Gun rarity ladder unchanged: C10 / R5 / L1. Wave C guns: **1C / 2R / 1L** — Lamplighter **common** = Quill one-step pool-health adjust (Rook FINAL accepted). Hushiron / Backtalk rare; Faultlink legendary.
 
 ---
 
