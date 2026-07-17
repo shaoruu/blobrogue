@@ -96,6 +96,14 @@ export type EnemyKind =
   //  - relief_vent: highlighted deposit / relief vent along the reverse route (mechanic).
   //  - flood_front: untargetable advancing flood marker (mechanic, never a second boss core).
   | "undertow" | "warm_pulse" | "relief_vent" | "flood_front"
+  // CLAIMANT (F70 PASS-THE-CLAIM — Batch3A OWNER LOCK): ONE isBossKind guarded core in a
+  // compact coordination arena (structureKind 'arena'). Verb PASS-THE-CLAIM: one player
+  // carries a claim-token (the marked target); carrier fire cannot break the Claimant's
+  // guard, so the team must deliberately pass. Signature ALL THINGS OWED (wire:
+  // "all_things_owed"). CROWNFALL retired — never revive.
+  //  - claim_token: carried/socketed/world-pickup coordination token (mechanic body).
+  //  - claim_socket: deposit socket; exactly one lights after aim lock as the Owed counter.
+  | "claimant" | "claim_token" | "claim_socket"
   // PALE THRONE (F75 GIANT #2 — the Pale region cap): the SECOND giant, inheriting the Gorge
   // shell-peel grammar EXACTLY (a ~192px STATIONARY front-facing set-piece pinned to floor 75,
   // shared giant-encounter core), with the MATERIAL swapped to COLD warmth-drain (a blazing
@@ -168,7 +176,12 @@ export type AttackMove =
   // UNDERTOW F65 signature — THE RIVER COMES BACK: 1.6s flood tell → 1.2s advancing front →
   // 3.5s punish window. Display name THE RIVER COMES BACK; wire id is the closed AttackMove.
   // BLACK_TIDE retired — never revive.
-  | "river_comes_back";
+  | "river_comes_back"
+  // CLAIMANT F70 signature — ALL THINGS OWED: 1.4s angular crown/beam tell → aim locks at
+  // 0.84s (60% of the tell) → 0.6s descent → 3.0s kneel punish. The crown-lane targets the
+  // claim-token carrier; exactly one socket lights after the lock. Display name ALL THINGS
+  // OWED; wire id is the closed AttackMove. CROWNFALL retired — never revive.
+  | "all_things_owed";
 
 // Grouped so the whole attack subsystem lives in one cohesive place per enemy
 // (allocated once at spawn, never per frame).
@@ -927,6 +940,9 @@ export type SpriteName =
   // UNDERTOW (F65): placeholder art hooks only (reuse Weaver/Choir sheets) — no art generation.
   // Signature display THE RIVER COMES BACK; mechanic bodies warm_pulse / relief_vent / flood_front.
   | "undertow" | "warm_pulse" | "relief_vent" | "flood_front"
+  // CLAIMANT (F70): placeholder art hooks only (reuse Weaver/Choir sheets) — no art generation.
+  // Signature display ALL THINGS OWED; mechanic bodies claim_token / claim_socket.
+  | "claimant" | "claim_token" | "claim_socket"
   | "patch"
   // Client-side cosmetic companion pets (META spec §3). A pure render key mapping to a
   // swappable placeholder asset; the sim never references it (pets are OUT of the sim). The

@@ -244,6 +244,10 @@ registerDirectionalSet("undertow", { walkFps: 6, fileBase: "weaver2_px" });
 SHEETS["warm_pulse.idle"] = { src: "/sprites/choir.png", fps: 4 };
 SHEETS["relief_vent.idle"] = { src: "/sprites/weaver2_px.png", fps: 2 };
 SHEETS["flood_front.idle"] = { src: "/sprites/choir.png", fps: 2 };
+// CLAIMANT F70 — PLACEHOLDER art hooks (Weaver/Choir sheets); display name ALL THINGS OWED.
+registerDirectionalSet("claimant", { walkFps: 6, fileBase: "weaver2_px" });
+SHEETS["claim_token.idle"] = { src: "/sprites/choir.png", fps: 4 };
+SHEETS["claim_socket.idle"] = { src: "/sprites/weaver2_px.png", fps: 2 };
 
 // PALE THRONE (F75 GIANT #2 — AD-LOCKED committed COLD-material art, wire never regenerate): three
 // single-frame SHELL states the renderer swaps off boss.phase, inheriting the Gorge peel-reveal
@@ -411,6 +415,9 @@ const SOURCES: Record<SpriteName, string> = {
   warm_pulse: "/sprites/choir.png",
   relief_vent: "/sprites/weaver2_px.png",
   flood_front: "/sprites/choir.png",
+  claimant: "/sprites/weaver2_px.png",
+  claim_token: "/sprites/choir.png",
+  claim_socket: "/sprites/weaver2_px.png",
   // PALE THRONE (F75 GIANT — AD-LOCKED committed art): the cold shell states the renderer swaps
   // off boss.phase (base "pale" = the stone/dormant shell), plus the small cold weak-point chunk.
   pale: "/sprites/pale_shell_stone.png",

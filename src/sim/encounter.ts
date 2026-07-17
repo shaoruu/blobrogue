@@ -222,6 +222,44 @@ export function initEscapeEncounter(dungeon: Dungeon): EncounterState {
   };
 }
 
+// Batch3A Claimant F70: compact coordination arena (structureKind 'arena' — NOT a RoomEdge chase
+// graph). Verb PASS-THE-CLAIM; signature ALL THINGS OWED. checkpoint = successful passes / socket
+// deposits (0..3); objectiveProgress = pass/deposit progress; carrierPlayerId = claim-token carrier
+// (null if socketed / dropped).
+// flags (OWNER LOCK — serialize for reconnect/spectate): tokenSocketId / highlightedSocketId /
+// passesCompleted / owedPhase / owedOutcome / aimLockedAt / lockFrac / tokenDropped / passCount.
+export function initClaimantEncounter(dungeon: Dungeon): EncounterState {
+  const bp = dungeon.blueprint;
+  const spawnRoomId = bp?.spawnRoomId ?? (dungeon.rooms.length > 0 ? dungeon.rooms[dungeon.rooms.length - 1].id : 0);
+  return {
+    kind: "arena",
+    // Inactive until a player enters the arena / pressure radius — no global aggro before
+    // encounter activation (Batch3A OWNER LOCK).
+    active: false,
+    structureKind: "arena",
+    currentRoomId: spawnRoomId,
+    routeEdgeId: null, // NOT a RoomEdge chase — OWNER LOCK
+    checkpoint: 0, // successful passes / socket deposits (0..3)
+    objectiveProgress: 0,
+    carrierPlayerId: null,
+    failureCount: 0,
+    completed: false,
+    failed: false,
+    flags: {
+      tokenSocketId: -1,        // socket currently holding the token (-1 = carried / world)
+      highlightedSocketId: -1,  // the ONE socket lit during the Owed cast (set only AFTER aim lock)
+      passesCompleted: 0,       // 0..3 — mirrors checkpoint; three baits the overcommit
+      passCount: 0,             // total correct passes / deposits this fight (monotonic)
+      owedPhase: "idle",        // idle | tell | locked | descent | punish
+      owedOutcome: "idle",      // idle | pending | success | survival | failure
+      aimLockedAt: 0,           // seconds into the tell when aim locked (0 until locked; ~0.84)
+      lockFrac: 0.6,            // fraction of the tell at which aim locks (0.6 × 1.4 = 0.84s)
+      tokenDropped: false,      // token dropped to the arena floor (world-pickup)
+      tokenPlanted: false,      // token + sockets seeded once on activation
+    },
+  };
+}
+
 export function completeEncounter(e: EncounterState): void {
   e.completed = true;
   e.active = true;

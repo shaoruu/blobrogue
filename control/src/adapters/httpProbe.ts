@@ -85,7 +85,8 @@ import type {
 // v39: Batch2A Choirmaster F60 closed AttackMove `last_note` + choirmaster/choir_pillar kinds.
 // v40: policy-bound PVP private draft wire (WaitWire/offer k+tr+isComeback) after Choirmaster v39.
 // v41: Batch2B Undertow F65 closed AttackMove `river_comes_back` + undertow/warm_pulse/relief_vent/flood_front kinds (after PVP v40).
-export const SYNTHETIC_JOIN_PROTOCOL = 41;
+// v42: Batch3A Claimant F70 closed AttackMove `all_things_owed` + claimant/claim_token/claim_socket kinds (after Undertow v41).
+export const SYNTHETIC_JOIN_PROTOCOL = 42;
 export const SYNTHETIC_COOP_TICKET_ENVELOPE = "v1";
 export const SYNTHETIC_PVP_TICKET_ENVELOPE = "v2";
 export const SYNTHETIC_ADMISSION_ENVELOPE = "a2";
