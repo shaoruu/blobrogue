@@ -13643,7 +13643,7 @@ function wakeProcessionSuccess(w: WorldState, e: Enemy, ev: SimEvent[]): void {
   ev.push({ t: "cue", name: "wake.procession.success", x: e.x, y: e.y, rate: 0.8, gain: 0.75, trauma: 0.08 });
 }
 
-function wakeMaybeBeginProcession(w: WorldState, e: Enemy, ev: SimEvent[]): boolean {
+function wakeMaybeBeginProcession(w: WorldState, e: Enemy, _ev: SimEvent[]): boolean {
   const enc = wakeEnc(w);
   const boss = e.boss!;
   if (!enc || !enc.active || enc.completed) return false;
