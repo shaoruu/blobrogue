@@ -81,7 +81,7 @@ import type {
 // v35: Wave A closed WeaponId and per-weapon cycle state.
 // v36: Batch1 Sever F55 closed AttackMove `worldsplit`.
 // v37: Wave B closed WeaponId + catalogVersion 2 (after Sever v36).
-// v38: PALE THRONE F75 giant closed enemy/prop kind sets (after Wave B v37 / Sever v36).
+// v38: PALE THRONE F75 giant closed enemy/prop kind sets + telegraph/warmth wire (after Wave B v37 / Sever v36).
 export const SYNTHETIC_JOIN_PROTOCOL = 38;
 export const SYNTHETIC_COOP_TICKET_ENVELOPE = "v1";
 export const SYNTHETIC_PVP_TICKET_ENVELOPE = "v2";
