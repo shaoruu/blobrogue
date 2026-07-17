@@ -1,4 +1,4 @@
-// Convex mirror of the independent private/public PVP rollout switches. Both remain dark.
+// Convex mirror of the independent private/public PVP rollout switches. Private ON (private_draft_v1 smoke); public remains dark.
 //
 // Byte-mirror of the flag policy in src/net/pvpFlag.ts for the Convex runtime, which cannot
 // import app code (it bundles in isolation — the same reason gsTicketCore.ts duplicates the
@@ -35,7 +35,7 @@ export function resolvePvpPublicEnabled(flag: boolean | undefined): boolean {
 
 // Independent backend rollout guards. A later enable requires coordinated client/Convex/GS work.
 export const PVP_PUBLIC_ENABLED: boolean = resolvePvpPublicEnabled(false);
-export const PVP_PRIVATE_ENABLED: boolean = resolvePvpPublicEnabled(false);
+export const PVP_PRIVATE_ENABLED: boolean = resolvePvpPublicEnabled(true);
 
 // The single backend guard: reject a pvp action while disabled with a TAGGED ConvexError whose
 // structured data survives the RPC boundary; pass co-op through untouched. Called at the top of

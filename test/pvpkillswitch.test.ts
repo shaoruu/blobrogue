@@ -86,8 +86,8 @@ section("FAIL CLOSED: only the boolean literal true enables PVP");
     check(`${label}: an explicit false resolves OFF`, resolve(false) === false);
     check(`${label}: only literal true resolves ON`, resolve(true) === true);
   }
-  check("the shipped src private/public flags are OFF", !SRC_PRIVATE_ENABLED && !SRC_PUBLIC_ENABLED);
-  check("the shipped Convex private/public flags are OFF", !CVX_PRIVATE_ENABLED && !CVX_PUBLIC_ENABLED);
+  check("the shipped src flags are PRIVATE ON / PUBLIC OFF", SRC_PRIVATE_ENABLED === true && SRC_PUBLIC_ENABLED === false);
+  check("the shipped Convex flags are PRIVATE ON / PUBLIC OFF", CVX_PRIVATE_ENABLED === true && CVX_PUBLIC_ENABLED === false);
 }
 
 section("ONE coordinated policy: the src flag and the Convex mirror agree");
@@ -117,15 +117,14 @@ section("BACKEND typed error: the Convex guard throws a TAGGED ConvexError that 
   // This is the crux of the pre-merge contract bug the TD caught: a plain `throw new Error(...)`
   // is redacted by Convex in production (the client sees "[Request ID …] Server Error", message
   // stripped). Only a ConvexError's structured `.data` is delivered to the client verbatim.
-  const e = thrown(() => cvxAssert("pvp", "private"));
-  check("the backend guard throws", e !== null);
+  check("the backend guard passes private pvp while PRIVATE is ON", thrown(() => cvxAssert("pvp", "private")) === null);
+  const e = thrown(() => cvxAssert("pvp", "public"));
+  check("the backend guard throws for public pvp while PUBLIC is OFF", e !== null);
   check("...a real ConvexError (NOT a plain custom Error subclass)", e instanceof ConvexError);
   check("...an Error subtype whose name marshals as 'ConvexError'", e instanceof Error && e.name === "ConvexError");
   check("...carrying the Symbol.for('ConvexError') runtime tag the SDK uses to identify it", hasConvexTag(e));
-  check("...with EXACTLY the private_disabled structured payload",
-    sameData(e, { code: "private_disabled", message: CLEAN_COPY }));
   check("public intent uses its independent code",
-    sameData(thrown(() => cvxAssert("pvp", "public")), { code: "public_disabled", message: CLEAN_COPY }));
+    sameData(e, { code: "public_disabled", message: CLEAN_COPY }));
   check("the backend guard NEVER rejects co-op", thrown(() => cvxAssert("coop", "private")) === null);
   check("the backend guard NEVER rejects absent/default co-op", thrown(() => cvxAssert(undefined, "public")) === null);
 }
@@ -134,10 +133,11 @@ section("CLIENT preflight: the local (pre-RPC) guard throws the typed PvpDisable
 {
   // The client entry guard rejects BEFORE a request leaves the browser; it is deliberately a
   // local Error subclass (never crosses RPC), distinct from the backend ConvexError.
-  const e = thrown(() => srcAssert("pvp", "private"));
-  check("the client preflight guard throws a local PvpDisabledError", e instanceof SrcPvpDisabledError);
+  check("the client preflight guard passes private pvp while PRIVATE is ON", thrown(() => srcAssert("pvp", "private")) === null);
+  const e = thrown(() => srcAssert("pvp", "public"));
+  check("the client preflight guard throws a local PvpDisabledError for public pvp", e instanceof SrcPvpDisabledError);
   check("...it is NOT a ConvexError (distinct from the backend type)", !(e instanceof ConvexError) && !hasConvexTag(e));
-  check("...carrying the private_disabled code", e instanceof SrcPvpDisabledError && e.code === "private_disabled");
+  check("...carrying the public_disabled code", e instanceof SrcPvpDisabledError && e.code === "public_disabled");
   check("...and the clean player-facing message", e instanceof Error && e.message === CLEAN_COPY);
   check("client preflight NEVER rejects co-op", thrown(() => srcAssert("coop", "private")) === null);
   check("client preflight NEVER rejects absent/default co-op", thrown(() => srcAssert(undefined, "public")) === null);
