@@ -10446,7 +10446,7 @@ function updateQuorumSplinter(w: WorldState, e: Enemy, dt: number): void {
 //            opens the earned window (success). Holding past trapEscapeAttacks casts without an
 //            intercept tears it free (failure): escapeMeter++, the corridor behind is cut, and
 //            it advances a checkpoint with NO window.
-//   window → the exposed reel: the party punishes. When it closes the hunt resumes toward the
+//   exposed→ the earned reel: the party punishes. When it closes the hunt resumes toward the
 //            next checkpoint — or, on the final checkpoint, the objective completes.
 //   escaped→ escapeMeter hit its cap: a soft-failed run (route fully worsened) that stays
 //            winnable through the boss's own HP.
@@ -10531,7 +10531,7 @@ function severHuntStep(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): voi
   const hasTarget = findTarget(w, e.x, e.y);
   const pressured = hasTarget && Math.hypot(w.targetX - e.x, w.targetY - e.y) < SEVER.pressureRadius;
 
-  if (state === "window") {
+  if (state === "exposed") {
     // The exposed reel: hold, facing the party, until the punish window closes.
     if (!enc.completed && boss.exposed <= 0) severAfterWindow(e, enc, ev);
     else if (hasTarget) applyChaseStep(w, e, dt, chaseAngle(w, e), e.speed * 0.25 * dt);
@@ -10668,7 +10668,7 @@ function severAnchorLoop(w: WorldState, e: Enemy, ev: SimEvent[]): void {
   if (countLiveIds(w, boss.windowAddIds) === 0) {
     boss.windowAddIds.length = 0;
     openBossWindow(e, SEVER.interceptWindow, ev); // success: the earned intercept window
-    enc.flags.interceptState = "window";
+    enc.flags.interceptState = "exposed";
     enc.flags.trapAttacks = 0;
     enc.objectiveProgress = Math.min(1, (enc.checkpoint + 1) / SEVER.checkpoints);
     ev.push({ t: "chargeCrash", x: e.x, y: e.y });

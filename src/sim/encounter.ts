@@ -128,7 +128,7 @@ export function initHuntEncounter(dungeon: Dungeon): EncounterState {
     flags: {
       escapeMeter: 0,
       supportsCut: 0,
-      interceptState: "hunt", // hunt | trap | window | escaped
+      interceptState: "hunt", // hunt | trap | exposed | escaped
       chosenExitEdgeId: -1,   // set to the corridor fled through; -1 until it first flees
       worldsplitPhase: "idle", // idle | plant | fracture | punish
       trapAttacks: 0,

@@ -230,8 +230,10 @@ SHEETS["gorge.attack"] = { src: "/sprites/gorge_shell_rind.png", fps: 2 };
 SHEETS["gorge_shell_chitin.idle"] = { src: "/sprites/gorge_shell_chitin.png", fps: 2 };
 SHEETS["gorge_shell_core.idle"] = { src: "/sprites/gorge_shell_core.png", fps: 2 };
 SHEETS["gorge_seam.idle"] = { src: "/sprites/gorge_shell_core.png", fps: 2 };
-// SEVER F55 — art hooks only (placeholder Weaver sheets); no generation this batch.
-SHEETS["sever.idle"] = { src: "/sprites/weaver2_px.png", fps: 2 };
+// SEVER F55 — placeholder Weaver art (no generation this batch). The roaming core reuses the
+// Weaver's directional walk triplet (its declared directional_walk contract); the resin anchor
+// is a decoy idle loop. Both hold on the loaded weaver2_px strip until bespoke sheets land.
+registerDirectionalSet("sever", { walkFps: 6, fileBase: "weaver2_px" });
 SHEETS["sever_anchor.idle"] = { src: "/sprites/weaver2_px.png", fps: 2 };
 
 // Tintable bullet-FX primitives (public/sprites/fx). Authored pure white with all
