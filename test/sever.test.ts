@@ -220,7 +220,7 @@ function anchorsAndWindow(): void {
   // Break both anchors → earned window.
   for (const a of anchors) { a.hp = 0; a.dead = true; }
   step(w, 2);
-  check("both anchors broken opens intercept window", w.encounter.flags.interceptState === "window");
+  check("both anchors broken opens intercept window", w.encounter.flags.interceptState === "exposed");
   check("boss exposure window armed", (boss.boss?.exposed ?? 0) > 0);
   check("carrier pip assigned on intercept", w.encounter.carrierPlayerId !== null);
 }
@@ -392,7 +392,7 @@ function interceptIndependentOfWorldsplit(): void {
   for (const a of trapAnchors) { a.hp = 0; a.dead = true; }
   step(w, 2);
   check("intercept opens window without WORLDSPLIT success",
-    w.encounter.flags.interceptState === "window" && (boss.boss.exposed ?? 0) > 0);
+    w.encounter.flags.interceptState === "exposed" && (boss.boss.exposed ?? 0) > 0);
   check("WORLDSPLIT outcome untouched by intercept",
     w.encounter.flags.worldsplitOutcome === "idle"
     || w.encounter.flags.worldsplitOutcome === "pending");

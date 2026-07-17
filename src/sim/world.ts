@@ -11237,7 +11237,7 @@ function updateSever(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void 
   // Flee / hunt locomotion when not mid-WORLDSPLIT.
   severHuntStep(w, e, dt, ev);
 
-  if (a.cooldown === 0 && e.spawnTimer === 0 && !boss.roar && !(enc && enc.flags.interceptState === "window")) {
+  if (a.cooldown === 0 && e.spawnTimer === 0 && !boss.roar && !(enc && enc.flags.interceptState === "exposed")) {
     // Commit WORLDSPLIT when a player is in sightline / pressure range.
     if (findTarget(w, e.x, e.y) && Math.hypot(w.targetX - e.x, w.targetY - e.y) < SEVER.pressureRadius * 1.4) {
       beginWindup(e, "worldsplit");
@@ -11269,7 +11269,7 @@ function severHuntStep(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): voi
 
   // Trap = anchors live (players may intercept). Sever still flees when pressured;
   // only the earned window holds the body for punish.
-  if (pressured && enc.flags.interceptState !== "window") {
+  if (pressured && enc.flags.interceptState !== "exposed") {
     // Flee toward next checkpoint via authored chase edges.
     const nextCp = cps[Math.min(cps.length - 1, cp + (cps[cp] === enc.currentRoomId ? 1 : 0))] ?? cps[cps.length - 1];
     let chosen = -1;
@@ -11418,7 +11418,7 @@ function severAnchorLoop(w: WorldState, e: Enemy, ev: SimEvent[]): void {
   if (countLiveIds(w, boss.windowAddIds) === 0) {
     boss.windowAddIds.length = 0;
     openBossWindow(e, SEVER.interceptWindow, ev);
-    enc.flags.interceptState = "window";
+    enc.flags.interceptState = "exposed";
     // Carrier pip: nearest living player to Sever earns the intercept credit.
     let best: { id: string; d: number } | null = null;
     for (const p of w.players.values()) {

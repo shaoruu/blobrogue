@@ -159,6 +159,8 @@ function twoWaveGates(): void {
     jet_echo: 35,
     // The GORGE giant's tectonic weak-point first appears on the F50 giant floor.
     gorge_seam: 50,
+    // The SEVER hunt's resin anchor first appears on the F55 giant floor.
+    sever_anchor: 55,
     // The PALE THRONE giant's cold tectonic weak-point first appears on the F75 giant floor.
     pale_seam: 75,
   };
