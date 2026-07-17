@@ -2126,14 +2126,15 @@ export function choirPillarHpForFloor(floor: number): number {
 // Success = deposit Warm Pulse in highlighted relief vent before front arrives → openBossWindow(3.5).
 // Survival = drop Pulse + shelter in marked alcove (no window). Failure = capped hit+KB; never wipe.
 // BLACK_TIDE retired — story name THE RIVER COMES BACK everywhere (wire: river_comes_back).
-// BALANCER_TODO: Quill owns final HP/TTK/bank — provisional calibration only.
+// Calibrated on EXPOSED time (deposit-gated like deep roster): deep-boss band between Choirmaster F60 and
+// Pale F75 — earned RIVER COMES BACK windows are the pacing, not chip or sponge HP (Quill FINAL).
 export const UNDERTOW = {
-  baseHp: 720, // BALANCER_TODO
+  baseHp: 940,
   baseHpFloor: 65,
   phaseAt: [0.66, 0.33] as readonly number[],
   phaseFloor: [0.58, 0.25] as readonly number[],
-  guardMult: 0.24, // BALANCER_TODO
-  windowBankFrac: 0.26, // BALANCER_TODO
+  guardMult: 0.20,        // deposit-gated chip band (matches Choir / Choirmaster deep earned-window gate)
+  windowBankFrac: 0.22,   // ≥2 successful deposits per phase (matches deep roster Choir / Jet band)
   contactDamage: 2,
   entranceGrace: 1.4,
   attackCd: [0, 3.0, 2.7, 2.4] as readonly number[],
