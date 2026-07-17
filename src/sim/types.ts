@@ -82,7 +82,7 @@ export type EnemyKind =
   // through RoomEdges across 3 checkpoints. Signature move WORLDSPLIT (wire: "worldsplit").
   //  - sever_anchor: resin ANCHOR tooth (mechanic body) — destroy 2 per checkpoint room to
   //    trap both exits and open the intercept damage window. Never a boss kind.
-  | "sever" | "sever_anchor";
+  | "sever" | "sever_anchor"
   // PALE THRONE (F75 GIANT #2 — the Pale region cap): the SECOND giant, inheriting the Gorge
   // shell-peel grammar EXACTLY (a ~192px STATIONARY front-facing set-piece pinned to floor 75,
   // shared giant-encounter core), with the MATERIAL swapped to COLD warmth-drain (a blazing
