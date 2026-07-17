@@ -131,7 +131,9 @@ export const AUDIO_MATERIAL: Readonly<Record<EnemyKind, AudioMaterial>> = {
   // Weaver's lattice mechanic-body rows (chitin, like the Tithe slab) — until the audio director's
   // bespoke giant stems land (half-time footfall + colossal downbeat; see the manifest).
   gorge: "gold", gorge_seam: "chitin",
-  sever: "gold", sever_anchor: "chitin",
+  // PLACEHOLDER: the Sever borrows the Weaver's lattice bank (chitin) end-to-end — its sprite,
+  // its cues, and so its material — until the audio director's bespoke resin-giant stems land.
+  sever: "chitin", sever_anchor: "chitin",
 };
 
 // SAME-MATERIAL fallback law: until a row's generated stem lands, its declared fallback
