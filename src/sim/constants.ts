@@ -91,6 +91,7 @@ export const WEAPON_KB: Record<WeaponId, number> = {
   singularity: 20,
   mooring_nail: 6, sluicegate: 5, oddsmaker: 6, pathmaker: 1,
   resonant_fork: 4, red_pen: 3, margin_call: 5, sidewinder: 3,
+  hushiron: 4, backtalk: 4, lamplighter: 3, faultlink: 4,
 };
 export const KB_LAMBDA = 16;
 export const KB_MAX_SPEED = 520;
@@ -123,6 +124,7 @@ export const FIRE_KNOCKBACK: Record<WeaponId, number> = {
   singularity: 4,
   mooring_nail: 0, sluicegate: 4, oddsmaker: 3, pathmaker: 0,
   resonant_fork: 2, red_pen: 2, margin_call: 3, sidewinder: 1,
+  hushiron: 2, backtalk: 2, lamplighter: 1, faultlink: 2,
 };
 
 // ---- legendary gimmick tuning ----
@@ -168,6 +170,14 @@ export const WAVE_B_SECONDARY_LATER = 0.35;
 // Sidewinder arc geometry: the curving round's swept radius grows over its life.
 export const SIDEWINDER_ARC_RADIUS_MIN = 90;
 export const SIDEWINDER_ARC_RADIUS_MAX = 130;
+// ---- Content Wave C: shared safety locks (Quill FINAL) ----
+// Wave C reuses the Wave B proc window (≤4/s/player/target). Faultlink echoes carry a
+// TIGHTER same-target-repeat share (0.25 vs Sidewinder's 0.35) — a single-endpoint echo
+// chain can re-hit one body for at most this fraction of the primary hit.
+export const WAVE_C_FAULT_ECHO_REPEAT = 0.25;
+// Hushiron stance: the flusher vulnerability adds a flat, readable +damage on an enemy
+// blast/KB that displaces the ramped owner far enough (see StanceSpec.flusherDisplace).
+export const WAVE_C_HUSH_FLUSHER_DAMAGE = 1;
 export const EFFECT_TICK = 0.1;          // shared cadence for zone chill + sentry contact
 export const ORBIT_RING_EASE = 10;       // 1/s the halo ring eases toward its target radius
 export const SENTRY_CONTACT_CD = 0.4;    // seconds between enemy-contact chews on a sentry

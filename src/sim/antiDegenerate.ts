@@ -18,7 +18,7 @@ import {
 
 export const SAME_CATEGORY_CAP = 2;
 
-// One canonical stackCategory per content id (weapons + blessings), Wave A + Wave B.
+// One canonical stackCategory per content id (weapons + blessings), Wave A + Wave B + Wave C.
 export const STACK_CATEGORY: Readonly<Record<string, string>> = {
   // Wave A weapons
   mooring_nail: "position",
@@ -42,6 +42,12 @@ export const STACK_CATEGORY: Readonly<Record<string, string>> = {
   known_by_touch: "reveal",
   remember_me: "lethal_save",
   carry_the_light: "objective_support",
+  // Wave C weapons (guns-only). Faultlink shares the `link` category with Resonant Fork by
+  // design (same cap2 lane — A+B+C can never triple-link the same endpoint).
+  hushiron: "stance_ramp",
+  backtalk: "parry_active",
+  lamplighter: "light_edit",
+  faultlink: "link",
 };
 
 export function stackCategoryOf(id: string): string | undefined {

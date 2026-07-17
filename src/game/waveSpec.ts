@@ -626,6 +626,38 @@ export const WAVE_SOUNDS = {
     stem: "sfx/sidewinder_fire", variants: 1, takes: [], gain: 0.6, bus: "sfx",
     priority: WAVE_PRIORITY.weapon, jitter: 0, spatial: true,
   },
+  "shootHushiron": {
+    stem: "sfx/hushiron_fire", variants: 1, takes: [], gain: 0.62, bus: "sfx",
+    priority: WAVE_PRIORITY.weapon, jitter: 0, spatial: true,
+  },
+  "shootBacktalk": {
+    stem: "sfx/backtalk_fire", variants: 1, takes: [], gain: 0.6, bus: "sfx",
+    priority: WAVE_PRIORITY.weapon, jitter: 0, spatial: true,
+  },
+  "shootLamplighter": {
+    stem: "sfx/lamplighter_fire", variants: 1, takes: [], gain: 0.58, bus: "sfx",
+    priority: WAVE_PRIORITY.weapon, jitter: 0, spatial: true,
+  },
+  "shootFaultlink": {
+    stem: "sfx/faultlink_fire", variants: 1, takes: [], gain: 0.66, bus: "sfx",
+    priority: WAVE_PRIORITY.weapon, jitter: 0, spatial: true,
+  },
+  "backtalk.parry": {
+    stem: "sfx/backtalk_parry", variants: 1, takes: [], gain: 0.72, bus: "sfx",
+    priority: WAVE_PRIORITY.impact, jitter: 0, spatial: true,
+  },
+  "backtalk.return": {
+    stem: "sfx/backtalk_return", variants: 1, takes: [], gain: 0.7, bus: "sfx",
+    priority: WAVE_PRIORITY.weapon, jitter: 0, spatial: true,
+  },
+  "lamplighter.patch": {
+    stem: "sfx/lamplighter_patch", variants: 1, takes: [], gain: 0.5, bus: "sfx",
+    priority: WAVE_PRIORITY.impact, jitter: 0, spatial: true,
+  },
+  "faultlink.link": {
+    stem: "sfx/faultlink_link", variants: 1, takes: [], gain: 0.55, bus: "sfx",
+    priority: WAVE_PRIORITY.impact, jitter: 0, spatial: true,
+  },
   "red_pen.snap": {
     stem: "sfx/red_pen_snap", variants: 1, takes: [], gain: 0.75, bus: "sfx",
     priority: WAVE_PRIORITY.weapon, jitter: 0, spatial: true,
@@ -1947,6 +1979,10 @@ export const WAVE_WEAPON_FIRE: Readonly<Record<string, WaveEventId>> = {
   red_pen: "shootRedPen",
   margin_call: "shootMarginCall",
   sidewinder: "shootSidewinder",
+  hushiron: "shootHushiron",
+  backtalk: "shootBacktalk",
+  lamplighter: "shootLamplighter",
+  faultlink: "shootFaultlink",
 };
 
 // ---- the WEAPON AUDIO CONTRACT: semantic states -> manifest rows -----------------------
@@ -2039,6 +2075,10 @@ export const WEAPON_AUDIO: Readonly<Record<string, Partial<Record<WeaponAudioSta
   red_pen: { equip: "weapon.equip", release: "shootRedPen" },
   margin_call: { equip: "weapon.equip", release: "shootMarginCall" },
   sidewinder: { equip: "weapon.equip", release: "shootSidewinder" },
+  hushiron: { equip: "weapon.equip", release: "shootHushiron" },
+  backtalk: { equip: "weapon.equip", release: "shootBacktalk" },
+  lamplighter: { equip: "weapon.equip", release: "shootLamplighter" },
+  faultlink: { equip: "weapon.equip", release: "shootFaultlink" },
 };
 
 // The shared status library (apply on FIRST application, break on state exit; DoT ticks

@@ -52,6 +52,10 @@ export const pvpUnsupportedWeaponIds: readonly WeaponId[] = [
   "red_pen",
   "margin_call",
   "sidewinder",
+  "hushiron",
+  "backtalk",
+  "lamplighter",
+  "faultlink",
 ];
 
 const PVP_UNSUPPORTED_WEAPON_IDS = new Set<WeaponId>(pvpUnsupportedWeaponIds);

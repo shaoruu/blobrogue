@@ -329,6 +329,10 @@ const SHOOT_SFX: Record<WeaponId, SfxName> = {
   red_pen: "cannon",
   margin_call: "ricochet",
   sidewinder: "homing",
+  hushiron: "cannon",
+  backtalk: "ricochet",
+  lamplighter: "shootRapid",
+  faultlink: "tesla",
 };
 // Per-shot pitch/gain trims where a shared sample needs to read as a different gun
 // (the railgun borrows the cannon boom, pitched up into a sharp crack).
@@ -409,6 +413,7 @@ const FIRE_TRAUMA: Record<WeaponId, number> = {
   cryobolt: 0.05, firebomb: 0.42, tracker: 0.14, singularity: 0.4,
   mooring_nail: 0.18, sluicegate: 0.3, oddsmaker: 0.22, pathmaker: 0.04,
   resonant_fork: 0.14, red_pen: 0.2, margin_call: 0.22, sidewinder: 0.12,
+  hushiron: 0.16, backtalk: 0.18, lamplighter: 0.1, faultlink: 0.12,
 };
 // Per-weapon feel: recoil punch (sprite scale kick), camera kick (px, back along aim),
 // and knockback (px the weapon shoves the player). The hand cannon is the beefy end.
@@ -425,6 +430,7 @@ const FIRE_RECOIL: Record<WeaponId, number> = {
   cryobolt: 0.4, firebomb: 1.4, tracker: 0.6, singularity: 1.4,
   mooring_nail: 0.9, sluicegate: 1.1, oddsmaker: 1, pathmaker: 0.35,
   resonant_fork: 0.7, red_pen: 0.9, margin_call: 1, sidewinder: 0.6,
+  hushiron: 0.8, backtalk: 0.7, lamplighter: 0.5, faultlink: 0.5,
 };
 const FIRE_KICK: Record<WeaponId, number> = {
   pistol: 3, shotgun: 8, rapid: 1.2,
@@ -439,6 +445,7 @@ const FIRE_KICK: Record<WeaponId, number> = {
   cryobolt: 1, firebomb: 7, tracker: 1.5, singularity: 6,
   mooring_nail: 3, sluicegate: 5, oddsmaker: 4, pathmaker: 0.8,
   resonant_fork: 2, red_pen: 3, margin_call: 4, sidewinder: 1.5,
+  hushiron: 3, backtalk: 3, lamplighter: 1.5, faultlink: 1.5,
 };
 const KICK_DECAY = 20; // how fast the camera kick eases back to center
 const TRAUMA_HURT = 0.4;
@@ -8678,6 +8685,24 @@ export class Game {
         this.fxLayer("glow_round", color, bx, by, R * 4.5, R * 4.5, 0.4, 0);
         this.fxTrail("comet_trail", "#a6f0b0", bx, by, Math.max(trailLen, R * 6), R * 2, 0.7, angle);
         return this.fxLayer("core_dot", "#eafff0", bx, by, R * 2.2, R * 2.2, 1, 0);
+      case "hushiron":
+        this.fxTrail("trail_streak", color, bx, by, Math.max(trailLen, R * 8), R * 1.4, 0.7, angle);
+        return this.fxLayer("core_dot", "#e6eef4", bx, by, R * 2.2, R * 2.2, 1, 0);
+      case "backtalk":
+        if (b.isBacktalkReturn === true) {
+          this.fxLayer("crackle", "#ffb27a", bx, by, R * 6, R * 6, 0.8, this.animClock * 8);
+          return this.fxLayer("slug", "#fff2e6", bx, by, R * 3.6, R * 3.6, 1, angle);
+        }
+        this.fxTrail("comet_trail", color, bx, by, trailLen * 0.6, R * 2, 0.55, angle);
+        return this.fxLayer("core_dot", "#ffe8d6", bx, by, R * 2, R * 2, 1, 0);
+      case "lamplighter":
+        this.fxLayer("glow_round", color, bx, by, R * (b.lampLit === true ? 6 : 4.5), R * (b.lampLit === true ? 6 : 4.5), b.lampLit === true ? 0.6 : 0.4, 0);
+        this.fxTrail("trail_streak", "#fff0c0", bx, by, Math.max(trailLen, R * 6), R * 1.6, 0.65, angle);
+        return this.fxLayer("core_dot", "#fffdf0", bx, by, R * 2.2, R * 2.2, 1, 0);
+      case "faultlink":
+        this.fxLayer("glow_round", color, bx, by, R * 5, R * 5, 0.4, 0);
+        this.fxTrail("trail_streak", b.isFaultEcho === true ? "#c9fff0" : "#8ad6c9", bx, by, Math.max(trailLen, R * 7), R * 1.5, 0.7, angle);
+        return this.fxLayer("core_dot", "#eafffb", bx, by, R * 2.2, R * 2.2, 1, 0);
       case "lastlight":
         // The desperate round: a fierce red glow trailing a hot streak into a white-hot core
         // that blazes brightest when HP runs low — the last-stand ember.
