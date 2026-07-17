@@ -106,6 +106,16 @@ export const COSMETICS: readonly CosmeticDef[] = [
   { id: "hat_headphones", slot: "hat", name: "Headphones", unlock: "earned", need: { totalKills: 100 }, hint: "100 all-time kills", assetKey: "hat_headphones" },
   { id: "hat_helmet", slot: "hat", name: "Helmet", unlock: "earned", need: { totalKills: 250 }, hint: "250 all-time kills", assetKey: "hat_helmet" },
   { id: "hat_horns", slot: "hat", name: "Horns", unlock: "earned", need: { totalKills: 1000 }, hint: "1000 all-time kills", assetKey: "hat_horns" },
+  // hats, pack #2 — a fresh mix of starters + earned (assetKey matches the file stem; the
+  // sprite is the only art, so a still-streaming file renders nothing, never a placeholder).
+  { id: "hat_beret", slot: "hat", name: "Beret", unlock: "starter", assetKey: "hat_beret" },
+  { id: "hat_bow", slot: "hat", name: "Bow", unlock: "starter", assetKey: "hat_bow" },
+  { id: "hat_bandana", slot: "hat", name: "Bandana", unlock: "starter", assetKey: "hat_bandana" },
+  { id: "hat_propeller", slot: "hat", name: "Propeller Cap", unlock: "earned", need: { deepestFloor: 6 }, hint: "reach floor 6", assetKey: "hat_propeller" },
+  { id: "hat_viking", slot: "hat", name: "Viking Helm", unlock: "earned", need: { deepestFloor: 18 }, hint: "reach floor 18", assetKey: "hat_viking" },
+  { id: "hat_leaf", slot: "hat", name: "Leaf", unlock: "earned", need: { deepestFloor: 30 }, hint: "reach floor 30", assetKey: "hat_leaf" },
+  { id: "hat_hardhat", slot: "hat", name: "Hard Hat", unlock: "earned", need: { totalKills: 150 }, hint: "150 all-time kills", assetKey: "hat_hardhat" },
+  { id: "hat_space", slot: "hat", name: "Space Helmet", unlock: "earned", need: { totalKills: 400 }, hint: "400 all-time kills", assetKey: "hat_space" },
   // face
   { id: "face_round", slot: "face", name: "Round Specs", unlock: "starter", assetKey: "round_glasses" },
   { id: "face_shades", slot: "face", name: "Shades", unlock: "starter", assetKey: "face_shades" },
@@ -113,6 +123,12 @@ export const COSMETICS: readonly CosmeticDef[] = [
   { id: "face_star_shades", slot: "face", name: "Star Shades", unlock: "earned", need: { totalKills: 750 }, hint: "750 all-time kills", assetKey: "face_star_shades" },
   { id: "face_3d_glasses", slot: "face", name: "3D Glasses", unlock: "earned", need: { deepestFloor: 25 }, hint: "reach floor 25", assetKey: "face_3d_glasses" },
   { id: "face_monocle", slot: "face", name: "Monocle", unlock: "earned", need: { totalKills: 500 }, hint: "500 all-time kills", assetKey: "face_monocle" },
+  // faces, pack #2 — starters + earned (assetKey matches the file stem, like the hats above).
+  { id: "face_goggles", slot: "face", name: "Goggles", unlock: "starter", assetKey: "face_goggles" },
+  { id: "face_heart_shades", slot: "face", name: "Heart Shades", unlock: "starter", assetKey: "face_heart_shades" },
+  { id: "face_visor", slot: "face", name: "Visor", unlock: "earned", need: { deepestFloor: 14 }, hint: "reach floor 14", assetKey: "face_visor" },
+  { id: "face_bandage", slot: "face", name: "Bandage", unlock: "earned", need: { totalKills: 300 }, hint: "300 all-time kills", assetKey: "face_bandage" },
+  { id: "face_snorkel", slot: "face", name: "Snorkel Mask", unlock: "earned", need: { deepestFloor: 28 }, hint: "reach floor 28", assetKey: "face_snorkel" },
   // titles — text honors, earned only (the empty slot is the default)
   { id: "title_depth_diver", slot: "title", name: "Depth Diver", unlock: "earned", need: { deepestFloor: 10 }, hint: "reach floor 10" },
   { id: "title_blob_slayer", slot: "title", name: "Blob Slayer", unlock: "earned", need: { totalKills: 500 }, hint: "500 all-time kills" },
