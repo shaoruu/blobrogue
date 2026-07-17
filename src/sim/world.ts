@@ -12443,7 +12443,7 @@ function undertowInAlcove(w: WorldState, px: number, py: number): boolean {
   return Math.hypot(px - cx, py - cy) >= UNDERTOW.alcoveHalfWidth;
 }
 
-function undertowDepositCheck(w: WorldState, e: Enemy, ev: SimEvent[]): boolean {
+function undertowDepositCheck(w: WorldState, _e: Enemy, ev: SimEvent[]): boolean {
   const enc = undertowEnc(w);
   if (!enc || !enc.carrierPlayerId) return false;
   const ventId = Number(enc.flags.highlightedVentId);
@@ -12511,7 +12511,6 @@ function undertowMaybeBeginRiver(w: WorldState, e: Enemy, ev: SimEvent[]): boole
 function undertowRiverStep(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void {
   const a = e.attack;
   const enc = undertowEnc(w);
-  const boss = e.boss!;
   if (a.phase === "windup") {
     // 1.6s full-width flood tell
     a.time += dt;

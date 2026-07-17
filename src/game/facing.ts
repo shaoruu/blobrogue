@@ -101,6 +101,8 @@ export const AIMED_MOVES: Readonly<Record<AttackMove, boolean>> = {
   worldsplit: false,
   // HOLLOW CHOIRMASTER F60 THE LAST NOTE: inhale/sheet — body stays front-facing conductor.
   last_note: false,
+  // UNDERTOW F65 THE RIVER COMES BACK: flood front is geometry (like WORLDSPLIT) — body keeps travel facing.
+  river_comes_back: false,
   // PALE F75 THE LAST LIGHT FALLS: meteor/scar sequence — body stays front-facing set-piece.
   last_light: false,
 };

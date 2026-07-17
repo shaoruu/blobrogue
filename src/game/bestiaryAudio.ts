@@ -83,6 +83,7 @@ export const AUDIO_BEHAVIOR: Readonly<Record<EnemyKind, AudioBehavior>> = {
   sever: "boss", sever_anchor: "decoy",
   choirmaster: "boss", choir_pillar: "decoy",
   pale: "boss", pale_seam: "decoy", // the F75 giant + its cold planted weak-point (decoy grammar)
+  undertow: "boss", warm_pulse: "decoy", relief_vent: "decoy", flood_front: "decoy",
 };
 
 // ---- body materials ----
