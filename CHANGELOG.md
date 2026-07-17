@@ -3,6 +3,8 @@
 A running log of what's new in BlobRogue, our co-op top-down roguelike shooter.
 Newest changes first. (Times are Pacific.)
 
+Visual patch notes with screenshots: [/changelog](/changelog) on the live site.
+
 ---
 
 ## Unreleased (in progress)

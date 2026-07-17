@@ -4,6 +4,8 @@
   "outputDirectory": "dist",
   "framework": "vite",
   "rewrites": [
-    { "source": "/r/:code", "destination": "/index.html" }
+    { "source": "/r/:code", "destination": "/index.html" },
+    { "source": "/changelog", "destination": "/changelog/index.html" },
+    { "source": "/changelog/", "destination": "/changelog/index.html" }
   ]
 }

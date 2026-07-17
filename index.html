@@ -1591,11 +1591,15 @@
          title + ink-mute body), and the [GOT IT] primary on the one-time popup. */
       .changelog-scrim{ position:fixed; inset:0; z-index:12; display:flex; align-items:center; justify-content:center;
         padding:16px; background:rgba(5,3,11,.55); }
-      .changelog-pop{ width:min(560px,94vw); max-height:min(600px,92vh); padding:0; gap:0; overflow:hidden; }
+      .changelog-pop{ width:min(640px,94vw); max-height:min(680px,92vh); padding:0; gap:0; overflow:hidden; }
       .cl-head{ display:flex; align-items:center; justify-content:space-between; gap:12px; padding:16px 18px 12px;
         border-bottom:2px solid var(--dun-3); }
       .cl-title{ font-family:var(--f-logo); font-size:var(--fs-sm); letter-spacing:2px; color:var(--amber); line-height:1.4; }
       .cl-title .cl-flag{ color:var(--amber-hi); }
+      /* Subtle deep link to the standalone /changelog site; sits to the left of the ✕. */
+      .cl-site-link{ margin-left:auto; margin-right:4px; font-family:var(--f-ui); font-size:var(--fs-2xs);
+        letter-spacing:1px; text-transform:uppercase; color:var(--ink-mute); text-decoration:none; white-space:nowrap; }
+      .cl-site-link:hover{ color:var(--amber); }
       /* The panel-close ✕ sits inline in the header here (not the absolute shell corner). */
       .changelog-pop .panel-close{ position:static; top:auto; right:auto; }
       .cl-body{ flex:1; min-height:0; overflow-y:auto; padding:2px 18px 8px; display:flex; flex-direction:column;
@@ -1605,12 +1609,17 @@
       .cl-date{ font-family:var(--f-ui); font-size:var(--fs-xs); letter-spacing:2px; color:var(--amber-hi);
         text-transform:uppercase; margin-bottom:8px; }
       .cl-date.progress{ color:var(--ink-mute); }
-      .cl-entry{ display:flex; gap:8px; padding:4px 0; font-family:var(--f-ui); font-size:var(--fs-sm); line-height:1.5; }
+      .cl-entry{ display:flex; flex-wrap:wrap; gap:8px; padding:4px 0; font-family:var(--f-ui); font-size:var(--fs-sm); line-height:1.5; }
       /* amber ▪ bullet leads every entry (grayscale-distinct geometry, not hue-only) */
       .cl-entry::before{ content:"\u25aa"; color:var(--amber); flex:0 0 auto; line-height:1.5; }
       .cl-entry-text{ min-width:0; }
       .cl-entry-title{ color:var(--cream); }
       .cl-entry-body{ color:var(--ink-mute); }
+      /* A wrapped strip of real shipped sprites under the entry text — pixelated thumbs in a
+         2px amber-lo frame (see src/generated/changelog.ts media, tools/changelogMedia.mjs). */
+      .cl-media{ display:flex; flex-wrap:wrap; gap:6px; margin-top:6px; flex:0 0 100%; }
+      .cl-thumb{ width:40px; height:40px; image-rendering:pixelated; object-fit:contain;
+        background:var(--dun-0); box-shadow:inset 0 0 0 2px var(--amber-lo),0 0 0 2px var(--dun-0); padding:3px; }
       .cl-foot{ display:flex; justify-content:center; padding:12px 18px 16px; border-top:2px solid var(--dun-3); }
       .cl-got-it{ min-width:180px; }
 

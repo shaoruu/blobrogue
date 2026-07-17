@@ -2278,8 +2278,13 @@ export class Menu {
     const title = el("div", "cl-title");
     if (opts.isUpdatePopup) title.appendChild(el("span", "cl-flag", "UPDATED \u00b7 "));
     title.appendChild(document.createTextNode("WHAT'S NEW"));
+    // A subtle deep link to the standalone visual patch-notes site (new tab; opt-in).
+    const siteLink = el("a", "cl-site-link", "full site \u2197");
+    siteLink.href = "/changelog";
+    siteLink.target = "_blank";
+    siteLink.rel = "noopener";
     const closeBtn = this.closeButton(close);
-    head.append(title, closeBtn);
+    head.append(title, siteLink, closeBtn);
     pop.appendChild(head);
 
     const body = el("div", "cl-body");
@@ -2294,6 +2299,21 @@ export class Menu {
         if (entry.title) text.appendChild(el("span", "cl-entry-title", entry.title + (entry.body ? " \u2014 " : "")));
         if (entry.body) text.appendChild(el("span", "cl-entry-body", entry.body));
         row.appendChild(text);
+        // Real shipped sprite art for the matched entries — a wrapped strip of pixel thumbs
+        // (see tools/changelogMedia.mjs). Purely additive; text-only entries are unchanged.
+        if (entry.media && entry.media.length) {
+          const media = el("div", "cl-media");
+          for (const src of entry.media) {
+            const thumb = el("img", "cl-thumb");
+            thumb.src = src;
+            thumb.alt = "";
+            thumb.loading = "lazy";
+            thumb.width = 40;
+            thumb.height = 40;
+            media.appendChild(thumb);
+          }
+          row.appendChild(media);
+        }
         sec.appendChild(row);
       }
       body.appendChild(sec);
