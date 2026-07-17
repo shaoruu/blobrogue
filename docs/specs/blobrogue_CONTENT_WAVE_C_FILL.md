@@ -32,10 +32,10 @@ Baselines (Wave A+B, locked — for combo audit):
 |---|---|---|---|---:|---:|
 | `hushiron` | ROOT / RAMP | `stance_ramp` | rare | **0.40** | **~0.52** |
 | `backtalk` | PARRY / RETURN | `parry_active` | rare | **0.286** (stub) | **~0.45–0.70** (catch-dependent; ideal ≤1.10 w/ Margin tax) |
-| `lamplighter` | RELIGHT | `light_edit` | common | **0.34** | **~0.40** |
+| `lamplighter` | RELIGHT | `light_edit` | rare | **0.34** | **~0.40** |
 | `faultlink` | LINK / SHARE | `link` | legendary | **0.978** | envelope: sustained ≤**1.15** / specialist ≤**1.35** / 3s burst ≤**1.60** |
 
-Gun rarity ladder unchanged: C10 / R5 / L1. Wave C guns (Quill one-step adjust, Rook accepted): **1C / 2R / 1L** — Lamplighter common; Hushiron / Backtalk rare; Faultlink legendary.
+Gun rarity ladder unchanged: C10 / R5 / L1. Wave C guns (Rook FINAL lock): **0C / 3R / 1L** — Hushiron / Backtalk / Lamplighter **rare**; Faultlink legendary. Quill one-step Lamplighter **common** pool-health adjust **REJECTED**; GD seed **rare** stands.
 
 ---
 
@@ -104,7 +104,7 @@ Prior Wave B taxed pairs (Oddsmaker×Margin, Crosscurrent×pierce families, etc.
 | Field | Value |
 |---|---|
 | `stackCategory` | **`light_edit`** (GD) |
-| Rarity | **common** |
+| Rarity | **rare** |
 | Fire interval | **0.40 s** |
 | Primary | dmg **1.7**, pellets **1**, speed **500**, life **1.0**, `bulletRadius` **5**, `pelletGroup: lamp_shot` → **0.34 PU** |
 | Lit path | if shot travels **≥40 px** through warm light / Carry-the-Light radius / objective light → gain pierce **+1** (shares `CAPS.pierce`) **AND** on first enemy hit or wall, plant safe patch **r=22**, life **1.2 s** |
