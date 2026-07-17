@@ -2423,13 +2423,23 @@ export class Menu {
 
   // A companion pet card in the Kennel: rescued+following / rescued (click to bring along) /
   // still-lost teaser pointing to its rescue floor. Reuses the camp-card grid styling so the
-  // Kennel reads identically to the Camp Upgrades sinks — no bespoke chrome.
+  // Kennel reads identically to the Camp Upgrades sinks — no bespoke chrome. Pet identity is
+  // the same createPetThumbnail() canvas the loadout gate already uses (existing sprites only).
   private campPetCard(node: CampNodeDef, owned: readonly string[], equippedPet: string | null, note: HTMLElement, rebuild: () => HTMLElement): HTMLElement {
     const isOwned = isNodeOwned(node.id, owned);
     const isEquipped = isOwned && node.pet !== undefined && equippedPet === node.pet;
     const card = el("div", `camp-card ${isEquipped ? "owned" : isOwned ? "buyable" : "locked"}`);
-    card.appendChild(el("span", "camp-card-name", node.name));
-    card.appendChild(el("span", "camp-card-desc", node.desc));
+    const head = el("div", "camp-card-head");
+    if (node.pet) {
+      const thumb = createPetThumbnail(node.pet, 48);
+      thumb.className = "camp-card-thumb";
+      head.appendChild(thumb);
+    }
+    const copy = el("div", "camp-card-copy");
+    copy.appendChild(el("span", "camp-card-name", node.name));
+    copy.appendChild(el("span", "camp-card-desc", node.desc));
+    head.appendChild(copy);
+    card.appendChild(head);
     if (!isOwned) {
       card.appendChild(el("span", "camp-card-chip",
         node.rescueFloor !== undefined ? `reach floor ${node.rescueFloor}` : "rescue to unlock"));
@@ -2457,9 +2467,12 @@ export class Menu {
     if (isOwned) {
       card.appendChild(el("span", "camp-card-chip", "\u2713 owned"));
     } else {
-      const buy = el("button", afford && !locked ? "camp-node buyable" : "camp-node locked", `\u25c6 ${node.cost}`);
+      const buy = el("button", afford && !locked ? "camp-node buyable" : "camp-node locked");
       buy.type = "button";
       buy.disabled = locked;
+      // Digits ride VT323 via .camp-price — keep the diamond + number out of Silkscreen/shadow.
+      const price = el("span", "camp-price", `\u25c6 ${node.cost}`);
+      buy.appendChild(price);
       buy.onclick = () => {
         if (!afford) { note.textContent = `Not enough Amber \u2014 need \u25c6 ${node.cost}.`; return; }
         void this.campBuy(node.id, note, rebuild);
