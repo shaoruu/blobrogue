@@ -82,13 +82,13 @@ function propBlocksPoint(w: WorldState, x: number, y: number, r: number): boolea
 // ---- 1. F50 pin + the seeded rotation behind it ----
 
 function pinGates(): void {
-  section("F50 is ALWAYS the gorge giant (a fixed set-piece); F55 Sever; F60 Choirmaster; F65 Undertow; F70 Claimant; F80+ rotation intact");
+  section("F50 is ALWAYS the gorge giant (a fixed set-piece); F55 Sever; F60 Choirmaster; F65 Undertow; F70 Claimant; F80 Wake; F85+ rotation intact");
   check("GORGE_FLOOR is 50", GORGE_FLOOR === 50);
   check("gorge is a boss kind (HP bar, chest, danger-end, HP scaling)", isBossKind("gorge"));
 
   const deepRoster: EnemyKind[] = ["marrow", "choir", "weaver", "gilded", "boss", "jet", "tithe", "quorum"];
   const seen = new Set<EnemyKind>();
-  let allGorge = true, f45Quorum = true, allSever = true, allChoir = true, allUndertow = true, allClaimant = true, deterministic = true, noRepeat = true, neverGorge = true;
+  let allGorge = true, f45Quorum = true, allSever = true, allChoir = true, allUndertow = true, allClaimant = true, allWake = true, deterministic = true, noRepeat = true, neverGorge = true;
   for (let s = 0; s < 80; s++) {
     const seed = 0x5EED + s * 977;
     if (bossKindForFloor(seed, 50) !== "gorge") allGorge = false;
@@ -97,16 +97,18 @@ function pinGates(): void {
     if (bossKindForFloor(seed, 60) !== "choirmaster") allChoir = false; // Batch2A Choirmaster pin
     if (bossKindForFloor(seed, 65) !== "undertow") allUndertow = false; // Batch2B Undertow pin
     if (bossKindForFloor(seed, 70) !== "claimant") allClaimant = false; // Batch3A Claimant pin
-    // F50 gorge + F55 Sever + F60 Choirmaster + F65 Undertow + F70 Claimant + F75 Pale are fixed;
-    // seeded rotation resumes at F80 and must never repeat back-to-back (nor pick the pinned bosses).
+    if (bossKindForFloor(seed, 80) !== "wake") allWake = false; // Batch3B Wake pin
+    // F50 gorge + F55 Sever + F60 Choirmaster + F65 Undertow + F70 Claimant + F75 Pale + F80 Wake are
+    // fixed; seeded rotation resumes at F85 and must never repeat back-to-back (nor pick the pins).
     let prev: EnemyKind | null = "undertow";
-    for (let floor = 70; floor <= 95; floor += 5) {
-      if (floor === 70) { prev = "claimant"; continue; } // Claimant pin — don't bridge F65↔F80
-      if (floor === 75) { prev = "pale"; continue; } // Pale Throne pin — don't bridge F70↔F80
+    for (let floor = 70; floor <= 110; floor += 5) {
+      if (floor === 70) { prev = "claimant"; continue; } // Claimant pin — don't bridge F65↔F85
+      if (floor === 75) { prev = "pale"; continue; } // Pale Throne pin — don't bridge F70↔F85
+      if (floor === 80) { prev = "wake"; continue; } // Wake pin — don't bridge F75↔F85
       const a = bossKindForFloor(seed, floor);
       if (a !== bossKindForFloor(seed, floor)) deterministic = false;
       if (a === null || a === prev) noRepeat = false;
-      if (a === "gorge" || a === "sever" || a === "choirmaster" || a === "undertow" || a === "claimant" || a === "pale") neverGorge = false;
+      if (a === "gorge" || a === "sever" || a === "choirmaster" || a === "undertow" || a === "claimant" || a === "wake" || a === "pale") neverGorge = false;
       if (a !== null) seen.add(a);
       prev = a;
     }
@@ -117,10 +119,11 @@ function pinGates(): void {
   check("floor 60 returns choirmaster for every seed (Batch2A fixed split set-piece)", allChoir);
   check("floor 65 returns undertow for every seed (Batch2B fixed escape set-piece)", allUndertow);
   check("floor 70 returns claimant for every seed (Batch3A fixed coordination set-piece)", allClaimant);
-  check("F80+ deep rotation is a pure function of (seed, floor)", deterministic);
-  check("F80+ has no immediate repeats (nor against the F65 Undertow pin)", noRepeat);
-  check("the seeded rotation NEVER picks gorge/sever/choirmaster/undertow/claimant/pale (fixed set-pieces)", neverGorge);
-  check("every seeded-roster boss still appears across F80-95 (variety survives the pins)",
+  check("floor 80 returns wake for every seed (Batch3B fixed escort set-piece)", allWake);
+  check("F85+ deep rotation is a pure function of (seed, floor)", deterministic);
+  check("F85+ has no immediate repeats (nor against the F65 Undertow pin)", noRepeat);
+  check("the seeded rotation NEVER picks gorge/sever/choirmaster/undertow/claimant/wake/pale (fixed set-pieces)", neverGorge);
+  check("every seeded-roster boss still appears across F85-110 (variety survives the pins)",
     deepRoster.every((k) => seen.has(k)), [...seen].join(","));
 
   // The floor planner spawns the gorge (centered) at F50 with its full pool.

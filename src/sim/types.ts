@@ -104,6 +104,16 @@ export type EnemyKind =
   //  - claim_token: carried/socketed/world-pickup coordination token (mechanic body).
   //  - claim_socket: deposit socket; exactly one lights after aim lock as the Owed counter.
   | "claimant" | "claim_token" | "claim_socket"
+  // THE WAKE (F80 PROTECT/ADVANCE — Batch3B OWNER LOCK): ONE isBossKind guarded shadow that
+  // manifests at thresholds (structureKind 'escort'). Verb PROTECT/ADVANCE: an autonomous
+  // last-light convoy advances spawn→exit across RoomEdges; the team escorts it inside a
+  // continuous warmth corridor, clearing one highlighted blocker before each threshold while a
+  // dark front follows from behind. Signature THE LAST PROCESSION (wire: "last_procession").
+  // NIGHTFALL_PROCESSION retired — never revive.
+  //  - warm_bier: the autonomous convoy body / continuous safe corridor (mechanic body).
+  //  - convoy_blocker: the ONE highlighted blocker before a threshold (peel target, mechanic).
+  //  - shadow_front: the untargetable dark front that follows the convoy from behind (mechanic).
+  | "wake" | "warm_bier" | "convoy_blocker" | "shadow_front"
   // PALE THRONE (F75 GIANT #2 — the Pale region cap): the SECOND giant, inheriting the Gorge
   // shell-peel grammar EXACTLY (a ~192px STATIONARY front-facing set-piece pinned to floor 75,
   // shared giant-encounter core), with the MATERIAL swapped to COLD warmth-drain (a blazing
@@ -181,7 +191,13 @@ export type AttackMove =
   // 0.84s (60% of the tell) → 0.6s descent → 3.0s kneel punish. The crown-lane targets the
   // claim-token carrier; exactly one socket lights after the lock. Display name ALL THINGS
   // OWED; wire id is the closed AttackMove. CROWNFALL retired — never revive.
-  | "all_things_owed";
+  | "all_things_owed"
+  // THE WAKE F80 signature — THE LAST PROCESSION: 1.5s blackout/flood tell → a dark front
+  // follows the convoy to the threshold (moving-front) → 4.0s light-bound manifestation punish.
+  // Success = escort the convoy across the threshold in the warmth corridor with the highlighted
+  // blocker cleared → the Wake is forced into light. Display name THE LAST PROCESSION; wire id is
+  // the closed AttackMove. NIGHTFALL_PROCESSION retired — never revive.
+  | "last_procession";
 
 // Grouped so the whole attack subsystem lives in one cohesive place per enemy
 // (allocated once at spawn, never per frame).
@@ -943,6 +959,9 @@ export type SpriteName =
   // CLAIMANT (F70): placeholder art hooks only (reuse Weaver/Choir sheets) — no art generation.
   // Signature display ALL THINGS OWED; mechanic bodies claim_token / claim_socket.
   | "claimant" | "claim_token" | "claim_socket"
+  // THE WAKE (F80): placeholder art hooks only (reuse Weaver/Choir sheets) — no art generation.
+  // Signature display THE LAST PROCESSION; mechanic bodies warm_bier / convoy_blocker / shadow_front.
+  | "wake" | "warm_bier" | "convoy_blocker" | "shadow_front"
   | "patch"
   // Client-side cosmetic companion pets (META spec §3). A pure render key mapping to a
   // swappable placeholder asset; the sim never references it (pets are OUT of the sim). The

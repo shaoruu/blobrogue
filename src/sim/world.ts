@@ -16,6 +16,7 @@ import {
   initSplitEncounter,
   initEscapeEncounter,
   initClaimantEncounter,
+  initEscortEncounter,
   isEncounterObjectiveComplete,
   completeEncounter,
   cloneEncounter,
@@ -30,6 +31,7 @@ export {
   initSplitEncounter,
   initEscapeEncounter,
   initClaimantEncounter,
+  initEscortEncounter,
   initSmokeEncounter,
   isEncounterObjectiveComplete,
   completeEncounter,
@@ -112,7 +114,7 @@ import { PRIVATE_DRAFT_PVP_POLICY } from "../pvpPolicyId.js";
 import * as C from "./constants.js";
 import {
   PLAYER, SUSTAIN, SHOP, REVIVE, FANG_PROC_COOLDOWN, BOSS, MARROW, CHOIR, WEAVER, GILDED,
-  JET, TITHE, QUORUM, GORGE, SEVER, CHOIRMASTER, UNDERTOW, PALE, CLAIMANT, jetSimulCapFor, titheSlabHpForFloor, gorgeSeamHpForFloor, gorgeSeamCountFor, gorgeShellFracFor, severAnchorHpForFloor, choirPillarHpForFloor, paleSeamHpForFloor, paleSeamCountFor, paleShellFracFor, weaponResonanceFamily, RESONANCE_FAMILIES, RESONANCE_TELEGRAPH_COLOR,
+  JET, TITHE, QUORUM, GORGE, SEVER, CHOIRMASTER, UNDERTOW, PALE, CLAIMANT, WAKE, jetSimulCapFor, titheSlabHpForFloor, gorgeSeamHpForFloor, gorgeSeamCountFor, gorgeShellFracFor, severAnchorHpForFloor, choirPillarHpForFloor, paleSeamHpForFloor, paleSeamCountFor, paleShellFracFor, weaponResonanceFamily, RESONANCE_FAMILIES, RESONANCE_TELEGRAPH_COLOR,
   GAUNTLET, gauntletCaptainHp, TIERS, coopBossHpMult, EXPOSE_WINDOW_CAP,
   activeThreatCap, clampPlayers, coopThreatMult, coopHeartRateMult,
   REINFORCE_STAGGER, BIOME_PRESSURE, BRUTE_HEAVY_DAMAGE, ELITE_BRACE, BOSS_VULN_CAP,
@@ -1934,6 +1936,8 @@ export function loadFloorIntoWorld(w: WorldState, floor: number, playerCountAtLo
     w.encounter = initSplitEncounter(w.dungeon);
   } else if (w.dungeon.blueprint !== null && w.dungeon.blueprint.structureKind === "escape") {
     w.encounter = initEscapeEncounter(w.dungeon);
+  } else if (w.dungeon.blueprint !== null && w.dungeon.blueprint.structureKind === "escort") {
+    w.encounter = initEscortEncounter(w.dungeon);
   } else {
     w.encounter = null;
   }
@@ -3693,6 +3697,13 @@ const BOSS_BEATS: Readonly<Partial<Record<Enemy["kind"], BossBeatDef>>> = {
     damageReduction: UNDERTOW.roarDamageReduction, bulletClearRadius: UNDERTOW.roarBulletClearRadius,
     addCount: 0, isBreakable: false,
   },
+  // THE WAKE (F80): a punctuated shadow-toll at each phase boundary (roar semantics), no adds —
+  // the escort convoy is the beat, not summoned chasers.
+  wake: {
+    phaseAt: WAKE.phaseAt, phaseFloor: WAKE.phaseFloor, move: "roar",
+    damageReduction: WAKE.roarDamageReduction, bulletClearRadius: WAKE.roarBulletClearRadius,
+    addCount: 0, isBreakable: false,
+  },
   // PALE THRONE (F75 giant): the same SHELL CRACK-OFF transition as Gorge (roar semantics — a
   // punctuated screen-punch that sloughs the layer, swaps the sprite stone → cracked → core, and
   // drops the cold shell as debris cover via giantShellSlough). No adds.
@@ -3739,6 +3750,9 @@ const EARNED_WINDOWS: Readonly<Partial<Record<Enemy["kind"], EarnedWindowDef>>> 
   // CLAIMANT (F70): guarded coordination core — non-carrier fire chips at guardMult, the Owed
   // window is opened ONLY by the dedicated socket deposit after aim lock (openBossWindow).
   claimant: { guardMult: CLAIMANT.guardMult, bankFrac: CLAIMANT.windowBankFrac },
+  // THE WAKE (F80): guarded shadow — fire chips at guardMult outside the light, the PROCESSION
+  // window is opened ONLY by escorting the convoy across a threshold (openBossWindow).
+  wake: { guardMult: WAKE.guardMult, bankFrac: WAKE.windowBankFrac },
   // PALE THRONE (F75 giant): the same hard-gate shell as Gorge (guardMult 0.0), with the region-cap
   // TIGHTER per-window bank (0.20 vs Gorge's 0.22) — the ONLY damage path is peeling the cold seams.
   pale: { guardMult: PALE.guardMult, bankFrac: PALE.windowBankFrac },
@@ -6731,6 +6745,10 @@ function updateEnemyAI(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): voi
     case "claimant": updateClaimant(w, e, dt, ev); return;
     case "claim_token": return; // inert: claim-token is a carry/pass/deposit prop, not an actor
     case "claim_socket": return; // inert: deposit socket target, not an actor
+    case "wake": updateWake(w, e, dt, ev); return;
+    case "warm_bier": return; // inert: the convoy body is advanced by updateWake, not self-driven
+    case "convoy_blocker": return; // inert: peel target before a threshold, not an actor
+    case "shadow_front": return; // inert: untargetable dark-front marker, not an actor
     case "pale": updateGiant(w, e, dt, ev, GIANT_SPEC.pale!); return;
     case "pale_seam": return; // inert: a tectonic weak-point is a peel target, not an actor
     default: updateChaser(w, e, dt); return;
@@ -13057,6 +13075,372 @@ function updateClaimant(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): vo
 
   if (e.attack.phase === "none" && boss.exposed <= 0) {
     claimantMaybeBeginOwed(w, e, ev);
+  }
+}
+
+// ---- THE WAKE (F80 PROTECT/ADVANCE + THE LAST PROCESSION) — Batch3B OWNER LOCK ----
+// Cross-room escort/convoy (structureKind 'escort'; a RoomEdge graph). An autonomous last-light
+// convoy (warm_bier) advances FORWARD across ≥2 RoomEdges (origin → thresholds → exit) inside a
+// continuous warmth corridor (the convoy aura). The team PROTECTs the convoy: stay in the aura and
+// clear the ONE highlighted blocker before each threshold while the untargetable dark front
+// (shadow_front) closes from behind. Signature THE LAST PROCESSION: 1.5s blackout/flood tell → the
+// dark front follows the convoy to the threshold (moving-front, capped at frontMaxDuration) → 4.0s
+// light-bound manifestation punish (±1 tick @20Hz). Success = protected (blocker cleared + a player
+// in the aura) → the convoy crosses on-beat → the Wake is forced into light → openBossWindow(4.0);
+// crossing the FINAL threshold custom-completes the floor. Survival = nobody in the dark-front lane
+// (all in a side shelter) → the convoy stalls, no window. Failure = capped hit to players caught in
+// the lane + bounded warmth/progress loss; anti-one-shot holds; never a wipe/soft-lock. ONE
+// isBossKind wake; warm_bier / convoy_blocker / shadow_front = mechanics. NIGHTFALL_PROCESSION
+// retired — cues use the wake.procession* story pattern. Outcome rides boss.mirrorLastFamily
+// (-1 idle, 0 pending, 1 success, 2 survival, 3 failure), same as the other Batch bosses.
+type WakeOutcome = "idle" | "pending" | "success" | "survival" | "failure";
+
+function wakeEnc(w: WorldState) {
+  return w.encounter && w.encounter.structureKind === "escort" ? w.encounter : null;
+}
+
+function wakeSetOutcome(w: WorldState, e: Enemy, outcome: WakeOutcome): void {
+  const enc = wakeEnc(w);
+  if (enc) enc.flags.processionOutcome = outcome;
+  const map = { idle: -1, pending: 0, success: 1, survival: 2, failure: 3 } as const;
+  e.boss!.mirrorLastFamily = map[outcome];
+}
+
+function wakeRoomCenter(w: WorldState, roomId: number): { x: number; y: number } {
+  const room = w.dungeon.rooms.find((r) => r.id === roomId) ?? w.dungeon.rooms[w.dungeon.rooms.length - 1];
+  return { x: room.cx * TILE + TILE / 2, y: room.cy * TILE + TILE / 2 };
+}
+
+// The convoy's current segment: from objective room[thresholdIndex] toward room[thresholdIndex+1].
+function wakeSegment(w: WorldState, enc: EncounterState): { from: { x: number; y: number }; to: { x: number; y: number } } {
+  const obj = w.dungeon.blueprint?.objectiveRoomIds ?? [enc.currentRoomId];
+  const ti = Math.max(0, Math.min(obj.length - 2, Number(enc.flags.thresholdIndex)));
+  return { from: wakeRoomCenter(w, obj[ti]), to: wakeRoomCenter(w, obj[ti + 1]) };
+}
+
+function wakeBier(w: WorldState): Enemy | null {
+  return w.enemies.find((o) => o.kind === "warm_bier" && !o.dead) ?? null;
+}
+
+// Position the bier by lerping the current segment at convoyProgress (the convoy is autonomous).
+function wakePlaceBier(w: WorldState, enc: EncounterState): void {
+  const bier = wakeBier(w);
+  if (!bier) return;
+  const seg = wakeSegment(w, enc);
+  const t = Math.max(0, Math.min(1, Number(enc.flags.convoyProgress)));
+  bier.x = seg.from.x + (seg.to.x - seg.from.x) * t;
+  bier.y = seg.from.y + (seg.to.y - seg.from.y) * t;
+  const rid = roomIdAt(w.dungeon, Math.floor(bier.x / TILE), Math.floor(bier.y / TILE));
+  if (rid >= 0) enc.currentRoomId = rid;
+}
+
+// The untargetable dark front trails the convoy from behind; during the front phase it closes in.
+function wakePlaceShadowFront(w: WorldState, enc: EncounterState, closing: boolean): void {
+  const front = w.enemies.find((o) => o.kind === "shadow_front" && !o.dead);
+  const bier = wakeBier(w);
+  if (!front || !bier) return;
+  const seg = wakeSegment(w, enc);
+  const ang = Math.atan2(seg.to.y - seg.from.y, seg.to.x - seg.from.x);
+  const lag = closing ? TILE * 1.2 : TILE * 2.5; // closes from behind during the moving-front
+  front.x = bier.x - Math.cos(ang) * lag;
+  front.y = bier.y - Math.sin(ang) * lag;
+  enc.flags.shadowBehind = true;
+}
+
+function wakeHighlightBlockerFor(w: WorldState, enc: EncounterState, thresholdIndex: number): void {
+  let id = -1;
+  for (const o of w.enemies) {
+    if (o.kind !== "convoy_blocker") continue;
+    if (!o.dead && o.aux === thresholdIndex) id = o.id;
+  }
+  enc.flags.highlightedBlockerId = id;
+}
+
+function wakeEnsureConvoy(w: WorldState, e: Enemy, ev: SimEvent[]): void {
+  const enc = wakeEnc(w);
+  if (!enc || enc.flags.convoyPlanted === true) return;
+  const boss = e.boss!;
+  const obj = w.dungeon.blueprint?.objectiveRoomIds ?? [enc.currentRoomId];
+  const origin = wakeRoomCenter(w, obj[0] ?? enc.currentRoomId);
+  // The convoy body starts at the origin — the continuous warmth corridor the team escorts.
+  let bx = origin.x + TILE;
+  let by = origin.y;
+  settleSpawnPoint(w, bx, by, ENEMY_ARCHETYPES.warm_bier.radius);
+  const bier = createEnemy("warm_bier", settlePoint.x, settlePoint.y, w.floor, w.rng, w.nextEnemyId++, {
+    isSummoned: true, players: w.encounterPlayers,
+  });
+  bier.hp = bier.maxHp = WAKE.bierHp;
+  bier.spawnTimer = 0;
+  bier.aux = 0;
+  w.enemies.push(bier);
+  boss.windowAddIds.push(bier.id);
+  ev.push({ t: "enemySpawn", eid: bier.id, kind: bier.kind, tier: bier.tier, x: bier.x, y: bier.y });
+  ev.push({ t: "cue", name: "wake.procession.plant", x: bier.x, y: bier.y, rate: 1.0, gain: 0.5, trauma: 0.02 });
+  // One blocker per threshold, planted at the room the convoy enters when it crosses (aux = index).
+  for (let i = 0; i < WAKE.thresholdCount; i++) {
+    const c = wakeRoomCenter(w, obj[Math.min(obj.length - 1, i + 1)] ?? enc.currentRoomId);
+    let x = c.x;
+    let y = c.y - TILE * 1.5;
+    if (!settleSpawnPoint(w, x, y, ENEMY_ARCHETYPES.convoy_blocker.radius)) {
+      x = c.x; y = c.y;
+      settleSpawnPoint(w, x, y, ENEMY_ARCHETYPES.convoy_blocker.radius);
+    }
+    const blk = createEnemy("convoy_blocker", settlePoint.x, settlePoint.y, w.floor, w.rng, w.nextEnemyId++, {
+      isSummoned: true, players: w.encounterPlayers,
+    });
+    blk.hp = blk.maxHp = WAKE.blockerHp;
+    blk.spawnTimer = 0;
+    blk.aux = i; // the threshold this blocker gates
+    w.enemies.push(blk);
+    boss.windowAddIds.push(blk.id);
+    ev.push({ t: "enemySpawn", eid: blk.id, kind: blk.kind, tier: blk.tier, x: blk.x, y: blk.y });
+  }
+  // The untargetable dark front trails the convoy from behind.
+  const front = createEnemy("shadow_front", origin.x - TILE * 2.5, origin.y, w.floor, w.rng, w.nextEnemyId++, {
+    isSummoned: true, players: w.encounterPlayers,
+  });
+  front.spawnTimer = 0;
+  front.hp = front.maxHp = 9999;
+  w.enemies.push(front);
+  boss.windowAddIds.push(front.id);
+  enc.flags.convoyPlanted = true;
+  enc.flags.thresholdIndex = 0;
+  wakeHighlightBlockerFor(w, enc, 0);
+}
+
+function wakeTryActivate(w: WorldState, e: Enemy, ev: SimEvent[]): boolean {
+  const enc = wakeEnc(w);
+  if (!enc) return false;
+  if (enc.active) {
+    if (enc.flags.convoyPlanted !== true) wakeEnsureConvoy(w, e, ev);
+    return true;
+  }
+  const originRoom = w.dungeon.blueprint?.spawnRoomId ?? enc.currentRoomId;
+  let near = false;
+  for (const p of w.players.values()) {
+    if (p.isDown || p.isAbsent || p.hp <= 0) continue;
+    const rid = roomIdAt(w.dungeon, Math.floor(p.x / TILE), Math.floor(p.y / TILE));
+    if (rid === originRoom) { near = true; break; }
+    if (Math.hypot(p.x - e.x, p.y - e.y) <= WAKE.pressureRadius) { near = true; break; }
+  }
+  if (!near) return false;
+  enc.active = true;
+  enc.currentRoomId = originRoom;
+  enc.flags.processionPhase = "advance";
+  wakeEnsureConvoy(w, e, ev);
+  ev.push({ t: "cue", name: "wake.activate", x: e.x, y: e.y, rate: 0.75, gain: 0.65, trauma: 0.04 });
+  return true;
+}
+
+// The convoy is PROTECTED for the current threshold when the highlighted blocker is cleared AND at
+// least one living player rides inside the warmth corridor (the aura) around the bier.
+function wakeConvoyProtected(w: WorldState, enc: EncounterState | null): boolean {
+  if (!enc) return false;
+  const blkId = Number(enc.flags.highlightedBlockerId);
+  const blk = blkId >= 0 ? w.enemies.find((o) => o.id === blkId && o.kind === "convoy_blocker" && !o.dead) : undefined;
+  if (blk) return false; // the highlighted blocker still stands — not clear
+  const bier = wakeBier(w);
+  if (!bier) return false;
+  for (const p of w.players.values()) {
+    if (p.isDown || p.isAbsent || p.hp <= 0) continue;
+    if (Math.hypot(p.x - bier.x, p.y - bier.y) <= WAKE.auraRadius) return true;
+  }
+  return false;
+}
+
+// A player is in the dark-front lane when within laneHalfWidth perpendicular of the convoy axis and
+// within reach of the bier; a side shelter beyond the lane keeps them safe (the convoy then stalls).
+function wakeInLane(w: WorldState, enc: EncounterState, px: number, py: number): boolean {
+  const bier = wakeBier(w);
+  if (!bier) return false;
+  const seg = wakeSegment(w, enc);
+  const ang = Math.atan2(seg.to.y - seg.from.y, seg.to.x - seg.from.x);
+  const dx = px - bier.x;
+  const dy = py - bier.y;
+  if (Math.hypot(dx, dy) > WAKE.auraRadius * 2) return false;
+  const perp = Math.abs(-Math.sin(ang) * dx + Math.cos(ang) * dy);
+  return perp <= WAKE.laneHalfWidth;
+}
+
+function wakeAnyInLane(w: WorldState, enc: EncounterState): boolean {
+  for (const p of w.players.values()) {
+    if (p.isDown || p.isAbsent || p.hp <= 0) continue;
+    if (wakeInLane(w, enc, p.x, p.y)) return true;
+  }
+  return false;
+}
+
+function wakeProcessionSuccess(w: WorldState, e: Enemy, ev: SimEvent[]): void {
+  const enc = wakeEnc(w);
+  const a = e.attack;
+  if (enc) {
+    const ti = Number(enc.flags.thresholdIndex);
+    enc.flags.blockersClearedMask = (Number(enc.flags.blockersClearedMask) || 0) | (1 << (ti & 31));
+    enc.flags.thresholdIndex = ti + 1;
+    enc.checkpoint = ti + 1;
+    enc.flags.manifestCount = Number(enc.flags.manifestCount) + 1;
+    enc.flags.convoyProgress = 0; // the convoy has crossed — begin the next segment
+    enc.objectiveProgress = Math.min(1, (ti + 1) / WAKE.thresholdCount);
+    enc.flags.processionPhase = "punish";
+    wakePlaceBier(w, enc);
+    if (ti + 1 < WAKE.thresholdCount) wakeHighlightBlockerFor(w, enc, ti + 1);
+    else enc.flags.highlightedBlockerId = -1;
+    // Custom completion at the FINAL threshold (not only enemies.length===0).
+    if (ti + 1 >= WAKE.thresholdCount) {
+      completeEncounter(enc);
+      grantEncounterCompletionReward(w);
+    }
+  }
+  wakeSetOutcome(w, e, "success");
+  openBossWindow(e, WAKE.processionPunish, ev);
+  a.phase = "recover";
+  a.time = 0;
+  ev.push({ t: "cue", name: "wake.procession.success", x: e.x, y: e.y, rate: 0.8, gain: 0.75, trauma: 0.08 });
+}
+
+function wakeMaybeBeginProcession(w: WorldState, e: Enemy, ev: SimEvent[]): boolean {
+  const enc = wakeEnc(w);
+  const boss = e.boss!;
+  if (!enc || !enc.active || enc.completed) return false;
+  if (Number(enc.flags.thresholdIndex) >= WAKE.thresholdCount) return false;
+  if (e.attack.phase !== "none" || boss.exposed > 0) return false;
+  if (e.attack.cooldown > 0) return false;
+  if (Number(enc.flags.convoyProgress) < WAKE.processionTriggerFrac) return false;
+  beginWindup(e, "last_procession");
+  e.attack.cooldown = WAKE.attackCd[boss.phase] ?? WAKE.attackCd[3];
+  wakeSetOutcome(w, e, "pending");
+  enc.flags.processionPhase = "tell";
+  wakeHighlightBlockerFor(w, enc, Number(enc.flags.thresholdIndex));
+  ev.push({ t: "cue", name: "wake.procession.tell", x: e.x, y: e.y, rate: 0.65, gain: 0.7, trauma: 0.05 });
+  return true;
+}
+
+function wakeProcessionStep(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void {
+  const a = e.attack;
+  const enc = wakeEnc(w);
+  const lockAt = WAKE.processionTell * WAKE.processionLockFrac; // 0.90s
+  if (a.phase === "windup") {
+    // 1.5s blackout/flood tell; aim locks at 0.90s (the dark front's heading commits).
+    a.time += dt;
+    a.windup = Math.min(1, a.time / WAKE.processionTell);
+    if (enc) enc.flags.processionPhase = "tell";
+    if (!a.isAimLocked && a.time >= lockAt) {
+      a.isAimLocked = true;
+      const bier = wakeBier(w);
+      const seg = enc ? wakeSegment(w, enc) : null;
+      if (bier && seg) { a.markX = bier.x; a.markY = bier.y; a.lockedAngle = Math.atan2(seg.to.y - seg.from.y, seg.to.x - seg.from.x); }
+    }
+    // Success can fire once the convoy is protected (blocker cleared + a player in the aura).
+    if (wakeConvoyProtected(w, enc)) { wakeProcessionSuccess(w, e, ev); return; }
+    if (a.time >= WAKE.processionTell) {
+      a.phase = "active";
+      a.time = 0;
+      a.windup = 1;
+      if (enc) enc.flags.processionPhase = "front";
+      ev.push({ t: "cue", name: "wake.procession.front", x: e.x, y: e.y, rate: 0.9, gain: 0.65, trauma: 0.04 });
+    }
+    return;
+  }
+  if (a.phase === "active") {
+    // Moving-front: the dark front follows the convoy to the threshold (capped by frontMaxDuration).
+    a.time += dt;
+    if (enc) {
+      enc.flags.processionPhase = "front";
+      // The convoy keeps advancing toward the threshold while the front closes from behind.
+      enc.flags.convoyProgress = Math.min(WAKE.convoyHoldFrac, Number(enc.flags.convoyProgress) + WAKE.convoyAdvanceRate * dt);
+      wakePlaceBier(w, enc);
+      wakePlaceShadowFront(w, enc, true);
+    }
+    if (wakeConvoyProtected(w, enc)) { wakeProcessionSuccess(w, e, ev); return; }
+    if (a.time >= WAKE.frontMaxDuration) {
+      // Survival: nobody caught in the dark-front lane (all in a side shelter) → the convoy stalls.
+      if (!enc || !wakeAnyInLane(w, enc)) {
+        wakeSetOutcome(w, e, "survival");
+        if (enc) enc.flags.processionPhase = "advance";
+        ev.push({ t: "cue", name: "wake.procession.survival", x: e.x, y: e.y, rate: 1.1, gain: 0.45, trauma: 0.02 });
+        enterIdle(e);
+        return;
+      }
+      // Soft failure: bounded warmth/progress loss + a capped hit to players in the lane; never wipe.
+      wakeSetOutcome(w, e, "failure");
+      enc.failed = true;
+      enc.failureCount += 1;
+      enc.flags.processionPhase = "advance";
+      enc.flags.convoyWarmth = Math.max(0.1, Number(enc.flags.convoyWarmth) - WAKE.warmthLossOnFailure);
+      enc.flags.convoyProgress = Math.max(0, Number(enc.flags.convoyProgress) - 0.15);
+      for (const p of w.players.values()) {
+        if (p.isDown || p.isAbsent || p.hp <= 0) continue;
+        if (!wakeInLane(w, enc, p.x, p.y)) continue;
+        damagePlayer(w, p, WAKE.processionFailDamage, ev);
+      }
+      ev.push({ t: "cue", name: "wake.procession.miss", x: e.x, y: e.y, rate: 0.95, gain: 0.55, trauma: 0.05 });
+      enterIdle(e);
+      return;
+    }
+    return;
+  }
+  if (a.phase === "recover") {
+    // 4.0s light-bound manifestation punish (success path only) — runs alongside the exposed window.
+    a.time += dt;
+    if (enc) enc.flags.processionPhase = "punish";
+    if (a.time >= WAKE.processionPunish) {
+      if (enc) enc.flags.processionPhase = "advance";
+      enterIdle(e);
+    }
+    return;
+  }
+}
+
+function updateWake(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void {
+  const boss = e.boss!;
+  if (!wakeTryActivate(w, e, ev)) {
+    e.attack.cooldown = Math.max(e.attack.cooldown, 0.5);
+    return;
+  }
+  if (e.spawnTimer > 0) {
+    wakeEnsureConvoy(w, e, ev);
+    return;
+  }
+  if (e.attack.cooldown > 0) e.attack.cooldown = Math.max(0, e.attack.cooldown - dt);
+
+  const enc = wakeEnc(w);
+
+  if (e.attack.move === "last_procession" && e.attack.phase !== "none") {
+    wakeProcessionStep(w, e, dt, ev);
+    return;
+  }
+
+  // Advance the autonomous convoy toward the next threshold (the convoy waits at holdFrac for the
+  // escort — it only CROSSES a threshold on a successful procession).
+  if (enc && enc.active && !enc.completed && Number(enc.flags.thresholdIndex) < WAKE.thresholdCount) {
+    enc.flags.processionPhase = "advance";
+    enc.flags.convoyProgress = Math.min(WAKE.convoyHoldFrac, Number(enc.flags.convoyProgress) + WAKE.convoyAdvanceRate * dt);
+    const seg = wakeSegment(w, enc);
+    enc.flags.convoyEdgeId = w.dungeon.blueprint && w.dungeon.blueprint.chaseEdgeIds.length > 0
+      ? w.dungeon.blueprint.chaseEdgeIds[Math.min(Number(enc.flags.thresholdIndex), w.dungeon.blueprint.chaseEdgeIds.length - 1)]
+      : -1;
+    enc.routeEdgeId = Number(enc.flags.convoyEdgeId) >= 0 ? Number(enc.flags.convoyEdgeId) : null;
+    void seg;
+    wakePlaceBier(w, enc);
+    wakePlaceShadowFront(w, enc, false);
+  }
+
+  // The Wake shadow trails the convoy from behind (never a global aggro rush — the escort is the
+  // beat, not a chase). It manifests into the fight at the thresholds via THE LAST PROCESSION.
+  const bier = wakeBier(w);
+  if (bier && enc) {
+    const seg = wakeSegment(w, enc);
+    const ang = Math.atan2(seg.to.y - seg.from.y, seg.to.x - seg.from.x);
+    const behindX = bier.x - Math.cos(ang) * (TILE * 2.5);
+    const behindY = bier.y - Math.sin(ang) * (TILE * 2.5);
+    const toBehind = Math.atan2(behindY - e.y, behindX - e.x);
+    applyChaseStep(w, e, dt, toBehind, e.speed * 0.4 * dt);
+  } else if (findTarget(w, e.x, e.y)) {
+    applyChaseStep(w, e, dt, chaseAngle(w, e), e.speed * 0.4 * dt);
+  }
+
+  if (e.attack.phase === "none" && boss.exposed <= 0) {
+    wakeMaybeBeginProcession(w, e, ev);
   }
 }
 

@@ -260,6 +260,49 @@ export function initClaimantEncounter(dungeon: Dungeon): EncounterState {
   };
 }
 
+// Batch3B Wake F80: cross-room escort/convoy on the Batch0 room graph (structureKind 'escort').
+// Verb PROTECT/ADVANCE; signature THE LAST PROCESSION. An autonomous last-light convoy advances
+// spawn→exit across ≥2 RoomEdges; the team escorts it inside a continuous warmth corridor.
+// checkpoint = thresholds the convoy has crossed (0..thresholdCount); objectiveProgress = escort
+// progress; carrierPlayerId is unused (the convoy is autonomous, not player-carried).
+// flags (OWNER LOCK — serialize for reconnect/spectate): convoyEdgeId / convoyProgress /
+// convoyWarmth / highlightedBlockerId / blockersClearedMask / processionPhase / processionOutcome /
+// thresholdIndex / manifestCount / shadowBehind / convoyPlanted.
+export function initEscortEncounter(dungeon: Dungeon): EncounterState {
+  const bp = dungeon.blueprint;
+  // Convoy origin = near-spawn approach room; it advances forward toward the exit.
+  const spawnRoomId = bp?.spawnRoomId ?? (dungeon.rooms.length > 0 ? dungeon.rooms[0].id : 0);
+  const routeEdgeId = bp && bp.chaseEdgeIds.length > 0 ? bp.chaseEdgeIds[0] : (dungeon.edges.length > 0 ? 0 : null);
+  return {
+    kind: "escort",
+    // Inactive until a player enters the convoy origin / pressure radius — no global aggro before
+    // encounter activation (Batch3B OWNER LOCK).
+    active: false,
+    structureKind: "escort",
+    currentRoomId: spawnRoomId,
+    routeEdgeId,
+    checkpoint: 0, // thresholds the convoy has crossed (0..thresholdCount)
+    objectiveProgress: 0,
+    carrierPlayerId: null, // the convoy is autonomous — never a player-carried token
+    failureCount: 0,
+    completed: false,
+    failed: false,
+    flags: {
+      convoyEdgeId: routeEdgeId ?? -1, // RoomEdge the convoy currently traverses
+      convoyProgress: 0,        // 0..1 along the current edge/segment toward the next threshold
+      convoyWarmth: 1,          // 0..1 continuous safe-corridor warmth (bounded loss on failure)
+      highlightedBlockerId: -1, // the ONE blocker lit before the current threshold
+      blockersClearedMask: 0,   // bitmask of thresholds whose blocker was cleared
+      processionPhase: "idle",  // idle | tell | front | punish | advance
+      processionOutcome: "idle",// idle | pending | success | survival | failure
+      thresholdIndex: 0,        // 0..thresholdCount — threshold the convoy is approaching
+      manifestCount: 0,         // shadow manifestations resolved this fight
+      shadowBehind: true,       // the dark front follows the convoy from behind
+      convoyPlanted: false,     // bier + blockers + shadow_front seeded once on activation
+    },
+  };
+}
+
 export function completeEncounter(e: EncounterState): void {
   e.completed = true;
   e.active = true;

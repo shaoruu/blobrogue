@@ -248,6 +248,11 @@ SHEETS["flood_front.idle"] = { src: "/sprites/choir.png", fps: 2 };
 registerDirectionalSet("claimant", { walkFps: 6, fileBase: "weaver2_px" });
 SHEETS["claim_token.idle"] = { src: "/sprites/choir.png", fps: 4 };
 SHEETS["claim_socket.idle"] = { src: "/sprites/weaver2_px.png", fps: 2 };
+// THE WAKE F80 — PLACEHOLDER art hooks (Weaver/Choir sheets); display name THE LAST PROCESSION.
+registerDirectionalSet("wake", { walkFps: 6, fileBase: "weaver2_px" });
+SHEETS["warm_bier.idle"] = { src: "/sprites/choir.png", fps: 4 };
+SHEETS["convoy_blocker.idle"] = { src: "/sprites/weaver2_px.png", fps: 2 };
+SHEETS["shadow_front.idle"] = { src: "/sprites/choir.png", fps: 2 };
 
 // PALE THRONE (F75 GIANT #2 — AD-LOCKED committed COLD-material art, wire never regenerate): three
 // single-frame SHELL states the renderer swaps off boss.phase, inheriting the Gorge peel-reveal
@@ -418,6 +423,10 @@ const SOURCES: Record<SpriteName, string> = {
   claimant: "/sprites/weaver2_px.png",
   claim_token: "/sprites/choir.png",
   claim_socket: "/sprites/weaver2_px.png",
+  wake: "/sprites/weaver2_px.png",
+  warm_bier: "/sprites/choir.png",
+  convoy_blocker: "/sprites/weaver2_px.png",
+  shadow_front: "/sprites/choir.png",
   // PALE THRONE (F75 GIANT — AD-LOCKED committed art): the cold shell states the renderer swaps
   // off boss.phase (base "pale" = the stone/dormant shell), plus the small cold weak-point chunk.
   pale: "/sprites/pale_shell_stone.png",

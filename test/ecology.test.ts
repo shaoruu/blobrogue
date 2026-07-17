@@ -167,6 +167,8 @@ function twoWaveGates(): void {
     warm_pulse: 65, relief_vent: 65, flood_front: 65,
     // The CLAIMANT coordination mechanic bodies first appear on the F70 arena floor.
     claim_token: 70, claim_socket: 70,
+    // The WAKE escort/convoy mechanic bodies first appear on the F80 escort floor.
+    warm_bier: 80, convoy_blocker: 80, shadow_front: 80,
     // The PALE THRONE giant's cold tectonic weak-point first appears on the F75 giant floor.
     pale_seam: 75,
   };
