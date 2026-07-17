@@ -1,4 +1,4 @@
-// Independent production rollout switches for private and public PVP. Both remain dark.
+// Independent production rollout switches for private and public PVP. Private ON (private_draft_v1 smoke); public remains dark.
 //
 // This module is the ONE authoritative source of truth for the CLIENT and the GAME SERVER
 // (both import it directly). Convex cannot import app code — its runtime bundles in isolation —
@@ -30,7 +30,7 @@ export function resolvePvpPublicEnabled(flag: boolean | undefined): boolean {
 // The resolved policy. Typed `boolean` (not the literal) so every consumer's guard type-checks
 // under either setting without tsc flagging a constant condition.
 export const PVP_PUBLIC_ENABLED: boolean = resolvePvpPublicEnabled(false);
-export const PVP_PRIVATE_ENABLED: boolean = resolvePvpPublicEnabled(false);
+export const PVP_PRIVATE_ENABLED: boolean = resolvePvpPublicEnabled(true);
 
 // The CLIENT-SIDE PREFLIGHT rejection: thrown locally by the OnlineLobby entry guards before a
 // pvp request ever leaves the browser. It never crosses an RPC boundary — that is the BACKEND's
