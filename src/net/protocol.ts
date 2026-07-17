@@ -1834,7 +1834,7 @@ export function enemyFromWire(w: EnemyWire, x: number, y: number): Enemy {
     aux: w.aux, seq: 0, panicTime: 0, echoTime: 0, echoAngle: 0,
     speed: 0, touchDamage: 0, zig: 0, hopClock: 0, hopMove: 0, spawnTimer: 0, stuckTimer: 0,
     avoidSide: 0, avoidTime: 0,
-    burn: w.burn, burnDmg: 0, chill: w.chill, shock: w.shock, markT: w.mkt, statusTick: 0, burnOwner: null,
+    burn: w.burn, burnDmg: 0, chill: w.chill, shock: w.shock, markT: w.mkt, revealT: 0, statusTick: 0, burnOwner: null,
     mirrorOf: w.mir.length > 0 ? w.mir : null,
     attack: {
       phase: w.atk.ph, time: 0, move: w.atk.mv, windup: w.atk.wu, cooldown: 0,

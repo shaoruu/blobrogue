@@ -337,6 +337,10 @@ export interface Enemy extends Entity {
   // the BOSS_VULN_CAP with the crit channel (never additive on top). Rides the wire (EnemyWire.mkt)
   // so every client draws the marked glow. Decays in tickStatuses.
   markT: number;
+  // Known by Touch (Wave B): seconds a body stays REVEALED — an evasion-untargetable body
+  // (a diving burrower, a faded choir, a blinking weaver) can be hit while this is live.
+  // Sim-internal, transient, never on the wire.
+  revealT: number;
   statusTick: number; // burn DoT accumulator (fires a tick every 0.25s)
   // Who applied the current burn (authoritative kill attribution for the DoT). Solo: always
   // the single local player. Multiplayer: the shooter/exploder who lit the enemy, so the burn
