@@ -20,6 +20,10 @@ import {
   CAT_NODE_ID, CAT_PET_ID, CAT_RESCUE_FLOOR,
   DRAGON_NODE_ID, DRAGON_PET_ID, DRAGON_RESCUE_FLOOR,
   SLIME_NODE_ID, SLIME_PET_ID, SLIME_RESCUE_FLOOR,
+  WICK_NODE_ID, WICK_PET_ID, WICK_RESCUE_FLOOR,
+  PEBBLE_NODE_ID, PEBBLE_PET_ID, PEBBLE_RESCUE_FLOOR,
+  CLATTER_NODE_ID, CLATTER_PET_ID, CLATTER_RESCUE_FLOOR,
+  NULLFIN_NODE_ID, NULLFIN_PET_ID, NULLFIN_RESCUE_FLOOR,
 } from "../src/sim/camp_nodes.js";
 import { petSpriteFor } from "../src/game/pets.js";
 import { createWorld, spawnPlayerInWorld, stepWorld } from "../src/sim/world.js";
@@ -177,13 +181,16 @@ function multiPetTests(): void {
     rescueNodesForRun(CAT_RESCUE_FLOOR).includes(CAT_NODE_ID)
     && rescueNodesForRun(CAT_RESCUE_FLOOR).includes(DOGGIE_NODE_ID)
     && !rescueNodesForRun(CAT_RESCUE_FLOOR).includes(DRAGON_NODE_ID));
-  check("reaching the dragon's floor earns doggie+cat+dragon, not yet the slime",
-    rescueNodesForRun(DRAGON_RESCUE_FLOOR).sort().join(",")
-      === [DOGGIE_NODE_ID, CAT_NODE_ID, DRAGON_NODE_ID].sort().join(",")
-    && !rescueNodesForRun(DRAGON_RESCUE_FLOOR).includes(SLIME_NODE_ID));
-  check("reaching the slime's floor (the deepest) earns all four companions",
-    rescueNodesForRun(SLIME_RESCUE_FLOOR).sort().join(",")
-      === [DOGGIE_NODE_ID, CAT_NODE_ID, DRAGON_NODE_ID, SLIME_NODE_ID].sort().join(","));
+  check("reaching the dragon's floor earns the classic pack through dragon (plus earlier overnight pets), not yet the slime",
+    [DOGGIE_NODE_ID, CAT_NODE_ID, DRAGON_NODE_ID, WICK_NODE_ID, PEBBLE_NODE_ID].every((id) =>
+      rescueNodesForRun(DRAGON_RESCUE_FLOOR).includes(id))
+    && !rescueNodesForRun(DRAGON_RESCUE_FLOOR).includes(SLIME_NODE_ID)
+    && !rescueNodesForRun(DRAGON_RESCUE_FLOOR).includes(CLATTER_NODE_ID)
+    && !rescueNodesForRun(DRAGON_RESCUE_FLOOR).includes(NULLFIN_NODE_ID));
+  check("reaching the slime's floor earns the classic four plus overnight pets up through clatter (not yet nullfin)",
+    [DOGGIE_NODE_ID, CAT_NODE_ID, DRAGON_NODE_ID, SLIME_NODE_ID, WICK_NODE_ID, PEBBLE_NODE_ID, CLATTER_NODE_ID].every((id) =>
+      rescueNodesForRun(SLIME_RESCUE_FLOOR).includes(id))
+    && !rescueNodesForRun(SLIME_RESCUE_FLOOR).includes(NULLFIN_NODE_ID));
   check("a run below the shallowest rescue floor earns nothing",
     rescueNodesForRun(DOGGIE_RESCUE_FLOOR - 1).length === 0);
   check("isDoggieRescuedByRun still agrees with the generalized grant for the pup",
@@ -194,10 +201,41 @@ function multiPetTests(): void {
   check("cat -> cat", petSpriteFor(CAT_PET_ID) === "cat");
   check("dragon -> dragon", petSpriteFor(DRAGON_PET_ID) === "dragon");
   check("slime -> slime_pet (distinct from the slime ENEMY sprite)", petSpriteFor(SLIME_PET_ID) === "slime_pet");
+  check("wick -> wick", petSpriteFor(WICK_PET_ID) === "wick");
+  check("pebble -> pebble", petSpriteFor(PEBBLE_PET_ID) === "pebble");
+  check("clatter -> clatter", petSpriteFor(CLATTER_PET_ID) === "clatter");
+  check("nullfin -> nullfin", petSpriteFor(NULLFIN_PET_ID) === "nullfin");
   check("an unknown pet id renders nothing (graceful null, never a crash)",
     petSpriteFor("griffin") === null && petSpriteFor("") === null);
   check("every companion node's pet id has a render sprite (no dangling pet)",
     CAMP_NODES.filter((n) => n.category === "companion").every((n) => n.pet !== undefined && petSpriteFor(n.pet) !== null));
+
+  section("overnight Wren pets: Wick/Pebble/Clatter/Nullfin rescued at floors 5/9/14/20");
+  const wick = campNodeById(WICK_NODE_ID);
+  const pebble = campNodeById(PEBBLE_NODE_ID);
+  const clatter = campNodeById(CLATTER_NODE_ID);
+  const nullfin = campNodeById(NULLFIN_NODE_ID);
+  check("pet_wick is a companion RESCUE at floor 5",
+    wick?.rescue === true && wick?.cost === 0 && wick?.pet === WICK_PET_ID && wick?.rescueFloor === WICK_RESCUE_FLOOR && WICK_RESCUE_FLOOR === 5);
+  check("pet_pebble is a companion RESCUE at floor 9",
+    pebble?.rescue === true && pebble?.cost === 0 && pebble?.pet === PEBBLE_PET_ID && pebble?.rescueFloor === PEBBLE_RESCUE_FLOOR && PEBBLE_RESCUE_FLOOR === 9);
+  check("pet_clatter is a companion RESCUE at floor 14",
+    clatter?.rescue === true && clatter?.cost === 0 && clatter?.pet === CLATTER_PET_ID && clatter?.rescueFloor === CLATTER_RESCUE_FLOOR && CLATTER_RESCUE_FLOOR === 14);
+  check("pet_nullfin is a companion RESCUE at floor 20",
+    nullfin?.rescue === true && nullfin?.cost === 0 && nullfin?.pet === NULLFIN_PET_ID && nullfin?.rescueFloor === NULLFIN_RESCUE_FLOOR && NULLFIN_RESCUE_FLOOR === 20);
+  check("Amber can NEVER buy overnight pets",
+    [WICK_NODE_ID, PEBBLE_NODE_ID, CLATTER_NODE_ID, NULLFIN_NODE_ID].every((id) => {
+      const r = canBuyNode(id, 9999, [CAMP_SHELL_ID]);
+      return !r.ok && r.reason === "rescue";
+    }));
+  check("rescue floors escalate across the overnight pack",
+    WICK_RESCUE_FLOOR < PEBBLE_RESCUE_FLOOR && PEBBLE_RESCUE_FLOOR < CLATTER_RESCUE_FLOOR && CLATTER_RESCUE_FLOOR < NULLFIN_RESCUE_FLOOR);
+  check("reaching nullfin's floor grants all overnight pets (plus the classic pack)",
+    [WICK_NODE_ID, PEBBLE_NODE_ID, CLATTER_NODE_ID, NULLFIN_NODE_ID, DOGGIE_NODE_ID, CAT_NODE_ID, DRAGON_NODE_ID, SLIME_NODE_ID]
+      .every((id) => rescueNodesForRun(NULLFIN_RESCUE_FLOOR).includes(id)));
+  check("ownedPets lists overnight ids once rescued",
+    [WICK_PET_ID, PEBBLE_PET_ID, CLATTER_PET_ID, NULLFIN_PET_ID].every((id) =>
+      ownedPets([CAMP_SHELL_ID, WICK_NODE_ID, PEBBLE_NODE_ID, CLATTER_NODE_ID, NULLFIN_NODE_ID]).includes(id)));
 }
 
 // The pet is a CLIENT-SIDE cosmetic companion — it rides the identity/wire like hat/face and

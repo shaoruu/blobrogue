@@ -309,6 +309,16 @@ function socketGateTests(): void {
       def.socket === (c.slot === "hat" ? "head" : "face"), def.socket);
   }
   check("round_glasses hooks the shipped Round Specs item", cosmeticById("face_round")?.assetKey === "round_glasses");
+  const overnightHats = ["hat_cork","hat_lamp_brim","hat_root","hat_bone_band","hat_brass","hat_ember_visor","hat_pale_hood","hat_null_crown"];
+  const overnightFaces = ["face_amber_specs","face_coal_smudge","face_resin_monocle","face_shale_goggles","face_pale_bandage","face_choir_veil"];
+  check("overnight Wren hats are catalogued", overnightHats.every((id) => cosmeticById(id)?.slot === "hat"));
+  check("overnight Wren faces are catalogued", overnightFaces.every((id) => cosmeticById(id)?.slot === "face"));
+  check("overnight overlays resolve asset keys",
+    [...overnightHats, ...overnightFaces].every((id) => {
+      const key = cosmeticById(id)?.assetKey;
+      return typeof key === "string" && COSMETIC_ASSET_SOURCES[key] !== undefined;
+    }));
+
   check("cowboy_hat_classic is now a normal equippable hat layer (starter, hooks its overlay art)",
     COSMETIC_ASSET_SOURCES.cowboy_hat_classic !== undefined
     && cosmeticById("cowboy_hat_classic")?.slot === "hat"

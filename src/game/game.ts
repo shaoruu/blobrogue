@@ -20,7 +20,7 @@ import {
   createPetFollow, stepPetFollow, PET_REST_OFFSET, PET_REST_DROP, PET_MAX_SPEED,
 } from "./petFollow.js";
 import type { PetFollow } from "./petFollow.js";
-import { DOGGIE_PET_ID, CAT_PET_ID, DRAGON_PET_ID, SLIME_PET_ID } from "../sim/camp_nodes.js";
+import { DOGGIE_PET_ID, CAT_PET_ID, DRAGON_PET_ID, SLIME_PET_ID, WICK_PET_ID, PEBBLE_PET_ID, CLATTER_PET_ID, NULLFIN_PET_ID } from "../sim/camp_nodes.js";
 import type { EnemyTier, EliteAffix, ResonanceFamily } from "../sim/balance.js";
 import {
   shopViewerOf,
@@ -204,16 +204,22 @@ interface RemoteAnimEntry { anim: Anim; lastX: number; lastY: number; isDashing:
 // A companion pet's client-only render state (META spec §3): the lagged follow body (a trot
 // velocity that scampers to catch up and coasts to a sit — see petFollow.ts), plus an anim
 // clock for the idle-breathe / run cycle. Purely cosmetic — never a sim entity.
-interface PetRenderEntry { petId: string; follow: PetFollow; anim: Anim; wasMoving: boolean; }
+interface PetRenderEntry { petId: string; follow: PetFollow; anim: Anim; wasMoving: boolean; attackT: number; }
 // Per-pet voice: a move cue (while trotting), a settle cue (on stop), and an optional trot
 // loop. The doggie has the richest set (a felt trot loop + pant); the others get a small
 // species move/settle. Cooldowns live in the wave spec, so this only fires on transitions.
-const PET_VOICES: Record<string, { move: string; settle: string; trot?: WaveEventId }> = {
-  [DOGGIE_PET_ID]: { move: "dog.pant", settle: "dog.settle", trot: "dog.trot" },
+const PET_VOICES: Record<string, { move: string; settle: string; happy?: string; trot?: WaveEventId }> = {
+  [DOGGIE_PET_ID]: { move: "dog.pant", settle: "dog.settle", trot: "dog.trot", happy: "dog.happy" },
   [CAT_PET_ID]: { move: "cat.move", settle: "cat.settle" },
   [DRAGON_PET_ID]: { move: "dragon.move", settle: "dragon.settle" },
   [SLIME_PET_ID]: { move: "slimepet.move", settle: "slimepet.settle" },
+  [WICK_PET_ID]: { move: "wick.move", settle: "wick.settle", happy: "wick.happy" },
+  [PEBBLE_PET_ID]: { move: "pebble.move", settle: "pebble.settle", happy: "pebble.happy" },
+  [CLATTER_PET_ID]: { move: "clatter.move", settle: "clatter.settle", happy: "clatter.happy" },
+  [NULLFIN_PET_ID]: { move: "nullfin.move", settle: "nullfin.settle", happy: "nullfin.happy" },
 };
+// Client-only attack emote length (seconds) for the overnight pets' attack sheets.
+const PET_ATTACK_EMOTE = 0.36;
 // A short-lived floating text in world space (e.g. the name of a just-dropped weapon).
 interface WorldLabel { x: number; y: number; vy: number; life: number; maxLife: number; text: string; color: string; }
 // A coin token flying from its pickup spot (world x,y) up into the top-left wallet: t runs
@@ -2473,6 +2479,7 @@ export class Game {
         }
         triggerRecoil(this.playerAnim, FIRE_RECOIL[e.weapon] * settings.effectiveRecoil);
         this.muzzle.t = MUZZLE_DUR; this.muzzle.x = e.x; this.muzzle.y = e.y; this.muzzle.angle = e.aim;
+        this.triggerPetAttackEmote();
         this.muzzle.size = e.mode === "flood" ? w.muzzle + 2 : e.mode === "drain" ? 2 : w.muzzle;
         this.muzzle.color = outcomeColor;
         this.spawnParticles(e.x, e.y, w.muzzle, muzzleParticleColor);
@@ -8990,7 +8997,8 @@ export class Game {
       //         Missing strip -> drawChar falls to the static base PNG and the procedural
       //         idle transform (breathe/bob) animates it, so a sat pet is never a dead frame.
       // A still-streaming sprite degrades to a tinted disc (never blank, never a crash).
-      const clip = f.isMoving ? "walk" : "idle";
+      // Attack emote (owner-fire, client-only) outranks walk/idle while the short timer runs.
+      const clip = pet.attackT > 0 ? "attack" : f.isMoving ? "walk" : "idle";
       drawPetFrame(this.ctx, this.sprites, {
         petId: pet.petId,
         clip,
@@ -9016,7 +9024,7 @@ export class Game {
     if (!pet || pet.petId !== petId) {
       // Spawn AT the owner (a guaranteed-standable point — the owner is there) so a fresh pet
       // never initializes inside a wall; it then trots out to its rest spot.
-      pet = { petId, follow: createPetFollow(ownerX, ownerY, ownerFacing), anim: createAnim(), wasMoving: false };
+      pet = { petId, follow: createPetFollow(ownerX, ownerY, ownerFacing), anim: createAnim(), wasMoving: false, attackT: 0 };
       this.petRenders.set(ownerId, pet);
     }
     const f = pet.follow;
@@ -9041,9 +9049,20 @@ export class Game {
       }
     }
     pet.wasMoving = f.isMoving;
+    if (pet.attackT > 0) pet.attackT = Math.max(0, pet.attackT - dt);
     // Lean into the trot direction for a touch of scamper; a settled pet just breathes.
     const lean = f.isMoving ? Math.max(-1, Math.min(1, f.vx / PET_MAX_SPEED)) : 0;
-    stepAnim(pet.anim, dt, f.isMoving, lean);
+    stepAnim(pet.anim, dt, f.isMoving || pet.attackT > 0, lean);
+  }
+
+  // Owner-fire pet attack emote (CLIENT-ONLY): play the attack strip + optional happy cue when
+  // the local player fires. Never a sim entity / never deals damage — pure juice.
+  private triggerPetAttackEmote() {
+    const pet = this.petRenders.get(LOCAL_ID);
+    if (!pet) return;
+    pet.attackT = PET_ATTACK_EMOTE;
+    const voice = PET_VOICES[pet.petId];
+    if (voice?.happy !== undefined) waveAudio.cueAt(voice.happy, pet.follow.x, pet.follow.y);
   }
 
   // The body tint for the local blob, or null for the natural amber sprite (palette slot 0

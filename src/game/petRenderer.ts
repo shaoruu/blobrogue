@@ -8,7 +8,7 @@ export const PET_RENDER_SIZE = 34;
 
 export interface DrawPetFrameOptions {
   petId: string;
-  clip: Extract<SheetClip, "idle" | "walk">;
+  clip: Extract<SheetClip, "idle" | "walk" | "attack">;
   cx: number;
   cy: number;
   size: number;

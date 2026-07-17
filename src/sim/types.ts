@@ -981,4 +981,5 @@ export type SpriteName =
   // swappable placeholder asset; the sim never references it (pets are OUT of the sim). The
   // slime companion's key is "slime_pet" so it never collides with the "slime" ENEMY sprite.
   | "doggie" | "cat" | "dragon" | "slime_pet"
+  | "wick" | "pebble" | "clatter" | "nullfin"
   | "heart" | "coin" | "gun" | "spit";

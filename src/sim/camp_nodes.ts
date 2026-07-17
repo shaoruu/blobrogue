@@ -64,6 +64,27 @@ export const SLIME_NODE_ID = "pet_slime";
 export const SLIME_PET_ID = "slime";
 export const SLIME_RESCUE_FLOOR = 18;
 
+
+// Pet #5 — Wick, a tiny resin moth with a warm pinprick light. RESCUED (never bought).
+export const WICK_NODE_ID = "pet_wick";
+export const WICK_PET_ID = "wick";
+export const WICK_RESCUE_FLOOR = 5;
+
+// Pet #6 — Pebble, an amber toad with a stone back. RESCUED (never bought).
+export const PEBBLE_NODE_ID = "pet_pebble";
+export const PEBBLE_PET_ID = "pebble";
+export const PEBBLE_RESCUE_FLOOR = 9;
+
+// Pet #7 — Clatter, a bottlecap hermit-crab. RESCUED (never bought).
+export const CLATTER_NODE_ID = "pet_clatter";
+export const CLATTER_PET_ID = "clatter";
+export const CLATTER_RESCUE_FLOOR = 14;
+
+// Pet #8 — Nullfin, a pale cave-koi float. RESCUED (never bought).
+export const NULLFIN_NODE_ID = "pet_nullfin";
+export const NULLFIN_PET_ID = "nullfin";
+export const NULLFIN_RESCUE_FLOOR = 20;
+
 // Whether a run that reached `deepestFloorThisRun` earns the one-time doggie rescue. Pure so
 // the server bank (recordRun) and any client hint agree.
 export function isDoggieRescuedByRun(deepestFloorThisRun: number): boolean {
@@ -104,6 +125,26 @@ export const CAMP_NODES: readonly CampNodeDef[] = [
     id: SLIME_NODE_ID, name: "Baby Slime", category: "companion", cost: 0, prereqs: [],
     desc: "A wobbling baby blob from the deepest dark — one blob befriending another; carry it home and it bounces along at your side.",
     pet: SLIME_PET_ID, rescue: true, rescueFloor: SLIME_RESCUE_FLOOR,
+  },
+  {
+    id: WICK_NODE_ID, name: "Wick", category: "companion", cost: 0, prereqs: [],
+    desc: "A tiny resin moth with a warm pinprick of light — rescued from the shallows, it flickers along at your side.",
+    pet: WICK_PET_ID, rescue: true, rescueFloor: WICK_RESCUE_FLOOR,
+  },
+  {
+    id: PEBBLE_NODE_ID, name: "Pebble", category: "companion", cost: 0, prereqs: [],
+    desc: "An amber toad with a stone back — hop-waddle it home from the mid depths and it settles beside you.",
+    pet: PEBBLE_PET_ID, rescue: true, rescueFloor: PEBBLE_RESCUE_FLOOR,
+  },
+  {
+    id: CLATTER_NODE_ID, name: "Clatter", category: "companion", cost: 0, prereqs: [],
+    desc: "A bottlecap hermit-crab from the deeper dark — carry it home and it sideways-scuttles at your heel.",
+    pet: CLATTER_PET_ID, rescue: true, rescueFloor: CLATTER_RESCUE_FLOOR,
+  },
+  {
+    id: NULLFIN_NODE_ID, name: "Nullfin", category: "companion", cost: 0, prereqs: [],
+    desc: "A pale cave-koi that floats through still air — the deepest rescue of the new pack; glide it home and it bubbles along.",
+    pet: NULLFIN_PET_ID, rescue: true, rescueFloor: NULLFIN_RESCUE_FLOOR,
   },
   {
     id: "stash_slot_1", name: "Stash Slot", category: "convenience", cost: 25, prereqs: [CAMP_SHELL_ID],
