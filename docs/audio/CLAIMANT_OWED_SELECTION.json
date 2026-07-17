@@ -1,0 +1,106 @@
+{
+  "batch": "claimant-owed-v1-reselect",
+  "story_name": "ALL THINGS OWED",
+  "rule": "Vale EAR reselect: deposit denser (fal if v1 thin), fail_v2, guard_chip_v3, tell_v1, socket_light_v1, token_pickup_v1; fal-regen lock/overcommit/token_drop; remaster all",
+  "selected": {
+    "claimant.owedEntrance": {
+      "ship": "boss/claimant_owed_entrance",
+      "take": "claimant_owed_entrance"
+    },
+    "claimant.owedPhase": {
+      "ship": "boss/claimant_owed_phase",
+      "take": "claimant_owed_phase"
+    },
+    "claimant.owedDeath": {
+      "ship": "boss/claimant_owed_death",
+      "take": "claimant_owed_death"
+    },
+    "claimant.owedTell": {
+      "ship": "boss/claimant_owed_tell",
+      "take": "claimant_owed_tell_v1",
+      "rejected": [
+        "claimant_owed_tell_v2"
+      ]
+    },
+    "claimant.owedLock": {
+      "ship": "boss/claimant_owed_lock",
+      "take": "fal_regen_lock_r3_v1",
+      "rejected": [
+        "claimant_owed_lock_pool"
+      ]
+    },
+    "claimant.owedDescent": {
+      "ship": "boss/claimant_owed_descent",
+      "take": "claimant_owed_descent_v1",
+      "rejected": [
+        "claimant_owed_descent_v2"
+      ]
+    },
+    "claimant.owedPunish": {
+      "ship": "boss/claimant_owed_punish",
+      "take": "claimant_owed_punish"
+    },
+    "claimant.owedRecover": {
+      "ship": "boss/claimant_owed_recover",
+      "take": "claimant_owed_recover"
+    },
+    "claimant.owedFail": {
+      "ship": "boss/claimant_owed_fail",
+      "take": "claimant_owed_fail_v2",
+      "rejected": [
+        "claimant_owed_fail_v1"
+      ]
+    },
+    "claimant.owedTokenPickup": {
+      "ship": "boss/claimant_owed_token_pickup",
+      "take": "claimant_owed_token_pickup_v1",
+      "rejected": [
+        "claimant_owed_token_pickup_v2"
+      ]
+    },
+    "claimant.owedTokenPass": {
+      "ship": "boss/claimant_owed_token_pass",
+      "take": "claimant_owed_token_pass_v1",
+      "rejected": [
+        "claimant_owed_token_pass_v2"
+      ]
+    },
+    "claimant.owedTokenDrop": {
+      "ship": "boss/claimant_owed_token_drop",
+      "take": "fal_regen_token_drop_r2_v2",
+      "rejected": [
+        "claimant_owed_token_drop_pool"
+      ]
+    },
+    "claimant.owedSocketLight": {
+      "ship": "boss/claimant_owed_socket_light",
+      "take": "claimant_owed_socket_light_v1",
+      "rejected": [
+        "claimant_owed_socket_light_v2"
+      ]
+    },
+    "claimant.owedDeposit": {
+      "ship": "boss/claimant_owed_deposit",
+      "take": "fal_regen_deposit_r3_v4",
+      "rejected": [
+        "claimant_owed_deposit_v2",
+        "claimant_owed_deposit_v1_thin"
+      ]
+    },
+    "claimant.owedGuardChip": {
+      "ship": "boss/claimant_owed_guard_chip",
+      "take": "claimant_owed_guard_chip_v3",
+      "rejected": [
+        "claimant_owed_guard_chip_v1",
+        "claimant_owed_guard_chip_v2"
+      ]
+    },
+    "claimant.owedOvercommit": {
+      "ship": "boss/claimant_owed_overcommit",
+      "take": "fal_regen_overcommit_r2_v1",
+      "rejected": [
+        "claimant_owed_overcommit_pool"
+      ]
+    }
+  }
+}
