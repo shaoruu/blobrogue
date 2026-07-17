@@ -13313,7 +13313,10 @@ function claimantMaybeBeginOwed(w: WorldState, e: Enemy, ev: SimEvent[]): boolea
   // The passes are SPENT to bait the overcommit — reset the count for the next cycle.
   enc.flags.passesCompleted = 0;
   enc.checkpoint = 0;
-  ev.push({ t: "cue", name: "claimant.owed.tell", x: e.x, y: e.y, rate: 0.65, gain: 0.7, trauma: 0.05 });
+  if (overcommit) {
+    ev.push({ t: "cue", name: "claimant.owed.overcommit", x: e.x, y: e.y, rate: 0.9, gain: 0.84, trauma: 0.03 });
+  }
+  // tell/lock/descent ride WAVE_TELLS (claimant.all_things_owed) — no duplicate sim cue.
   return true;
 }
 
@@ -13335,7 +13338,11 @@ function claimantOwedStep(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): 
         enc.flags.aimLockedAt = a.time;
         // ONE socket lights — the nearest to the locked carrier mark (reachable = fair).
         const sock = claimantNearestSocket(w, a.markX, a.markY);
-        if (sock) { sock.aux = 10; enc.flags.highlightedSocketId = sock.id; }
+        if (sock) {
+          sock.aux = 10;
+          enc.flags.highlightedSocketId = sock.id;
+          ev.push({ t: "cue", name: "claimant.owed.socket", x: sock.x, y: sock.y, rate: 1.0, gain: 0.72, trauma: 0.02 });
+        }
       }
     } else if (enc && !a.isAimLocked) {
       enc.flags.owedPhase = "tell";
@@ -13347,7 +13354,7 @@ function claimantOwedStep(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): 
       a.time = 0;
       a.windup = 1;
       if (enc) enc.flags.owedPhase = "descent";
-      ev.push({ t: "cue", name: "claimant.owed.descent", x: e.x, y: e.y, rate: 0.9, gain: 0.65, trauma: 0.04 });
+      // descent voiced by WAVE_TELLS active → claimant.owedDescent
     }
     return;
   }

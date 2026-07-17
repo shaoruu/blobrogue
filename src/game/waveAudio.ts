@@ -140,6 +140,18 @@ const WAKE_CUE_ALIASES: Readonly<Record<string, WaveEventId>> = {
   "wake.procession.blocker": "wake.processionBlockerHighlight",
   "wake.procession.break": "wake.processionBlockerBreak",
 };
+// Keeps stem uniqueness in WAVE_SOUNDS while still routing PASS-THE-CLAIM beats.
+const CLAIMANT_CUE_ALIASES: Readonly<Record<string, WaveEventId>> = {
+  "claimant.owed.plant": "claimant.owedTokenPickup",
+  "claimant.owed.take": "claimant.owedTokenPickup",
+  "claimant.owed.pass": "claimant.owedTokenPass",
+  "claimant.owed.drop": "claimant.owedTokenDrop",
+  "claimant.owed.socket": "claimant.owedSocketLight",
+  "claimant.owed.success": "claimant.owedPunish",
+  "claimant.owed.miss": "claimant.owedFail",
+  "claimant.owed.survival": "claimant.owedRecover",
+  "claimant.owed.overcommit": "claimant.owedOvercommit",
+};
 
 class WaveAudioDirector {
   private engine: WaveEngine;
@@ -219,7 +231,7 @@ class WaveAudioDirector {
   // Routes a sim `cue` event whose name is a manifest id; returns false for legacy names
   // so the caller keeps its existing SfxName path byte-identical.
   cueAt(name: string, x: number, y: number, entityId?: number): boolean {
-    const resolved = WAKE_CUE_ALIASES[name] ?? name;
+    const resolved = WAKE_CUE_ALIASES[name] ?? CLAIMANT_CUE_ALIASES[name] ?? name;
     if (!isWaveEventId(resolved)) return false;
     this.play(resolved, { x, y, entityId });
     return true;
