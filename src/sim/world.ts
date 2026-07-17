@@ -10432,8 +10432,6 @@ function updateQuorumSplinter(w: WorldState, e: Enemy, dt: number): void {
 // trap both exits of a checkpoint room → earned window. Signature WORLDSPLIT:
 //   1.5s plant/tell → 1.2s moving fracture → 3.0s reel-back punish (±1 tick @20Hz).
 // No global aggro before encounter activation (player enters approach / pressure).
-const WORLDSPLIT_PHASE = { idle: 0, plant: 1, fracture: 2, punish: 3 } as const;
-
 function severEnc(w: WorldState) {
   return w.encounter && w.encounter.structureKind === "hunt" ? w.encounter : null;
 }
