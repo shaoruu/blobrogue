@@ -4,6 +4,7 @@ import { dirname } from "node:path";
 // The changelog generator is a plain Node module (kept out of the tsc program) so it can
 // run in the build without a compile step. It parses CHANGELOG.md -> src/generated.
 import { writeChangelog, latestVersion } from "./tools/genChangelog.mjs";
+import { writeChangelogSite } from "./tools/genChangelogSite.mjs";
 
 const root = dirname(fileURLToPath(import.meta.url));
 
@@ -23,6 +24,8 @@ export default defineConfig({
       name: "blobrogue-changelog",
       buildStart() {
         writeChangelog(root);
+        // The standalone /changelog site is built from the same parse, so it never drifts.
+        writeChangelogSite(root);
       },
     },
   ],

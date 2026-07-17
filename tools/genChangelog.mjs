@@ -13,6 +13,8 @@
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
+import { attachMedia } from "./changelogMedia.mjs";
+import { writeChangelogSite } from "./genChangelogSite.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(HERE, "..");
@@ -57,6 +59,7 @@ function renderModule(sections) {
     const parts = [];
     if (e.title !== undefined) parts.push(`title: ${JSON.stringify(e.title)}`);
     parts.push(`body: ${JSON.stringify(e.body)}`);
+    if (e.media && e.media.length) parts.push(`media: ${JSON.stringify(e.media)}`);
     return `{ ${parts.join(", ")} }`;
   };
   const sectionTs = (s) => {
@@ -70,6 +73,7 @@ function renderModule(sections) {
 export interface ChangelogEntry {
   title?: string;
   body: string;
+  media?: string[]; // public URL paths of shipped sprite art, e.g. "/sprites/pets/wick.png"
 }
 
 export interface ChangelogSection {
@@ -91,7 +95,7 @@ export const LATEST_VERSION: string = CHANGELOG[0]?.version ?? "unreleased";
 // Regenerate src/generated/changelog.ts from CHANGELOG.md. Returns the latest version key.
 export function writeChangelog(repoRoot = REPO_ROOT) {
   const md = readFileSync(join(repoRoot, "CHANGELOG.md"), "utf8");
-  const sections = parseChangelog(md);
+  const sections = attachMedia(parseChangelog(md));
   const outDir = join(repoRoot, "src", "generated");
   mkdirSync(outDir, { recursive: true });
   writeFileSync(join(outDir, "changelog.ts"), renderModule(sections), "utf8");
@@ -106,5 +110,6 @@ export function latestVersion(repoRoot = REPO_ROOT) {
 
 if (import.meta.url === `file://${process.argv[1]}`) {
   const version = writeChangelog();
-  process.stdout.write(`generated src/generated/changelog.ts (latest: ${version})\n`);
+  writeChangelogSite();
+  process.stdout.write(`generated src/generated/changelog.ts + public/changelog/ (latest: ${version})\n`);
 }
