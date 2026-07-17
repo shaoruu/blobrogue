@@ -20,8 +20,14 @@ import {
   CAT_NODE_ID, CAT_PET_ID, CAT_RESCUE_FLOOR,
   DRAGON_NODE_ID, DRAGON_PET_ID, DRAGON_RESCUE_FLOOR,
   SLIME_NODE_ID, SLIME_PET_ID, SLIME_RESCUE_FLOOR,
+  WICK_NODE_ID, WICK_PET_ID, WICK_RESCUE_FLOOR,
+  PEBBLE_NODE_ID, PEBBLE_PET_ID, PEBBLE_RESCUE_FLOOR,
+  CLATTER_NODE_ID, CLATTER_PET_ID, CLATTER_RESCUE_FLOOR,
+  NULLFIN_NODE_ID, NULLFIN_PET_ID, NULLFIN_RESCUE_FLOOR,
 } from "../src/sim/camp_nodes.js";
 import { petSpriteFor } from "../src/game/pets.js";
+import { SHEETS } from "../src/game/assets.js";
+import { drawPetFrame } from "../src/game/petRenderer.js";
 import { createWorld, spawnPlayerInWorld, stepWorld } from "../src/sim/world.js";
 import { buildSnapshot } from "../src/net/protocol.js";
 import { IDLE_INPUT } from "../src/sim/input.js";
@@ -170,20 +176,24 @@ function multiPetTests(): void {
       === [DOGGIE_PET_ID, CAT_PET_ID, DRAGON_PET_ID, SLIME_PET_ID].sort().join(","));
 
   section("the server-side rescue grant is data-driven: deeper runs earn deeper pets");
-  check("a shallow run (below the cat's floor) rescues only the pup",
+  check("a shallow run at the pup's floor rescues only the pup (wick waits at 5)",
     rescueNodesForRun(DOGGIE_RESCUE_FLOOR).join(",") === DOGGIE_NODE_ID
+    && !rescueNodesForRun(WICK_RESCUE_FLOOR - 1).includes(WICK_NODE_ID)
     && !rescueNodesForRun(CAT_RESCUE_FLOOR - 1).includes(CAT_NODE_ID));
-  check("reaching the cat's floor earns the cat (pup too), not yet the dragon",
+  check("reaching the cat's floor earns the cat (pup + wick too), not yet the dragon",
     rescueNodesForRun(CAT_RESCUE_FLOOR).includes(CAT_NODE_ID)
     && rescueNodesForRun(CAT_RESCUE_FLOOR).includes(DOGGIE_NODE_ID)
+    && rescueNodesForRun(CAT_RESCUE_FLOOR).includes(WICK_NODE_ID)
     && !rescueNodesForRun(CAT_RESCUE_FLOOR).includes(DRAGON_NODE_ID));
-  check("reaching the dragon's floor earns doggie+cat+dragon, not yet the slime",
+  check("reaching the dragon's floor earns doggie+wick+cat+pebble+dragon, not yet clatter/slime",
     rescueNodesForRun(DRAGON_RESCUE_FLOOR).sort().join(",")
-      === [DOGGIE_NODE_ID, CAT_NODE_ID, DRAGON_NODE_ID].sort().join(",")
+      === [DOGGIE_NODE_ID, WICK_NODE_ID, CAT_NODE_ID, PEBBLE_NODE_ID, DRAGON_NODE_ID].sort().join(",")
+    && !rescueNodesForRun(DRAGON_RESCUE_FLOOR).includes(CLATTER_NODE_ID)
     && !rescueNodesForRun(DRAGON_RESCUE_FLOOR).includes(SLIME_NODE_ID));
-  check("reaching the slime's floor (the deepest) earns all four companions",
+  check("reaching the slime's floor earns the classic pack plus wick/pebble/clatter (not yet nullfin)",
     rescueNodesForRun(SLIME_RESCUE_FLOOR).sort().join(",")
-      === [DOGGIE_NODE_ID, CAT_NODE_ID, DRAGON_NODE_ID, SLIME_NODE_ID].sort().join(","));
+      === [DOGGIE_NODE_ID, WICK_NODE_ID, CAT_NODE_ID, PEBBLE_NODE_ID, DRAGON_NODE_ID, CLATTER_NODE_ID, SLIME_NODE_ID].sort().join(",")
+    && !rescueNodesForRun(SLIME_RESCUE_FLOOR).includes(NULLFIN_NODE_ID));
   check("a run below the shallowest rescue floor earns nothing",
     rescueNodesForRun(DOGGIE_RESCUE_FLOOR - 1).length === 0);
   check("isDoggieRescuedByRun still agrees with the generalized grant for the pup",
@@ -194,6 +204,10 @@ function multiPetTests(): void {
   check("cat -> cat", petSpriteFor(CAT_PET_ID) === "cat");
   check("dragon -> dragon", petSpriteFor(DRAGON_PET_ID) === "dragon");
   check("slime -> slime_pet (distinct from the slime ENEMY sprite)", petSpriteFor(SLIME_PET_ID) === "slime_pet");
+  check("wick -> wick", petSpriteFor(WICK_PET_ID) === "wick");
+  check("pebble -> pebble", petSpriteFor(PEBBLE_PET_ID) === "pebble");
+  check("clatter -> clatter", petSpriteFor(CLATTER_PET_ID) === "clatter");
+  check("nullfin -> nullfin", petSpriteFor(NULLFIN_PET_ID) === "nullfin");
   check("an unknown pet id renders nothing (graceful null, never a crash)",
     petSpriteFor("griffin") === null && petSpriteFor("") === null);
   check("every companion node's pet id has a render sprite (no dangling pet)",
@@ -203,6 +217,100 @@ function multiPetTests(): void {
 // The pet is a CLIENT-SIDE cosmetic companion — it rides the identity/wire like hat/face and
 // the sim does not know it exists. Two snapshot builds of the SAME stepped world under identity
 // maps that differ ONLY in the equipped pet must agree byte-for-byte on every gameplay field.
+
+// Sable-PASS pack: Wick / Pebble / Clatter / Nullfin — RESCUED companions with attack strips.
+function sablePassPetTests(): void {
+  section("Sable-PASS pets: Wick/Pebble/Clatter/Nullfin are RESCUED companions (floors 5/9/14/20)");
+  const wick = campNodeById(WICK_NODE_ID);
+  const pebble = campNodeById(PEBBLE_NODE_ID);
+  const clatter = campNodeById(CLATTER_NODE_ID);
+  const nullfin = campNodeById(NULLFIN_NODE_ID);
+  check("pet_wick is a companion RESCUE (cost 0, grants wick)",
+    wick?.category === "companion" && wick?.rescue === true && wick?.cost === 0 && wick?.pet === WICK_PET_ID
+    && wick?.rescueFloor === WICK_RESCUE_FLOOR && WICK_RESCUE_FLOOR === 5);
+  check("pet_pebble is a companion RESCUE (cost 0, grants pebble)",
+    pebble?.category === "companion" && pebble?.rescue === true && pebble?.cost === 0 && pebble?.pet === PEBBLE_PET_ID
+    && pebble?.rescueFloor === PEBBLE_RESCUE_FLOOR && PEBBLE_RESCUE_FLOOR === 9);
+  check("pet_clatter is a companion RESCUE (cost 0, grants clatter)",
+    clatter?.category === "companion" && clatter?.rescue === true && clatter?.cost === 0 && clatter?.pet === CLATTER_PET_ID
+    && clatter?.rescueFloor === CLATTER_RESCUE_FLOOR && CLATTER_RESCUE_FLOOR === 14);
+  check("pet_nullfin is a companion RESCUE (cost 0, grants nullfin)",
+    nullfin?.category === "companion" && nullfin?.rescue === true && nullfin?.cost === 0 && nullfin?.pet === NULLFIN_PET_ID
+    && nullfin?.rescueFloor === NULLFIN_RESCUE_FLOOR && NULLFIN_RESCUE_FLOOR === 20);
+  check("Sable-PASS floors slot between the classic pack (doggie < wick < cat < pebble < dragon < clatter < slime < nullfin)",
+    DOGGIE_RESCUE_FLOOR < WICK_RESCUE_FLOOR && WICK_RESCUE_FLOOR < CAT_RESCUE_FLOOR
+    && CAT_RESCUE_FLOOR < PEBBLE_RESCUE_FLOOR && PEBBLE_RESCUE_FLOOR < DRAGON_RESCUE_FLOOR
+    && DRAGON_RESCUE_FLOOR < CLATTER_RESCUE_FLOOR && CLATTER_RESCUE_FLOOR < SLIME_RESCUE_FLOOR
+    && SLIME_RESCUE_FLOOR < NULLFIN_RESCUE_FLOOR);
+
+  section("Amber can NEVER buy a Sable-PASS companion");
+  for (const [id, label] of [
+    [WICK_NODE_ID, "wick"], [PEBBLE_NODE_ID, "pebble"], [CLATTER_NODE_ID, "clatter"], [NULLFIN_NODE_ID, "nullfin"],
+  ] as const) {
+    const buy = canBuyNode(id, 9999, [CAMP_SHELL_ID]);
+    check(`buying ${label} is refused as a rescue`, !buy.ok && buy.reason === "rescue");
+  }
+
+  section("Sable-PASS ownership + data-driven rescue grant");
+  check("wick owned only with its node",
+    !isPetOwned(WICK_PET_ID, [CAMP_SHELL_ID]) && isPetOwned(WICK_PET_ID, [CAMP_SHELL_ID, WICK_NODE_ID]));
+  check("reaching wick's floor earns doggie+wick, not yet the cat",
+    rescueNodesForRun(WICK_RESCUE_FLOOR).includes(WICK_NODE_ID)
+    && rescueNodesForRun(WICK_RESCUE_FLOOR).includes(DOGGIE_NODE_ID)
+    && !rescueNodesForRun(WICK_RESCUE_FLOOR).includes(CAT_NODE_ID));
+  check("reaching nullfin's floor (deepest) earns every companion node",
+    rescueNodesForRun(NULLFIN_RESCUE_FLOOR).sort().join(",")
+      === [
+        DOGGIE_NODE_ID, WICK_NODE_ID, CAT_NODE_ID, PEBBLE_NODE_ID,
+        DRAGON_NODE_ID, CLATTER_NODE_ID, SLIME_NODE_ID, NULLFIN_NODE_ID,
+      ].sort().join(","));
+
+  section("Sable-PASS attack sheets are registered; attack clip falls back when missing");
+  for (const id of ["wick", "pebble", "clatter", "nullfin"] as const) {
+    check(`${id}.attack sheet is registered`,
+      SHEETS[`${id}.attack`]?.src === `/sprites/pets/${id}_attack.png`);
+    check(`${id}.idle + ${id}.walk sheets are registered`,
+      SHEETS[`${id}.idle`]?.src === `/sprites/pets/${id}_idle.png`
+      && SHEETS[`${id}.walk`]?.src === `/sprites/pets/${id}_walk.png`);
+  }
+  // Attack fallback: a pet without an attack sheet must not crash — drawPetFrame falls to idle.
+  // Temporarily clear doggie.attack (never registered) and draw with clip "attack".
+  const canvas = document.createElement("canvas");
+  canvas.width = 64; canvas.height = 64;
+  const ctx = canvas.getContext("2d");
+  check("canvas 2d context available for attack-fallback draw", ctx !== null);
+  if (ctx) {
+    // Minimal sprites stub: ready(base) true, sheet(attack) null, sheet(idle) null → static path.
+    let drew = false;
+    const sprites = {
+      sheet: (_name: string, clip: string) => {
+        if (clip === "attack") return null; // missing attack
+        return null; // also missing idle → static base path
+      },
+      ready: () => true,
+      get: () => {
+        drew = true;
+        const img = new Image();
+        // 1x1 placeholder; drawImage tolerates incomplete images in node canvas shim
+        return img;
+      },
+    } as unknown as import("../src/game/assets.js").Sprites;
+    let threw = false;
+    try {
+      drawPetFrame(ctx, sprites, {
+        petId: DOGGIE_PET_ID,
+        clip: "attack",
+        cx: 32, cy: 32, size: 34, facing: 1,
+        xform: { ox: 0, oy: 0, sx: 1, sy: 1, rot: 0 },
+        clock: 0,
+      });
+    } catch {
+      threw = true;
+    }
+    check("attack clip with missing sheet falls back without throwing (static base path)", !threw && drew);
+  }
+}
+
 function petOutOfSimTests(): void {
   section("the pet is OUT of the sim: an equipped pet can never alter a gameplay field");
   const w = createWorld(0xD09, 1, { isShared: true, skipLocalPlayer: true });
@@ -252,6 +360,7 @@ function main(): void {
   amberEarnTests();
   campSpendTests();
   multiPetTests();
+  sablePassPetTests();
   petOutOfSimTests();
   process.stdout.write(`\n${passed} checks passed, ${failed} failed\n`);
   if (failed > 0) { process.stdout.write(`FAILURES:\n${failures.map((f) => "  - " + f).join("\n")}\n`); process.exit(1); }

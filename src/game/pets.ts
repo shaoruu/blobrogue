@@ -7,7 +7,10 @@
 // renders nothing — never a crash.
 
 import type { SpriteName } from "../sim/types.js";
-import { DOGGIE_PET_ID, CAT_PET_ID, DRAGON_PET_ID, SLIME_PET_ID } from "../sim/camp_nodes.js";
+import {
+  DOGGIE_PET_ID, CAT_PET_ID, DRAGON_PET_ID, SLIME_PET_ID,
+  WICK_PET_ID, PEBBLE_PET_ID, CLATTER_PET_ID, NULLFIN_PET_ID,
+} from "../sim/camp_nodes.js";
 
 const PET_SPRITES: Readonly<Record<string, SpriteName>> = {
   [DOGGIE_PET_ID]: "doggie",
@@ -15,6 +18,11 @@ const PET_SPRITES: Readonly<Record<string, SpriteName>> = {
   [DRAGON_PET_ID]: "dragon",
   // The slime companion renders as "slime_pet" — a key distinct from the "slime" ENEMY sprite.
   [SLIME_PET_ID]: "slime_pet",
+  // Sable-PASS pack — render keys match pet ids (flat sprites under public/sprites/pets/).
+  [WICK_PET_ID]: "wick",
+  [PEBBLE_PET_ID]: "pebble",
+  [CLATTER_PET_ID]: "clatter",
+  [NULLFIN_PET_ID]: "nullfin",
 };
 
 // The sprite for an equipped pet id, or null for an unknown id (graceful: renders nothing).

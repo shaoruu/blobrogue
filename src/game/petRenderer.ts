@@ -8,7 +8,7 @@ export const PET_RENDER_SIZE = 34;
 
 export interface DrawPetFrameOptions {
   petId: string;
-  clip: Extract<SheetClip, "idle" | "walk">;
+  clip: Extract<SheetClip, "idle" | "walk" | "attack">;
   cx: number;
   cy: number;
   size: number;
@@ -24,7 +24,9 @@ export function drawPetFrame(
 ): void {
   const sprite = petSpriteFor(options.petId);
   if (sprite === null) return;
-  const sheet = sprites.sheet(sprite, options.clip);
+  // Attack is optional per pet: fall back to idle strip, then the static base PNG.
+  let sheet = sprites.sheet(sprite, options.clip);
+  if (!sheet && options.clip === "attack") sheet = sprites.sheet(sprite, "idle");
   if (!sheet && !sprites.ready(sprite)) {
     ctx.save();
     ctx.fillStyle = "#a855f7";
