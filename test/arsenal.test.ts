@@ -403,11 +403,12 @@ function printMatrix(m: Matrix): void {
 const WAVE_AB_SPECIALISTS = new Set<WeaponId>([
   "mooring_nail", "sluicegate", "oddsmaker", "pathmaker",
   "resonant_fork", "red_pen", "margin_call", "sidewinder",
+  "hushiron", "backtalk", "lamplighter", "faultlink",
 ]);
 // Verb-identity metrics prove via authored spec (like paving), not aim-straight room clears.
 // Sidewinder's Quill shape (turn 3.5 / r=5 / no basePierce) deliberately fails the raw
 // excelRoom harness — the flank metric is the proof, not a fattened BALANCER_TODO clear.
-const VERB_IDENTITY_METRICS = new Set(["paving", "link", "mark", "copy", "flank"]);
+const VERB_IDENTITY_METRICS = new Set(["paving", "link", "mark", "copy", "flank", "stance", "parry", "relight", "share"]);
 
 // Median clear ticks among weapons that CLEARED a room (uncleared entries excluded so
 // one impossible pairing can't drag the room's midpoint to the cap).
@@ -484,6 +485,8 @@ function manifestGates(): void {
     wep.gamble !== undefined ? "gamble" : "", wep.paint?.isPaving === true ? "pave" : "",
     wep.resonate !== undefined ? "tune" : "", wep.rewrite !== undefined ? "rewrite" : "",
     wep.margin !== undefined ? "copy" : "", wep.sidewinder !== undefined ? "flank" : "",
+    wep.stance !== undefined ? "stance" : "", wep.parry !== undefined ? "parry" : "",
+    wep.relight !== undefined ? "relight" : "", wep.faultlink !== undefined ? "link" : "",
   ].filter((s) => s.length > 0).join("+") || "plain";
   const fingerprints = ALL_WEAPONS.map((id) => `${mechSig(WEAPONS[id])}|${ARSENAL[id].idealRange}|${ARSENAL[id].target}`);
   const dupes = fingerprints.filter((f, i) => fingerprints.indexOf(f) !== i);
@@ -1241,6 +1244,34 @@ function differentiationGates(m: Matrix): void {
           && s.turn >= 3.0 && WEAPONS[id].bulletRadius <= 5 && (WEAPONS[id].basePierce ?? 0) === 0;
         detail = s === undefined ? "no sidewinder spec"
           : `arcs=${s.arcs} flank=${s.flankBonus} turn=${s.turn} r=${WEAPONS[id].bulletRadius}`;
+      } else if (metric === "stance") {
+        // Hushiron: the ROOT/RAMP stance identity — still-time ramps accuracy + pierce (never
+        // damage), moving vents, a dash clears. Proven by the authored spec, like paving.
+        const s = WEAPONS[id].stance;
+        ok = s !== undefined && s.maxStacks >= 3 && s.stillDelay > 0 && s.stackInterval > 0
+          && s.spreadPerStack > 0 && s.moveClearSpeed > 0;
+        detail = s === undefined ? "no stance spec" : `stacks=${s.maxStacks} still=${s.stillDelay}`;
+      } else if (metric === "parry") {
+        // Backtalk: the PARRY/RETURN identity — a frontal window catches an enemy shot and
+        // throws it back at >1x on a real cooldown that starts only on a catch.
+        const s = WEAPONS[id].parry;
+        ok = s !== undefined && s.returnCoef >= 1 && s.windowDur > 0 && s.cooldown > 0
+          && s.windowArc > 0 && s.returnMax > s.returnMin;
+        detail = s === undefined ? "no parry spec" : `coef=${s.returnCoef} cd=${s.cooldown}`;
+      } else if (metric === "relight") {
+        // Lamplighter: the RELIGHT identity — a lit shot pierces further and plants a capped,
+        // short-lived safe patch (a light edit the aim-straight harness cannot express).
+        const s = WEAPONS[id].relight;
+        ok = s !== undefined && s.litDist > 0 && s.patchRadius > 0 && s.patchLife > 0
+          && s.maxPatches >= 1;
+        detail = s === undefined ? "no relight spec" : `lit=${s.litDist} patch=${s.patchRadius}`;
+      } else if (metric === "share") {
+        // Faultlink: the LINK/SHARE identity — two marked bodies echo a bounded fraction of
+        // primary damage across the seam (room 0.25 / boss 0.15), rate-clamped.
+        const s = WEAPONS[id].faultlink;
+        ok = s !== undefined && s.echoRoom > 0 && s.echoRoom < 1 && s.echoBoss > 0
+          && s.echoBoss < s.echoRoom && s.range >= 120 && s.linkDur > 0;
+        detail = s === undefined ? "no faultlink spec" : `echo=${s.echoRoom}/${s.echoBoss} range=${s.range}`;
       } else if ((entry.resource === "health-risk" || entry.resource === "coin-fed") && metric !== "boss") {
         // Cost-paid run vs the room's neutral median: the payoff must be real (the
         // Lastlight pays in hearts, the Midas in coins — same paid-ceiling contract).
@@ -1273,6 +1304,7 @@ function differentiationGates(m: Matrix): void {
   const waveA = new Set<WeaponId>([
     "mooring_nail", "sluicegate", "oddsmaker", "pathmaker",
     "resonant_fork", "red_pen", "margin_call", "sidewinder",
+    "hushiron", "backtalk", "lamplighter", "faultlink",
   ]);
   const referenceWeapons = ALL_WEAPONS.filter((id) => !waveA.has(id));
   const bossVals75 = p75(referenceWeapons.map((id) => m.boss.get(id)!), "high");
@@ -1291,7 +1323,8 @@ function creativeGates(m: Matrix): void {
   const NEW_WAVE: WeaponId[] = ["lastlight", "breach", "snapwire", "frostline", "halo", "sentry", "crook",
     "reaper", "swarm", "midas", "phase", "vortex",
     "mooring_nail", "sluicegate", "oddsmaker", "pathmaker",
-    "resonant_fork", "red_pen", "margin_call", "sidewinder"];
+    "resonant_fork", "red_pen", "margin_call", "sidewinder",
+    "hushiron", "backtalk", "lamplighter", "faultlink"];
   const mechSig = (wep: Weapon): string => [
     wep.melee ? (wep.melee.isThrust ? "thrust" : "sweep") : "",
     wep.charge ? "charge" : "", wep.wire ? "wire" : "", wep.paint ? "paint" : "",
@@ -1310,6 +1343,8 @@ function creativeGates(m: Matrix): void {
     wep.gamble !== undefined ? "gamble" : "", wep.paint?.isPaving === true ? "pave" : "",
     wep.resonate !== undefined ? "tune" : "", wep.rewrite !== undefined ? "rewrite" : "",
     wep.margin !== undefined ? "copy" : "", wep.sidewinder !== undefined ? "flank" : "",
+    wep.stance !== undefined ? "stance" : "", wep.parry !== undefined ? "parry" : "",
+    wep.relight !== undefined ? "relight" : "", wep.faultlink !== undefined ? "link" : "",
   ].filter((x) => x.length > 0).join("+") || "plain";
 
   section("[MAJOR] creative audit: every addition moves a whole play dimension");

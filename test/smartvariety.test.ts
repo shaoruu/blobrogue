@@ -77,9 +77,9 @@ section("catalog contracts");
     uncommon: normal.filter((item) => item.rarity === "uncommon").length,
     rare: normal.filter((item) => item.rarity === "rare").length,
   };
-  check("46 weapons include the pistol and 45 are pickup offers",
-    Object.keys(WEAPONS).length === 46
-    && PICKUP_WEAPONS.length === 45
+  check("50 weapons include the pistol and 49 are pickup offers",
+    Object.keys(WEAPONS).length === 50
+    && PICKUP_WEAPONS.length === 49
     && !PICKUP_WEAPONS.includes("pistol"));
   check("44 blessings split into 40 normal and 4 premium cores",
     ITEMS.length === 44 && normal.length === 40 && ITEMS.length - normal.length === 4);
