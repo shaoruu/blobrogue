@@ -284,7 +284,18 @@ const windowStub: any = {
   removeEventListener: (type: string, fn: (ev: unknown) => void) => {
     windowListeners.get(type)?.delete(fn);
   },
-  location: { search: "", href: "http://localhost/", hash: "", pathname: "/", origin: "http://localhost" },
+  location: {
+    search: "", href: "http://localhost/", hash: "", pathname: "/", origin: "http://localhost",
+    // Real-enough assign so navigation-triggering code (e.g. WHAT'S NEW -> /changelog) is
+    // testable: the location fields update; nothing else happens (no real navigation).
+    assign(url: string) {
+      const u = new URL(String(url), windowStub.location.href);
+      windowStub.location.pathname = u.pathname;
+      windowStub.location.search = u.search;
+      windowStub.location.hash = u.hash;
+      windowStub.location.href = u.href;
+    },
+  },
   // Real-enough replaceState so URL-consuming code (invite/auth strip) is testable: the
   // location fields update; nothing else happens (no navigation, no listeners).
   history: {

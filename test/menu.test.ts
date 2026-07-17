@@ -48,7 +48,7 @@ import { getSelectedKit, setSelectedKit } from "../src/net/kitSelection.js";
 import type { RunLoadout } from "../src/net/kitSelection.js";
 import { NUDGE_DISMISSED_AT_KEY, NUDGE_SHOWN_AT_KEY } from "../src/ui/signinNudge.js";
 import { gridTargetIndex, padActions } from "../src/ui/menuGamepad.js";
-import { CHANGELOG, LATEST_VERSION } from "../src/generated/changelog.js";
+import { LATEST_VERSION } from "../src/generated/changelog.js";
 import {
   COPY_INVITE_LABEL, INVITE_COPIED_LABEL, INVITE_SHARED_LABEL, INVITE_COPY_FAILED_LABEL,
   INVITE_OFFLINE_NOTE, INVITE_UNREACHABLE_NOTE, ARENA_LABEL, ARENA_PATCHING_LABEL,
@@ -2333,13 +2333,16 @@ async function main(): Promise<void> {
     check("the URL line's height is reserved in CSS (failure fill can't shift)", /invite-url\s*\{[^}]*min-height/.test(html));
   }
 
-  section("What's New: the uniform WHAT'S NEW nav destination, single-sourced from CHANGELOG.md");
+  section("What's New: the uniform WHAT'S NEW nav destination -> the standalone /changelog site");
   {
     const SEEN_KEY = "blobrogue.changelogSeen";
     const latest = LATEST_VERSION; // the newest changelog section's version key
+    const loc = window.location as unknown as { pathname: string; href: string };
+    const resetLoc = () => { loc.pathname = "/"; loc.href = "http://localhost/"; };
 
-    // A brand-new player (no stored key): the dest shows, WITHOUT the unread cue, and the
-    // boot popup is silent (it just catches them up). It rides the uniform nav stack.
+    // A brand-new player (no stored key): the dest shows, WITHOUT the unread cue, and the boot
+    // catch-up marks them seen silently (an unseen build shouldn't nag). Rides the nav stack.
+    resetLoc();
     localStorage.removeItem(SEEN_KEY);
     const fresh = makeMenu();
     await fresh.menu.showTitle();
@@ -2350,71 +2353,45 @@ async function main(): Promise<void> {
       (buttonsOf(fresh.overlay)[0] ?? "").includes("PLAY"));
     check("a brand-new player sees NO unread cue (no NEW chip, no dot)",
       byClass(fresh.overlay, "wn-new").length === 0 && byClass(fresh.overlay, "wn-dot").length === 0);
-    fresh.menu.maybeShowChangelogPopup();
-    check("a brand-new player gets NO popup", byClass(fresh.overlay, "changelog-scrim").length === 0);
-    check("...and is caught up silently (seen := latest)", localStorage.getItem(SEEN_KEY) === latest);
+    fresh.menu.catchUpChangelog();
+    check("a brand-new player is caught up silently (seen := latest)", localStorage.getItem(SEEN_KEY) === latest);
+    check("...and is never auto-navigated away from the title", loc.pathname === "/");
 
     // A returning player on a NEW build (stored key from an older version): the button wears
-    // the grayscale-distinct NEW chip + the amber square dot, and the boot popup opens once.
+    // the grayscale-distinct NEW chip + the amber square dot. The boot catch-up must NOT auto-
+    // navigate them and must leave the cue intact until they click WHAT'S NEW themselves.
     localStorage.setItem(SEEN_KEY, "2026-07-06");
     const ret = makeMenu();
     await ret.menu.showTitle();
     check("a returning player on a new build sees the NEW chip + amber dot",
       byClass(ret.overlay, "wn-new").length === 1 && textOf(byClass(ret.overlay, "wn-new")[0]) === "NEW"
       && byClass(ret.overlay, "wn-dot").length === 1);
-    ret.menu.maybeShowChangelogPopup();
-    check("...and the ONE-TIME popup auto-opens at the menu", byClass(ret.overlay, "changelog-scrim").length === 1);
-    check("the popup header flags the update (UPDATED · WHAT'S NEW)", textOf(byClass(ret.overlay, "cl-title")[0]).includes("UPDATED"));
-    const gotIt = collect(ret.overlay, (n) => n.tagName === "BUTTON" && textOf(n) === "GOT IT");
-    check("the popup carries a [GOT IT] primary", gotIt.length === 1);
-    check("the panel renders version sections + the Unreleased IN PROGRESS marker",
-      byClass(ret.overlay, "cl-section").length === CHANGELOG.length && textOf(byClass(ret.overlay, "cl-body")[0]).includes("IN PROGRESS"));
-    check("opening the popup marks the build seen (dot cleared next paint)", localStorage.getItem(SEEN_KEY) === latest);
-    gotIt[0].onclick?.();
-    check("GOT IT closes the popup", byClass(ret.overlay, "changelog-scrim").length === 0);
+    ret.menu.catchUpChangelog();
+    check("the boot catch-up never auto-navigates a returning player", loc.pathname === "/");
+    check("...and leaves the NEW cue intact (seen unchanged, dot stays) until they click",
+      localStorage.getItem(SEEN_KEY) === "2026-07-06" && byClass(ret.overlay, "wn-dot").length === 1);
 
-    // Caught up: no cue, no popup.
+    // Caught up: no cue.
     localStorage.setItem(SEEN_KEY, latest);
     const caught = makeMenu();
     await caught.menu.showTitle();
     check("a caught-up player sees no unread cue", byClass(caught.overlay, "wn-dot").length === 0);
-    caught.menu.maybeShowChangelogPopup();
-    check("...and no popup", byClass(caught.overlay, "changelog-scrim").length === 0);
 
-    // Clicking the button opens the plain panel (no GOT IT) and clears the unread cue live.
+    // Clicking WHAT'S NEW marks the build seen, clears the unread cue live, and navigates to
+    // the standalone /changelog site — no in-game panel ever appears.
+    resetLoc();
     localStorage.setItem(SEEN_KEY, "2026-07-06");
     const click = makeMenu();
     await click.menu.showTitle();
     check("unread before click", byClass(click.overlay, "wn-dot").length === 1);
     byClass(click.overlay, "nav-whatsnew")[0]?.onclick?.();
-    check("clicking opens the panel (no GOT IT — not the popup)",
-      byClass(click.overlay, "changelog-scrim").length === 1
-      && collect(click.overlay, (n) => n.tagName === "BUTTON" && textOf(n) === "GOT IT").length === 0);
-    check("opening clears the unread cue on the title dest in place",
+    check("clicking navigates same-tab to the /changelog site", loc.pathname === "/changelog", loc.pathname);
+    check("no in-game changelog panel is ever constructed", byClass(click.overlay, "changelog-scrim").length === 0);
+    check("clicking clears the unread cue on the title dest in place",
       byClass(byClass(click.overlay, "nav-whatsnew")[0] ?? {}, "wn-dot").length === 0);
     check("...and marks the build seen", localStorage.getItem(SEEN_KEY) === latest);
 
-    // Visual patch notes: entries the media map matched (tools/changelogMedia.mjs) render a
-    // wrapped .cl-media strip of pixel-art .cl-thumb sprites. Additive — text-only entries
-    // are untouched, so the .cl-section count assertion above still holds.
-    const totalThumbs = CHANGELOG.reduce(
-      (n, s) => n + s.entries.reduce((m, e) => m + (e.media?.length ?? 0), 0), 0);
-    const entriesWithMedia = CHANGELOG.reduce(
-      (n, s) => n + s.entries.filter((e) => (e.media?.length ?? 0) > 0).length, 0);
-    check("matched entries render one .cl-media strip each, all thumbs present",
-      totalThumbs > 0
-      && byClass(click.overlay, "cl-thumb").length === totalThumbs
-      && byClass(click.overlay, "cl-media").length === entriesWithMedia,
-      `thumbs=${byClass(click.overlay, "cl-thumb").length}/${totalThumbs} strips=${byClass(click.overlay, "cl-media").length}/${entriesWithMedia}`);
-    check("the newest (in-progress) pets entry ships thumbnail art",
-      (CHANGELOG[0]?.entries[0]?.media?.length ?? 0) > 0
-      && (CHANGELOG[0]?.entries[0]?.media ?? []).some((p) => p.startsWith("/sprites/pets/")));
-    check("the panel header deep-links to the standalone /changelog site",
-      collect(click.overlay, (n) => n.tagName === "A"
-        && typeof n.className === "string" && n.className.includes("cl-site-link")).length === 1);
-
-    fireWindowEvent("keydown", { key: "Escape" });
-    check("Escape closes the panel", byClass(click.overlay, "changelog-scrim").length === 0);
+    resetLoc();
     localStorage.removeItem(SEEN_KEY);
   }
 
