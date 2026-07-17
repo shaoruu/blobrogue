@@ -26,7 +26,7 @@ import {
 } from "../src/sim/balance.js";
 import { WEAPONS, PICKUP_WEAPONS } from "../src/sim/weapons.js";
 import { weaponDisplayStats } from "../src/sim/weaponStats.js";
-import { createMods } from "../src/sim/items.js";
+import { createMods, ITEMS } from "../src/sim/items.js";
 import { Rng } from "../src/sim/rng.js";
 import * as C from "../src/sim/constants.js";
 
@@ -1565,6 +1565,14 @@ function tooltipTests(): void {
     breachCard.coverage.kind === "ARTILLERY" && breachCard.mechanics.some((mech) => mech.tag === "CHARGE"));
   check("distinct room jobs read distinct role verbs", new Set(wave.map((id) => weaponDisplayStats(id, base, 0).role)).size >= 6);
   check("all seven sit in the pickup pool", wave.every((id) => PICKUP_WEAPONS.includes(id)));
+
+  // Blessing card copy is player-facing: it must never leak raw engine units. Distances,
+  // light, jump, and reveal ranges read as human language (tiles / "farther" / "a wider
+  // glow"), never "140px". Balance numbers live in the apply() fields, not the strings.
+  const pxLeak = /\d+\s*px\b/i;
+  const leaked = ITEMS.flatMap((it) => [it.name, ...it.descs]).filter((s) => pxLeak.test(s));
+  check("no player-facing blessing name/desc leaks a raw px value", leaked.length === 0,
+    leaked.length ? leaked.join(" | ") : "all human-readable");
 }
 
 // ---- roster integration ----
