@@ -73,7 +73,7 @@ function forceOwed(w: WorldState, boss: Enemy): void {
 }
 
 function pinGates(): void {
-  section("F70 Claimant pin + chain + protocol 42");
+  section("F70 Claimant pin + chain + protocol 44");
   check("CLAIMANT_FLOOR is 70", CLAIMANT_FLOOR === 70);
   check("claimant is a boss kind", isBossKind("claimant"));
   check("claim_token is NOT a boss kind", !isBossKind("claim_token"));
