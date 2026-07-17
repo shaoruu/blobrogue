@@ -13,6 +13,7 @@ import type { KitId } from "../../src/sim/kits.js";
 import type { WireEvent } from "../../src/net/protocol.js";
 import type { RunReceiptParticipant } from "../../src/net/runReceipt.js";
 import type { PvpPolicyId } from "../../src/net/pvpPolicy.js";
+import type { PvpTelemetryEvent } from "../../src/sim/events.js";
 import type { Conn, InputIntent } from "./connection.js";
 import type { ServerConfig } from "./config.js";
 
@@ -121,6 +122,7 @@ export interface RoomRuntime {
   offerPlayers(): BlessingOfferRequest[];
   // Offers whose TTL expired this tick (already resolved on both sides) — logging/metrics.
   expiredOfferPlayers(): PlayerId[];
+  pvpTelemetryEvents(): readonly PvpTelemetryEvent[];
 }
 
 // One sim-raised blessing offer (descend or boss chest) awaiting server-side rolling.

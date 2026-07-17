@@ -196,13 +196,13 @@ async function offerAndRunOverTests(): Promise<void> {
   section("offers dedupe by id; terminal run state is readable from snapshots");
   const rig = await makeRig();
   rig.sock.deliver(rig.snap({ full: true }));
-  rig.sock.deliver({ t: "offer", id: 1, choices: ["it_a", "it_b"] });
-  rig.sock.deliver({ t: "offer", id: 1, choices: ["it_a", "it_b"] }); // resend
+  rig.sock.deliver({ t: "offer", id: 1, choices: ["it_a", "it_b"], k: "blessing", tr: "none", isComeback: false });
+  rig.sock.deliver({ t: "offer", id: 1, choices: ["it_a", "it_b"], k: "blessing", tr: "none", isComeback: false }); // resend
   const first = rig.transport.consumePendingOffer();
   const dup = rig.transport.consumePendingOffer();
   check("offer surfaced once with its id", first !== null && first.id === 1 && first.choices.length === 2);
   check("resent offer id not re-prompted", dup === null);
-  rig.sock.deliver({ t: "offer", id: 2, choices: ["it_c"] });
+  rig.sock.deliver({ t: "offer", id: 2, choices: ["it_c"], k: "blessing", tr: "none", isComeback: false });
   const second = rig.transport.consumePendingOffer();
   check("a NEW offer id prompts again", second !== null && second.id === 2);
 

@@ -666,27 +666,43 @@ export function rollPvpDraftChoicesWith(
   const tierBump = Math.max(0, Math.floor(opts.tierBump ?? 0));
   const tierOf = (rarity: ItemRarity): number =>
     rarity === "rare" ? 2 : rarity === "uncommon" ? 1 : 0;
-  const weightOf = (item: ItemDef): number => {
-    const base = PVP.draftRarityWeight[item.rarity];
-    const rarityBoost = 1 + tierBump * tierOf(item.rarity);
-    return base * rarityBoost * (levels.has(item.id) ? 1 : NEW_ITEM_WEIGHT);
-  };
+  const rarityWeight = (rarity: ItemRarity): number =>
+    PVP.draftRarityWeight[rarity] * (1 + tierBump * tierOf(rarity));
+  const itemWeight = (item: ItemDef): number =>
+    levels.has(item.id) ? 1 : NEW_ITEM_WEIGHT;
 
   const remaining = eligible.slice();
   const chosen: ItemDef[] = [];
   for (let draw = 0; draw < count && remaining.length > 0; draw++) {
-    let total = 0;
-    for (const item of remaining) total += weightOf(item);
-    if (total <= 0) break;
-    let roll = rand() * total;
-    let index = 0;
-    for (; index < remaining.length; index++) {
-      roll -= weightOf(remaining[index]);
-      if (roll <= 0) break;
+    const availableRarities = (["common", "uncommon", "rare"] as const)
+      .filter((rarity) =>
+        rarityWeight(rarity) > 0 && remaining.some((item) => item.rarity === rarity)
+      );
+    let rarityTotal = 0;
+    for (const rarity of availableRarities) rarityTotal += rarityWeight(rarity);
+    if (rarityTotal <= 0) break;
+    let rarityRoll = rand() * rarityTotal;
+    let selectedRarity = availableRarities[availableRarities.length - 1];
+    for (const rarity of availableRarities) {
+      rarityRoll -= rarityWeight(rarity);
+      if (rarityRoll <= 0) {
+        selectedRarity = rarity;
+        break;
+      }
     }
-    if (index >= remaining.length) index = remaining.length - 1;
-    chosen.push(remaining[index]);
-    remaining.splice(index, 1);
+    const candidates = remaining.filter((item) => item.rarity === selectedRarity);
+    let itemTotal = 0;
+    for (const item of candidates) itemTotal += itemWeight(item);
+    let itemRoll = rand() * itemTotal;
+    let index = 0;
+    for (; index < candidates.length; index++) {
+      itemRoll -= itemWeight(candidates[index]);
+      if (itemRoll <= 0) break;
+    }
+    if (index >= candidates.length) index = candidates.length - 1;
+    const pick = candidates[index];
+    chosen.push(pick);
+    remaining.splice(remaining.indexOf(pick), 1);
   }
   return chosen;
 }

@@ -23,6 +23,9 @@ const RARITY_LABEL: Record<ItemRarity, string> = {
 export class BlessingOverlay {
   private root: HTMLElement;
   private cardsEl: HTMLElement;
+  private titleEl: HTMLElement;
+  private subtitleEl: HTMLElement;
+  private hintEl: HTMLElement;
   private countdownEl!: HTMLElement;
   private cards: HTMLElement[] = [];
   private choices: BlessingChoice[] = [];
@@ -30,6 +33,7 @@ export class BlessingOverlay {
   private onPick: ((item: ItemDef) => void) | null = null;
   private keyHandler: ((e: KeyboardEvent) => void) | null = null;
   private focusScope = new FocusScope();
+  private isGamepadLatched = true;
 
   constructor() {
     const root = document.createElement("div");
@@ -41,11 +45,13 @@ export class BlessingOverlay {
     const title = document.createElement("h1");
     title.textContent = "CHOOSE A BLESSING";
     card.appendChild(title);
+    this.titleEl = title;
 
     const sub = document.createElement("p");
     sub.className = "muted";
     sub.textContent = "one pick, stacks for the rest of the run";
     card.appendChild(sub);
+    this.subtitleEl = sub;
 
     // Online offers have an authoritative TTL; the countdown keeps the deadline honest.
     // Always present (nbsp when unused) so showing it never shifts the card's layout.
@@ -63,16 +69,27 @@ export class BlessingOverlay {
     hint.className = "hint";
     hint.textContent = "1 / 2 / 3 or click \u00b7 \u2190 \u2192 then ENTER";
     card.appendChild(hint);
+    this.hintEl = hint;
 
     root.appendChild(card);
     document.body.appendChild(root);
     this.root = root;
   }
 
-  show(choices: BlessingChoice[], onPick: (item: ItemDef) => void): void {
+  show(
+    choices: BlessingChoice[],
+    onPick: (item: ItemDef) => void,
+    opts: { isDraft?: boolean } = {},
+  ): void {
     this.choices = choices;
     this.onPick = onPick;
     this.selected = 0;
+    this.isGamepadLatched = true;
+    this.titleEl.textContent = opts.isDraft ? "CHOOSE YOUR DRAFT" : "CHOOSE A BLESSING";
+    this.subtitleEl.textContent = opts.isDraft
+      ? "only your controls pause \u00b7 you remain damageable"
+      : "one pick, stacks for the rest of the run";
+    this.hintEl.textContent = "1 / 2 / 3 or tap \u00b7 \u2190 \u2192 / d-pad then confirm";
     const previous = currentFocus();
     this.render();
     this.root.classList.remove("hidden");
@@ -85,6 +102,26 @@ export class BlessingOverlay {
   // have no server deadline while the overlay freezes the sim). Layout is stable either way.
   setCountdown(seconds: number | null): void {
     this.countdownEl.textContent = seconds !== null ? `offer expires in ${Math.max(0, Math.ceil(seconds))}s` : "\u00a0";
+  }
+
+  tickGamepad(): void {
+    if (this.onPick === null || typeof navigator.getGamepads !== "function") return;
+    const pad = [...navigator.getGamepads()].find((candidate) => candidate !== null);
+    if (pad === undefined || pad === null) return;
+    const axis = pad.axes[0] ?? 0;
+    const isLeft = pad.buttons[14]?.pressed === true || axis < -0.55;
+    const isRight = pad.buttons[15]?.pressed === true || axis > 0.55;
+    const isConfirm = pad.buttons[0]?.pressed === true;
+    const isPressed = isLeft || isRight || isConfirm;
+    if (!isPressed) {
+      this.isGamepadLatched = false;
+      return;
+    }
+    if (this.isGamepadLatched) return;
+    this.isGamepadLatched = true;
+    if (isConfirm) this.pick(this.selected);
+    else if (isRight) this.setSelected((this.selected + 1) % this.choices.length);
+    else if (isLeft) this.setSelected((this.selected + this.choices.length - 1) % this.choices.length);
   }
 
   hide(): void {

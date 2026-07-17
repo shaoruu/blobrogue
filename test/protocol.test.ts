@@ -191,6 +191,11 @@ function serverRoundTripTests(): void {
     { id: 12, e: { t: "tetherLatch", eid: 5, x: 200, y: 210, tx: 260, ty: 210, inv: false } },
     { id: 13, e: { t: "sentryShot", x: 400, y: 380, aim: 0.5 } },
     { id: 14, e: { t: "haloFlare", x: 300, y: 300, r: 96 } },
+    { id: 15, e: { t: "pvpDraftTriggered", pid: "pMe", source: "dedup", isComeback: true, ordinal: 2, score: 2, leaderScore: 4 } },
+    { id: 16, e: { t: "pvpDraftOffered", pid: "pMe", source: "dedup", isComeback: true, ordinal: 2, items: "split_shot:uncommon:1,deadeye:rare:2,core_dash:rare:1" } },
+    { id: 17, e: { t: "pvpDraftPicked", pid: "pMe", source: "dedup", isComeback: true, ordinal: 2, item: "deadeye", level: 2, latencyTicks: 18, hp: 72, score: 2, leaderScore: 4 } },
+    { id: 18, e: { t: "pvpDraftResolved", pid: "pMe", source: "time", ordinal: 3, outcome: "expiry", latencyTicks: 1200 } },
+    { id: 19, e: { t: "pvpDraftDelayed", pid: "pMe", ordinal: 3, reason: "absence", remainingTicks: 900 } },
   ];
   const snap = buildSnapshot(w, "pMe", 12, events, 9, false, { worldId: "w-test" });
   const decoded = jsonCodec.decodeServer(jsonCodec.encodeServer(snap));
@@ -212,7 +217,7 @@ function serverRoundTripTests(): void {
 
   const others: ServerMsg[] = [
     { t: "ping", id: 4, tick: 100, time: 1234567 },
-    { t: "offer", id: 2, choices: ["it_a", "it_b", "it_c"] },
+    { t: "offer", id: 2, choices: ["it_a", "it_b", "it_c"], k: "blessing", tr: "none", isComeback: false },
     { t: "error", code: "auth", msg: "nope" },
   ];
   for (const m of others) {
@@ -275,7 +280,7 @@ function serverRoundTripTests(): void {
 // who is actually there (the Sev-0 readout).
 function worldBindingWireTests(): void {
   section("v4: authoritative world id + roster are required, strict, and round-trip");
-  check("protocol version covers Choirmaster last_note after Pale/Wave B/Sever (v39)", PROTOCOL_VERSION === 39, `v=${PROTOCOL_VERSION}`);
+  check("protocol version covers policy-bound PVP private draft wire after Choirmaster (v40)", PROTOCOL_VERSION === 40, `v=${PROTOCOL_VERSION}`);
   check("room code maps to its world id", worldIdForRoomCode(" abcd ") === "room:ABCD");
   check("room world ids pass the shared charset gate", isValidWorldId(worldIdForRoomCode("ZZZZ")) && isValidWorldId("arena-1"));
   check("junk world ids fail the shared charset gate", !isValidWorldId("room:../../etc") && !isValidWorldId(""));
@@ -295,7 +300,10 @@ function worldBindingWireTests(): void {
   check("snapshot carries the full roster (interest-independent identities + on/away)", deepEqual(snap.roster, roster));
   check("snapshot carries the resume token when supplied", snap.tok === "tok-abc123");
   check("snapshot carries the party-wait state (sorted, whole seconds)",
-    deepEqual(snap.wait, [{ pid: "pMe", s: 43 }, { pid: "pOther", s: 7 }]), JSON.stringify(snap.wait));
+    deepEqual(snap.wait, [
+      { pid: "pMe", s: 43, k: "blessing", tr: "none", isComeback: false },
+      { pid: "pOther", s: 7, k: "blessing", tr: "none", isComeback: false },
+    ]), JSON.stringify(snap.wait));
   const decoded = jsonCodec.decodeServer(jsonCodec.encodeServer(snap));
   check("wid/roster/tok/wait round-trip deep-equal", deepEqual(decoded, snap));
 

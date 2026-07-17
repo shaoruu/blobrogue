@@ -14,7 +14,7 @@
 
 import {
   createWorld, stepWorld, spawnPlayerInWorld, removePlayerFromWorld, setPlayerAbsence, isPvp,
-  isFloorCleared, playersAtExit, applyItemToWorld,
+  isFloorCleared, playersAtExit, applyItemToWorld, isPvpDraftRuntime,
 } from "../src/sim/world.js";
 import type { WorldState, PlayerSim } from "../src/sim/world.js";
 import {
@@ -41,6 +41,7 @@ import { Rng } from "../src/sim/rng.js";
 import {
   createMods, isPvpBlessingId, itemById, recomputeMods, rollPvpDraftChoicesWith,
 } from "../src/sim/items.js";
+import { PRIVATE_DRAFT_PVP_POLICY } from "../src/net/pvpPolicy.js";
 
 let passed = 0, failed = 0;
 const failures: string[] = [];
@@ -56,8 +57,13 @@ function inp(over: Partial<InputCmd>): InputCmd {
   return { seq: 0, moveX: 0, moveY: 0, aim: 0, firing: false, dash: false, ...over };
 }
 
-function pvpWorld(seed: number, ids: string[]): WorldState {
-  const w = createWorld(seed, 1, { mode: "pvp", isShared: true, skipLocalPlayer: true });
+function pvpWorld(seed: number, ids: string[], pvpPolicy: string | null = null): WorldState {
+  const w = createWorld(seed, 1, {
+    mode: "pvp",
+    isShared: true,
+    skipLocalPlayer: true,
+    pvpPolicy,
+  });
   for (const id of ids) spawnPlayerInWorld(w, id);
   return w;
 }
@@ -145,7 +151,7 @@ section("damage model (balancer numbers)");
   check("pit guardrail constants are exact", PVP.pitEdgeClearance === 200 && PVP.pitWarningBandTiles === 1);
   check("environmental credit window = 2.0s", PVP.envKillCreditWindowSec === 2.0);
   check("chain window = 5.0s", PVP.chainWindowSec === 5.0);
-  check("mid-match draft defaults off for physics-only playtests", PVP.draftEnabled === false);
+  check("policy-less PVP keeps draft runtime inert", !isPvpDraftRuntime(tickZeroWorld));
   check("draft cadence = 3 personal frags or 45s", PVP.draftEveryFrags === 3 && PVP.draftEverySec === 45);
   check("comeback tier bump = +1", PVP.comebackDraftTierBump === 1);
   check("sudden-death distance = 1 frag", PVP.suddenDeathFrags === 1);
@@ -282,15 +288,18 @@ section("MID-MATCH DRAFT: safe pool, cadence, deterministic offers, comeback bum
   advanceToLive(disabledWorld);
   for (const player of disabledWorld.players.values()) {
     player.pvpDraftFrags = PVP.draftEveryFrags;
-    player.pvpNextDraftTick = disabledWorld.tick;
+    player.pvpDraftActiveTicks = pvpDraftEveryTicks();
   }
   const disabledEvents = stepCollect(disabledWorld, 1, new Map());
   check("default-off draft emits no offers even when both cadences are due",
     !disabledEvents.some((event) => event.t === "offerBlessing")
     && disabledWorld.pendingBlessings.size === 0);
 
-  const isDraftPreviouslyEnabled = PVP.draftEnabled;
-  PVP.draftEnabled = true;
+  const unsupportedWorld = pvpWorld(651, ["p1", "p2"], "public_draft_v1");
+  advanceToLive(unsupportedWorld);
+  for (const player of unsupportedWorld.players.values()) player.pvpDraftFrags = PVP.draftEveryFrags;
+  check("unsupported PVP policy fails closed",
+    !stepCollect(unsupportedWorld, 1, new Map()).some((event) => event.t === "offerBlessing"));
   check("every named PvP-blacklisted blessing is rejected",
     pvpBlessingBlacklist.every((id) => !isPvpBlessingId(id)));
   const rolledIds = new Set<string>();
@@ -347,7 +356,7 @@ section("MID-MATCH DRAFT: safe pool, cadence, deterministic offers, comeback bum
     comebackRare > normalRare,
     `rare ${normalRare}->${comebackRare}`);
 
-  const timeWorld = pvpWorld(66, ["p1", "p2"]);
+  const timeWorld = pvpWorld(66, ["p1", "p2"], PRIVATE_DRAFT_PVP_POLICY);
   advanceToLive(timeWorld);
   const timedEvents = stepCollect(timeWorld, pvpDraftEveryTicks() + 1, new Map());
   const timedOffers = timedEvents.filter((event) => event.t === "offerBlessing");
@@ -356,7 +365,7 @@ section("MID-MATCH DRAFT: safe pool, cadence, deterministic offers, comeback bum
     && timedOffers.some((event) => event.t === "offerBlessing" && event.pid === "p1")
     && timedOffers.some((event) => event.t === "offerBlessing" && event.pid === "p2"));
 
-  const fragWorld = pvpWorld(67, ["p1", "p2"]);
+  const fragWorld = pvpWorld(67, ["p1", "p2"], PRIVATE_DRAFT_PVP_POLICY);
   advanceToLive(fragWorld);
   const fragKiller = fragWorld.players.get("p1")!;
   const fragVictim = fragWorld.players.get("p2")!;
@@ -374,7 +383,6 @@ section("MID-MATCH DRAFT: safe pool, cadence, deterministic offers, comeback bum
   check("third personal frag raises that player's draft before the clock",
     fragEvents.some((event) => event.t === "offerBlessing" && event.pid === "p1")
     && !fragEvents.some((event) => event.t === "offerBlessing" && event.pid === "p2"));
-  PVP.draftEnabled = isDraftPreviouslyEnabled;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1170,9 +1178,9 @@ section("PER-WEAPON TTK band (1v1 median 3-5s across the arsenal)");
 }
 
 // ---------------------------------------------------------------------------------------------
-section("FULL-DRAFT TTK: glass-cannon / deadeye / pierce stack stays in band");
+section("FULL-DRAFT TTK: legal crit / pierce / core stack stays in band");
 {
-  const draftedIds = ["glass_cannon", "deadeye", "full_metal", "core_damage"];
+  const draftedIds = ["deadeye", "full_metal", "core_damage", "core_fire"];
   const draftedTtks: number[] = [];
   for (let seed = 70; seed < 91; seed++) {
     const w = pvpWorld(seed, ["p1", "p2"]);
@@ -1256,7 +1264,7 @@ section("DETERMINISM: identical inputs -> byte-identical, and reconnect-stable s
   check("a scripted match replayed twice is byte-identical", a === b);
 
   const runWaveOneReplay = (addOrder: string[]): string => {
-    const w = pvpWorld(93, addOrder);
+    const w = pvpWorld(93, addOrder, PRIVATE_DRAFT_PVP_POLICY);
     advanceToLive(w);
     const attacker = w.players.get("p1")!;
     const victim = w.players.get("p2")!;
@@ -1291,11 +1299,8 @@ section("DETERMINISM: identical inputs -> byte-identical, and reconnect-stable s
       choices,
     });
   };
-  const isDraftPreviouslyEnabled = PVP.draftEnabled;
-  PVP.draftEnabled = true;
   const waveForward = runWaveOneReplay(["p1", "p2"]);
   const waveReversed = runWaveOneReplay(["p2", "p1"]);
-  PVP.draftEnabled = isDraftPreviouslyEnabled;
   check("draft offers, environmental attribution, and knockback replay identically",
     waveForward === waveReversed);
 
@@ -1495,9 +1500,9 @@ section("DETERMINISM EDGE-CASES: self-immune, same-tick order-stable, no shoot-f
 }
 
 // ---------------------------------------------------------------------------------------------
-section("P2 WIRE: protocol v39, match block + spawn protection + reliable events");
+section("P2 WIRE: protocol v40, match block + spawn protection + reliable events");
 {
-  check("PROTOCOL_VERSION bumped to 39", PROTOCOL_VERSION === 39);
+  check("PROTOCOL_VERSION bumped to 40", PROTOCOL_VERSION === 40);
 
   // A pvp snapshot round-trips the match block, per-player team, and the local respawn field.
   const w = pvpWorld(30, ["p1", "p2"]);

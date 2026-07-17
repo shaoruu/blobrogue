@@ -940,6 +940,19 @@
       .bc-rarity.uncommon { color: var(--blu); }
       .bc-rarity.rare { color: var(--pur); }
       .bc-desc { font-family: var(--f-num), monospace; font-size: var(--fs-md); line-height: 1.2; color: var(--ink-mute); }
+      @media (max-width:560px){
+        .blessing{ width:calc(100vw - 16px); max-width:none; padding:16px 10px; gap:8px; }
+        .blessing h1{ font-size:clamp(20px,7vw,28px); }
+        .blessing p.muted,.blessing p.hint{ font-size:var(--fs-2xs); }
+        .blessing-cards{ display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:6px; width:100%; margin:4px 0 2px; }
+        .blessing-card{ width:auto; min-width:0; min-height:240px; gap:6px; padding:16px 6px 12px; }
+        .bc-key{ top:6px; left:6px; width:18px; height:18px; }
+        .bc-icon{ width:46px; height:46px; margin-top:8px; font-size:24px; }
+        .bc-icon img{ width:40px; height:40px; }
+        .bc-name{ font-size:var(--fs-xs); }
+        .bc-tag,.bc-rarity{ font-size:var(--fs-2xs); letter-spacing:1px; }
+        .bc-desc{ font-size:var(--fs-sm); }
+      }
 
       /* --- Patch's shop panel: the compact interact panel (world keeps rendering behind it).
          Anchored above the hotbar so it never covers the buyer or the pedestal row; the

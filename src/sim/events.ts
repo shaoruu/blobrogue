@@ -167,6 +167,13 @@ export type SimEvent =
   | { t: "pvpSpawnAttackBlocked"; pid: PlayerId; x: number; y: number }
   // PVP presentation-only match-point/final-clock crescendo.
   | { t: "pvpSuddenDeath"; leader: PlayerId }
+  // PVP draft telemetry is mode-gated and carries only world-local player ids. The offer's
+  // compact item manifest is `id:rarity:nextLevel` joined by commas.
+  | { t: "pvpDraftTriggered"; pid: PlayerId; source: string; isComeback: boolean; ordinal: number; score: number; leaderScore: number }
+  | { t: "pvpDraftOffered"; pid: PlayerId; source: string; isComeback: boolean; ordinal: number; items: string }
+  | { t: "pvpDraftPicked"; pid: PlayerId; source: string; isComeback: boolean; ordinal: number; item: string; level: number; latencyTicks: number; hp: number; score: number; leaderScore: number }
+  | { t: "pvpDraftResolved"; pid: PlayerId; source: string; ordinal: number; outcome: string; latencyTicks: number }
+  | { t: "pvpDraftDelayed"; pid: PlayerId; ordinal: number; reason: string; remainingTicks: number }
   // PVP: the match resolved — `winner` is the frag leader (id-sorted tiebreak; "" = no winner).
   | { t: "pvpMatchOver"; winner: PlayerId }
   // generic atoms (residual one-off FX)
@@ -175,3 +182,26 @@ export type SimEvent =
   | { t: "trauma"; amount: number }
   // positional near-cam sound cue (+ optional near-cam trauma) for AI telegraph tells
   | { t: "cue"; name: string; x: number; y: number; rate: number; gain: number; trauma: number };
+
+export type PvpDraftTelemetryEvent = Extract<SimEvent, {
+  t:
+    | "pvpDraftTriggered"
+    | "pvpDraftOffered"
+    | "pvpDraftPicked"
+    | "pvpDraftResolved"
+    | "pvpDraftDelayed";
+}>;
+
+export interface PvpDamageTelemetryEvent {
+  t: "pvpDamage";
+  by: PlayerId;
+  victim: PlayerId;
+  weapon: WeaponId;
+  damage: number;
+  victimHp: number;
+}
+
+export type PvpTelemetryEvent =
+  | PvpDraftTelemetryEvent
+  | PvpDamageTelemetryEvent
+  | Extract<SimEvent, { t: "pvpMatchOver" }>;

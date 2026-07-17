@@ -93,7 +93,7 @@ canonical `<prefix>.<payload>` text.
 
 The game server stores the verified policy immutably on its room runtime. Every later join and
 resume must present the same policy, and active bodies plus reserved reconnect seats share the
-four-player cap. `/version` exposes protocol 33, ticket `v1`/`v2`, admission `a2`, supported
+four-player cap. `/version` exposes protocol 40, ticket `v1`/`v2`, admission `a2`, supported
 policies, and both dark rollout flags. Control requires the exact policy catalog
 `["private_draft_v1"]`, the terminal v2 parser acknowledgement, and ordinary WS/snapshot
 liveness. The older signed v1 liveness synthetic remains deliberately separate: it creates an
@@ -117,35 +117,53 @@ responses become local `admission_unavailable` and cannot bind a world.
 
 ## Rolling deployment order
 
-This is a coordinated protocol-v33 hard cut, not a rolling mixed-version deploy.
+This is a coordinated protocol-v40 hard cut, not a rolling mixed-version deploy.
 
 1. Set a new Convex `GS_RECEIPT_SECRET`, distinct from `GS_AUTH_SECRET`, and deploy the additive
    schema, receipt/admission routes, guest capability resolver, and migration function.
-2. Enter maintenance and stop legacy joins. Drain all v32 worlds. A v32 server has no signed
-   completion route, so verify `/worlds` is empty before continuing.
+2. Enter maintenance and stop legacy joins. Drain all pre-v40 worlds. A v32 server has no signed
+   completion route, so verify `/worlds` is empty before continuing; v33–v39 worlds must also drain
+   because their offer/snapshot contract predates policy-bound drafts.
 3. Run
    `migrations.backfillGenerationState({ isLegacyWorldsDrained: true })`. The explicit assertion
    converts drained legacy `playing` rooms to completed so they can reopen once, without
    pretending an old server emitted a receipt.
-4. Publish the v33 client bundle.
+4. Publish the v40 client bundle.
 5. Configure GS with `GS_AUTH_SECRET`, the distinct `GS_RECEIPT_SECRET`,
    `GS_CONVEX_RECEIPT_URL`, `GS_CONVEX_ADMISSION_URL`, and durable
    `GS_GENERATION_STATE_PATH`.
-6. Deploy/reload GS v33, run the signed non-generation synthetic join, then resume joins.
+6. Deploy/reload GS v40, run the signed non-generation synthetic join, then resume joins.
 
-For later v33 deploys, use the normal control-plane drain and flush endpoints. Drain refuses new
+For later v40 deploys, use the normal control-plane drain and flush endpoints. Drain refuses new
 joins; flush clears reconnect seats, persists signed abandonment receipts, retires worlds, and
 only then permits reload.
 
 Old clients receive a terminal protocol or guest-capability rejection with refresh-required
 copy. They do not retry for the 90-second reconnect window and cannot strand a room.
 
-The policy foundation does not change the WebSocket join or snapshot shape, so
-`PROTOCOL_VERSION` remains 33. Ticket v2 and admission a2 are server-side envelope changes.
+The policy-bound draft runtime changes the offer/event/snapshot contract, so
+`PROTOCOL_VERSION` is 40 across client, game server, and control (v40 = PVP private draft wire after Choirmaster v39). Old clients terminate with refresh-required copy. Ticket v2 and
+admission a2 remain the authority envelopes.
+
+`RoomRuntime.pvpPolicy === "private_draft_v1"` is the sole draft-runtime switch. The immutable
+policy is copied into the simulation when the world is constructed; null, unsupported, public,
+and co-op worlds are inert. The 3-frag/45-active-second cadence, 60-active-second offer lifetime,
+offer choices, picks, and drafted build are match-scoped. Insufficient-present-player pauses and
+absence freeze the affected clocks; death does not cancel a pending offer because applying a
+blessing cannot fire, heal, move, or otherwise cause immediate combat action. Match over,
+no-contest, final leave, and requeue clear every pending offer and drafted build.
+
+Low-rate draft trigger/offer/pick/resolve/delay facts use the reliable event stream. High-rate
+damage facts never enter that ring: the game server drains them from a per-tick authoritative
+buffer and writes one structured `pvp telemetry` record per non-empty tick. Records contain only
+the fixed policy, sim tick, world-local player ids, weapon, bounded damage/HP, item rarity/level,
+active-time pick latency, score, and outcome. They contain no account identity, room code, ticket,
+resume token, or secret, and are sufficient to derive post-pick TTK and winner delta offline.
+
 Deploy Convex policy schema/query support before the matching game server, verify `/version`,
-and keep both PVP flags false. A later private-PVP rollout still requires a coordinated Convex,
-game-server, and client release; no flag may be enabled while either side reports an older
-authority contract.
+and keep both PVP flags false. This change is safe to merge dark but does not authorize private
+or public admission; a later private-PVP release must flip only the private guard after its
+coordinated client/server release.
 
 ## Migration and compatibility
 
