@@ -120,7 +120,8 @@
     "test:contentwaveb": "tsx test/contentwaveb.test.ts",
     "test:bundle": "npm run build && node tools/bundle_budget.mjs",
     "test:sever": "tsx test/sever.test.ts",
-    "test:choirmaster": "tsx test/choirmaster.test.ts"
+    "test:choirmaster": "tsx test/choirmaster.test.ts",
+    "test:undertow": "tsx test/undertow.test.ts"
   },
   "devDependencies": {
     "@fal-ai/serverless-client": "^0.15.0",

@@ -239,6 +239,14 @@ SHEETS["choirmaster.idle"] = { src: "/sprites/choir_idle.png", fps: 6 };
 SHEETS["choirmaster.attack"] = { src: "/sprites/choir_attack.png", fps: 10 };
 SHEETS["choir_pillar.idle"] = { src: "/sprites/choir.png", fps: 2 };
 
+// UNDERTOW F65 — placeholder Weaver art (no generation this batch). The roaming core reuses the
+// Weaver's directional walk triplet (its declared directional_walk contract); mechanic bodies
+// are decoy idle loops.
+registerDirectionalSet("undertow", { walkFps: 6, fileBase: "weaver2_px" });
+SHEETS["undertow_pulse.idle"] = { src: "/sprites/weaver2_px.png", fps: 2 };
+SHEETS["undertow_vent.idle"] = { src: "/sprites/weaver2_px.png", fps: 2 };
+SHEETS["undertow_flood.idle"] = { src: "/sprites/weaver2_px.png", fps: 2 };
+
 // PALE THRONE (F75 GIANT #2 — AD-LOCKED committed COLD-material art, wire never regenerate): three
 // single-frame SHELL states the renderer swaps off boss.phase, inheriting the Gorge peel-reveal
 // shape. "pale" is the base/idle body (pale_shell_stone, P1: frost-pale dark stone, dormant/cold);
