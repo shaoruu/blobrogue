@@ -354,15 +354,15 @@ export const BESTIARY_CUES: Readonly<Record<EnemyKind, Readonly<Record<string, W
   },
   claim_token: { fuse: "choir.strikeWarn", toll: "choir.swellFire" },
   claim_socket: { fuse: "weaver.latticeWarn", toll: "weaver.latticeFire" },
-  // THE WAKE F80 — PLACEHOLDER (Choir/Weaver bank); display-facing name THE LAST PROCESSION.
-  // Audio stems/events use wake.procession* story pattern (hooks only; no generation this PR).
+  // THE WAKE F80 — THE LAST PROCESSION story bank (selected remaster stems). NIGHTFALL retired.
   wake: {
-    windup: "choir.swellWarn", lock: "choir.strikeLock", active: "choir.swellFire", impact: "choir.strikeImpact",
-    recover: "choir.recover", entrance: "choir.entrance", phase: "choir.phase", special: "choir.floorDischarge", death: "choir.death",
+    windup: "wake.processionTell", lock: "wake.processionLock", active: "wake.processionFront", impact: "wake.processionFail",
+    recover: "wake.processionRecover", entrance: "wake.processionEntrance", phase: "wake.processionPhase",
+    special: "wake.processionPunish", death: "wake.processionDeath",
   },
-  warm_bier: { fuse: "choir.strikeWarn", toll: "choir.swellFire" },
-  convoy_blocker: { fuse: "weaver.latticeWarn", toll: "weaver.latticeFire" },
-  shadow_front: { fuse: "choir.swellWarn", toll: "choir.swellFire" },
+  warm_bier: { fuse: "wake.processionBierPulse", toll: "wake.processionBierAdvance" },
+  convoy_blocker: { fuse: "wake.processionBlockerHighlight", toll: "wake.processionBlockerBreak" },
+  shadow_front: { fuse: "wake.processionShadowWarn", toll: "wake.processionFront" },
 
   pale: {
     windup: "pale.ringWarn", lock: "pale.ring2Warn", active: "pale.spokeActive", impact: "pale.ringImpact",

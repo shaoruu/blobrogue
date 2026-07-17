@@ -194,6 +194,87 @@ export const WAVE_SOUNDS = {
   "pale.warmthChill": pendingGiantSound("boss/pale_warmth_chill"),
   "pale.warmthClear": pendingGiantSound("boss/pale_warmth_clear"),
 
+  // ---- §2 THE WAKE F80 — THE LAST PROCESSION (selected remaster stems) ---------------
+  // Story stems ship selected (canonical unversioned). NIGHTFALL_PROCESSION retired forever.
+  // Missing files resolve silently — no Choir/Weaver fallback. BierPulse sparse one-shot.
+  "wake.processionEntrance": {
+    stem: "boss/wake_procession_entrance", variants: 1, gain: 0.90, bus: "voiceTell", priority: WAVE_PRIORITY.bossTell,
+    jitter: 0.03, spatial: true, isOffCameraUncapped: true, cooldownMs: 1000, isPerEntityCooldown: true,
+    duck: [dM(0.3, 0.45, 1.0)],
+  },
+  "wake.processionPhase": {
+    stem: "boss/wake_procession_phase", variants: 1, gain: 0.92, bus: "voiceTell", priority: WAVE_PRIORITY.bossTell,
+    jitter: 0.03, spatial: true, isOffCameraUncapped: true, cooldownMs: 1000, isPerEntityCooldown: true,
+    duck: [dM(0.3, 0.4, 0.9)],
+  },
+  "wake.processionDeath": {
+    stem: "boss/wake_procession_death", variants: 1, gain: 1.0, bus: "voiceTell", priority: WAVE_PRIORITY.bossTell,
+    jitter: 0, spatial: true, isOffCameraUncapped: true, cooldownMs: 1000, isPerEntityCooldown: true,
+    duck: [dM(0.2, 1.0, 1.4)],
+  },
+  "wake.processionTell": {
+    stem: "boss/wake_procession_tell", variants: 1, gain: 0.88, bus: "voiceTell", priority: WAVE_PRIORITY.bossTell,
+    jitter: 0.03, spatial: true, isOffCameraUncapped: true, cooldownMs: 200, isPerEntityCooldown: true,
+    duck: [dM(0.4, 0.3, 0.7)],
+  },
+  "wake.processionLock": {
+    stem: "boss/wake_procession_lock", variants: 1, gain: 1.0, bus: "voiceTell", priority: WAVE_PRIORITY.bossLock,
+    jitter: 0, spatial: true, isOffCameraUncapped: true, cooldownMs: 200, isPerEntityCooldown: true,
+    duck: [dM(0.35, 0.12, 0.4)],
+  },
+  "wake.processionFront": {
+    stem: "boss/wake_procession_front", variants: 1, gain: 0.90, bus: "sfx", priority: WAVE_PRIORITY.bossTell,
+    jitter: 0.03, spatial: true, isOffCameraUncapped: true,
+    duck: [dM(0.45, 0.2, 0.55)],
+  },
+  "wake.processionPunish": {
+    stem: "boss/wake_procession_punish", variants: 1, gain: 0.95, bus: "sfx", priority: WAVE_PRIORITY.bossTell,
+    jitter: 0.03, spatial: true, isOffCameraUncapped: true, cooldownMs: 400, isPerEntityCooldown: true,
+    duck: [dM(0.25, 0.4, 1.0)],
+  },
+  "wake.processionRecover": {
+    stem: "boss/wake_procession_recover", variants: 1, gain: 0.78, bus: "sfx", priority: WAVE_PRIORITY.impact,
+    jitter: 0.05, spatial: true, cooldownMs: 300, isPerEntityCooldown: true,
+    duck: [dM(0.55, 0.15, 0.45)],
+  },
+  "wake.processionFail": {
+    stem: "boss/wake_procession_fail", variants: 1, gain: 0.84, bus: "sfx", priority: WAVE_PRIORITY.bossTell,
+    jitter: 0.03, spatial: true,
+    duck: [dM(0.55, 0.12, 0.35)],
+  },
+  "wake.processionBierPulse": {
+    stem: "boss/wake_procession_bier_pulse", variants: 1, gain: 0.38, bus: "sfx", priority: WAVE_PRIORITY.impact,
+    jitter: 0.03, spatial: true, cooldownMs: 400, isPerEntityCooldown: true,
+  },
+  "wake.processionBierAdvance": {
+    stem: "boss/wake_procession_bier_advance", variants: 1, gain: 0.52, bus: "sfx", priority: WAVE_PRIORITY.impact,
+    jitter: 0.03, spatial: true, cooldownMs: 250, isPerEntityCooldown: true,
+  },
+  "wake.processionBlockerHighlight": {
+    stem: "boss/wake_procession_blocker_highlight", variants: 1, gain: 0.70, bus: "voiceTell", priority: WAVE_PRIORITY.bossTell,
+    jitter: 0.03, spatial: true, isOffCameraUncapped: true, cooldownMs: 200, isPerEntityCooldown: true,
+    duck: [dM(0.7, 0.1, 0.3)],
+  },
+  "wake.processionBlockerBreak": {
+    stem: "boss/wake_procession_blocker_break", variants: 1, gain: 0.78, bus: "sfx", priority: WAVE_PRIORITY.bossTell,
+    jitter: 0.03, spatial: true,
+    duck: [dM(0.65, 0.1, 0.35)],
+  },
+  "wake.processionThreshold": {
+    stem: "boss/wake_procession_threshold", variants: 1, gain: 0.80, bus: "voiceTell", priority: WAVE_PRIORITY.bossTell,
+    jitter: 0.03, spatial: true, isOffCameraUncapped: true, cooldownMs: 300, isPerEntityCooldown: true,
+    duck: [dM(0.5, 0.15, 0.45)],
+  },
+  "wake.processionShelter": {
+    stem: "boss/wake_procession_shelter", variants: 1, gain: 0.55, bus: "sfx", priority: WAVE_PRIORITY.impact,
+    jitter: 0.03, spatial: true, cooldownMs: 300, isPerEntityCooldown: true,
+  },
+  "wake.processionShadowWarn": {
+    stem: "boss/wake_procession_shadow_warn", variants: 1, gain: 0.74, bus: "voiceTell", priority: WAVE_PRIORITY.bossTell,
+    jitter: 0.03, spatial: true, isOffCameraUncapped: true, cooldownMs: 250, isPerEntityCooldown: true,
+    duck: [dM(0.6, 0.15, 0.4)],
+  },
+
   // ---- §2 MARROW — bone/shale + sub impact ------------------------------------------
   // Shipped: one listen take, one charge take (pinned to their _v1 stems until the full
   // variant sets land). No fallback for the growl rows: the old enemyAttack/dash
@@ -1810,6 +1891,15 @@ export const WAVE_TELLS: Readonly<Record<string, Readonly<Record<string, MoveTel
     spew: { windup: "pale.zoneWarn", active: "pale.zoneActive" },
     sweep: { windup: "pale.spokeWarn", active: "pale.spokeActive" },
   },
+  // THE WAKE F80 — THE LAST PROCESSION (tell watcher + dusk lock). NIGHTFALL retired.
+  wake: {
+    // impact/recover omitted: miss→wake.procession.miss (Fail); success→wake.procession.success (Punish).
+    last_procession: {
+      windup: "wake.processionTell",
+      lock: "wake.processionLock",
+      active: "wake.processionFront",
+    },
+  },
   skeleton: {
     lunge: { windup: "skeleton.commit" },
   },
@@ -1881,14 +1971,14 @@ export const WAVE_BOSS_PHASE: Readonly<Record<string, WaveEventId>> = {
   boss: "king.phase",
   marrow: "marrow.phase", choir: "choir.phase", weaver: "weaver.phase", gilded: "warden.phase",
   marshal: "marshal.shatter", toll: "toll.phase",
-  gorge: "gorge.phase", pale: "pale.phase",
+  gorge: "gorge.phase", pale: "pale.phase", wake: "wake.processionPhase",
 };
 
 export const WAVE_BOSS_DEATH: Readonly<Record<string, WaveEventId>> = {
   boss: "king.death",
   marrow: "marrow.death", choir: "choir.death", weaver: "weaver.death", gilded: "warden.death",
   marshal: "marshal.death", toll: "toll.death",
-  gorge: "gorge.death", pale: "pale.death",
+  gorge: "gorge.death", pale: "pale.death", wake: "wake.processionDeath",
 };
 
 // Bespoke entrance per boss-grade body (played at floor load / captain spawn).
@@ -1896,7 +1986,7 @@ export const WAVE_BOSS_ENTRANCE: Readonly<Record<string, WaveEventId>> = {
   boss: "king.entrance",
   marrow: "marrow.entrance", choir: "choir.entrance", weaver: "weaver.entrance", gilded: "gilded.entrance",
   marshal: "marshal.entrance", toll: "toll.entrance",
-  gorge: "gorge.entrance", pale: "pale.entrance",
+  gorge: "gorge.entrance", pale: "pale.entrance", wake: "wake.processionEntrance",
 };
 
 // Every event a boss OR regular archetype kind can raise — its preload group (§10:
