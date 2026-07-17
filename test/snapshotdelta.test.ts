@@ -286,7 +286,7 @@ function waveAStateTests(): void {
   delete oldSnapshot.cat;
   check("an old snapshot missing catalog version decodes legacy only",
     validateSnap(oldSnapshot).cat === 0);
-  for (const value of [-1, 2, 1.5, null, "1", true] as WireValue[]) {
+  for (const value of [-1, 3, 1.5, null, "1", true] as WireValue[]) {
     const raw = JSON.parse(JSON.stringify(snapshotToWire(base))) as WireObject;
     raw.cat = value;
     let isRejected = false;
@@ -355,7 +355,7 @@ function safetyTests(): void {
   const d = diffSnapshot(snapshotToWire(base), snapshotToWire(next), next.sseq, fullWorld(next));
   check("a delta advertises its baseline sseq so a client can refuse a gap", d.b === base.sseq && d.q === 7);
 
-  check("protocol version is current (v36: Sever worldsplit + Wave A + Batch0 enc)", PROTOCOL_VERSION === 36);
+  check("protocol version is current (v37: Wave B catalog 2 after Sever worldsplit)", PROTOCOL_VERSION === 37);
 }
 
 function main(): void {

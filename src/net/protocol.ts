@@ -316,7 +316,10 @@ export const FIXED_DT = 1 / TICK_HZ; // 50ms authoritative step
 //   `sever_anchor` ride via ENEMY_ARCHETYPES (no new EnemyWire fields). EncounterState flags
 //   stay sim-internal (escapeMeter/supportsCut/interceptState/chosenExitEdgeId/
 //   worldsplitPhase) — Batch0's enc wire already carries checkpoint/objectiveProgress.
-export const PROTOCOL_VERSION = 36;
+// v37: Content Wave B catalog `2` stacked on Sever v36 / Wave A catalog `1` — closed WeaponId
+//   additions (resonant_fork / red_pen / margin_call / sidewinder) and `cat` admitting version 2.
+//   Wave A fields remain on v35 semantics; Sever worldsplit wire remains on v36.
+export const PROTOCOL_VERSION = 37;
 
 // How long the server reserves a disconnected player's body (their seat) before the
 // authoritative leave lifecycle applies. 90s per the studio balance gate's reconnect
