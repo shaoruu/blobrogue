@@ -32,10 +32,10 @@ Baselines (Wave A+B, locked — for combo audit):
 |---|---|---|---|---:|---:|
 | `hushiron` | ROOT / RAMP | `stance_ramp` | rare | **0.40** | **~0.52** |
 | `backtalk` | PARRY / RETURN | `parry_active` | rare | **0.286** (stub) | **~0.45–0.70** (catch-dependent; ideal ≤1.10 w/ Margin tax) |
-| `lamplighter` | RELIGHT | `light_edit` | common | **0.34** | **~0.40** |
+| `lamplighter` | RELIGHT | `light_edit` | rare | **0.34** | **~0.40** |
 | `faultlink` | LINK / SHARE | `link` | legendary | **0.978** | envelope: sustained ≤**1.15** / specialist ≤**1.35** / 3s burst ≤**1.60** |
 
-Gun rarity ladder unchanged: C10 / R5 / L1. Wave C intentional **1C / 2R / 1L**.
+Gun rarity ladder unchanged: C10 / R5 / L1. Wave C guns (Rook stamp): **0C / 3R / 1L** — Hushiron / Backtalk / Lamplighter rare; Faultlink legendary.
 
 ---
 
@@ -103,8 +103,8 @@ Prior Wave B taxed pairs (Oddsmaker×Margin, Crosscurrent×pierce families, etc.
 
 | Field | Value |
 |---|---|
-| `stackCategory` | **`light_edit`** (GD) |
-| Rarity | **common** |
+| `stackCategory` | **`light_edit`** (GD; identity gun) |
+| Rarity | **rare** |
 | Fire interval | **0.40 s** |
 | Primary | dmg **1.7**, pellets **1**, speed **500**, life **1.0**, `bulletRadius` **5**, `pelletGroup: lamp_shot` → **0.34 PU** |
 | Lit path | if shot travels **≥40 px** through warm light / Carry-the-Light radius / objective light → gain pierce **+1** (shares `CAPS.pierce`) **AND** on first enemy hit or wall, plant safe patch **r=22**, life **1.2 s** |
@@ -137,7 +137,6 @@ Prior Wave B taxed pairs (Oddsmaker×Margin, Crosscurrent×pierce families, etc.
 | PU envelope | sustained ≤**1.15** / specialist ≤**1.35** / 3s burst ≤**1.60** |
 | Cap2 w/ Resonant Fork | enforce **owner1 / party2 / endpoint1** so A+B+C cannot triple-link the same endpoint |
 | Boss coef | **0.70** |
-| Reward note | Quorum → Faultlink permanent reward lead when Wave C ships (content routing only; not a numeric change here) |
 | Combo tax | Fork × Faultlink (**50%** echo if same endpoint); Crosscurrent (**55%** on jumps riding fault echoes) |
 
 ---
@@ -158,6 +157,17 @@ hushiron, backtalk, lamplighter, faultlink
 ```
 
 Catalog: Wave C = catalog **`3`** (Wave A = `1`, Wave B = `2`; legacy `0` unchanged). Do not mutate prior catalog arrays.
+
+## Boss rewards (Wave C ship)
+
+Permanent boss-clear reward leads routed with catalog **`3`**. **Do not invent other reward remaps** in this wave.
+
+| Boss | Reward lead |
+|---|---|
+| Jet | Oddsmaker (`oddsmaker`) |
+| Tithe | Sluicegate (`sluicegate`) |
+| Quorum | Faultlink (`faultlink`) |
+| Gorge | Breach (`breach`) |
 
 ## Sign-off
 
