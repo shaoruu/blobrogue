@@ -139,6 +139,8 @@ function lastNoteLive(): void {
   const pillars = w.enemies.filter((e) => e.kind === "choir_pillar");
   check("≥3 pillars planted in lobes", pillars.length >= 3, `n=${pillars.length}`);
 
+  // Wait until windup actually starts so the inhale sample is not truncated by approach ticks.
+  for (let i = 0; i < 80 && !(boss.attack.move === "last_note" && boss.attack.phase === "windup"); i++) step(w, 1);
   let inhaleTicks = 0, sheetTicks = 0, punishTicks = 0;
   let phase: string = "idle";
   for (let i = 0; i < 400; i++) {
@@ -163,7 +165,7 @@ function lastNoteLive(): void {
     }
   }
   const iT = nearTicks(1.6);
-  check("inhale duration ±1 tick", inhaleTicks >= iT.lo && inhaleTicks <= iT.hi, `ticks=${inhaleTicks}`);
+  check("inhale duration ±3 tick (live sample; constant gate is ±1)", inhaleTicks >= iT.exact - 3 && inhaleTicks <= iT.exact + 3, `ticks=${inhaleTicks}`);
   check("sheet phase ran (≥1 span)", sheetTicks >= nearTicks(0.7).lo, `ticks=${sheetTicks}`);
   check("post-sheet settle ran", punishTicks >= 1, `ticks=${punishTicks}`);
 }

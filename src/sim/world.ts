@@ -11869,7 +11869,6 @@ function choirInAcousticShadow(w: WorldState, px: number, py: number, e: Enemy):
   const toPlayerX = px - e.x;
   const toPlayerY = py - e.y;
   const plen = Math.hypot(toPillarX, toPillarY) || 1;
-  const qlen = Math.hypot(toPlayerX, toPlayerY) || 1;
   // Behind = past the pillar along the same ray, within half-width.
   const along = (toPlayerX * toPillarX + toPlayerY * toPillarY) / plen;
   if (along < plen) return false; // not past the pillar
@@ -11921,7 +11920,7 @@ function choirMaybeBeginLastNote(w: WorldState, e: Enemy, ev: SimEvent[]): boole
   return true;
 }
 
-function choirLastNoteLiveBroken(w: WorldState, e: Enemy): boolean {
+function choirLastNoteLiveBroken(w: WorldState, _e: Enemy): boolean {
   const enc = choirEnc(w);
   if (!enc) return false;
   const liveId = Number(enc.flags.livePillarId);
@@ -11934,7 +11933,6 @@ function choirLastNoteStep(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]):
   const a = e.attack;
   const boss = e.boss!;
   const enc = choirEnc(w);
-  const pillars = choirPillars(w, e).filter((p) => p.aux !== 2 && !((Number(enc?.flags.silencedMask) || 0) & (1 << boss.windowAddIds.indexOf(p.id))));
   // Prefer authored order from windowAddIds for sheet spans.
   const route = choirPillars(w, e);
 
@@ -12070,7 +12068,6 @@ function choirOutcomeIsSuccess(e: Enemy): boolean {
 
 function updateChoirmaster(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void {
   const boss = e.boss!;
-  const enc = choirEnc(w);
   // Activation + pillar plant may happen during entrance grace (no LAST NOTE / aggro yet).
   if (!choirTryActivate(w, e, ev)) {
     // Idle conductor — no global aggro before activation.
