@@ -79,7 +79,8 @@ import type {
 // v33: authority-plane receipt/capability/generation admission hard cut.
 // v34: Batch0 encounter architecture (`enc` on snapshots).
 // v35: Wave A closed WeaponId and per-weapon cycle state.
-export const SYNTHETIC_JOIN_PROTOCOL = 35;
+// v36: Batch1 Sever F55 closed AttackMove `worldsplit`.
+export const SYNTHETIC_JOIN_PROTOCOL = 36;
 export const SYNTHETIC_COOP_TICKET_ENVELOPE = "v1";
 export const SYNTHETIC_PVP_TICKET_ENVELOPE = "v2";
 export const SYNTHETIC_ADMISSION_ENVELOPE = "a2";

@@ -310,7 +310,13 @@ export const FIXED_DT = 1 / TICK_HZ; // 50ms authoritative step
 //   Sluice observer mode, Oddsmaker outcome, revive channel owner (`rvb`), and Muddy dash
 //   state (`isMds`). Batch0 `enc` remains on the snapshot. Later PvP/Pale work allocates the
 //   next version only when its own wire changes.
-export const PROTOCOL_VERSION = 35;
+// v36 (Batch1 Sever F55): the closed AttackMove set grows `worldsplit` (display name
+//   WORLDSPLIT) and it is decoded through inSet(ATTACK_MOVES,...), so a v35 client rejects a
+//   snapshot carrying it — a real wire cut on top of Wave A's v35. Enemy kinds `sever` /
+//   `sever_anchor` ride via ENEMY_ARCHETYPES (no new EnemyWire fields). EncounterState flags
+//   stay sim-internal (escapeMeter/supportsCut/interceptState/chosenExitEdgeId/
+//   worldsplitPhase) — Batch0's enc wire already carries checkpoint/objectiveProgress.
+export const PROTOCOL_VERSION = 36;
 
 // How long the server reserves a disconnected player's body (their seat) before the
 // authoritative leave lifecycle applies. 90s per the studio balance gate's reconnect
@@ -859,6 +865,8 @@ const ATTACK_MOVES: Record<AttackMove, true> = {
   // Wave 1 rework — the deep bosses' interleaved pressure moves (v19) + the Tithe's dedicated
   // P3 rip signature (v23).
   tracer: true, beam: true, spew: true, hurl: true, rip: true,
+  // v35 SEVER F55 signature — display name WORLDSPLIT everywhere client-facing.
+  worldsplit: true,
 };
 const ENEMY_TIERS: Record<EnemyTier, true> = { swarm: true, standard: true, brute: true, elite: true };
 const SLUICE_MODES: Record<SluiceMode, true> = { flood: true, drain: true };

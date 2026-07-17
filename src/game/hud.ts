@@ -178,6 +178,10 @@ export function encounterObjectiveCopy(enc: HudState["encounter"]): string | nul
   if (!enc || enc.kind === "arena" || enc.kind === "none") return null;
   if (enc.completed) return "OBJECTIVE COMPLETE";
   const pct = Math.round(Math.max(0, Math.min(1, enc.progress)) * 100);
+  // Sever F55 hunt: story name WORLDSPLIT on the objective lane when natural.
+  if (enc.kind === "hunt") {
+    return `WORLDSPLIT \u00b7 INTERCEPT ${pct}% \u00b7 CP ${enc.checkpoint}/2`;
+  }
   return `OBJECTIVE ${pct}% \u00b7 CP ${enc.checkpoint}`;
 }
 
