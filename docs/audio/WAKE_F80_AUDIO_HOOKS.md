@@ -1,12 +1,12 @@
 # Wake F80 audio hook manifest — THE LAST PROCESSION
 
-Status: **hook + prompt manifest** (code still on Choir/Weaver placeholder bank in `bestiaryAudio.ts`).
+Status: **shipped wake-procession-v1** — stems in `public/audio/boss/`, `WAVE_SOUNDS` + `bestiaryAudio.ts` off Choir/Weaver placeholders.
 Story name everywhere: **THE LAST PROCESSION**. **NIGHTFALL_PROCESSION / NIGHTFALL PROCESSION is retired forever** — never revive that name in events, stems, docs, or display.
 
 Floor pin: F80 The Wake. Verb: **PROTECT / ADVANCE** (escort). Protocol 43 (`last_procession`).
 Signature timings (authoritative @ TICK_HZ=20, ±1 tick): blackout tell **1.5s** → aim lock at **0.90s** (0.6×tell) → dark front follows convoy (cap **2.0s**) → light-bound punish **4.0s**.
 
-Missing files resolve **silently** — no Choir, Weaver, Undertow, or Pale fallback once story hooks are wired. Until then, runtime may still reuse choir.* placeholders; this doc is the retirement path.
+Missing files resolve **silently** — no Choir, Weaver, Undertow, or Pale fallback. Story hooks are wired (`WAVE_SOUNDS` + `bestiaryAudio.ts`); Choir placeholders retired for Wake.
 
 ## 0. Decisions
 Model: `fal-ai/elevenlabs/sound-effects/v2`; `pcm_44100` / `mp3_44100_192`; ship `.ogg` + `.mp3`.
