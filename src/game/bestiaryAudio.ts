@@ -346,14 +346,14 @@ export const BESTIARY_CUES: Readonly<Record<EnemyKind, Readonly<Record<string, W
   warm_pulse: { fuse: "choir.strikeWarn", toll: "choir.swellFire" },
   relief_vent: { fuse: "weaver.latticeWarn", toll: "weaver.latticeFire" },
   flood_front: { fuse: "choir.swellWarn", toll: "choir.swellFire" },
-  // CLAIMANT F70 — PLACEHOLDER (Choir/Weaver bank); display-facing name ALL THINGS OWED.
-  // Audio stems/events use claimant.owed* story pattern (hooks only; no generation this PR).
+  // CLAIMANT F70 — ALL THINGS OWED (claimant-owed-v1 stems). CROWNFALL retired forever.
   claimant: {
-    windup: "choir.swellWarn", lock: "choir.strikeLock", active: "choir.swellFire", impact: "choir.strikeImpact",
-    recover: "choir.recover", entrance: "choir.entrance", phase: "choir.phase", special: "choir.floorDischarge", death: "choir.death",
+    windup: "claimant.owedTell", lock: "claimant.owedLock", active: "claimant.owedDescent", impact: "claimant.owedFail",
+    recover: "claimant.owedRecover", entrance: "claimant.owedEntrance", phase: "claimant.owedPhase",
+    special: "claimant.owedOvercommit", death: "claimant.owedDeath",
   },
-  claim_token: { fuse: "choir.strikeWarn", toll: "choir.swellFire" },
-  claim_socket: { fuse: "weaver.latticeWarn", toll: "weaver.latticeFire" },
+  claim_token: { fuse: "claimant.owedTokenPickup", toll: "claimant.owedTokenPass" },
+  claim_socket: { fuse: "claimant.owedSocketLight", toll: "claimant.owedDeposit" },
   // THE WAKE F80 — PLACEHOLDER (Choir/Weaver bank); display-facing name THE LAST PROCESSION.
   // Audio stems/events use wake.procession* story pattern (hooks only; no generation this PR).
   wake: {

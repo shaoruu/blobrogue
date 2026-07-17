@@ -118,7 +118,7 @@ function manifestGates(): void {
   }
   check("every kind resolves EVERY hook its behavior verb declares", isOk);
   check("boss-grade kinds also carry bespoke entrance/phase/death maps",
-    (["boss", "marrow", "choir", "weaver", "gilded", "marshal", "toll", "gorge", "pale"] as const).every(
+    (["boss", "marrow", "choir", "weaver", "gilded", "marshal", "toll", "gorge", "pale", "claimant"] as const).every(
       (k) => WAVE_BOSS_ENTRANCE[k] !== undefined && WAVE_BOSS_PHASE[k] !== undefined && WAVE_BOSS_DEATH[k] !== undefined));
   check("every committed move of every kind is covered by tells (windup at minimum)",
     ALL_KINDS.every((kind) => ENEMY_MOVESET[kind].every((move) => {
