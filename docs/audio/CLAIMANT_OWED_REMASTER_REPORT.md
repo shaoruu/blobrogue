@@ -1,46 +1,64 @@
-# Claimant ALL THINGS OWED denser reselect (PR #175)
+# Claimant ALL THINGS OWED remaster + denser reselect (PR #175)
 
 Story: **ALL THINGS OWED** (never CROWNFALL).
 
+Follow-up denser remaster for Vale ear-hold on deposit/lock/overcommit/token_drop.
+
 ## Pipeline
 
-- `loudnorm=I=-14:TP=-1.5:LRA=11,alimiter=limit=0.89:level=disabled` on all 16 stems
-- onset pad **5–15 ms**; peak ≤ **-1.0 dB**
+- `loudnorm=I=-14|-16|-18:TP=-1.5:LRA=11,alimiter=limit=0.89:level=disabled`
+- onset align **5–15 ms**; active-body crop on fal-regen combat cues
+- encode: libvorbis `-q:a 5` + libmp3lame `-b:a 192k`
+- gate: **peak ≤ -1.0 dB**; combat silence preferably **<70%**
 
-## Vale swaps / denser fal
+## Selection
 
-| stem | take |
+| stem | source |
 | --- | --- |
-| deposit | fal denser (pool deposit_v1 sil>70 after remaster) |
-| fail | fail_v2 |
-| guard_chip | guard_chip_v3 (denser of v2/v3) |
-| tell | tell_v1 |
-| token_pickup | token_pickup_v1 (kept) |
-| lock | fal lock_r4_v2 + compress densify ≤0.35s |
-| overcommit | fal overcommit_r2_v3 |
-| token_drop | fal token_drop_r2_v2 |
+| `entrance` | pool entrance |
+| `phase` | pool phase |
+| `death` | pool death |
+| `tell` | swap tell_v1 (#170) |
+| `lock` | fal-regen denser latch (r5_v4 cropped≤0.35s) |
+| `descent` | pool descent_v1 |
+| `punish` | pool punish |
+| `recover` | pool recover |
+| `fail` | swap fail_v2 (#170) |
+| `token_pickup` | keep token_pickup_v1 |
+| `token_pass` | pool token_pass_v1 |
+| `token_drop` | fal-regen denser (r2_v2) |
+| `socket_light` | swap socket_light_v1 denser |
+| `deposit` | fal-regen denser (pool deposit_v1 still >70% sil) |
+| `guard_chip` | swap guard_chip_v3 densest |
+| `overcommit` | fal-regen denser (r2_v3; reject ~93% sil) |
 
-Fal: `fal-ai/elevenlabs/sound-effects/v2`, dur≥0.5 trim, influence 0.35.
+## Metrics
 
-## Peak / onset / silence
-
-| stem | dur | peak dB | onset ms | sil% |
+| stem | peak_dB | onset_ms | sil% | dur_s |
 | --- | ---: | ---: | ---: | ---: |
-| `death` | 2.2 | -1.42 | 8.4 | 51.4 |
-| `deposit` | 0.521 | -1.66 | 10.0 | 13.8 |
-| `descent` | 0.597 | -1.3 | 7.6 | 28.8 |
-| `entrance` | 1.4 | -1.81 | 7.5 | 14.7 |
-| `fail` | 0.547 | -1.45 | 10.0 | 27.4 |
-| `guard_chip` | 0.282 | -1.5 | 7.7 | 7.8 |
-| `lock` | 0.34 | -1.36 | 10.0 | 22.7 |
-| `overcommit` | 0.547 | -1.72 | 7.2 | 2.9 |
-| `phase` | 1.2 | -2.52 | 9.4 | 10.7 |
-| `punish` | 0.847 | -1.32 | 7.9 | 59.0 |
-| `recover` | 0.697 | -1.49 | 10.0 | 65.8 |
-| `socket_light` | 0.447 | -1.88 | 9.4 | 67.2 |
-| `tell` | 1.4 | -1.3 | 9.5 | 51.2 |
-| `token_drop` | 0.401 | -3.31 | 7.1 | 13.4 |
-| `token_pass` | 0.422 | -1.11 | 7.1 | 38.2 |
-| `token_pickup` | 0.347 | -1.71 | 8.5 | 9.8 |
+| `entrance` | -1.8 | 7.5 | 14.7 | 1.4 |
+| `phase` | -2.6 | 7.9 | 10.8 | 1.2 |
+| `death` | -1.5 | 7.9 | 51.4 | 2.2 |
+| `tell` | -1.3 | 8.0 | 51.2 | 1.4 |
+| `lock` | -1.6 | 10.0 | 22.9 | 0.34 |
+| `descent` | -1.3 | 7.6 | 28.6 | 0.597 |
+| `punish` | -1.2 | 7.8 | 59.1 | 0.847 |
+| `recover` | -1.5 | 10.0 | 65.9 | 0.697 |
+| `fail` | -1.4 | 10.0 | 27.4 | 0.547 |
+| `token_pickup` | -2.4 | 8.0 | 9.6 | 0.347 |
+| `token_pass` | -1.1 | 7.1 | 38.1 | 0.422 |
+| `token_drop` | -2.7 | 7.0 | 12.9 | 0.401 |
+| `socket_light` | -1.7 | 9.3 | 67.3 | 0.447 |
+| `deposit` | -1.7 | 10.0 | 13.9 | 0.521 |
+| `guard_chip` | -1.5 | 7.5 | 7.6 | 0.282 |
+| `overcommit` | -1.8 | 7.2 | 2.9 | 0.547 |
 
-Do **not** merge until Vale EAR passes.
+Notes:
+
+- `deposit`: pool `deposit_v1` still thin after remaster → fal-regen denser.
+- `lock` ≤0.35 s denser latch; onset in 5–15 ms band.
+- `overcommit` fal-regen densest (reject prior ~93% silence).
+- `token_drop` fal-regen denser body.
+- `fail` ← `#170` `fail_v2`; `tell` ← `tell_v1`; `guard_chip` ← densest `v3`; `socket_light` ← denser `v1`; `token_pickup` kept v1.
+
+**Do not merge** until Vale ear-pass.
