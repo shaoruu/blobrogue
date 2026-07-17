@@ -956,35 +956,45 @@ function rotationTests(): void {
   }
   {
     // F50 is the GORGE GIANT — a FIXED set-piece (the Sump cap), NOT part of the seeded deep
-    // rotation. It is pinned for every seed; the seeded rotation resumes at F55.
+    // rotation. It is pinned for every seed; the seeded rotation resumes at F65 after Sever F55 / Choirmaster F60 / Pale F75 pins.
     let allGorge = true;
     for (let s = 0; s < 80; s++) if (bossKindForFloor(0x5EED + s * 977, 50) !== "gorge") allGorge = false;
     check("F50 is ALWAYS the gorge giant (a fixed set-piece, out of the seeded rotation)", allGorge);
   }
   {
-    // Beyond the authored chain + the F50 gorge cap (F55+ endgame): the seeded rotation is
-    // deterministic, varied, no immediate repeats — and never picks the gorge (a fixed set-piece
-    // is out of the pool). The deep roster holds all eight.
+    // F55 Sever + F60 Choirmaster are FIXED set-pieces (like F50 Gorge / F75 Pale). Seeded deep
+    // rotation resumes at F65. Never picks gorge/sever/choirmaster/pale from the seeded pool.
+    let allSever = true;
+    let allChoir = true;
+    for (let s = 0; s < 80; s++) {
+      const seed = 0x5EED + s * 977;
+      if (bossKindForFloor(seed, 55) !== "sever") allSever = false;
+      if (bossKindForFloor(seed, 60) !== "choirmaster") allChoir = false;
+    }
+    check("F55 is ALWAYS Sever (fixed set-piece)", allSever);
+    check("F60 is ALWAYS Choirmaster (fixed set-piece)", allChoir);
+
     const roster: EnemyKind[] = ["marrow", "choir", "weaver", "gilded", "boss", "jet", "tithe", "quorum"];
     const seen = new Set<EnemyKind>();
     let deterministic = true;
     let noRepeats = true;
-    let neverGorge = true;
+    let neverPinned = true;
     for (let s = 0; s < 80; s++) {
       const seed = 0x5EED + s * 977;
-      let prev: EnemyKind | null = "gorge"; // F50 is the gorge; F55 must not repeat it (trivially true)
-      for (let floor = 55; floor <= 95; floor += 5) {
+      let prev: EnemyKind | null = "choirmaster"; // F60 pin; F65 must not repeat it
+      for (let floor = 65; floor <= 95; floor += 5) {
+        if (floor === 75) { prev = "pale"; continue; } // Pale pin — don't bridge F70↔F80
         const a = bossKindForFloor(seed, floor);
         if (a !== bossKindForFloor(seed, floor)) deterministic = false;
         if (a === null || a === prev) noRepeats = false;
-        if (a === "gorge") neverGorge = false;
+        if (a === "gorge" || a === "sever" || a === "choirmaster" || a === "pale") neverPinned = false;
         if (a !== null) seen.add(a);
         prev = a;
       }
     }
     check("the deep pick is a pure function of (seed, floor)", deterministic);
-    check("no boss repeats back-to-back deep (nor against the F50 gorge cap)", noRepeats);
-    check("the seeded rotation never picks the gorge (the fixed F50 set-piece is out of the pool)", neverGorge);
+    check("no boss repeats back-to-back deep (nor against the F60 Choirmaster pin)", noRepeats);
+    check("seeded rotation never picks gorge/sever/choirmaster/pale pins", neverPinned);
     check("every deep-roster boss appears across deep seeds", roster.every((k) => seen.has(k)), [...seen].join(","));
   }
   {

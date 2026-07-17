@@ -81,6 +81,7 @@ export const AUDIO_BEHAVIOR: Readonly<Record<EnemyKind, AudioBehavior>> = {
   jet_echo: "kite", // the reflection warns, locks, and fires ONE salvo (ranged-hold grammar)
   gorge: "boss", gorge_seam: "decoy", // the F50 giant + its planted weak-point (decoy grammar)
   sever: "boss", sever_anchor: "decoy",
+  choirmaster: "boss", choir_pillar: "decoy",
   pale: "boss", pale_seam: "decoy", // the F75 giant + its cold planted weak-point (decoy grammar)
 };
 
@@ -136,6 +137,8 @@ export const AUDIO_MATERIAL: Readonly<Record<EnemyKind, AudioMaterial>> = {
   // The Sever borrows the Weaver's lattice bank (chitin) end-to-end — sprite, cues, and so
   // material — until the audio director's bespoke resin-giant stems land.
   sever: "chitin", sever_anchor: "chitin",
+  // CHOIRMASTER F60 — voice bank (Choir family); pillars reuse chitin lattice mechanic rows.
+  choirmaster: "voice", choir_pillar: "chitin",
   // PALE THRONE (F75 giant) — dedicated pale material bank (see F75 audio hooks).
   pale: "pale", pale_seam: "pale",
 
@@ -315,11 +318,17 @@ export const BESTIARY_CUES: Readonly<Record<EnemyKind, Readonly<Record<string, W
   },
   gorge_seam: { fuse: "gorge.seamWarn", toll: "gorge.seamBreak" },
   // SEVER F55 — PLACEHOLDER (Weaver bank); display-facing name WORLDSPLIT.
+  // CHOIRMASTER F60 — PLACEHOLDER (Choir bank); display-facing name THE LAST NOTE.
   sever: {
     windup: "weaver.blinkTell", lock: "weaver.latticeWarn", active: "weaver.blinkDepart", impact: "weaver.blinkArriveStrike",
     recover: "weaver.recover", entrance: "weaver.entrance", phase: "weaver.phase", special: "weaver.latticeFire", death: "weaver.death",
   },
   sever_anchor: { fuse: "weaver.latticeWarn", toll: "weaver.latticeFire" },
+  choirmaster: {
+    windup: "choir.swellWarn", lock: "choir.strikeLock", active: "choir.swellFire", impact: "choir.strikeImpact",
+    recover: "choir.recover", entrance: "choir.entrance", phase: "choir.phase", special: "choir.floorDischarge", death: "choir.death",
+  },
+  choir_pillar: { fuse: "choir.strikeWarn", toll: "choir.swellFire" },
 
   pale: {
     windup: "pale.ringWarn", lock: "pale.ring2Warn", active: "pale.spokeActive", impact: "pale.ringImpact",

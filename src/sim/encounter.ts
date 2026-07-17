@@ -147,6 +147,40 @@ export function initHuntEncounter(dungeon: Dungeon): EncounterState {
   };
 }
 
+// Batch2A Choirmaster F60: split/silence encounter in ONE multi-lobed super-room.
+// flags (OWNER LOCK): activePhrase, phraseIndex, livePillarId, silencedMask,
+// sheetSpanIndex, lastNotePhase, lastNoteOutcome, acousticShadowPillarId
+export function initSplitEncounter(dungeon: Dungeon): EncounterState {
+  const bp = dungeon.blueprint;
+  const spawnRoomId = bp?.spawnRoomId ?? (dungeon.rooms.length > 0 ? dungeon.rooms[dungeon.rooms.length - 1].id : 0);
+  return {
+    kind: "split",
+    // Inactive until a player enters the super-room / pressure radius — no global aggro
+    // before encounter activation (Batch2A OWNER LOCK).
+    active: false,
+    structureKind: "split",
+    currentRoomId: spawnRoomId,
+    routeEdgeId: null, // NOT a RoomEdge chase
+    checkpoint: 0, // phrase index / silenced pillar count
+    objectiveProgress: 0,
+    carrierPlayerId: null,
+    failureCount: 0,
+    completed: false,
+    failed: false,
+    flags: {
+      activePhrase: 0,
+      phraseIndex: 0,
+      livePillarId: -1,
+      silencedMask: 0,
+      sheetSpanIndex: 0,
+      lastNotePhase: "idle", // idle | inhale | sheet | punish
+      lastNoteOutcome: "idle", // idle | pending | success | survival | failure
+      acousticShadowPillarId: -1,
+      pillarsPlanted: false,
+    },
+  };
+}
+
 export function completeEncounter(e: EncounterState): void {
   e.completed = true;
   e.active = true;

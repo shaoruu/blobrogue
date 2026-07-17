@@ -757,9 +757,13 @@ export function generateDungeon(seed: number, floor: number): Dungeon {
   // - F55 Sever (Batch1 OWNER LOCK): structureKind 'hunt' — spawn in an APPROACH room (not
   //   last-arena-only); 3 checkpoint rooms along the chain; chaseEdgeIds = ≥2 chain edges of
   //   width≥3 so Sever flees through explicit RoomEdges.
+  // - F60 Choirmaster (Batch2A OWNER LOCK): structureKind 'split' — ONE multi-lobed super-room
+  //   (final arena + side chambers as lobes in the SAME encounter space). NOT a RoomEdge chase.
+  //   chaseEdgeIds reserved empty; objectiveRoomIds = lobe room ids (≥3) for pillar placement.
   let blueprint: EncounterBlueprint | null = null;
   if (bossArena !== null) {
     const isHuntFloor = floor === 55; // SEVER_FLOOR — keep literal to avoid enemies↔dungeon cycle
+    const isSplitFloor = floor === 60; // CHOIRMASTER_FLOOR — literal to avoid enemies↔dungeon cycle
     if (isHuntFloor && chain.length >= 4) {
       // Checkpoints: approach mid-band rooms (not spawn, not final exit-only). Prefer last 4 rooms.
       const n = chain.length;
@@ -792,6 +796,27 @@ export function generateDungeon(seed: number, floor: number): Dungeon {
         spawnRoomId,
         objectiveRoomIds: [cp0, cp1, cp2],
         chaseEdgeIds,
+      };
+    } else if (isSplitFloor) {
+      // Multi-lobed super-room: conductor in final arena; side chambers = pillar lobes.
+      // Geometry lobes in ONE encounter space — do NOT author a chase graph.
+      const spawnRoomId = last.id;
+      const lobeIds: number[] = [last.id];
+      // Prefer nearby chain rooms as alcove lobes (same encounter space, not RoomEdge flee).
+      for (let i = chain.length - 2; i >= 1 && lobeIds.length < 4; i--) {
+        const id = chain[i].id;
+        if (lobeIds.indexOf(id) < 0) lobeIds.push(id);
+      }
+      // Pad from earlier rooms if the chain is short.
+      for (let i = 0; i < chain.length && lobeIds.length < 3; i++) {
+        const id = chain[i].id;
+        if (lobeIds.indexOf(id) < 0) lobeIds.push(id);
+      }
+      blueprint = {
+        structureKind: "split",
+        spawnRoomId,
+        objectiveRoomIds: lobeIds,
+        chaseEdgeIds: [], // NOT a RoomEdge chase — OWNER LOCK
       };
     } else {
       const spawnRoomId = last.id;

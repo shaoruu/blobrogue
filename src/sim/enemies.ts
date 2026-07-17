@@ -5,11 +5,11 @@ import { Rng } from "./rng.js";
 import { biomeIndexForFloor } from "./biomes.js";
 import {
   TIERS, BIOME_PRESSURE, BOSS, MARROW, CHOIR, WEAVER, GILDED, GAUNTLET,
-  JET, TITHE, QUORUM, GORGE, SEVER, PALE,
+  JET, TITHE, QUORUM, GORGE, SEVER, CHOIRMASTER, PALE,
   MINIBOSS, ELITE_BULWARK, ELITE_COST_CAP, ENVELOPE, LIVE_CAPS, activeMoverCapFor,
   floorHpMult, floorSpeedMult, floorThreat, activeThreatCap, roundHalfToEven,
   bossHpForFloor, marrowHpForFloor, choirHpForFloor, weaverHpForFloor, gildedHpForFloor,
-  jetHpForFloor, titheHpForFloor, quorumHpForFloor, gorgeHpForFloor, severHpForFloor, paleHpForFloor,
+  jetHpForFloor, titheHpForFloor, quorumHpForFloor, gorgeHpForFloor, severHpForFloor, choirmasterHpForFloor, choirPillarHpForFloor, paleHpForFloor,
   captainHpForFloor, bossHpFracFor,
   coopMobHpMult, coopBossHpMult, coopThreatMult, coopKbResistMult,
   MAX_COMPLEX_PER_ROOM, BRUTE_ELITE_COMBO_FLOOR,
@@ -399,6 +399,19 @@ export const ENEMY_ARCHETYPES: Record<EnemyKind, EnemyArchetype> = {
     radius: 14, drawSize: 36, alpha: 1, tint: "#e8d6ff", kbResist: 100,
     baseHp: SEVER.anchorHp, baseSpeed: 0, touchDamage: 0, threat: 0.25,
   },
+  // HOLLOW CHOIRMASTER (F60 SPLIT/SILENCE): ONE conductor (isBossKind) in a multi-lobed
+  // super-room. Signature THE LAST NOTE. Placeholder art reuses Choir sheets (hooks only).
+  choirmaster: {
+    kind: "choirmaster", sprite: "choirmaster", movement: "boss", isPhasing: false,
+    radius: 30, drawSize: 80, alpha: 1, tint: "#c9b6ff", kbResist: 50,
+    baseHp: choirmasterHpForFloor(CHOIRMASTER.baseHpFloor), baseSpeed: 0, touchDamage: CHOIRMASTER.contactDamage, threat: 0,
+  },
+  // Resonating pillar — mechanic body in a linked lobe. Never a boss kind.
+  choir_pillar: {
+    kind: "choir_pillar", sprite: "choir_pillar", movement: "drift", isPhasing: false,
+    radius: 14, drawSize: 40, alpha: 1, tint: "#e0d4ff", kbResist: 100,
+    baseHp: CHOIRMASTER.pillarHp, baseSpeed: 0, touchDamage: 0, threat: 0.25,
+  },
   // PALE THRONE (F75 GIANT #2): the second giant, mechanically identical to Gorge (a stationary
   // ~192px set-piece the client swaps stone → cracked → core off boss.phase, radius ~60 hittable
   // core). Only the MATERIAL differs: tint = COLD crystalline core-blaze (#bfeaff), never amber.
@@ -455,6 +468,7 @@ export const ELITE_AFFIXES: Readonly<Record<EnemyKind, EliteAffix>> = {
   jet_echo: "brace", // JET's mirror echo is a summon-only reflection, never an elite roll
   gorge: "brace", gorge_seam: "brace", // the giant + its weak-points never roll elite
   sever: "brace", sever_anchor: "brace", // Sever + resin anchors never roll elite
+  choirmaster: "brace", choir_pillar: "brace", // Choirmaster + pillars never roll elite
   pale: "brace", pale_seam: "brace", // the F75 giant + its weak-points never roll elite
 };
 
@@ -470,7 +484,7 @@ export function isBossFloor(floor: number): boolean {
 // Only the three FIGHT bodies are boss kinds (chest drop, danger-end, HP scaling, the
 // HUD bar). The Tithe's slab and the Quorum husks are satellite/mechanic bodies, never
 // boss kinds themselves.
-const BOSS_KINDS: readonly EnemyKind[] = ["boss", "marrow", "choir", "weaver", "gilded", "jet", "tithe", "quorum", "gorge", "sever", "pale"];
+const BOSS_KINDS: readonly EnemyKind[] = ["boss", "marrow", "choir", "weaver", "gilded", "jet", "tithe", "quorum", "gorge", "sever", "choirmaster", "pale"];
 
 export function isBossKind(kind: EnemyKind): boolean {
   return BOSS_KINDS.indexOf(kind) !== -1;
@@ -491,6 +505,7 @@ const BOSS_DISPLAY_NAME: Readonly<Partial<Record<EnemyKind, string>>> = {
   quorum: "Quorum",
   gorge: "The Gorge",
   sever: "Sever",
+  choirmaster: "The Hollow Choirmaster",
   pale: "The Pale Throne",
 };
 
@@ -522,6 +537,7 @@ export const BOSS_KIN: Readonly<Partial<Record<EnemyKind, EnemyKind>>> = {
   // this kin is only the approach-room escort the floor scatters (the Sump hoard).
   gorge: "skeleton",
   sever: "bat", // approach escort only; Sever summons no chase adds itself
+  choirmaster: "ghost", // approach escort only; Choirmaster summons no adds itself
   // The PALE THRONE giant likewise summons no adds; its kin is only the F75 approach-room escort
   // (the Pale region's frozen hoard) — same space-control-not-chasing giant contract as Gorge.
   pale: "skeleton",
@@ -579,6 +595,10 @@ export function bossKindForFloor(seed: number, floor: number): EnemyKind | null 
   // F45 Quorum as predecessor; F55's Sever pin simply skips the first rotation slot that used
   // to live at F55 (now F60 is step 0 of the deep walk — see SEVER_FLOOR comment).
   if (floor === SEVER_FLOOR) return "sever";
+  // F60 is HOLLOW CHOIRMASTER — FIXED SPLIT/SILENCE set-piece (Batch2A OWNER LOCK). Early return
+  // so the seeded deep rotation (F65+) stays deterministic. Choirmaster consumes the old F60
+  // deep-rotation slot (step 0); deep walk resumes at F65.
+  if (floor === CHOIRMASTER_FLOOR) return "choirmaster";
   // F75 is the PALE THRONE GIANT — the SECOND fixed set-piece (the Pale region cap), pinned the
   // exact same way as the F50 gorge: a pure early return that never touches the RNG, so the seeded
   // ladder stays byte-identical (deepBossIndex still walks unchanged, and pale — like gorge — can
@@ -586,8 +606,9 @@ export function bossKindForFloor(seed: number, floor: number): EnemyKind | null 
   if (floor === PALE_FLOOR) return "pale";
   const ladder = Math.floor(floor / BOSS_EVERY);
   if (ladder <= AUTHORED_BOSS_LADDER.length) return AUTHORED_BOSS_LADDER[Math.max(1, ladder) - 1];
-  // Deep rotation resumes at F60 (= first seeded step after authored chain + Gorge + Sever pins).
-  // step = ladder - authoredLen - 1 (Gorge consumed the old F50 slot) - 1 (Sever consumes F55).
+  // Deep rotation: F60 Choirmaster pin consumes the old F60 seeded slot via early return;
+  // F65+ keeps the pre-Choirmaster deepStep formula so Gorge/Sever/Pale goldens stay green.
+  // step = ladder - authoredLen - 1 (Gorge F50) - 1 (Sever F55).
   const deepStep = ladder - AUTHORED_BOSS_LADDER.length - 1 - 1;
   if (deepStep < 0) return DEEP_BOSS_ROSTER[deepBossIndex(seed, 0)];
   return DEEP_BOSS_ROSTER[deepBossIndex(seed, deepStep)];
@@ -599,6 +620,8 @@ export const GORGE_FLOOR = 50;
 
 // F55 SEVER HUNT/INTERCEPT (Batch1 OWNER LOCK) — fixed set-piece, not seeded rotation.
 export const SEVER_FLOOR = 55;
+// F60 HOLLOW CHOIRMASTER SPLIT/SILENCE (Batch2A OWNER LOCK) — fixed set-piece, not seeded rotation.
+export const CHOIRMASTER_FLOOR = 60;
 // The floor the PALE THRONE giant caps (the Pale region — F71-90). The SECOND giant set-piece,
 // pinned exactly like GORGE_FLOOR; F100 Unmaker will add its own pin the same way.
 export const PALE_FLOOR = 75;
@@ -631,6 +654,8 @@ export function enemyHpForFloor(kind: EnemyKind, floor: number): number {
     case "quorum": return quorumHpForFloor(floor);
     case "gorge": return gorgeHpForFloor(floor);
     case "sever": return severHpForFloor(floor);
+    case "choirmaster": return choirmasterHpForFloor(floor);
+    case "choir_pillar": return choirPillarHpForFloor(floor);
     case "pale": return paleHpForFloor(); // F75 fixed anchor (floor-independent — see paleHpForFloor)
     default: return roundHalfToEven(ENEMY_ARCHETYPES[kind].baseHp * floorHpMult(floor));
   }
@@ -742,7 +767,7 @@ const BOSS_ENTRANCE_GRACE: Readonly<Partial<Record<EnemyKind, number>>> = {
   weaver: WEAVER.entranceGrace, gilded: GILDED.entranceGrace,
   jet: JET.entranceGrace, tithe: TITHE.entranceGrace, quorum: QUORUM.entranceGrace,
   gorge: GORGE.entranceGrace,
-  sever: SEVER.entranceGrace,
+  sever: SEVER.entranceGrace, choirmaster: CHOIRMASTER.entranceGrace,
   pale: PALE.entranceGrace,
 };
 
@@ -1217,17 +1242,20 @@ export function spawnFloorEnemies(dungeon: Dungeon, seed: number, floor: number,
     const bossKind = bossKindForFloor(seed, floor) ?? "boss";
     const minionKind: EnemyKind = BOSS_KIN[bossKind] ?? "slime";
     const bpSpawn = dungeon.blueprint?.spawnRoomId;
-    const bossRoom = (bossKind === "sever" && bpSpawn !== undefined && bpSpawn >= 0 && bpSpawn < roomCount)
-      ? bpSpawn
-      : roomCount - 1;
+    const bossRoom = (
+      (bossKind === "sever" || bossKind === "choirmaster")
+      && bpSpawn !== undefined && bpSpawn >= 0 && bpSpawn < roomCount
+    ) ? bpSpawn : roomCount - 1;
     // pointInRoom is called unconditionally (it advances the seeded RNG the same way for every
     // boss). The GIANTS (Gorge F50, Pale Throne F75) are STATIONARY set-pieces that must anchor at
     // the arena CENTER so their radial rings/spokes have symmetric dodge space on every side (a
-    // wall-hugged giant would be unfair); every other boss uses the sampled interior point.
+    // wall-hugged giant would be unfair). Choirmaster is also a stationary conductor at center.
+    // Every other boss uses the sampled interior point.
     const b = pointInRoom(rng, dungeon, bossRoom);
     const room = dungeon.rooms[bossRoom];
     const isGiant = bossKind === "gorge" || bossKind === "pale";
-    const spawn = isGiant ? { x: (room.cx + 0.5) * TILE, y: (room.cy + 0.5) * TILE } : b;
+    const isCentered = isGiant || bossKind === "choirmaster";
+    const spawn = isCentered ? { x: (room.cx + 0.5) * TILE, y: (room.cy + 0.5) * TILE } : b;
     active.push(createEnemy(bossKind, spawn.x, spawn.y, floor, rng, active.length, { players, power }));
     const minions = 2 + Math.floor(floor / BOSS_EVERY);
     for (let i = 0; i < minions; i++) {

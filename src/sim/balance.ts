@@ -306,6 +306,7 @@ export const AMBER_EARN = {
 // first-boss grant for a non-boss kind.
 export const BOSS_KINDS = [
   "boss", "marrow", "weaver", "gilded", "choir", "jet", "tithe", "quorum",
+  "choirmaster",
 ] as const;
 
 export function isBossKindId(kind: string): boolean {
@@ -2074,6 +2075,47 @@ export function severHpForFloor(floor: number): number {
 
 export function severAnchorHpForFloor(floor: number): number {
   return Math.max(1, anchoredBossHp(SEVER.anchorHp, SEVER.baseHpFloor, floor));
+}
+// ---- HOLLOW CHOIRMASTER (F60 SPLIT/SILENCE — THE LAST NOTE signature) ----
+// Batch2A OWNER LOCK: ONE multi-lobed super-room (structureKind 'split'). Timings LOCKED at 20Hz:
+//   1.6s silent inhale/gesture → ~0.7s per linked sheet span → 4.0s voiceless punish (±1 tick).
+// ONE isBossKind conductor; choir_pillar bodies are mechanic entities (never boss kinds).
+// Success = silence FIRST live pillar before sheet reaches it → openBossWindow(4.0).
+// Survival = acoustic shadow behind a previously broken pillar (no window). Failure soft, never wipe.
+// BALANCER_TODO: Quill owns final HP/TTK/bank — provisional calibration only.
+export const CHOIRMASTER = {
+  baseHp: 680, // BALANCER_TODO
+  baseHpFloor: 60,
+  phaseAt: [0.66, 0.33] as readonly number[],
+  phaseFloor: [0.58, 0.25] as readonly number[],
+  guardMult: 0.24, // BALANCER_TODO
+  windowBankFrac: 0.26, // BALANCER_TODO
+  contactDamage: 2,
+  entranceGrace: 1.4,
+  attackCd: [0, 3.2, 2.9, 2.6] as readonly number[],
+  // THE LAST NOTE timings (seconds) — authoritative at TICK_HZ=20; tests allow ±1 tick.
+  lastNoteInhale: 1.6,
+  lastNoteSpan: 0.7,
+  lastNotePunish: 4.0,
+  // Phrase / pillars
+  pillarCount: 4,           // ≥3 lobes + one spare for acoustic-shadow survival
+  pillarHp: 32,             // BALANCER_TODO
+  phrasePillars: 3,         // silenced pillars to complete a phrase (checkpoint)
+  pressureRadius: 260,      // activation / phrase pressure
+  sheetHalfWidth: 16, // 2-tile directional sheet (half-width = 16px = 1 tile)
+  sheetDamage: 2,           // BALANCER_TODO soft pressure, not wipe
+  wrongPillarPressure: 1,   // soft escalate damage ping
+  roarDuration: 1.0,
+  roarDamageReduction: 0.35,
+  roarBulletClearRadius: 72,
+} as const;
+
+export function choirmasterHpForFloor(floor: number): number {
+  return anchoredBossHp(CHOIRMASTER.baseHp, CHOIRMASTER.baseHpFloor, floor);
+}
+
+export function choirPillarHpForFloor(floor: number): number {
+  return Math.max(1, anchoredBossHp(CHOIRMASTER.pillarHp, CHOIRMASTER.baseHpFloor, floor));
 }
 // ---- PALE THRONE (F75 GIANT #2 — the Pale region cap; the SECOND giant, reusing the AD-LOCKED
 // Gorge shell-peel template EXACTLY via the shared giant-encounter core) ----

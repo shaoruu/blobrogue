@@ -530,6 +530,7 @@ const TELEGRAPH_COLOR: Record<AttackMove, string> = {
   rip: "#ffcf6a",     // the Tithe's P3 rip: the all-slabs debris wheel (bright amber)
   worldsplit: "#e8d9b0", // Sever WORLDSPLIT: pale bone fracture tell
   last_light: "#bfeaff", // Pale THE LAST LIGHT FALLS: cold stolen-sun meteor tell
+  last_note: "#d4c4ff", // Choirmaster THE LAST NOTE: hollow violet sheet tell
 };
 
 // BOSS TELEGRAPH RENDER CONTRACT (docs/specs/blobrogue_TELEGRAPH_RENDER_CONTRACT.md +
