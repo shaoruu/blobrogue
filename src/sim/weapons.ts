@@ -110,6 +110,46 @@ export interface GambleSpec {
   outcomes: readonly OddsmakerOutcome[];
 }
 
+// Resonant Fork (TUNE): a primary hit tunes a resonant link from the struck body to a
+// nearest neighbor in LOS; the link ticks damage into the neighbor for its duration.
+export interface ResonateSpec {
+  range: number;      // max px between the two link ends (LOS both ends)
+  duration: number;   // seconds the link resonates before it fades
+  tick: number;       // seconds between link damage ticks
+  tickDamage: number; // damage each tick applies to the linked neighbor
+}
+
+// Red Pen (SET / REWRITE): ink rounds mark a body; the REWRITE snap consumes a live mark
+// for a burst scaled off the marked target's last ink hit.
+export interface RewriteSpec {
+  markDur: number;    // seconds a mark lives (refreshes on re-mark)
+  snapCoef: number;   // burst = snapCoef × the marked target's last ink hit damage
+  skillCd: number;    // seconds before another snap (starts on a SUCCESSFUL snap only)
+}
+
+// Margin Call (COPY-ONE): stores exactly one payload class off the owner's previous
+// committed shot from another weapon, then echoes it (or fires a weak stub when empty).
+export interface MarginSpec {
+  ttl: number;          // seconds a stored payload survives before it clears
+  outputCoef: number;   // copy damage vs the stored original
+  maxCopyPellets: number; // pellet cap on a copied volley
+  loadedFireCd: number; // cadence while a payload is stored
+  stubDamage: number;   // stub damage when empty
+  stubFireCd: number;   // faster cadence when empty
+}
+
+// Sidewinder (ENCIRCLE / FLANK): a fixed authored two-arc volley of curving rounds that
+// bias to the flank; extra-pellet mods never add arcs.
+export interface SidewinderSpec {
+  arcs: number;       // authored arc count (fixed; extraPellets must not change it)
+  arcDelay: number;   // seconds between arc launches
+  arcDamage: number;  // per-arc damage
+  turn: number;       // arc curve turn rate magnitude (rad/s)
+  arcLife: number;    // arc round lifetime (seconds)
+  flankBonus: number; // vs non-boss: bonus when the impact lands in the rear arc
+  flankArc: number;   // radians: half-window of the rear arc that earns the bonus
+}
+
 export const WEAPON_CYCLE_IDS = ["sluicegate", "oddsmaker"] as const;
 export type WeaponCycleId = typeof WEAPON_CYCLE_IDS[number];
 export type WeaponCycles = Record<WeaponCycleId, number>;
@@ -161,6 +201,10 @@ export interface Weapon {
   grapple?: GrappleSpec;
   modeShift?: ModeShiftSpec;
   gamble?: GambleSpec;
+  resonate?: ResonateSpec;
+  rewrite?: RewriteSpec;
+  margin?: MarginSpec;
+  sidewinder?: SidewinderSpec;
   // Legendary signature mechanics — one per legendary, never shared, never a stat reskin.
   // Each stamps one field onto its bullets (or gates the trigger pull, for the Midas) and
   // switches an isolated branch in the update loop, exactly like the Tier B fields above.
@@ -519,6 +563,36 @@ export const WEAPONS: Record<WeaponId, Weapon> = {
     paint: { spacing: 28, radius: 27, life: 3.2, chillRate: 0, isPaving: true },
     special: "CLEANSE / PAVE — beads erase hostile ground and leave a safe route across floor hazards.",
   },
+  resonant_fork: {
+    id: "resonant_fork", name: "RESONANT FORK", rarity: "rare", fireCd: 0.34, speed: 580, life: 0.95,
+    damage: 2.0, pellets: 1, spread: 0, bulletRadius: 5, color: "#c9b8f0", muzzle: 2,
+    resonate: { range: 220, duration: 2.4, tick: 0.20, tickDamage: 0.55 },
+    special: "TUNE — a hit tunes a resonant link to a nearby body, ticking damage into it.",
+  },
+  red_pen: {
+    id: "red_pen", name: "RED PEN", rarity: "rare", fireCd: 0.22, speed: 640, life: 1.05,
+    damage: 1.6, pellets: 1, spread: 0.02, bulletRadius: 5, color: "#e8534f", muzzle: 2,
+    rewrite: { markDur: 3.0, snapCoef: 2.8, skillCd: 5.5 },
+    special: "SET / REWRITE — ink marks a body; the snap consumes the mark for a burst.",
+  },
+  margin_call: {
+    id: "margin_call", name: "MARGIN CALL", rarity: "legendary", fireCd: 0.40, speed: 620, life: 1.0,
+    damage: 1.2, pellets: 1, spread: 0, bulletRadius: 6, color: "#e7c96a", muzzle: 3,
+    margin: {
+      ttl: 8.0, outputCoef: 0.70, maxCopyPellets: 3,
+      loadedFireCd: 0.55, stubDamage: 1.2, stubFireCd: 0.40,
+    },
+    special: "COPY-ONE — stores one payload class off another weapon and echoes it once.",
+  },
+  sidewinder: {
+    id: "sidewinder", name: "SIDEWINDER", rarity: "common", fireCd: 0.48, speed: 420, life: 0.55,
+    damage: 1.35, pellets: 1, spread: 0, bulletRadius: 5, color: "#7fd48a", muzzle: 2,
+    sidewinder: {
+      arcs: 2, arcDelay: 0.08, arcDamage: 1.35, turn: 3.5, arcLife: 0.55,
+      flankBonus: 0.25, flankArc: 50 * Math.PI / 180,
+    },
+    special: "ENCIRCLE / FLANK — a two-arc volley curves in to strike the target's flank.",
+  },
 };
 
 export const DEFAULT_WEAPON: WeaponId = "pistol";
@@ -648,6 +722,13 @@ export interface ShotSpec {
   shotSeq?: number;
   sluiceMode?: SluiceMode;
   oddsmakerOutcome?: OddsmakerOutcome;
+  // Wave B stamps: crosscurrent (blessing) rides any round; the gun flags are set by
+  // their own fire paths after fire() returns.
+  crosscurrentJumps?: number;
+  crosscurrentRange?: number;
+  crosscurrentCoef?: number;
+  crosscurrentPreferNew?: boolean;
+  crosscurrentTax?: number;
 }
 
 const CRIT_COLOR = "#fff3c4";
@@ -739,6 +820,11 @@ export function fire(spec: ShotSpec, x: number, y: number, aim: number, rng: Rng
       shotSeq: spec.shotSeq,
       sluiceMode: spec.sluiceMode,
       oddsmakerOutcome: spec.oddsmakerOutcome,
+      crosscurrentJumps: spec.crosscurrentJumps,
+      crosscurrentRange: spec.crosscurrentRange,
+      crosscurrentCoef: spec.crosscurrentCoef,
+      crosscurrentPreferNew: spec.crosscurrentPreferNew,
+      crosscurrentTax: spec.crosscurrentTax,
     });
   }
   return shots;
