@@ -86,7 +86,8 @@ export type CoverageKind =
   | "WIDE" | "BURST" | "FOCUSED"
   // Effect-wave coverage kinds: what the placed/worn/charged output does to space.
   | "ARTILLERY" | "TRAP" | "ORBIT" | "TURRET" | "TETHER" | "GROUND"
-  | "GRAPPLE" | "MODESHIFT" | "GAMBLE" | "PAVE";
+  | "GRAPPLE" | "MODESHIFT" | "GAMBLE" | "PAVE"
+  | "TUNE" | "REWRITE" | "COPY" | "FLANK";
 
 export interface WeaponCoverage {
   kind: CoverageKind;
@@ -121,6 +122,10 @@ function roleOf(w: Weapon): string {
   if (w.grapple !== undefined) return "ANCHOR AND GRAPPLE";
   if (w.modeShift !== undefined) return "SHIFT THE ROOM";
   if (w.gamble !== undefined) return "GAMBLE THE PAYLOAD";
+  if (w.resonate !== undefined) return "TUNE THE RESONANCE";
+  if (w.rewrite !== undefined) return "MARK AND REWRITE";
+  if (w.margin !== undefined) return "STORE AND ECHO";
+  if (w.sidewinder !== undefined) return "FLANK THE TARGET";
   if (w.paint?.isPaving === true) return "CLEANSE AND PAVE";
   if (w.paint !== undefined) return "CUT THE ROOM IN TWO";
   if (w.lowHpBonus !== undefined) return "TRADE SAFETY FOR THE KILL";
@@ -186,6 +191,10 @@ function coverageOf(w: Weapon, pellets: number, spread: number): WeaponCoverage 
   if (w.grapple !== undefined) return { kind: "GRAPPLE", patternOrder: null };
   if (w.modeShift !== undefined) return { kind: "MODESHIFT", patternOrder: null };
   if (w.gamble !== undefined) return { kind: "GAMBLE", patternOrder: null };
+  if (w.resonate !== undefined) return { kind: "TUNE", patternOrder: null };
+  if (w.rewrite !== undefined) return { kind: "REWRITE", patternOrder: null };
+  if (w.margin !== undefined) return { kind: "COPY", patternOrder: null };
+  if (w.sidewinder !== undefined) return { kind: "FLANK", patternOrder: null };
   if (w.paint?.isPaving === true) return { kind: "PAVE", patternOrder: null };
   if (w.paint !== undefined) return { kind: "GROUND", patternOrder: null };
   if (w.blast !== undefined) return { kind: "AREA", patternOrder: null };
@@ -222,6 +231,10 @@ function mechanicsOf(w: Weapon, mods: PlayerMods): WeaponMechanic[] {
   if (w.grapple !== undefined) m.push({ tag: "GRAPPLE", text: "WALL HIT PULLS YOU TO THE ANCHOR", mag: w.grapple.pull });
   if (w.modeShift !== undefined) m.push({ tag: "MODESHIFT", text: "ALTERNATES FLOOD FAN / DRAIN LANCE", mag: 2 });
   if (w.gamble !== undefined) m.push({ tag: "GAMBLE", text: "ROLLS 1 OF 4 PAYLOAD VERBS", mag: w.gamble.outcomes.length });
+  if (w.resonate !== undefined) m.push({ tag: "TUNE", text: "A HIT RESONATES A NEARBY BODY OVER TIME", mag: w.resonate.range });
+  if (w.rewrite !== undefined) m.push({ tag: "REWRITE", text: "INK MARKS; A SNAP REWRITES IT FOR A BURST", mag: w.rewrite.snapCoef });
+  if (w.margin !== undefined) m.push({ tag: "COPY", text: "STORES ONE PAYLOAD CLASS AND ECHOES IT", mag: w.margin.maxCopyPellets });
+  if (w.sidewinder !== undefined) m.push({ tag: "FLANK", text: "TWO CURVING ARCS BITE THE FLANK", mag: w.sidewinder.arcs });
   if (w.paint?.isPaving === true) m.push({ tag: "PAVE", text: "CLEARS HOSTILE GROUND; PAVES FLOOR HAZARDS", mag: w.paint.radius });
   if (w.melee?.isThrust) m.push({ tag: "THRUST", text: "PIERCING THRUST", mag: 1 });
   if (w.chain !== undefined) m.push({ tag: "CHAIN", text: `CHAINS TO ${w.chain} MORE`, mag: w.chain });

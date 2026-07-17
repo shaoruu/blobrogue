@@ -51,6 +51,22 @@ export interface PlayerMods {
   beatFireRatePerTier: number;
   reviveRadiusBonus: number;
   reviveSpeedMult: number;
+  // ---- Content Wave B blessing mods (all off the boss-DPS estimator: identity, not +%) ----
+  crosscurrentChain: number;    // extra chain jumps added to any round
+  crosscurrentJumpRange: number;// px a crosscurrent jump may reach
+  crosscurrentJumpCoef: number; // jump damage vs the prior hit
+  crosscurrentPreferNew: number;// 1 (Lv3) = prefer an unhit target
+  warmRoundBonus: number;       // +% damage on the final shot of a weapon's fire cycle
+  revealDur: number;            // seconds a reveal pulse lasts
+  revealRadius: number;         // reveal pulse radius
+  revealIcd: number;            // reveal internal cooldown (shared trigger)
+  rememberMeDisableDur: number; // >0 arms the lethal-save; the disable timer it starts
+  lightReviveRadius: number;    // +px revive radius (Carry the Light)
+  lightReviveRate: number;      // +fraction revive channel rate
+  lightSwapCut: number;         // fraction of remaining fireCd cut on ally revive start
+  lightRadius: number;          // the aura radius (allies +move, downed slower bleed)
+  lightFreeMag: number;         // 1 (Lv3) = reviver's fireCd zeroed on revive complete
+  lightSoloDashRestore: number; // solo: fraction of max weapon fireCd restored on dash
 }
 
 export function createMods(): PlayerMods {
@@ -86,6 +102,21 @@ export function createMods(): PlayerMods {
     beatFireRatePerTier: 0,
     reviveRadiusBonus: 0,
     reviveSpeedMult: 1,
+    crosscurrentChain: 0,
+    crosscurrentJumpRange: 0,
+    crosscurrentJumpCoef: 0,
+    crosscurrentPreferNew: 0,
+    warmRoundBonus: 0,
+    revealDur: 0,
+    revealRadius: 0,
+    revealIcd: 0,
+    rememberMeDisableDur: 0,
+    lightReviveRadius: 0,
+    lightReviveRate: 0,
+    lightSwapCut: 0,
+    lightRadius: 0,
+    lightFreeMag: 0,
+    lightSoloDashRestore: 0,
   };
 }
 
@@ -396,6 +427,78 @@ export const ITEMS: readonly ItemDef[] = [
     apply: (m, l) => {
       m.reviveRadiusBonus = Math.max(m.reviveRadiusBonus, lv([12, 20, 28], l));
       m.reviveSpeedMult = Math.max(m.reviveSpeedMult, lv([1.15, 1.25, 1.35], l));
+    },
+  },
+  // ---- Content Wave B blessings (Quill FINAL: 4 identity + 1 support) ----
+  {
+    id: "crosscurrent", name: "CROSSCURRENT",
+    descs: [
+      "Your rounds chain to +1 more body at 55% damage (jump 140px).",
+      "Your rounds chain +1 and pierce +1 at 60% damage (jump 160px).",
+      "Your rounds chain +2 and pierce +1 at 65% damage (jump 180px), preferring a new target.",
+    ],
+    glyph: "~", tint: "#5fb6d6", rarity: "rare",
+    apply: (m, l) => {
+      m.crosscurrentChain = Math.max(m.crosscurrentChain, lv([1, 1, 2], l));
+      m.pierce += lv([0, 1, 1], l);
+      m.crosscurrentJumpRange = Math.max(m.crosscurrentJumpRange, lv([140, 160, 180], l));
+      m.crosscurrentJumpCoef = Math.max(m.crosscurrentJumpCoef, lv([0.55, 0.60, 0.65], l));
+      m.crosscurrentPreferNew = Math.max(m.crosscurrentPreferNew, lv([0, 0, 1], l));
+    },
+  },
+  {
+    id: "last_warm_round", name: "LAST WARM ROUND",
+    descs: [
+      "The final shot of a weapon's cycle deals +16% damage.",
+      "The final shot of a weapon's cycle deals +24% damage.",
+      "The final shot of a weapon's cycle deals +32% damage.",
+    ],
+    glyph: "!", tint: "#ff9d5c", rarity: "uncommon",
+    apply: (m, l) => { m.warmRoundBonus = Math.max(m.warmRoundBonus, lv([0.16, 0.24, 0.32], l)); },
+  },
+  {
+    id: "known_by_touch", name: "KNOWN BY TOUCH",
+    descs: [
+      "Dash end or a melee/skill hit reveals hidden bodies for 1.6s (90px).",
+      "Dash end or a melee/skill hit reveals hidden bodies for 2.2s (120px).",
+      "Dash end or a melee/skill hit reveals hidden bodies for 3.0s (150px).",
+    ],
+    glyph: "o", tint: "#d8d0b0", rarity: "common",
+    apply: (m, l) => {
+      m.revealDur = Math.max(m.revealDur, lv([1.6, 2.2, 3.0], l));
+      m.revealRadius = Math.max(m.revealRadius, lv([90, 120, 150], l));
+      m.revealIcd = m.revealIcd === 0 ? lv([4.0, 3.4, 2.8], l) : Math.min(m.revealIcd, lv([4.0, 3.4, 2.8], l));
+    },
+  },
+  {
+    id: "remember_me", name: "REMEMBER ME",
+    descs: [
+      "A lethal hit is survived once per floor: HP to 1, but disable your best blessing 6s.",
+      "A lethal hit is survived once per floor: HP to 1, but disable your best blessing 5s.",
+      "A lethal hit is survived once per floor: HP to 1, but disable your best blessing 4s.",
+    ],
+    glyph: "+", tint: "#c98bd6", rarity: "rare",
+    apply: (m, l) => {
+      m.rememberMeDisableDur = m.rememberMeDisableDur === 0
+        ? lv([6, 5, 4], l)
+        : Math.min(m.rememberMeDisableDur, lv([6, 5, 4], l));
+    },
+  },
+  {
+    id: "carry_the_light", name: "CARRY THE LIGHT",
+    descs: [
+      "Revive +10px & +12% faster; ally revive cuts 10% of your fire cooldown. Light 70px.",
+      "Revive +18px & +20% faster; ally revive cuts 18% of your fire cooldown. Light 100px.",
+      "Revive +26px & +30% faster; ally revive cuts 25% and readies your weapon. Light 130px.",
+    ],
+    glyph: "*", tint: "#ffe08a", rarity: "uncommon",
+    apply: (m, l) => {
+      m.lightReviveRadius = Math.max(m.lightReviveRadius, lv([10, 18, 26], l));
+      m.lightReviveRate = Math.max(m.lightReviveRate, lv([0.12, 0.20, 0.30], l));
+      m.lightSwapCut = Math.max(m.lightSwapCut, lv([0.10, 0.18, 0.25], l));
+      m.lightRadius = Math.max(m.lightRadius, lv([70, 100, 130], l));
+      m.lightFreeMag = Math.max(m.lightFreeMag, lv([0, 0, 1], l));
+      m.lightSoloDashRestore = Math.max(m.lightSoloDashRestore, lv([0.08, 0.12, 0.16], l));
     },
   },
   // ---- the premium CORE INFUSIONS (shop stock only — never in a blessing offer) ----

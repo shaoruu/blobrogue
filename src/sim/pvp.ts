@@ -34,6 +34,11 @@ export const pvpBlessingBlacklist = [
   "second_breath_muddy",
   "on_the_beat",
   "shared_rope",
+  "crosscurrent",
+  "last_warm_round",
+  "known_by_touch",
+  "remember_me",
+  "carry_the_light",
 ] as const;
 
 export const pvpUnsupportedWeaponIds: readonly WeaponId[] = [
@@ -41,6 +46,10 @@ export const pvpUnsupportedWeaponIds: readonly WeaponId[] = [
   "sluicegate",
   "oddsmaker",
   "pathmaker",
+  "resonant_fork",
+  "red_pen",
+  "margin_call",
+  "sidewinder",
 ];
 
 const PVP_UNSUPPORTED_WEAPON_IDS = new Set<WeaponId>(pvpUnsupportedWeaponIds);

@@ -90,6 +90,7 @@ export const WEAPON_KB: Record<WeaponId, number> = {
   cleaver: 10, scrapper: 2, skipper: 4, arcbolt: 5, cryobolt: 3, firebomb: 6, tracker: 3,
   singularity: 20,
   mooring_nail: 6, sluicegate: 5, oddsmaker: 6, pathmaker: 1,
+  resonant_fork: 4, red_pen: 3, margin_call: 5, sidewinder: 3,
 };
 export const KB_LAMBDA = 16;
 export const KB_MAX_SPEED = 520;
@@ -121,6 +122,7 @@ export const FIRE_KNOCKBACK: Record<WeaponId, number> = {
   cleaver: 4, scrapper: 0, skipper: 6, arcbolt: 2, cryobolt: 0, firebomb: 6, tracker: 0,
   singularity: 4,
   mooring_nail: 0, sluicegate: 4, oddsmaker: 3, pathmaker: 0,
+  resonant_fork: 2, red_pen: 2, margin_call: 3, sidewinder: 1,
 };
 
 // ---- legendary gimmick tuning ----
@@ -150,6 +152,22 @@ export const MAX_PAVE_ZONE_EFFECTS = 16;
 export const MAX_PAVE_ZONES_PER_OWNER = 8;
 export const MAX_PAVE_ZONES_PER_SHOT = 8;
 export const GRAPPLE_SWEEP_STEP = 4;
+
+// ---- Content Wave B: shared anti-degenerate safety locks (Quill FINAL) ----
+// Every Wave B secondary/proc system routes through these: the proc-rate hard clamp is
+// per player, per target; overflow procs are discarded (never queued). The same-target
+// repeat share caps how much of a system's secondary damage may re-hit ONE target within
+// the window after its first legal hit.
+export const WAVE_B_PROC_RATE_PER_SEC = 4;       // ≤4 secondary procs /s /player /target
+export const WAVE_B_PROC_WINDOW = 1.0;           // rolling second the clamp measures over
+export const WAVE_B_SAME_TARGET_REPEAT = 0.35;   // ≤0.35 of a system's DPS may re-hit one body
+// Secondary-body scoring (budget model): the first secondary body counts at 0.60, later
+// bodies at 0.35. Runtime damage is authored raw; these govern the PU envelope math.
+export const WAVE_B_SECONDARY_FIRST = 0.60;
+export const WAVE_B_SECONDARY_LATER = 0.35;
+// Sidewinder arc geometry: the curving round's swept radius grows over its life.
+export const SIDEWINDER_ARC_RADIUS_MIN = 90;
+export const SIDEWINDER_ARC_RADIUS_MAX = 130;
 export const EFFECT_TICK = 0.1;          // shared cadence for zone chill + sentry contact
 export const ORBIT_RING_EASE = 10;       // 1/s the halo ring eases toward its target radius
 export const SENTRY_CONTACT_CD = 0.4;    // seconds between enemy-contact chews on a sentry

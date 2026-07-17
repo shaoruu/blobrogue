@@ -28,7 +28,10 @@ export type RoomId = "swarm" | "anchor" | "brawl" | "lane" | "cover" | "kite" | 
 // A declared performance metric (balancer envelope): the room clear times plus the
 // cross-room aggregates. Each weapon declares 1-2 metrics it beats the arsenal median
 // on by >=15% (proven in test/arsenal.test.ts) — its authored, measurable identity.
-export type MetricId = RoomId | "safety" | "control" | "boss" | "paving";
+export type MetricId = RoomId | "safety" | "control" | "boss" | "paving"
+  // Content Wave B verb-identity metrics (spec-checks, like "paving"): a low-DPS identity
+  // weapon proves its authored verb rather than a raw room-clear time.
+  | "link" | "mark" | "copy" | "flank";
 export type RangeBand = "point-blank" | "close" | "mid" | "long" | "self" | "placed";
 export type TargetProfile = "swarm" | "single" | "pack" | "lane" | "anchor" | "control" | "mixed";
 // "coin-fed" (the Midas): the run economy amplifies the shot — never gates it. The
@@ -749,5 +752,77 @@ export const ARSENAL: Record<WeaponId, WeaponManifestEntry> = {
     visual: "#a8d7a0 pale safe-route plates under a quiet bead; held_pathmaker hook",
     authority: ["bullets", "effects:zone"],
     excelRoom: "ambush", weakRoom: "anchor",
+  },
+  resonant_fork: {
+    role: "resonance tuner: strike one body to ring a neighbor",
+    metrics: ["link"],
+    novelty: {
+      nearest: "tesla",
+      axes: ["priority", "geometry"],
+      note: "Tesla's arc chains raw damage outward; the Fork tunes ONE resonant link that ticks a nearby body over time, rewarding a hit on a clustered pair.",
+    },
+    idealRange: "mid", target: "pack",
+    strength: "A single hit resonates a second, clustered body for free follow-on damage.",
+    weakness: "One lone body has nothing to resonate with — the link never opens.",
+    resource: "none", status: "none",
+    modifiers: "Damage, rate, size, crit, and status map to the fork; the link range/tick are authored.",
+    audio: "shootResonantFork",
+    visual: "#c9b8f0 pale violet fork with a taut resonance thread; held_resonant_fork hook",
+    authority: ["bullets"],
+    excelRoom: "swarm", weakRoom: "anchor",
+  },
+  red_pen: {
+    role: "editor's mark: ink a body, then rewrite it in a burst",
+    metrics: ["anchor", "mark"],
+    novelty: {
+      nearest: "breach",
+      axes: ["timing", "priority"],
+      note: "The Breach buys a bigger blast by holding; the Red Pen commits a mark then spends it on a deliberate REWRITE snap for the burst.",
+    },
+    idealRange: "mid", target: "control",
+    strength: "A marked body takes a heavy snap on demand — a chosen focus target dies fast.",
+    weakness: "Un-marked bodies only feel the feeble ink, and the snap is on a real cooldown.",
+    resource: "none", status: "none",
+    modifiers: "Damage, rate, size, crit, and status map to the ink; the snap coefficient is authored.",
+    audio: "shootRedPen",
+    visual: "#e8534f red ink round with a bright rewrite snap; held_red_pen hook",
+    authority: ["bullets"],
+    excelRoom: "anchor", weakRoom: "brawl",
+  },
+  margin_call: {
+    role: "payload broker: store one class off another gun and echo it",
+    metrics: ["brawl", "copy"],
+    novelty: {
+      nearest: "oddsmaker",
+      axes: ["priority", "timing"],
+      note: "The Oddsmaker rolls its own payload; the Margin Call borrows ONE class off your other weapon and re-fires it — a copy you author by choosing what to store.",
+    },
+    idealRange: "mid", target: "pack",
+    strength: "It re-fires your best payload class at a discount, doubling a weapon's room verb.",
+    weakness: "Empty it is a feeble stub, and the Oddsmaker's gamble can never be stored.",
+    resource: "none", status: "none",
+    modifiers: "The copy scales with the stored shot; damage, rate, and size map to the echo.",
+    audio: "shootMarginCall",
+    visual: "#e7c96a brass ledger round echoing the stored payload's tint; held_margin_call hook",
+    authority: ["bullets"],
+    excelRoom: "brawl", weakRoom: "anchor",
+  },
+  sidewinder: {
+    role: "flanking arc: two curving rounds that bite the rear",
+    metrics: ["flank"],
+    novelty: {
+      nearest: "homing",
+      axes: ["geometry", "positioning"],
+      note: "Homing points straight at a body; the Sidewinder's two authored arcs curve laterally to strike the flank, rewarding an angle the target cannot face.",
+    },
+    idealRange: "close", target: "pack",
+    strength: "Curving arcs forgive imperfect aim and reward a rear angle on non-boss bodies.",
+    weakness: "The slow arcs stall on a lone anchored heavy that can simply be faced head-on.",
+    resource: "none", status: "none",
+    modifiers: "Rate, damage, size, and status map to the arcs; extra-pellet mods never add arcs.",
+    audio: "shootSidewinder",
+    visual: "#7fd48a twin green arcs sweeping wide of the aim line; held_sidewinder hook",
+    authority: ["bullets"],
+    excelRoom: "swarm", weakRoom: "anchor",
   },
 };

@@ -337,6 +337,10 @@ export interface Enemy extends Entity {
   // the BOSS_VULN_CAP with the crit channel (never additive on top). Rides the wire (EnemyWire.mkt)
   // so every client draws the marked glow. Decays in tickStatuses.
   markT: number;
+  // Known by Touch (Wave B): seconds a body stays REVEALED — an evasion-untargetable body
+  // (a diving burrower, a faded choir, a blinking weaver) can be hit while this is live.
+  // Sim-internal, transient, never on the wire.
+  revealT: number;
   statusTick: number; // burn DoT accumulator (fires a tick every 0.25s)
   // Who applied the current burn (authoritative kill attribution for the DoT). Solo: always
   // the single local player. Multiplayer: the shooter/exploder who lit the enemy, so the burn
@@ -371,13 +375,22 @@ export type WeaponId =
   // carries a single new isolated field (singularity: implode THEN a delayed nova blast).
   | "cleaver" | "scrapper" | "skipper" | "arcbolt" | "cryobolt" | "firebomb" | "tracker"
   | "singularity"
-  | "mooring_nail" | "sluicegate" | "oddsmaker" | "pathmaker";
+  | "mooring_nail" | "sluicegate" | "oddsmaker" | "pathmaker"
+  // Content Wave B — four more room verbs on the same one-isolated-field pattern:
+  //  - resonant_fork: TUNE — a hit links its target to a nearest neighbor, resonating it;
+  //  - red_pen: SET / REWRITE — ink marks a body, a snap consumes the mark for burst;
+  //  - margin_call: COPY-ONE — stores one payload class off another weapon and echoes it;
+  //  - sidewinder: ENCIRCLE / FLANK — a two-arc volley that curves in to hit the flank.
+  | "resonant_fork" | "red_pen" | "margin_call" | "sidewinder";
 
 // Drop-quality tier. Drives drop weighting (legendaries are genuinely rare and gated off
 // the earliest floors), the pickup/hotbar/tooltip rarity treatment, and shop pricing.
 export type WeaponRarity = "common" | "rare" | "legendary";
 export type SluiceMode = "flood" | "drain";
 export type OddsmakerOutcome = "ricochet" | "seeker" | "blast" | "pierce";
+// Margin Call's storeable payload classes — exactly one is captured off the owner's
+// previous committed shot; `gamble` (the Oddsmaker) is explicitly NOT storeable.
+export type MarginCategory = "slug" | "spread" | "pierce" | "blast" | "seeker" | "status";
 
 // A mystery pickup's baked reveal twist: a small buff or a small drawback rolled at spawn
 // (deterministic from the seed), so opening one is a real gamble — never a dead result.
@@ -549,6 +562,19 @@ export interface Bullet {
   enemyHits?: number;
   sluiceMode?: SluiceMode;
   oddsmakerOutcome?: OddsmakerOutcome;
+  // Wave B round channels (undefined on every other round; sim-internal unless noted).
+  isForkPrimary?: boolean;  // resonant_fork: a primary hit opens/refreshes the owner's tune link
+  isPenInk?: boolean;       // red_pen: an ink round marks the body it hits
+  isPenSnap?: boolean;      // red_pen: the REWRITE snap burst (consumes a mark)
+  isMarginCopy?: boolean;   // margin_call: a stored-payload echo (never re-storeable)
+  sidewinderArc?: number;   // sidewinder: authored arc index 0..1 (curving flank round)
+  sidewinderTurn?: number;  // sidewinder: signed turn rate (rad/s) the arc curves at
+  sidewinderAim?: number;   // sidewinder: the original aim, for the flank-angle test
+  crosscurrentJumps?: number;   // crosscurrent: chain jumps this round still owns
+  crosscurrentRange?: number;   // crosscurrent: max px a jump may reach
+  crosscurrentCoef?: number;    // crosscurrent: jump damage vs the prior hit
+  crosscurrentPreferNew?: boolean; // crosscurrent Lv3: prefer an unhit target
+  crosscurrentTax?: number;     // crosscurrent combo tax multiplier on jump damage (1 = none)
   // Elemental status a bullet stamps on the enemy it hits (see applyBulletStatuses).
   // Undefined on plain rounds; the value is the status duration in seconds.
   burn?: number;           // seconds of burn DoT the round applies

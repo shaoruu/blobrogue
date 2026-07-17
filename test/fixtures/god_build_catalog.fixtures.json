@@ -13,5 +13,12 @@
     "maxPracticalDps": 46.953,
     "strongestBuild": "midas + [big_iron,big_iron,frostbite,hair_trigger,marksman,overload,overload,quickdraw,shared_rope]",
     "rationale": "Expanded Wave A weapon/blessing space changes the strongest sampled combination while global caps, coefficients, and RNG seed remain unchanged."
+  },
+  "waveB": {
+    "catalogVersion": 2,
+    "sourceCommit": "7d35f74",
+    "maxPracticalDps": 49.96,
+    "strongestBuild": "midas + [big_iron,glass_cannon,hair_trigger,overload,quickdraw,second_wind,skirmisher,swift_boots,vitality]",
+    "rationale": "Wave B catalog 2 expands the weapon/blessing space after Sever v36; Quill-locked Wave B verb numbers unchanged. Fail-closed Odds\u00d7Margin (gamble not storeable) preserved."
   }
 }

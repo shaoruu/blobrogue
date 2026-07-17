@@ -48,6 +48,7 @@ import type { WeaponBag } from "../src/sim/weaponBag.js";
 import {
   LEGACY_CONTENT_CATALOG_VERSION,
   WAVE_A_CONTENT_CATALOG_VERSION,
+  WAVE_B_CONTENT_CATALOG_VERSION,
   contentCatalogFor,
 } from "../src/sim/contentCatalog.js";
 import { readFileSync } from "node:fs";
@@ -147,8 +148,9 @@ section("catalog and typed hooks");
       item !== undefined && item.isPremiumOnly !== true && item.descs.length === 3);
   }
   check("Wave A additions produce the locked catalog totals",
-    PICKUP_WEAPONS.length === 41
-    && ITEMS.filter((item) => item.isPremiumOnly !== true).length === 35);
+    contentCatalogFor(WAVE_A_CONTENT_CATALOG_VERSION).pickupWeapons.length === 41
+    && contentCatalogFor(WAVE_A_CONTENT_CATALOG_VERSION).normalBlessingIds.length === 35
+    && WAVE_A_WEAPONS.every((id) => contentCatalogFor(WAVE_A_CONTENT_CATALOG_VERSION).pickupWeapons.includes(id)));
 }
 
 section("canonical roadmap and additive catalog migration");
@@ -169,8 +171,9 @@ section("canonical roadmap and additive catalog migration");
     seed: number;
     legacy: { catalogVersion: 0; pickupCount: number; firstPass: WeaponId[] };
     waveA: { catalogVersion: 1; pickupCount: number; firstPass: WeaponId[] };
+    waveB: { catalogVersion: 2; pickupCount: number; firstPass: WeaponId[] };
   };
-  const deal = (version: 0 | 1): WeaponId[] => {
+  const deal = (version: 0 | 1 | 2): WeaponId[] => {
     const bag = createWeaponBag(fixture.seed, version);
     return contentCatalogFor(version).pickupWeapons
       .map(() => drawWeaponFromBag(bag, new Set()));
@@ -183,7 +186,12 @@ section("canonical roadmap and additive catalog migration");
     contentCatalogFor(WAVE_A_CONTENT_CATALOG_VERSION).pickupWeapons.length === fixture.waveA.pickupCount
     && JSON.stringify(waveADeal) === JSON.stringify(fixture.waveA.firstPass)
     && WAVE_A_WEAPONS.every((id) => waveADeal.includes(id)));
-  for (const version of [0, 1] as const) {
+  const waveBDeal = deal(WAVE_B_CONTENT_CATALOG_VERSION);
+  check("Wave B catalog golden is deterministic and includes every addition",
+    contentCatalogFor(WAVE_B_CONTENT_CATALOG_VERSION).pickupWeapons.length === fixture.waveB.pickupCount
+    && JSON.stringify(waveBDeal) === JSON.stringify(fixture.waveB.firstPass)
+    && fixture.waveB.catalogVersion === 2);
+  for (const version of [0, 1, 2] as const) {
     const bag = createWeaponBag(0xCA7105, version);
     for (let draw = 0; draw < 9; draw++) drawWeaponFromBag(bag, new Set());
     const restored = JSON.parse(JSON.stringify(bag)) as WeaponBag;
@@ -202,10 +210,12 @@ section("canonical roadmap and additive catalog migration");
     && legacyWorld.weaponBag.catalogVersion === LEGACY_CONTENT_CATALOG_VERSION
     && legacyWorld.weaponBag.order.join(",") !== legacyBagOrder
     && legacyWorld.weaponBag.order.every((id) => !WAVE_A_WEAPONS.includes(id)));
-  check("genuinely fresh production worlds select Wave A without a browser field",
-    createWorld(0xCA7108, 1).catalogVersion === WAVE_A_CONTENT_CATALOG_VERSION);
+  check("genuinely fresh production worlds select Wave B without a browser field",
+    createWorld(0xCA7108, 1).catalogVersion === WAVE_B_CONTENT_CATALOG_VERSION);
 
-  const snap = buildSnapshot(createWorld(0xCA7109, 1), LOCAL_ID, 0, [], 0, false, {
+  const snap = buildSnapshot(createWorld(0xCA7109, 1, {
+    catalogVersion: WAVE_A_CONTENT_CATALOG_VERSION,
+  }), LOCAL_ID, 0, [], 0, false, {
     worldId: "catalog-v1",
   });
   check("catalog version rides the authoritative compact snapshot", snap.cat === 1);
@@ -213,7 +223,7 @@ section("canonical roadmap and additive catalog migration");
   delete oldWire.cat;
   check("old snapshots missing catalog decode legacy, never current", validateSnap(oldWire).cat === 0);
   let isUnknownRejected = false;
-  try { validateSnap({ ...snap, cat: 2 }); } catch { isUnknownRejected = true; }
+  try { validateSnap({ ...snap, cat: 3 }); } catch { isUnknownRejected = true; }
   check("unsupported future catalog versions fail closed", isUnknownRejected);
 
   let isForgedClientFieldRejected = false;
@@ -1076,7 +1086,7 @@ section("snapshot, ownership, and PvP fail-closed policy");
   check("PvP acquisition fails closed for all unsupported Wave A weapons",
     WAVE_A_WEAPONS.every((id) => !fighter.ownedWeapons.includes(id))
     && WAVE_A_WEAPONS.every((id) => !isPvpWeaponSupported(id))
-    && pvpUnsupportedWeaponIds.length === WAVE_A_WEAPONS.length);
+    && WAVE_A_WEAPONS.every((id) => pvpUnsupportedWeaponIds.includes(id)));
   fighter.ownedWeapons.push("oddsmaker");
   check("PvP equip also fails closed for a maliciously injected unsupported id",
     !switchWeaponInWorld(pvp, fighter.id, "oddsmaker") && fighter.weapon !== "oddsmaker");
