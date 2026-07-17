@@ -275,6 +275,85 @@ export const WAVE_SOUNDS = {
     duck: [dM(0.6, 0.15, 0.4)],
   },
 
+  // ---- CLAIMANT F70 — ALL THINGS OWED (gilded debt / claim-token relay) ----------------
+  // Story stems ship selected (canonical unversioned). CROWNFALL retired forever.
+  // Missing files resolve silently — no Choir/Weaver/Gilded/gold/Gorge fallback.
+  "claimant.owedEntrance": {
+    stem: "boss/claimant_owed_entrance", variants: 1, gain: 0.9, bus: "voiceTell", priority: WAVE_PRIORITY.bossTell,
+    jitter: 0.03, spatial: true, isOffCameraUncapped: true, cooldownMs: 1000, isPerEntityCooldown: true,
+    duck: [dM(0.3, 0.4, 0.9)],
+  },
+  "claimant.owedPhase": {
+    stem: "boss/claimant_owed_phase", variants: 1, gain: 0.92, bus: "voiceTell", priority: WAVE_PRIORITY.bossTell,
+    jitter: 0.03, spatial: true, isOffCameraUncapped: true, cooldownMs: 1000, isPerEntityCooldown: true,
+    duck: [dM(0.3, 0.35, 0.85)],
+  },
+  "claimant.owedDeath": {
+    stem: "boss/claimant_owed_death", variants: 1, gain: 1.0, bus: "voiceTell", priority: WAVE_PRIORITY.bossTell,
+    jitter: 0, spatial: true, isOffCameraUncapped: true, cooldownMs: 1000, isPerEntityCooldown: true,
+    duck: [dM(0.2, 0.9, 1.3)],
+  },
+  "claimant.owedTell": {
+    stem: "boss/claimant_owed_tell", variants: 1, gain: 0.88, bus: "voiceTell", priority: WAVE_PRIORITY.bossTell,
+    jitter: 0.03, spatial: true, isOffCameraUncapped: true, cooldownMs: 200, isPerEntityCooldown: true,
+    duck: [dM(0.45, 0.25, 0.55)],
+  },
+  "claimant.owedLock": {
+    stem: "boss/claimant_owed_lock", variants: 1, gain: 1.0, bus: "voiceTell", priority: WAVE_PRIORITY.bossLock,
+    jitter: 0, spatial: true, isOffCameraUncapped: true, cooldownMs: 200, isPerEntityCooldown: true,
+    duck: [dM(0.35, 0.12, 0.4)],
+  },
+  "claimant.owedDescent": {
+    stem: "boss/claimant_owed_descent", variants: 1, gain: 0.95, bus: "sfx", priority: WAVE_PRIORITY.bossTell,
+    jitter: 0.03, spatial: true, cooldownMs: 200, isPerEntityCooldown: true,
+    duck: [dM(0.4, 0.15, 0.5)],
+  },
+  "claimant.owedPunish": {
+    stem: "boss/claimant_owed_punish", variants: 1, gain: 0.95, bus: "sfx", priority: WAVE_PRIORITY.bossTell,
+    jitter: 0.03, spatial: true, isOffCameraUncapped: true, cooldownMs: 400, isPerEntityCooldown: true,
+    duck: [dM(0.25, 0.35, 0.9)],
+  },
+  "claimant.owedRecover": {
+    stem: "boss/claimant_owed_recover", variants: 1, gain: 0.78, bus: "sfx", priority: WAVE_PRIORITY.impact,
+    jitter: 0.05, spatial: true, cooldownMs: 300, isPerEntityCooldown: true,
+    duck: [dM(0.55, 0.15, 0.4)],
+  },
+  "claimant.owedFail": {
+    stem: "boss/claimant_owed_fail", variants: 1, gain: 0.86, bus: "sfx", priority: WAVE_PRIORITY.bossTell,
+    jitter: 0.03, spatial: true, cooldownMs: 200, isPerEntityCooldown: true,
+    duck: [dM(0.55, 0.12, 0.35)],
+  },
+  "claimant.owedTokenPickup": {
+    stem: "boss/claimant_owed_token_pickup", variants: 1, gain: 0.55, bus: "sfx", priority: WAVE_PRIORITY.impact,
+    jitter: 0.05, spatial: true, cooldownMs: 80, isPerEntityCooldown: true,
+  },
+  "claimant.owedTokenPass": {
+    stem: "boss/claimant_owed_token_pass", variants: 1, gain: 0.58, bus: "sfx", priority: WAVE_PRIORITY.impact,
+    jitter: 0.05, spatial: true, cooldownMs: 80, isPerEntityCooldown: true,
+  },
+  "claimant.owedTokenDrop": {
+    stem: "boss/claimant_owed_token_drop", variants: 1, gain: 0.48, bus: "sfx", priority: WAVE_PRIORITY.impact,
+    jitter: 0.05, spatial: true, cooldownMs: 80, isPerEntityCooldown: true,
+  },
+  "claimant.owedSocketLight": {
+    stem: "boss/claimant_owed_socket_light", variants: 1, gain: 0.72, bus: "voiceTell", priority: WAVE_PRIORITY.bossTell,
+    jitter: 0.03, spatial: true, cooldownMs: 150, isPerEntityCooldown: true,
+    duck: [dM(0.7, 0.1, 0.3)],
+  },
+  "claimant.owedDeposit": {
+    stem: "boss/claimant_owed_deposit", variants: 1, gain: 0.8, bus: "sfx", priority: WAVE_PRIORITY.bossTell,
+    jitter: 0.03, spatial: true, cooldownMs: 120, isPerEntityCooldown: true,
+    duck: [dM(0.55, 0.12, 0.4)],
+  },
+  "claimant.owedGuardChip": {
+    stem: "boss/claimant_owed_guard_chip", variants: 1, gain: 0.42, bus: "sfx", priority: WAVE_PRIORITY.impact,
+    jitter: 0.05, spatial: true, cooldownMs: 60, isPerEntityCooldown: true,
+  },
+  "claimant.owedOvercommit": {
+    stem: "boss/claimant_owed_overcommit", variants: 1, gain: 0.84, bus: "voiceTell", priority: WAVE_PRIORITY.bossTell,
+    jitter: 0.03, spatial: true, isOffCameraUncapped: true, cooldownMs: 300, isPerEntityCooldown: true,
+    duck: [dM(0.5, 0.15, 0.45)],
+  },
   // ---- §2 MARROW — bone/shale + sub impact ------------------------------------------
   // Shipped: one listen take, one charge take (pinned to their _v1 stems until the full
   // variant sets land). No fallback for the growl rows: the old enemyAttack/dash
@@ -1900,6 +1979,16 @@ export const WAVE_TELLS: Readonly<Record<string, Readonly<Record<string, MoveTel
       active: "wake.processionFront",
     },
   },
+  // CLAIMANT F70 — ALL THINGS OWED (tell watcher + aim-lock edge). CROWNFALL retired.
+  claimant: {
+    // impact/recover omitted: miss→claimant.owed.miss (owedFail); success→claimant.owed.success (owedPunish).
+    // owedRecover stays registered (bestiary + survival alias) for kneel reseal / soft resolve.
+    all_things_owed: {
+      windup: "claimant.owedTell",
+      lock: "claimant.owedLock",
+      active: "claimant.owedDescent",
+    },
+  },
   skeleton: {
     lunge: { windup: "skeleton.commit" },
   },
@@ -1972,6 +2061,7 @@ export const WAVE_BOSS_PHASE: Readonly<Record<string, WaveEventId>> = {
   marrow: "marrow.phase", choir: "choir.phase", weaver: "weaver.phase", gilded: "warden.phase",
   marshal: "marshal.shatter", toll: "toll.phase",
   gorge: "gorge.phase", pale: "pale.phase", wake: "wake.processionPhase",
+  claimant: "claimant.owedPhase",
 };
 
 export const WAVE_BOSS_DEATH: Readonly<Record<string, WaveEventId>> = {
@@ -1979,6 +2069,7 @@ export const WAVE_BOSS_DEATH: Readonly<Record<string, WaveEventId>> = {
   marrow: "marrow.death", choir: "choir.death", weaver: "weaver.death", gilded: "warden.death",
   marshal: "marshal.death", toll: "toll.death",
   gorge: "gorge.death", pale: "pale.death", wake: "wake.processionDeath",
+  claimant: "claimant.owedDeath",
 };
 
 // Bespoke entrance per boss-grade body (played at floor load / captain spawn).
@@ -1987,6 +2078,7 @@ export const WAVE_BOSS_ENTRANCE: Readonly<Record<string, WaveEventId>> = {
   marrow: "marrow.entrance", choir: "choir.entrance", weaver: "weaver.entrance", gilded: "gilded.entrance",
   marshal: "marshal.entrance", toll: "toll.entrance",
   gorge: "gorge.entrance", pale: "pale.entrance", wake: "wake.processionEntrance",
+  claimant: "claimant.owedEntrance",
 };
 
 // Every event a boss OR regular archetype kind can raise — its preload group (§10:

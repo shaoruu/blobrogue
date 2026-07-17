@@ -1,0 +1,151 @@
+{
+  "batch": "claimant-owed-v1-denser-reselect",
+  "story_name": "ALL THINGS OWED",
+  "pr": 175,
+  "selected": {
+    "entrance": {
+      "note": "pool entrance",
+      "dur": 1.4,
+      "max_db": -1.8,
+      "sil_pct": 14.7,
+      "onset_ms": 7.5,
+      "lufs": -14,
+      "ogg_sha": "1e83944e04d3cf11"
+    },
+    "phase": {
+      "note": "pool phase",
+      "dur": 1.2,
+      "max_db": -2.6,
+      "sil_pct": 10.8,
+      "onset_ms": 7.9,
+      "lufs": -14,
+      "ogg_sha": "fc2057e4059c1910"
+    },
+    "death": {
+      "note": "pool death",
+      "dur": 2.2,
+      "max_db": -1.5,
+      "sil_pct": 51.4,
+      "onset_ms": 7.9,
+      "lufs": -14,
+      "ogg_sha": "88fa5c0e46a84b97"
+    },
+    "tell": {
+      "note": "swap tell_v1 (#170)",
+      "dur": 1.4,
+      "max_db": -1.3,
+      "sil_pct": 51.2,
+      "onset_ms": 8.0,
+      "lufs": -16,
+      "ogg_sha": "f4bdf8b739c485f0"
+    },
+    "lock": {
+      "note": "fal-regen denser latch (r5_v4 cropped\u22640.35s)",
+      "dur": 0.34,
+      "max_db": -1.6,
+      "sil_pct": 22.9,
+      "onset_ms": 10.0,
+      "lufs": -16,
+      "ogg_sha": "4bd1d4e11309012d"
+    },
+    "descent": {
+      "note": "pool descent_v1",
+      "dur": 0.597,
+      "max_db": -1.3,
+      "sil_pct": 28.6,
+      "onset_ms": 7.6,
+      "lufs": -16,
+      "ogg_sha": "24a3cb2f1c7aab22"
+    },
+    "punish": {
+      "note": "pool punish",
+      "dur": 0.847,
+      "max_db": -1.2,
+      "sil_pct": 59.1,
+      "onset_ms": 7.8,
+      "lufs": -16,
+      "ogg_sha": "1dd7c69cc05752b5"
+    },
+    "recover": {
+      "note": "pool recover",
+      "dur": 0.697,
+      "max_db": -1.5,
+      "sil_pct": 65.9,
+      "onset_ms": 10.0,
+      "lufs": -16,
+      "ogg_sha": "d19cf5b8a661b6fa"
+    },
+    "fail": {
+      "note": "swap fail_v2 (#170)",
+      "dur": 0.547,
+      "max_db": -1.4,
+      "sil_pct": 27.4,
+      "onset_ms": 10.0,
+      "lufs": -16,
+      "ogg_sha": "7cf9c94caf16d67f"
+    },
+    "token_pickup": {
+      "note": "keep token_pickup_v1",
+      "dur": 0.347,
+      "max_db": -2.4,
+      "sil_pct": 9.6,
+      "onset_ms": 8.0,
+      "lufs": -18,
+      "ogg_sha": "4adacbef32994119"
+    },
+    "token_pass": {
+      "note": "pool token_pass_v1",
+      "dur": 0.422,
+      "max_db": -1.1,
+      "sil_pct": 38.1,
+      "onset_ms": 7.1,
+      "lufs": -18,
+      "ogg_sha": "cd7bfa8208802109"
+    },
+    "token_drop": {
+      "note": "fal-regen denser (r2_v2)",
+      "dur": 0.401,
+      "max_db": -2.7,
+      "sil_pct": 12.9,
+      "onset_ms": 7.0,
+      "lufs": -16,
+      "ogg_sha": "825127c873e6809a"
+    },
+    "socket_light": {
+      "note": "swap socket_light_v1 denser",
+      "dur": 0.447,
+      "max_db": -1.7,
+      "sil_pct": 67.3,
+      "onset_ms": 9.3,
+      "lufs": -16,
+      "ogg_sha": "47d0dbe308dd5615"
+    },
+    "deposit": {
+      "note": "fal-regen denser (pool deposit_v1 still >70% sil)",
+      "dur": 0.521,
+      "max_db": -1.7,
+      "sil_pct": 13.9,
+      "onset_ms": 10.0,
+      "lufs": -16,
+      "ogg_sha": "17c2dccfe6499b0e"
+    },
+    "guard_chip": {
+      "note": "swap guard_chip_v3 densest",
+      "dur": 0.282,
+      "max_db": -1.5,
+      "sil_pct": 7.6,
+      "onset_ms": 7.5,
+      "lufs": -16,
+      "ogg_sha": "cd82bf0a1b55af75"
+    },
+    "overcommit": {
+      "note": "fal-regen denser (r2_v3; reject ~93% sil)",
+      "dur": 0.547,
+      "max_db": -1.8,
+      "sil_pct": 2.9,
+      "onset_ms": 7.2,
+      "lufs": -16,
+      "ogg_sha": "6e13fc97033c2691"
+    }
+  }
+}

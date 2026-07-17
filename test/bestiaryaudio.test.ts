@@ -118,7 +118,7 @@ function manifestGates(): void {
   }
   check("every kind resolves EVERY hook its behavior verb declares", isOk);
   check("boss-grade kinds also carry bespoke entrance/phase/death maps",
-    (["boss", "marrow", "choir", "weaver", "gilded", "marshal", "toll", "gorge", "pale", "wake"] as const).every(
+    (["boss", "marrow", "choir", "weaver", "gilded", "marshal", "toll", "gorge", "pale", "wake", "claimant"] as const).every(
       (k) => WAVE_BOSS_ENTRANCE[k] !== undefined && WAVE_BOSS_PHASE[k] !== undefined && WAVE_BOSS_DEATH[k] !== undefined));
   check("every committed move of every kind is covered by tells (windup at minimum)",
     ALL_KINDS.every((kind) => ENEMY_MOVESET[kind].every((move) => {
@@ -158,6 +158,13 @@ const DE_FALLBACKED_ROWS: ReadonlySet<WaveEventId> = new Set<WaveEventId>([
   "wake.processionBierPulse", "wake.processionBierAdvance",
   "wake.processionBlockerHighlight", "wake.processionBlockerBreak",
   "wake.processionThreshold", "wake.processionShelter", "wake.processionShadowWarn",
+  // Claimant story rows: silent until/unless file present; never Choir/Weaver reuse.
+  "claimant.owedEntrance", "claimant.owedPhase", "claimant.owedDeath",
+  "claimant.owedTell", "claimant.owedLock", "claimant.owedDescent",
+  "claimant.owedPunish", "claimant.owedRecover", "claimant.owedFail",
+  "claimant.owedTokenPickup", "claimant.owedTokenPass", "claimant.owedTokenDrop",
+  "claimant.owedSocketLight", "claimant.owedDeposit", "claimant.owedGuardChip",
+  "claimant.owedOvercommit",
 ]);
 
 function rowHygieneGates(): void {
