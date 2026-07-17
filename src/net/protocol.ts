@@ -893,6 +893,9 @@ const ATTACK_MOVES: Record<AttackMove, true> = {
   tracer: true, beam: true, spew: true, hurl: true, rip: true,
   // v35 SEVER F55 signature — display name WORLDSPLIT everywhere client-facing.
   worldsplit: true,
+  // PALE F75 signature — display name THE LAST LIGHT FALLS; wire id last_light.
+  // Fits existing AttackWire/EncounterState flags — no PROTOCOL_VERSION bump required.
+  last_light: true,
 };
 const ENEMY_TIERS: Record<EnemyTier, true> = { swarm: true, standard: true, brute: true, elite: true };
 const SLUICE_MODES: Record<SluiceMode, true> = { flood: true, drain: true };

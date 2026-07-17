@@ -2166,6 +2166,16 @@ export const PALE = {
   warmthDrainIdleSec: 1.5,
   warmthDrainMoveClearTiles: 1.0,
   warmthDrainSlow: 0.5,     // = CHILL_SLOW (constants.ts) — a single ×0.5, capped there
+  // THE LAST LIGHT FALLS (OWNER LOCK signature ult — success counter, NOT warmth-drain):
+  // 1.8s ceiling/meteor tell → three sequential scar relights (≥0.65s each, one active) →
+  // 1.0s redirected fall → 4.0s core punish. Authoritative at TICK_HZ=20; tests allow ±1 tick.
+  lastLightTell: 1.8,
+  lastLightScarCommit: 0.65,
+  lastLightScarCount: 3,
+  lastLightFall: 1.0,
+  lastLightPunish: 4.0,
+  lastLightScarHp: 18,          // highlighted scar target HP (mechanic body)
+  lastLightCadence: 14.0,       // seconds between signature commits (spatial patterns fill the rest)
 } as const;
 
 export function paleHpForFloor(): number {

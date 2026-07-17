@@ -11654,6 +11654,240 @@ function severWorldsplitActive(w: WorldState, e: Enemy, dt: number, ev: SimEvent
   }
 }
 
+// ---- PALE THRONE F75 — THE LAST LIGHT FALLS (OWNER LOCK signature) ----
+// Timings: 1.8s tell → 3× ≥0.65s sequential scar relights (one active) → 1.0s fall → 4.0s punish.
+// Success = all three scars relit in order → openBossWindow(4.0). Survival = abandon chain /
+// stay on warm route → dead-space impact, no window. Failure = bounded sequence reset.
+// Warmth-drain remains a separate P3 tax and is NEVER the success counter.
+// Cadence: boss.lastAddPick stores centiseconds until the next signature (Pale has no add drip).
+// Relit count rides boss.huskReformTimer (unused on Pale). Outcome rides boss.mirrorLastFamily:
+//   -1 idle, 0 pending, 1 success, 2 survival, 3 failure. Active scar index → boss.mirrorFamily.
+function paleEnc(w: WorldState) {
+  return w.encounter && w.encounter.structureKind === "arena" ? w.encounter : null;
+}
+
+function paleLastLightSetOutcome(w: WorldState, e: Enemy, outcome: "idle" | "pending" | "success" | "survival" | "failure"): void {
+  const enc = paleEnc(w);
+  if (enc) enc.flags.lastLightOutcome = outcome;
+  const map = { idle: -1, pending: 0, success: 1, survival: 2, failure: 3 } as const;
+  e.boss!.mirrorLastFamily = map[outcome];
+}
+
+function paleLastLightOutcomeOf(e: Enemy): "idle" | "pending" | "success" | "survival" | "failure" {
+  const v = e.boss!.mirrorLastFamily;
+  if (v === 1) return "success";
+  if (v === 2) return "survival";
+  if (v === 3) return "failure";
+  if (v === 0) return "pending";
+  return "idle";
+}
+
+function paleLastLightTickCadence(e: Enemy, dt: number): void {
+  const boss = e.boss!;
+  if (boss.lastAddPick > 0) {
+    boss.lastAddPick = Math.max(0, boss.lastAddPick - Math.max(1, Math.round(dt * 100)));
+  }
+}
+
+function paleLastLightMaybeBegin(w: WorldState, e: Enemy, ev: SimEvent[]): boolean {
+  const boss = e.boss!;
+  if (boss.lastAddPick > 0) return false;
+  beginWindup(e, "last_light");
+  e.attack.cooldown = PALE.attackCd[boss.phase] ?? PALE.attackCd[3];
+  boss.lastAddPick = Math.round(PALE.lastLightCadence * 100);
+  boss.spinCount = 0;
+  boss.mirrorFamily = 0;
+  boss.huskReformTimer = 0;
+  paleLastLightSetOutcome(w, e, "pending");
+  const enc = paleEnc(w);
+  if (enc) {
+    enc.flags.lastLightPhase = "tell";
+    enc.flags.lastLightScarIndex = 0;
+    enc.flags.lastLightScarId = -1;
+    enc.flags.lastLightRelit = 0;
+    enc.checkpoint = 0;
+  }
+  paleLastLightClearScar(w, e);
+  ev.push({ t: "cue", name: "pale.lastLight.tell", x: e.x, y: e.y, rate: 0.7, gain: 0.7, trauma: 0.05 });
+  return true;
+}
+
+function paleLastLightClearScar(w: WorldState, e: Enemy): void {
+  const boss = e.boss!;
+  if (boss.laneKnotId > 0) {
+    const scar = w.enemies.find((o) => o.id === boss.laneKnotId - 1 && o.kind === "pale_seam");
+    if (scar && !scar.dead) scar.dead = true;
+    boss.laneKnotId = 0;
+  }
+  const enc = paleEnc(w);
+  if (enc) enc.flags.lastLightScarId = -1;
+}
+
+function paleLastLightPlantScar(w: WorldState, e: Enemy, scarIndex: number, ev: SimEvent[]): void {
+  paleLastLightClearScar(w, e);
+  const boss = e.boss!;
+  const base = -Math.PI / 2;
+  const offsets = [-0.55, 0, 0.55];
+  const ang = base + (offsets[scarIndex] ?? 0);
+  const dist = PALE.seamRingDist + 12;
+  let x = e.x + Math.cos(ang) * dist;
+  let y = e.y + Math.sin(ang) * dist;
+  const r = ENEMY_ARCHETYPES.pale_seam.radius;
+  if (!settleSpawnPoint(w, x, y, r)) {
+    x = e.x + Math.cos(ang) * (dist + TILE);
+    y = e.y + Math.sin(ang) * (dist + TILE);
+    settleSpawnPoint(w, x, y, r);
+  }
+  const scar = createEnemy("pale_seam", settlePoint.x, settlePoint.y, w.floor, w.rng, w.nextEnemyId++, {
+    isSummoned: true, players: w.encounterPlayers,
+  });
+  scar.hp = scar.maxHp = Math.max(1, Math.round(PALE.lastLightScarHp));
+  scar.spawnTimer = 0;
+  scar.seq = e.id + 1;
+  scar.aux = scarIndex + 10;
+  w.enemies.push(scar);
+  boss.laneKnotId = scar.id + 1;
+  boss.mirrorFamily = scarIndex;
+  const enc = paleEnc(w);
+  if (enc) {
+    enc.flags.lastLightScarId = scar.id;
+    enc.flags.lastLightScarIndex = scarIndex;
+    enc.flags.lastLightPhase = "scars";
+    enc.checkpoint = scarIndex;
+  }
+  ev.push({ t: "enemySpawn", eid: scar.id, kind: scar.kind, tier: scar.tier, x: scar.x, y: scar.y });
+  ev.push({ t: "cue", name: "pale.lastLight.scar", x: scar.x, y: scar.y, rate: 1.1, gain: 0.55, trauma: 0.02 });
+}
+
+function paleLastLightScarBroken(w: WorldState, e: Enemy): boolean {
+  const boss = e.boss!;
+  if (boss.laneKnotId <= 0) return false;
+  const scar = w.enemies.find((o) => o.id === boss.laneKnotId - 1 && o.kind === "pale_seam");
+  return !scar || scar.dead || scar.hp <= 0;
+}
+
+function paleLastLightStep(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void {
+  const a = e.attack;
+  const boss = e.boss!;
+  const enc = paleEnc(w);
+  if (a.phase === "windup") {
+    a.time += dt;
+    a.windup = Math.min(1, a.time / PALE.lastLightTell);
+    if (!a.isAimLocked && a.windup >= 0.6) {
+      a.lockedAngle = -Math.PI / 2;
+      a.markX = e.x;
+      a.markY = e.y - PALE.seamRingDist;
+      a.isAimLocked = true;
+    }
+    if (enc) enc.flags.lastLightPhase = "tell";
+    if (a.time >= PALE.lastLightTell) {
+      a.phase = "active";
+      a.time = 0;
+      a.windup = 1;
+      boss.spinCount = 0;
+      boss.huskReformTimer = 0;
+      if (enc) {
+        enc.flags.lastLightPhase = "scars";
+        enc.flags.lastLightRelit = 0;
+        enc.flags.lastLightScarIndex = 0;
+      }
+      paleLastLightPlantScar(w, e, 0, ev);
+    }
+    return;
+  }
+  if (a.phase === "active") {
+    a.time += dt;
+    const scarIx = boss.spinCount;
+    if (scarIx < PALE.lastLightScarCount) {
+      if (enc) {
+        enc.flags.lastLightPhase = "scars";
+        enc.flags.lastLightScarIndex = scarIx;
+      }
+      if (paleLastLightScarBroken(w, e)) {
+        const relitCount = scarIx + 1;
+        boss.huskReformTimer = relitCount;
+        if (enc) {
+          enc.flags.lastLightRelit = relitCount;
+          enc.checkpoint = relitCount;
+        }
+        paleLastLightClearScar(w, e);
+        boss.spinCount = scarIx + 1;
+        a.time = 0;
+        if (boss.spinCount < PALE.lastLightScarCount) {
+          paleLastLightPlantScar(w, e, boss.spinCount, ev);
+          a.lockedAngle = -Math.PI / 2 + boss.spinCount * 0.18;
+        } else {
+          a.lockedAngle = Math.PI / 2;
+          if (enc) enc.flags.lastLightPhase = "fall";
+          ev.push({ t: "cue", name: "pale.lastLight.lock", x: e.x, y: e.y, rate: 0.55, gain: 0.8, trauma: 0.08 });
+        }
+        return;
+      }
+      if (a.time >= PALE.lastLightScarCommit) {
+        paleLastLightClearScar(w, e);
+        boss.spinCount = PALE.lastLightScarCount;
+        a.time = 0;
+        if (enc) enc.flags.lastLightPhase = "fall";
+      }
+      return;
+    }
+    if (enc) enc.flags.lastLightPhase = "fall";
+    if (a.time >= PALE.lastLightFall) {
+      const success = boss.huskReformTimer >= PALE.lastLightScarCount;
+      enterRecover(e);
+      a.time = 0;
+      if (enc) enc.flags.lastLightPhase = "punish";
+      if (success) {
+        paleLastLightSetOutcome(w, e, "success");
+        openBossWindow(e, PALE.lastLightPunish, ev);
+        ev.push({ t: "chargeCrash", x: e.x, y: e.y });
+        ev.push({ t: "cue", name: "pale.lastLight.punish", x: e.x, y: e.y, rate: 0.6, gain: 0.9, trauma: 0.14 });
+        if (enc) {
+          let best: { id: string; d: number } | null = null;
+          for (const p of w.players.values()) {
+            if (p.isDown || p.isAbsent || p.hp <= 0) continue;
+            const d = Math.hypot(p.x - e.x, p.y - e.y);
+            if (!best || d < best.d) best = { id: p.id, d };
+          }
+          if (best) setEncounterCarrier(enc, best.id);
+        }
+      } else {
+        let anyHit = false;
+        for (const p of w.players.values()) {
+          if (p.isDown || p.hp <= 0) continue;
+          const dx = p.x - e.x, dy = p.y - (e.y + PALE.seamRingDist);
+          if (Math.hypot(dx, dy) < TILE * 1.2 && p.invuln <= 0) {
+            anyHit = true;
+            damagePlayer(w, p, 1, ev);
+          }
+        }
+        paleLastLightSetOutcome(w, e, anyHit ? "failure" : "survival");
+        if (enc) {
+          if (anyHit) {
+            enc.failureCount = (enc.failureCount || 0) + 1;
+            enc.failed = true;
+          }
+          enc.flags.lastLightScarIndex = 0;
+          enc.flags.lastLightRelit = 0;
+          enc.checkpoint = 0;
+        }
+        ev.push({ t: "cue", name: "pale.lastLight.miss", x: e.x, y: e.y + PALE.seamRingDist, rate: 0.9, gain: 0.5, trauma: 0.04 });
+      }
+      paleLastLightClearScar(w, e);
+      boss.huskReformTimer = 0;
+    }
+    return;
+  }
+  if (a.phase === "recover") {
+    a.time += dt;
+    const dur = paleLastLightOutcomeOf(e) === "success" ? PALE.lastLightPunish : 0.6;
+    if (a.time >= dur) {
+      if (enc) enc.flags.lastLightPhase = "idle";
+      enterIdle(e);
+    }
+  }
+}
+
 // ---- THE GIANT ENCOUNTER CORE (Gorge F50 / Pale Throne F75 / — F100 Unmaker) ----
 // The AD-LOCKED shell-peel giant, run as ONE shared core parameterized by a per-giant GiantSpec
 // (constants + material colors + seam/debris kinds + balance fns). A colossal STATIONARY set-piece:
@@ -11675,6 +11909,16 @@ function updateGiant(w: WorldState, e: Enemy, dt: number, ev: SimEvent[], spec: 
   const a = e.attack;
   const gc = spec.C;
 
+  // THE LAST LIGHT FALLS (Pale only): signature reserves the major-telegraph slot. Seam peel and
+  // spatial patterns pause while the meteor/scar sequence is live (fairness: one lethal commitment).
+  if (spec.bodyKind === "pale") {
+    if (boss.lastAddPick < 0) boss.lastAddPick = Math.round(PALE.lastLightCadence * 100);
+    if (a.move === "last_light" && a.phase !== "none") {
+      paleLastLightStep(w, e, dt, ev);
+      return;
+    }
+  }
+
   // The weak-point loop runs EVERY tick, in parallel with (and independent of) the pattern loop —
   // the seams stand while the giant fires its rings/zones/spokes (paused only during the crack-off
   // beat, which sloughs them anyway).
@@ -11688,7 +11932,12 @@ function updateGiant(w: WorldState, e: Enemy, dt: number, ev: SimEvent[], spec: 
     if (a.time >= recDur) enterIdle(e);
     return;
   }
-  if (a.cooldown === 0 && e.spawnTimer === 0 && !boss.roar) { giantBeginAttack(e, ev, spec); return; }
+  if (spec.bodyKind === "pale") paleLastLightTickCadence(e, dt);
+  if (a.cooldown === 0 && e.spawnTimer === 0 && !boss.roar) {
+    if (spec.bodyKind === "pale" && paleLastLightMaybeBegin(w, e, ev)) return;
+    giantBeginAttack(e, ev, spec);
+    return;
+  }
   // STATIONARY: no chase step — the giant holds the arena center and lets its patterns do the work.
 }
 

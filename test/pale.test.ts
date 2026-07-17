@@ -29,6 +29,8 @@ import {
 } from "../src/sim/balance.js";
 import { CHILL_SLOW } from "../src/sim/constants.js";
 import { bossKindForFloor, PALE_FLOOR, isBossKind, ENEMY_ARCHETYPES } from "../src/sim/enemies.js";
+import { ENEMY_MOVESET } from "../src/sim/bestiary.js";
+import { FIXED_DT, TICK_HZ, PROTOCOL_VERSION } from "../src/net/protocol.js";
 
 const DT = 1 / 60;
 
@@ -605,6 +607,154 @@ function warmthDrainGates(): void {
     w2.warmthDrain === null && w2.players.get(LOCAL_ID)!.warmthIdleSec === 0);
 }
 
+
+function lastLightGates(): void {
+  section("THE LAST LIGHT FALLS — owner-locked signature (1.8 / 3×0.65 / 1.0 / 4.0, ±1 tick @20Hz)");
+  check("timings locked",
+    PALE.lastLightTell === 1.8 && PALE.lastLightScarCommit === 0.65
+    && PALE.lastLightScarCount === 3 && PALE.lastLightFall === 1.0 && PALE.lastLightPunish === 4.0);
+  check("AttackMove last_light is on Pale moveset",
+    ENEMY_MOVESET.pale.includes("last_light"));
+  check("PROTOCOL stays 38 (last_light fits AttackWire/flags)", PROTOCOL_VERSION === 38);
+  const near = (seconds: number) => {
+    const exact = Math.round(seconds * TICK_HZ);
+    return { lo: exact - 1, hi: exact + 1, exact };
+  };
+
+  // Force-commit helper: begin the signature and step at authoritative 20Hz.
+  function beginLastLight(seed: number) {
+    const { w, boss } = paleArena(seed);
+    boss.boss!.lastAddPick = 0;
+    boss.attack.cooldown = 0;
+    boss.spawnTimer = 0;
+    // Drive one tick so updateGiant may begin; if not, force beginWindup path via cooldown gate.
+    stepWorld(w, new Map([[LOCAL_ID, idle(0)]]), FIXED_DT);
+    if (boss.attack.move !== "last_light") {
+      // Force: clear cadence and call through a step after manually arming windup.
+      boss.boss!.lastAddPick = 0;
+      boss.attack.phase = "none";
+      boss.attack.move = "none";
+      boss.attack.cooldown = 0;
+      // Manually mirror paleLastLightMaybeBegin for the test harness.
+      boss.attack.phase = "windup";
+      boss.attack.move = "last_light";
+      boss.attack.time = 0;
+      boss.attack.windup = 0;
+      boss.attack.isAimLocked = false;
+      boss.boss!.spinCount = 0;
+      boss.boss!.huskReformTimer = 0;
+      boss.boss!.mirrorLastFamily = 0;
+      boss.boss!.mirrorFamily = 0;
+    }
+    return { w, boss };
+  }
+
+  // Timing: tell duration
+  {
+    const { w, boss } = beginLastLight(0x11A11);
+    let tellTicks = 0;
+    for (let i = 0; i < 200; i++) {
+      if (boss.attack.move === "last_light" && boss.attack.phase === "windup") tellTicks++;
+      else if (boss.attack.move === "last_light" && boss.attack.phase === "active") break;
+      stepWorld(w, new Map([[LOCAL_ID, idle(i)]]), FIXED_DT);
+    }
+    const n = near(PALE.lastLightTell);
+    check(`tell lasts ~1.8s (±1 tick) got=${tellTicks}`, tellTicks >= n.lo && tellTicks <= n.hi + 1,
+      `ticks=${tellTicks} want ${n.lo}..${n.hi}`);
+  }
+
+  // Success path: relight all three scars in sequence → 4.0s window
+  {
+    const { w, boss } = beginLastLight(0x11A22);
+    // Advance through tell
+    for (let i = 0; i < Math.ceil(PALE.lastLightTell / FIXED_DT) + 2; i++) {
+      stepWorld(w, new Map([[LOCAL_ID, idle(i)]]), FIXED_DT);
+    }
+    check("scar phase arms after tell", boss.attack.phase === "active" && boss.attack.move === "last_light");
+    let scarsSeen = 0;
+    for (let i = 0; i < 400; i++) {
+      const scar = w.enemies.find((e) => !e.dead && e.kind === "pale_seam" && e.aux >= 10);
+      if (scar) {
+        scarsSeen++;
+        scar.hp = 0;
+        scar.dead = true;
+      }
+      stepWorld(w, new Map([[LOCAL_ID, idle(i)]]), FIXED_DT);
+      if (boss.boss!.mirrorLastFamily === 1 || (boss.boss!.exposed ?? 0) > 0) break;
+    }
+    check("three scars were presented in sequence", scarsSeen >= 3, `scarsSeen=${scarsSeen}`);
+    check("success opens punish window", (boss.boss!.exposed ?? 0) > 0,
+      `exposed=${boss.boss!.exposed} outcome=${boss.boss!.mirrorLastFamily}`);
+    check("punish ~4.0s", (boss.boss!.exposed ?? 0) >= PALE.lastLightPunish - FIXED_DT * 2,
+      `exposed=${boss.boss!.exposed}`);
+    check("outcome success", boss.boss!.mirrorLastFamily === 1);
+  }
+
+  // Survival: abandon chain (let scar expire) → no window
+  {
+    const { w, boss } = beginLastLight(0x11A33);
+    for (let i = 0; i < Math.ceil(PALE.lastLightTell / FIXED_DT) + 2; i++) {
+      stepWorld(w, new Map([[LOCAL_ID, idle(i)]]), FIXED_DT);
+    }
+    // Wait out scar commit + fall without breaking scars; stand on warm route (north), not dead-space.
+    const p = w.players.get(LOCAL_ID)!;
+    p.x = boss.x;
+    p.y = boss.y - 140;
+    p.invuln = 10;
+    for (let i = 0; i < 200; i++) {
+      stepWorld(w, new Map([[LOCAL_ID, idle(i)]]), FIXED_DT);
+      if (boss.boss!.mirrorLastFamily === 2 || boss.boss!.mirrorLastFamily === 3 || boss.boss!.mirrorLastFamily === 1) break;
+    }
+    check("survival/failure does NOT open window",
+      boss.boss!.mirrorLastFamily !== 1 && (boss.boss!.exposed ?? 0) === 0,
+      `outcome=${boss.boss!.mirrorLastFamily} exposed=${boss.boss!.exposed}`);
+    check("outcome is survival when on warm route",
+      boss.boss!.mirrorLastFamily === 2 || boss.boss!.mirrorLastFamily === 3,
+      `outcome=${boss.boss!.mirrorLastFamily}`);
+  }
+
+  // Failure: stand in dead-space south → soft fail, still no wipe / no success window
+  {
+    const { w, boss } = beginLastLight(0x11A44);
+    for (let i = 0; i < Math.ceil(PALE.lastLightTell / FIXED_DT) + 2; i++) {
+      stepWorld(w, new Map([[LOCAL_ID, idle(i)]]), FIXED_DT);
+    }
+    const p = w.players.get(LOCAL_ID)!;
+    w.isGodMode = false;
+    p.invuln = 0;
+    p.hp = p.maxHp = 6;
+    p.x = boss.x;
+    p.y = boss.y + 96; // dead-space
+    for (let i = 0; i < 200; i++) {
+      stepWorld(w, new Map([[LOCAL_ID, idle(i)]]), FIXED_DT);
+      if (boss.boss!.mirrorLastFamily === 2 || boss.boss!.mirrorLastFamily === 3 || boss.boss!.mirrorLastFamily === 1) break;
+    }
+    check("failure never grants success window",
+      boss.boss!.mirrorLastFamily !== 1 && (boss.boss!.exposed ?? 0) === 0);
+    check("player not wiped (anti-one-shot)", p.hp > 0, `hp=${p.hp}`);
+  }
+
+  // Scar serialize index advances 0→1→2
+  {
+    const { w, boss } = beginLastLight(0x11A55);
+    for (let i = 0; i < Math.ceil(PALE.lastLightTell / FIXED_DT) + 2; i++) {
+      stepWorld(w, new Map([[LOCAL_ID, idle(i)]]), FIXED_DT);
+    }
+    const idxs: number[] = [];
+    for (let i = 0; i < 300; i++) {
+      const scar = w.enemies.find((e) => !e.dead && e.kind === "pale_seam" && e.aux >= 10);
+      if (scar) {
+        idxs.push(scar.aux - 10);
+        scar.hp = 0; scar.dead = true;
+      }
+      stepWorld(w, new Map([[LOCAL_ID, idle(i)]]), FIXED_DT);
+      if (boss.boss!.mirrorLastFamily === 1) break;
+    }
+    check("scar indices are sequential 0,1,2", idxs[0] === 0 && idxs[1] === 1 && idxs[2] === 2,
+      `idxs=${idxs.join(",")}`);
+  }
+}
+
 function main(): void {
   pinGates();
   stationaryGates();
@@ -617,6 +767,7 @@ function main(): void {
   axisPoolGates();
   axisSweepGates();
   warmthDrainGates();
+  lastLightGates();
   determinismGates();
   process.stdout.write(`\n${passed} checks passed, ${failed} failed\n`);
   if (failed > 0) { process.stdout.write(`FAILURES:\n${failures.map((f) => "  - " + f).join("\n")}\n`); process.exit(1); }

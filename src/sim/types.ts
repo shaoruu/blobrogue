@@ -143,7 +143,11 @@ export type AttackMove =
   | "tracer" | "beam" | "spew" | "hurl" | "rip"
   // SEVER F55 signature — WORLDSPLIT: 1.5s blade-plant tell → 1.2s moving fracture → 3.0s
   // reel-back punish. Display name is always WORLDSPLIT; wire id is the closed AttackMove.
-  | "worldsplit";
+  | "worldsplit"
+  // PALE THRONE F75 signature — THE LAST LIGHT FALLS: 1.8s ceiling/meteor tell → three
+  // sequential scar relights (≥0.65s each, one active) → 1.0s redirected fall → 4.0s core
+  // punish. Display name THE LAST LIGHT FALLS; wire id is the closed AttackMove.
+  | "last_light";
 
 // Grouped so the whole attack subsystem lives in one cohesive place per enemy
 // (allocated once at spawn, never per frame).

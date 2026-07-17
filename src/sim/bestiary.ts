@@ -313,9 +313,9 @@ export const ENEMY_MOVESET: Readonly<Record<EnemyKind, readonly AttackMove[]>> =
   gorge_seam: [],
   sever: ["worldsplit", "roar"],
   sever_anchor: [],
-  // PALE THRONE (F75 giant): the same shared-grammar moveset as Gorge — "slam"/"spew"/"sweep" the
-  // three spatial patterns, "roar" the shell crack-off transition. Its weak-point commits nothing.
-  pale: ["slam", "spew", "sweep", "roar"],
+  // PALE THRONE (F75 giant): shared-grammar patterns + THE LAST LIGHT FALLS signature.
+  // "roar" remains the shell crack-off transition. Its weak-point commits nothing.
+  pale: ["slam", "spew", "sweep", "roar", "last_light"],
   pale_seam: [],
 };
 
