@@ -1570,6 +1570,7 @@ export const WEAPON_RESONANCE: Readonly<Record<WeaponId, ResonanceFamily>> = {
   // the Firebomb a lob, the Tracker an arcing seeker, the Singularity a collapsing lob.
   cleaver: "lance", scrapper: "rapid", skipper: "spread", arcbolt: "arc",
   cryobolt: "rapid", firebomb: "lob", tracker: "arc", singularity: "lob",
+  mooring_nail: "lance", sluicegate: "spread", oddsmaker: "arc", pathmaker: "lob",
 };
 
 export function weaponResonanceFamily(id: WeaponId): ResonanceFamily {
@@ -2133,6 +2134,10 @@ export const WEAPON_BOSS_COEF: Readonly<Partial<Record<WeaponId, number>>> = {
   // The Arcbolt taxes a pack via shock (amp + arc) — a room verb, priced like the other pack
   // weapons vs a boss (its shock amplifies nothing on boss-grade bodies).
   arcbolt: 0.6,
+  mooring_nail: 0.7,
+  sluicegate: 0.65,
+  oddsmaker: 0.75,
+  pathmaker: 0.55,
 };
 
 // ---- §6 power budget: raw caps (temporary per-run blessings) ----

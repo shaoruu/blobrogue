@@ -34,7 +34,7 @@ import { Rng } from "../src/sim/rng.js";
 import * as C from "../src/sim/constants.js";
 
 const DT = 1 / 60;
-const LEGENDARIES: readonly WeaponId[] = ["reaper", "swarm", "midas", "phase", "vortex", "singularity"];
+const LEGENDARIES: readonly WeaponId[] = ["reaper", "swarm", "midas", "phase", "vortex", "singularity", "oddsmaker"];
 
 let passed = 0, failed = 0;
 const failures: string[] = [];
@@ -68,7 +68,7 @@ function taggingGates(): void {
   section("rarity tagging: every weapon carries a tier; the legendary five are legendary");
   check("every WEAPONS entry has a valid rarity",
     (Object.keys(WEAPONS) as WeaponId[]).every((id) => ["common", "rare", "legendary"].includes(WEAPONS[id].rarity)));
-  check("the five legendaries are tagged legendary and sit in the pickup pool",
+  check("every canonical legendary is tagged legendary and sits in the pickup pool",
     LEGENDARIES.every((id) => WEAPONS[id].rarity === "legendary" && PICKUP_WEAPONS.includes(id)));
   check("no pre-existing weapon was promoted to legendary (the tier is the new content's)",
     (Object.keys(WEAPONS) as WeaponId[]).filter((id) => WEAPONS[id].rarity === "legendary").length === LEGENDARIES.length);
@@ -499,6 +499,8 @@ function envelopeGates(): void {
   check("midas pays in coins (the boost never comes free)", WEAPONS.midas.coinBoost !== undefined);
   check("phase pays in cadence + zero pierce", WEAPONS.phase.fireCd >= 0.5 && (WEAPONS.phase.basePierce ?? 0) === 0);
   check("vortex pays in raw damage (the pull is the payload)", WEAPONS.vortex.damage <= 2.5);
+  check("oddsmaker pays in outcome control (one authored verb per deterministic roll)",
+    WEAPONS.oddsmaker.gamble?.outcomes.length === 4);
 }
 
 // ---- shop: rarity pricing, the mystery pedestal, hidden wire identity ----

@@ -10,7 +10,10 @@ import type { PlayerSim } from "../sim/world.js";
 import type { PlayerMods } from "../sim/items.js";
 import { createMods } from "../sim/items.js";
 import type { WeaponId } from "../sim/types.js";
+import type { WeaponCycles } from "../sim/weapons.js";
+import type { WeaponFireCooldowns } from "../sim/weapons.js";
 import type { KitId } from "../sim/kits.js";
+import type { PlayerId } from "../sim/input.js";
 
 // The authoritative (server-owned) slice of a player: everything the server simulates and the
 // client must treat as truth. This is the full-fidelity projection; SelfWire is its compact
@@ -32,10 +35,14 @@ export interface AuthoritativePlayerSnapshot {
   facing: number;
   weapon: WeaponId;
   ownedWeapons: WeaponId[];
+  weaponFireCooldowns: WeaponFireCooldowns;
+  weaponCycles: WeaponCycles;
+  isMuddyRefundSpent: boolean;
   ownedItemIds: string[];
   mods: PlayerMods;
   isDown: boolean;
   reviveProgress: number;
+  reviveBy: PlayerId | null;
   kills: number;
   coins: number;
   combo: number;
@@ -93,8 +100,6 @@ type ServerOwnedField = keyof AuthoritativePlayerSnapshot;
 //                  client can only REQUEST a pulse; the server alone validates + resolves it.
 type ClientOwnedField = "id" | "pr" | "aimAngle" | "shotSeq" | "rewindTicks" | "meleeSwing" | "isInteracting" | "isAbsent" | "isUltRequested" | "isPulseRequested";
 // Server-only revive/down bookkeeping, off the reconcile snapshot entirely:
-// - reviveBy:       the channel's identity (WHO is reviving whom) — prediction has no
-//                   teammates to bind it to; the readouts ride SelfWire.rev / PlayerWire.rv
 // - downsThisFloor: the per-floor down count behind the OUT state — the client consumes
 //                   the derived out flag on the wire, never the counter
 // - ultSources/ultWasted: §10 server-side charge-accrual bookkeeping (per-source share caps +
@@ -120,7 +125,7 @@ type ClientOwnedField = "id" | "pr" | "aimAngle" | "shotSeq" | "rewindTicks" | "
 //              The server sends the validated offer itself; prediction never rolls an online pick.
 type ServerOnlyField =
   | "offerIdentity"
-  | "reviveBy"
+  | "lastGrappleShotSeq"
   | "downsThisFloor"
   | "ultSources"
   | "ultWasted"
@@ -175,10 +180,14 @@ export function projectPlayer(p: PlayerSim): AuthoritativePlayerSnapshot {
     facing: p.facing,
     weapon: p.weapon,
     ownedWeapons: p.ownedWeapons.slice(),
+    weaponFireCooldowns: { ...p.weaponFireCooldowns },
+    weaponCycles: { ...p.weaponCycles },
+    isMuddyRefundSpent: p.isMuddyRefundSpent,
     ownedItemIds: p.ownedItemIds.slice(),
     mods: { ...p.mods },
     isDown: p.isDown,
     reviveProgress: p.reviveProgress,
+    reviveBy: p.reviveBy,
     kills: p.kills,
     coins: p.coins,
     combo: p.combo,
@@ -231,10 +240,14 @@ export function applyPlayerSnapshot(p: PlayerSim, s: AuthoritativePlayerSnapshot
   p.facing = s.facing;
   p.weapon = s.weapon;
   p.ownedWeapons = s.ownedWeapons.slice();
+  p.weaponFireCooldowns = { ...s.weaponFireCooldowns };
+  p.weaponCycles = { ...s.weaponCycles };
+  p.isMuddyRefundSpent = s.isMuddyRefundSpent;
   p.ownedItemIds = s.ownedItemIds.slice();
   Object.assign(p.mods, s.mods);
   p.isDown = s.isDown;
   p.reviveProgress = s.reviveProgress;
+  p.reviveBy = s.reviveBy;
   p.kills = s.kills;
   p.coins = s.coins;
   p.combo = s.combo;

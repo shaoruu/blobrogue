@@ -16,6 +16,10 @@ import type { WorldState } from "../src/sim/world.js";
 import type { WorldMode } from "../src/sim/pvp.js";
 import { generateDungeon } from "../src/sim/dungeon.js";
 import { WEAPONS } from "../src/sim/weapons.js";
+import {
+  CURRENT_CONTENT_CATALOG_VERSION,
+  LEGACY_CONTENT_CATALOG_VERSION,
+} from "../src/sim/contentCatalog.js";
 
 let passed = 0, failed = 0;
 const failures: string[] = [];
@@ -46,7 +50,15 @@ interface Rig {
   sock: FakeSocket;
   world: WorldState;
   pid: string;
-  snap: (opts?: { ackSeq?: number; events?: WireEvent[]; evTo?: number; full?: boolean; worldId?: string; roster?: RosterWire[] }) => ServerMsg;
+  snap: (opts?: {
+    ackSeq?: number;
+    events?: WireEvent[];
+    evTo?: number;
+    full?: boolean;
+    worldId?: string;
+    roster?: RosterWire[];
+    cat?: 0 | 1;
+  }) => ServerMsg;
   tickNow: (ms: number) => void;
 }
 
@@ -71,7 +83,13 @@ async function makeRig(seed = 0xAB12, worldMode: WorldMode = "coop"): Promise<Ri
   sock.onopen?.();
   return {
     transport, sock, world, pid,
-    snap: (opts = {}) => buildSnapshot(world, pid, opts.ackSeq ?? 0, opts.events ?? [], opts.evTo ?? 0, opts.full ?? false, { worldId: opts.worldId ?? "w-test", roster: opts.roster }),
+    snap: (opts = {}) => ({
+      ...buildSnapshot(
+        world, pid, opts.ackSeq ?? 0, opts.events ?? [], opts.evTo ?? 0,
+        opts.full ?? false, { worldId: opts.worldId ?? "w-test", roster: opts.roster },
+      ),
+      ...(opts.cat !== undefined ? { cat: opts.cat } : {}),
+    }),
     tickNow: (ms) => { now += ms; },
   };
 }
@@ -252,6 +270,28 @@ async function worldRebuildTests(): Promise<void> {
   const clientDungeon = rig.transport.poll().state.dungeon;
   check("client dungeon geometry matches the authoritative floor-2 generation", clientDungeon.spawn.x === spawn2.x && clientDungeon.spawn.y === spawn2.y);
   rig.transport.stop();
+
+  const legacy = await makeRig(0x1212);
+  const legacyAuthority = createWorld(0x1212, 1, {
+    catalogVersion: LEGACY_CONTENT_CATALOG_VERSION,
+  });
+  legacy.sock.deliver(legacy.snap({
+    full: true,
+    cat: LEGACY_CONTENT_CATALOG_VERSION,
+  }));
+  const legacyClient = legacy.transport.poll().state;
+  check("legacy join rebuilds pred/render catalog and bag atomically to authority",
+    legacyClient.catalogVersion === LEGACY_CONTENT_CATALOG_VERSION
+    && legacyClient.weaponBag.catalogVersion === LEGACY_CONTENT_CATALOG_VERSION
+    && legacyClient.weaponBag.order.join(",") === legacyAuthority.weaponBag.order.join(","),
+    `client=${legacyClient.weaponBag.order.slice(0, 4).join(",")} authority=${legacyAuthority.weaponBag.order.slice(0, 4).join(",")}`);
+  legacy.transport.stop();
+  legacy.transport.start();
+  const restartedPlaceholder = legacy.transport.poll().state;
+  check("transport restart always restores current-catalog placeholder state",
+    restartedPlaceholder.catalogVersion === CURRENT_CONTENT_CATALOG_VERSION
+    && restartedPlaceholder.weaponBag.catalogVersion === CURRENT_CONTENT_CATALOG_VERSION);
+  legacy.transport.stop();
 }
 
 async function pvpWorldModeTests(): Promise<void> {
@@ -355,6 +395,8 @@ async function pvpOffenseLatchPredictionTests(): Promise<void> {
         px: serverPlayer.x,
         py: serverPlayer.y,
         chg: 0,
+        mode: "none",
+        outcome: "none",
       },
     },
   ];
@@ -384,17 +426,25 @@ async function remoteCombatAudioGateTests(): Promise<void> {
   const self = rig.pid; // "p1"
   const mate = "p2";
   const events: WireEvent[] = [
-    { id: 1, e: { t: "shot", pid: mate, weapon: "pistol", x: 10, y: 20, aim: 0, px: 10, py: 20, chg: 0 } },
+    { id: 1, e: { t: "shot", pid: mate, weapon: "pistol", x: 10, y: 20, aim: 0, px: 10, py: 20, chg: 0, mode: "none", outcome: "none" } },
     { id: 2, e: { t: "playerHurt", pid: mate, x: 10, y: 20 } },
     { id: 3, e: { t: "heal", pid: mate, x: 10, y: 20 } },
     { id: 4, e: { t: "pickup", pid: mate, kind: "coin", x: 10, y: 20 } },
-    { id: 5, e: { t: "shot", pid: self, weapon: "pistol", x: 5, y: 5, aim: 0, px: 5, py: 5, chg: 0 } },
+    { id: 5, e: { t: "shot", pid: self, weapon: "pistol", x: 5, y: 5, aim: 0, px: 5, py: 5, chg: 0, mode: "none", outcome: "none" } },
     // A NON-audible player-scoped event for a teammate must stay gated out (it drives the
     // owner's private UI, not shared audio) — proves the gate is selective, not a blanket pass.
     { id: 6, e: { t: "itemPicked", pid: mate, x: 10, y: 20, tint: "#fff" } },
+    { id: 7, e: { t: "grappleResolved", pid: mate, x: 10, y: 20, tx: 40, ty: 20, dx: 30, dy: 20 } },
+    { id: 8, e: { t: "blessingProc", pid: mate, item: "hold_fast", phase: "stabilized", x: 10, y: 20 } },
+    { id: 9, e: { t: "reviveHandoff", pid: mate, from: "", to: self, isBoosted: true, x: 10, y: 20 } },
+    { id: 10, e: { t: "grappleResolved", pid: self, x: 5, y: 5, tx: 35, ty: 5, dx: 25, dy: 5 } },
+    { id: 11, e: { t: "blessingProc", pid: self, item: "on_the_beat", phase: "tierUp", x: 5, y: 5 } },
+    { id: 12, e: { t: "reviveHandoff", pid: self, from: mate, to: self, isBoosted: true, x: 5, y: 5 } },
+    { id: 13, e: { t: "blessingProc", pid: "p3", item: "second_breath_muddy", phase: "refunded", x: 12, y: 20 } },
+    { id: 14, e: { t: "grappleResolved", pid: "p4", x: 14, y: 20, tx: 44, ty: 20, dx: 34, dy: 20 } },
   ];
   rig.world.tick = 10;
-  rig.sock.deliver(rig.snap({ events, evTo: 6 }));
+  rig.sock.deliver(rig.snap({ events, evTo: 14 }));
   const got = rig.transport.poll().events;
   const remoteShot = got.filter((e) => e.t === "shot" && (e as { pid: string }).pid === mate);
   const remoteHurt = got.filter((e) => e.t === "playerHurt" && (e as { pid: string }).pid === mate);
@@ -402,18 +452,30 @@ async function remoteCombatAudioGateTests(): Promise<void> {
   const remotePickup = got.filter((e) => e.t === "pickup" && (e as { pid: string }).pid === mate);
   const localShot = got.filter((e) => e.t === "shot" && (e as { pid: string }).pid === self);
   const remoteItem = got.filter((e) => e.t === "itemPicked");
+  const remoteWaveA = got.filter((event) =>
+    (event.t === "grappleResolved" || event.t === "blessingProc" || event.t === "reviveHandoff")
+    && (event as { pid: string }).pid !== self);
+  const localWaveA = got.filter((event) =>
+    (event.t === "grappleResolved" || event.t === "blessingProc" || event.t === "reviveHandoff")
+    && (event as { pid: string }).pid === self);
   check("a teammate's shot survives the gate (routable to the remote audio path)", remoteShot.length === 1);
   check("a teammate's hurt survives the gate (Ian hears his friend get hit)", remoteHurt.length === 1);
   check("a teammate's heal + pickup survive the gate", remoteHeal.length === 1 && remotePickup.length === 1);
   check("the local player's own shot arrives exactly once (no double-play)", localShot.length === 1);
   check("a teammate's non-audible pid event (itemPicked) stays gated out", remoteItem.length === 0);
+  check("remote Mooring/blessing/Rope events reach the relevant client without unrelated spam",
+    remoteWaveA.length === 5);
+  check("local Mooring/blessing/Rope events arrive exactly once", localWaveA.length === 3);
 
   // A resend (same ids) must not replay any of them — the local shot stays at exactly one.
   rig.world.tick = 11;
-  rig.sock.deliver(rig.snap({ events, evTo: 6 }));
+  rig.sock.deliver(rig.snap({ events, evTo: 14 }));
   const resent = rig.transport.poll().events;
   check("resent combat events are deduped (local shot never double-plays)",
     resent.filter((e) => e.t === "shot").length === 0, `count=${resent.filter((e) => e.t === "shot").length}`);
+  check("resent Wave A positional events never double-fire",
+    resent.filter((event) =>
+      event.t === "grappleResolved" || event.t === "blessingProc" || event.t === "reviveHandoff").length === 0);
   rig.transport.stop();
 }
 
@@ -567,22 +629,34 @@ async function deltaDropMidStreamRecoveryTests(): Promise<void> {
   rig.sock.deliver(s1);
 
   // Delta sseq 2 (base 1) applied -> baseline advances to 2 (client acks 2).
+  const owner = rig.world.players.get(rig.pid)!;
+  owner.weaponCycles.sluicegate = 10;
+  owner.weaponCycles.oddsmaker = 20;
+  owner.isMuddyRefundSpent = true;
   rig.world.enemies[0].x += 20; rig.world.tick = 12;
   const s2 = keyframe(rig, 2);
   rig.sock.deliver(deltaFrame(rig, s1, 2));
   check("delta 2 applied", rig.transport.getLatestSnapshot()!.tick === 12);
 
   // Delta sseq 3 (base 2) is DROPPED in flight.
+  owner.weaponCycles.sluicegate = 0x0fffffff;
+  owner.weaponCycles.oddsmaker = 0x0fffffff;
+  owner.isMuddyRefundSpent = true;
   rig.world.enemies[0].x += 20; rig.world.tick = 13; // (never delivered)
 
   // The server re-diffs against the last ACKED baseline (2) for the next frame: delta sseq 4,
   // base 2, carrying ALL changes since 2. The client (still at baseline 2) applies it and
   // reconverges — the dropped delta 3 never mattered.
+  owner.weaponCycles.sluicegate = 0;
+  owner.weaponCycles.oddsmaker = 0;
+  owner.isMuddyRefundSpent = false;
   rig.world.enemies[0].x += 20; rig.world.tick = 14; // total +40 since s2
   rig.sock.deliver(deltaFrame(rig, s2, 4));
   const got = rig.transport.getLatestSnapshot()!;
   check("client reconverged to full authoritative state after the dropped delta", Math.abs(got.enemies[0].x - rig.world.enemies[0].x) < 1e-9, `got=${got.enemies[0].x} truth=${rig.world.enemies[0].x}`);
   check("client tick jumped straight to the recovered frame", got.tick === 14);
+  check("dropped cycle delta recovers exact mode/outcome state from the next authoritative frame",
+    got.self?.sgc === 0 && got.self.ogc === 0 && !got.self.isMds);
   rig.transport.stop();
 }
 
@@ -616,7 +690,7 @@ async function deltaEventDedupeTests(): Promise<void> {
 async function protocolUpgradeRejectTests(): Promise<void> {
   section("protocol rejection is terminal and never burns the reconnect grace");
   const beforeReady = await makeRig();
-  beforeReady.sock.deliver({ t: "error", code: "protocol", msg: "expected 33" });
+  beforeReady.sock.deliver({ t: "error", code: "protocol", msg: "expected 34" });
   beforeReady.sock.onclose?.({ code: 4001 });
   check("pre-world protocol rejection surfaces client_outdated",
     beforeReady.transport.getCloseKind() === "client_outdated");
@@ -625,7 +699,7 @@ async function protocolUpgradeRejectTests(): Promise<void> {
 
   const afterReady = await makeRig();
   afterReady.sock.deliver(afterReady.snap({ full: true }));
-  afterReady.sock.deliver({ t: "error", code: "protocol", msg: "expected 33" });
+  afterReady.sock.deliver({ t: "error", code: "protocol", msg: "expected 34" });
   afterReady.sock.onclose?.({ code: 4001 });
   check("mid-run protocol rejection is terminal too",
     afterReady.transport.getCloseKind() === "client_outdated");

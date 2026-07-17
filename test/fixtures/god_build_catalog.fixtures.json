@@ -1,0 +1,17 @@
+{
+  "toolVersion": "god-build-v1",
+  "legacy": {
+    "catalogVersion": 0,
+    "sourceCommit": "e501819",
+    "maxPracticalDps": 47.94,
+    "strongestBuild": "spear + [executioner,full_metal,glass_cannon,hair_trigger,incendiary_rounds,overload,quickdraw,split_shot,thorns]",
+    "rationale": "Frozen pre-Wave-A catalog and deterministic 100k build stream."
+  },
+  "waveA": {
+    "catalogVersion": 1,
+    "sourceCommit": "c32a460",
+    "maxPracticalDps": 46.953,
+    "strongestBuild": "midas + [big_iron,big_iron,frostbite,hair_trigger,marksman,overload,overload,quickdraw,shared_rope]",
+    "rationale": "Expanded Wave A weapon/blessing space changes the strongest sampled combination while global caps, coefficients, and RNG seed remain unchanged."
+  }
+}

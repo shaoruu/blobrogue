@@ -43,6 +43,11 @@ import * as C from "../src/sim/constants.js";
 import {
   DT, L3, plantBullet, idle, step, grant, measureBossTtk, practicalBossDps, forEachLegalBuild,
 } from "./dpsHarness.js";
+import {
+  LEGACY_CONTENT_CATALOG_VERSION,
+  WAVE_A_CONTENT_CATALOG_VERSION,
+} from "../src/sim/contentCatalog.js";
+import type { ContentCatalogVersion } from "../src/sim/contentCatalog.js";
 
 // Measured-build fixtures: every TTK number the gates measure is recorded here and pinned
 // against test/fixtures/boss_ttk.fixtures.json. These are DETERMINISTIC SIM-HARNESS
@@ -50,6 +55,7 @@ import {
 // the fixture file says so. Regenerate after intentional balance changes with
 // `npm run fixtures:ttk`.
 const FIXTURES_PATH = new URL("./fixtures/boss_ttk.fixtures.json", import.meta.url);
+const GOD_CATALOG_FIXTURES_PATH = new URL("./fixtures/god_build_catalog.fixtures.json", import.meta.url);
 const MEASURED: Record<string, number> = {};
 function record(key: string, seconds: number): void {
   MEASURED[key] = Math.round(seconds * 1000) / 1000;
@@ -1250,8 +1256,13 @@ function eliteContractGates(): void {
 // strongest build is then run in the REAL sim against every boss to prove the absolute
 // high-roll minimum — no runtime clamp anywhere.
 
-function godBuildGates(): void {
-  section("balancer god-build gate: 100k legal builds under the per-boss practical-DPS ceilings");
+interface GodBuildMeasurement {
+  maxDps: number;
+  maxBuild: string;
+  top: Array<{ dps: number; build: string }>;
+}
+
+function measureGodBuild(catalogVersion: ContentCatalogVersion): GodBuildMeasurement {
   let maxDps = 0;
   let maxBuild = "";
   const top: Array<{ dps: number; build: string }> = [];
@@ -1259,23 +1270,53 @@ function godBuildGates(): void {
     const dps = practicalBossDps(weapon, mods);
     if (dps > maxDps) { maxDps = dps; maxBuild = `${weapon} + [${owned.join(",")}]`; }
     if (top.length < 100 || dps > top[top.length - 1].dps) {
-      top.push({ dps, build: `${weapon} + [${owned.sort().join(",")}]` });
+      top.push({ dps, build: `${weapon} + [${owned.slice().sort().join(",")}]` });
       top.sort((a, b) => b.dps - a.dps);
       if (top.length > 100) top.pop();
     }
-  });
-  record("godBuild.maxPracticalDps", maxDps);
+  }, catalogVersion);
+  return { maxDps, maxBuild, top };
+}
+
+function godBuildGates(): void {
+  section("balancer god-build gate: versioned 100k legal-build fixtures");
+  const legacy = measureGodBuild(LEGACY_CONTENT_CATALOG_VERSION);
+  const waveA = measureGodBuild(WAVE_A_CONTENT_CATALOG_VERSION);
+  const fixtures = JSON.parse(readFileSync(GOD_CATALOG_FIXTURES_PATH, "utf8")) as {
+    legacy: { maxPracticalDps: number; strongestBuild: string };
+    waveA: { maxPracticalDps: number; strongestBuild: string };
+  };
+  const roundedLegacy = Math.round(legacy.maxDps * 100) / 100;
+  const roundedWaveA = Math.round(waveA.maxDps * 1000) / 1000;
+  record("godBuild.maxPracticalDps", roundedLegacy);
+  check("legacy catalog preserves the reviewed 47.94 estimator fixture",
+    roundedLegacy === fixtures.legacy.maxPracticalDps
+    && legacy.top[0].build === fixtures.legacy.strongestBuild,
+    `${roundedLegacy} ${legacy.top[0].build}`);
+  check("Wave A catalog matches the separately reviewed 46.953 estimator fixture",
+    roundedWaveA === fixtures.waveA.maxPracticalDps
+    && waveA.top[0].build === fixtures.waveA.strongestBuild,
+    `${roundedWaveA} ${waveA.top[0].build}`);
+  check("the versioned strongest-build change is intentional while global ceilings remain unchanged",
+    legacy.top[0].build !== waveA.top[0].build
+    && roundedWaveA < roundedLegacy);
   for (const [kind, ceiling] of Object.entries(BOSS_DPS_CEILING) as Array<[EnemyKind, number]>) {
-    check(`100k-build max practical DPS ${maxDps.toFixed(1)} ≤ the ${kind} ceiling ${ceiling}`,
-      maxDps <= ceiling, maxBuild);
+    check(`Wave A 100k-build max practical DPS ${waveA.maxDps.toFixed(1)} ≤ the ${kind} ceiling ${ceiling}`,
+      waveA.maxDps <= ceiling, waveA.maxBuild);
   }
-  writeFileSync(new URL("./fixtures/god_build_report.json", import.meta.url), JSON.stringify({
-    note: "Top-100 legal builds by ESTIMATED practical boss DPS (deterministic 12s moving-target model — documented in test/balance.test.ts practicalBossDps — not live telemetry).",
-    ceilings: BOSS_DPS_CEILING,
-    maxPracticalDps: Math.round(maxDps * 100) / 100,
-    top100: top.map((x) => ({ dps: Math.round(x.dps * 100) / 100, build: x.build })),
-  }, null, 2) + "\n");
-  check("top-100 attribution written to test/fixtures/god_build_report.json", top.length === 100);
+  if (process.argv.includes("--write-god-candidate")) {
+    writeFileSync(new URL("./fixtures/god_build_report.wave_a.candidate.json", import.meta.url), JSON.stringify({
+      catalogVersion: WAVE_A_CONTENT_CATALOG_VERSION,
+      toolVersion: "god-build-v1",
+      sourceCommit: "c32a460",
+      rationale: "Wave A expands the deterministic weapon/blessing build space while global caps and coefficients remain unchanged.",
+      ceilings: BOSS_DPS_CEILING,
+      maxPracticalDps: waveA.maxDps,
+      strongestBuild: waveA.top[0].build,
+      top100: waveA.top.map((entry) => ({ dps: entry.dps, build: entry.build })),
+    }, null, 2) + "\n");
+  }
+  check("ordinary balance runs do not rewrite reviewed god-build fixtures", waveA.top.length === 100);
 
   section("balancer god-build gate: the strongest estimator build proves every sim floor");
   // The top family from the report: smg carrying max fire-rate/damage/crit stacking.

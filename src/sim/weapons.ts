@@ -1,6 +1,13 @@
-import type { Bullet, WeaponId, WeaponRarity, MysteryTwist } from "./types.js";
+import type {
+  Bullet, WeaponId, WeaponRarity, MysteryTwist, SluiceMode, OddsmakerOutcome,
+} from "./types.js";
 import type { PlayerId } from "./input.js";
 import type { Rng } from "./rng.js";
+import {
+  CURRENT_CONTENT_CATALOG_VERSION,
+  contentCatalogFor,
+} from "./contentCatalog.js";
+import type { ContentCatalogVersion } from "./contentCatalog.js";
 import {
   BOSS_EXTRA_PELLET_COEF, BOSS_NATIVE_PELLET_COEF, WEAPON_BOSS_COEF,
   WEAPON_RARITY_WEIGHT, LEGENDARY_MIN_FLOOR, BOSS_CHEST_LEGENDARY_MULT, MYSTERY,
@@ -45,6 +52,7 @@ export interface PaintSpec {
   radius: number;     // zone radius; bulletSizeMult scales it
   life: number;       // zone seconds; bulletLifeMult scales it
   chillRate: number;  // seconds of chill per second standing inside
+  isPaving?: boolean;
 }
 
 // Orbiting blades (the Razor Halo).
@@ -80,6 +88,35 @@ export interface TetherSpec {
   hold: number;        // sweep window seconds; bulletLifeMult scales it
   reach: number;       // sweep radius around the owner; bulletSizeMult scales it
   playerPullTime: number; // seconds the INVERTED pull may drag the owner (heavy targets)
+}
+
+export interface GrappleSpec {
+  pull: number;
+}
+
+export interface ModeShiftSpec {
+  alternate: {
+    damage: number;
+    pellets: number;
+    spread: number;
+    speed: number;
+    life: number;
+    bulletRadius: number;
+    basePierce: number;
+  };
+}
+
+export interface GambleSpec {
+  outcomes: readonly OddsmakerOutcome[];
+}
+
+export const WEAPON_CYCLE_IDS = ["sluicegate", "oddsmaker"] as const;
+export type WeaponCycleId = typeof WEAPON_CYCLE_IDS[number];
+export type WeaponCycles = Record<WeaponCycleId, number>;
+export type WeaponFireCooldowns = Partial<Record<WeaponId, number>>;
+
+export function createWeaponCycles(): WeaponCycles {
+  return { sluicegate: 0, oddsmaker: 0 };
 }
 
 export interface Weapon {
@@ -121,6 +158,9 @@ export interface Weapon {
   orbit?: OrbitSpec;
   sentry?: SentrySpec;
   tether?: TetherSpec;
+  grapple?: GrappleSpec;
+  modeShift?: ModeShiftSpec;
+  gamble?: GambleSpec;
   // Legendary signature mechanics — one per legendary, never shared, never a stat reskin.
   // Each stamps one field onto its bullets (or gates the trigger pull, for the Midas) and
   // switches an isolated branch in the update loop, exactly like the Tier B fields above.
@@ -449,20 +489,43 @@ export const WEAPONS: Record<WeaponId, Weapon> = {
     implode: 116, nova: 78,
     special: "Shots collapse the pack onto one point, then a nova detonates on the clump.",
   },
+  mooring_nail: {
+    id: "mooring_nail", name: "MOORING NAIL", rarity: "common", fireCd: 0.42, speed: 760, life: 1.2,
+    damage: 2, pellets: 1, spread: 0, bulletRadius: 5, color: "#d6c7a1", muzzle: 2,
+    basePierce: 4,
+    grapple: { pull: 150 },
+    special: "ANCHOR / GRAPPLE — a nail biting a wall yanks you toward its anchor point.",
+  },
+  sluicegate: {
+    id: "sluicegate", name: "SLUICEGATE", rarity: "rare", fireCd: 0.58, speed: 430, life: 0.45,
+    damage: 1.1, pellets: 5, spread: 0.76, bulletRadius: 5, color: "#78cbd1", muzzle: 5,
+    modeShift: {
+      alternate: {
+        damage: 7, pellets: 1, spread: 0, speed: 900, life: 1.1,
+        bulletRadius: 5, basePierce: 2,
+      },
+    },
+    special: "MODESHIFT — alternates a wide FLOOD fan with a long, piercing DRAIN lance.",
+  },
+  oddsmaker: {
+    id: "oddsmaker", name: "ODDSMAKER", rarity: "legendary", fireCd: 0.4, speed: 600, life: 1.1,
+    damage: 3.3, pellets: 1, spread: 0, bulletRadius: 6, color: "#efb85f", muzzle: 3,
+    gamble: { outcomes: ["ricochet", "seeker", "blast", "pierce"] },
+    special: "GAMBLE — every shot independently rolls a ricochet, seeker, blast, or piercing payload; repeats are possible.",
+  },
+  pathmaker: {
+    id: "pathmaker", name: "PATHMAKER", rarity: "rare", fireCd: 0.18, speed: 340, life: 1.15,
+    damage: 0.9, pellets: 1, spread: 0.03, bulletRadius: 6, color: "#a8d7a0", muzzle: 1,
+    paint: { spacing: 28, radius: 27, life: 3.2, chillRate: 0, isPaving: true },
+    special: "CLEANSE / PAVE — beads erase hostile ground and leave a safe route across floor hazards.",
+  },
 };
 
 export const DEFAULT_WEAPON: WeaponId = "pistol";
 
 // Weapons that can appear as floor pickups (the pistol is the always-owned default).
-export const PICKUP_WEAPONS: readonly WeaponId[] = [
-  "shotgun", "rapid", "smg", "cannon", "burst", "ricochet", "homing", "tesla",
-  "sawnoff", "railgun", "nailer", "flamer", "mortar", "beam",
-  "sword", "longsword", "spear",
-  "lastlight", "breach", "snapwire", "frostline", "halo", "sentry", "crook",
-  "reaper", "swarm", "midas", "phase", "vortex",
-  "cleaver", "scrapper", "skipper", "arcbolt", "cryobolt", "firebomb", "tracker",
-  "singularity",
-];
+export const PICKUP_WEAPONS: readonly WeaponId[] =
+  contentCatalogFor(CURRENT_CONTENT_CATALOG_VERSION).pickupWeapons;
 
 // The legendary tier of the pickup pool (derived once — gates and premium rolls read it).
 export const LEGENDARY_WEAPONS: readonly WeaponId[] =
@@ -486,7 +549,13 @@ export interface RarityRollOpts {
   legendaryWeight?: number;
 }
 
-export function rollWeaponRarity(rand: () => number, floor: number, opts: RarityRollOpts = {}): WeaponRarity {
+export function rollWeaponRarity(
+  rand: () => number,
+  floor: number,
+  opts: RarityRollOpts = {},
+  catalogVersion: ContentCatalogVersion = CURRENT_CONTENT_CATALOG_VERSION,
+): WeaponRarity {
+  const pickupWeapons = contentCatalogFor(catalogVersion).pickupWeapons;
   const isLegendaryOpen = opts.isMystery === true || floor >= LEGENDARY_MIN_FLOOR;
   const tiers: WeaponRarity[] = ["common", "rare", "legendary"];
   const weightOf = (tier: WeaponRarity): number => {
@@ -495,7 +564,7 @@ export function rollWeaponRarity(rand: () => number, floor: number, opts: Rarity
       : tier === "legendary" && opts.isMystery ? MYSTERY.legendaryWeight
       : tier === "legendary" && opts.isPremium ? WEAPON_RARITY_WEIGHT.legendary * BOSS_CHEST_LEGENDARY_MULT
       : WEAPON_RARITY_WEIGHT[tier];
-    return perWeapon * PICKUP_WEAPONS.filter((id) => WEAPONS[id].rarity === tier).length;
+    return perWeapon * pickupWeapons.filter((id) => WEAPONS[id].rarity === tier).length;
   };
   let total = 0;
   for (const tier of tiers) total += weightOf(tier);
@@ -572,6 +641,13 @@ export interface ShotSpec {
   paintRadius?: number;
   paintLife?: number;
   paintRate?: number;
+  isPaving?: boolean;
+  grapplePull?: number;
+  reclaimedBounceDamage?: number;
+  paintZonesLeft?: number;
+  shotSeq?: number;
+  sluiceMode?: SluiceMode;
+  oddsmakerOutcome?: OddsmakerOutcome;
 }
 
 const CRIT_COLOR = "#fff3c4";
@@ -604,8 +680,19 @@ export function fire(spec: ShotSpec, x: number, y: number, aim: number, rng: Rng
         ? homing * HOMING_SPLIT.extraTurnRateMult
         : undefined;
     }
-    const t = spec.pellets === 1 ? 0 : (i / (spec.pellets - 1)) - 0.5;
-    const jitter = (rng.next() - 0.5) * (spec.spread * 0.3);
+    const isAnchorPellet = spec.grapplePull !== undefined && i === 0;
+    // Mooring Nail: pellet0 is the sole centered grapple anchor. Extra pellets fan
+    // symmetrically around aim via t=(i/(n-1))-0.5 over the EXTRA set only — never
+    // pin-asymmetry from including the anchored center in the fan denominator.
+    const grappleExtraCount = spec.grapplePull !== undefined ? spec.pellets - 1 : 0;
+    const t = spec.pellets === 1 || isAnchorPellet
+      ? 0
+      : spec.grapplePull !== undefined
+        ? grappleExtraCount === 1 ? 0 : ((i - 1) / (grappleExtraCount - 1)) - 0.5
+        : (i / (spec.pellets - 1)) - 0.5;
+    const jitter = spec.grapplePull !== undefined
+      ? 0
+      : (rng.next() - 0.5) * (spec.spread * 0.3);
     const a = aim + t * spec.spread + jitter;
     const isCrit = spec.critChance > 0 && rng.next() < spec.critChance;
     shots.push({
@@ -621,6 +708,7 @@ export function fire(spec: ShotSpec, x: number, y: number, aim: number, rng: Rng
       pierce: spec.pierce,
       hitList: null,
       isCrit,
+      enemyHits: 0,
       critX: isCrit ? spec.critMult : 1,
       bossCoef: pelletBossCoef,
       fx: spec.fx,
@@ -644,6 +732,13 @@ export function fire(spec: ShotSpec, x: number, y: number, aim: number, rng: Rng
       paintLife: spec.paintLife,
       paintRate: spec.paintRate,
       paintDist: spec.paintSpacing !== undefined ? 0 : undefined,
+      isPaving: spec.isPaving,
+      grapplePull: spec.grapplePull,
+      reclaimedBounceDamage: spec.reclaimedBounceDamage,
+      paintZonesLeft: spec.paintZonesLeft,
+      shotSeq: spec.shotSeq,
+      sluiceMode: spec.sluiceMode,
+      oddsmakerOutcome: spec.oddsmakerOutcome,
     });
   }
   return shots;

@@ -421,7 +421,8 @@ function manifestGates(): void {
     ALL_WEAPONS.every((id) => ARSENAL[id].authority.every((ch) => KNOWN_AUTHORITY.includes(ch))));
   check("every effect weapon claims its effect channel",
     ([["snapwire", "effects:wire"], ["frostline", "effects:zone"], ["halo", "effects:orbit"],
-      ["sentry", "effects:sentry"], ["crook", "effects:tether"], ["breach", "chargeT"]] as Array<[WeaponId, AuthorityChannel]>)
+      ["sentry", "effects:sentry"], ["crook", "effects:tether"], ["breach", "chargeT"],
+      ["pathmaker", "effects:zone"]] as Array<[WeaponId, AuthorityChannel]>)
       .every(([id, ch]) => ARSENAL[id].authority.includes(ch)));
   // "coin-fed" (the Midas) keeps the INFINITE RESERVE contract: the run economy
   // AMPLIFIES the shot, never gates it — a broke trigger still fires.
@@ -448,6 +449,8 @@ function manifestGates(): void {
     wep.killShards !== undefined ? "reap" : "", wep.accel !== undefined ? "accel" : "",
     wep.coinBoost !== undefined ? "gilded" : "", wep.isPhase === true ? "phase" : "",
     wep.implode !== undefined ? "implode" : "",
+    wep.grapple !== undefined ? "grapple" : "", wep.modeShift !== undefined ? "modeshift" : "",
+    wep.gamble !== undefined ? "gamble" : "", wep.paint?.isPaving === true ? "pave" : "",
   ].filter((s) => s.length > 0).join("+") || "plain";
   const fingerprints = ALL_WEAPONS.map((id) => `${mechSig(WEAPONS[id])}|${ARSENAL[id].idealRange}|${ARSENAL[id].target}`);
   const dupes = fingerprints.filter((f, i) => fingerprints.indexOf(f) !== i);
@@ -923,6 +926,14 @@ function idealBossDps(id: WeaponId, isAtRisk: boolean): number {
   if (w.orbit) return (w.damage * coef) / w.orbit.rehit;
   if (w.tether) return (w.damage * coef) / w.fireCd;
   if (w.charge) return (w.damage * coef) / (w.fireCd + 0.1); // tap cycle: hold buys range, not rate
+  if (w.modeShift) {
+    const floodEff = 1 + Math.max(0, w.pellets - 1) * BOSS_NATIVE_PELLET_COEF;
+    const drain = w.modeShift.alternate;
+    const drainEff = 1 + Math.max(0, drain.pellets - 1) * BOSS_NATIVE_PELLET_COEF;
+    const floodDps = (w.damage * riskMult * floodEff * coef) / w.fireCd;
+    const drainDps = (drain.damage * riskMult * drainEff * coef) / w.fireCd;
+    return (floodDps + drainDps) / 2 + burnDot;
+  }
   const eff = 1 + Math.max(0, w.pellets - 1) * BOSS_NATIVE_PELLET_COEF;
   return (w.damage * riskMult * eff * coef) / w.fireCd + burnDot;
 }
@@ -935,6 +946,15 @@ function burstBossDps3s(id: WeaponId, isAtRisk: boolean): number {
   const eff = 1 + Math.max(0, w.pellets - 1) * BOSS_NATIVE_PELLET_COEF;
   const cycle = w.wire ? w.fireCd + w.wire.arm : w.sentry ? w.sentry.fireCd : w.orbit ? w.orbit.rehit : w.charge ? w.fireCd + 0.1 : w.fireCd;
   const shots = 1 + Math.floor(2.999 / cycle);
+  if (w.modeShift) {
+    const drain = w.modeShift.alternate;
+    const drainEff = 1 + Math.max(0, drain.pellets - 1) * BOSS_NATIVE_PELLET_COEF;
+    const floodDamage = w.damage * riskMult * eff * coef;
+    const drainDamage = drain.damage * riskMult * drainEff * coef;
+    let total = 0;
+    for (let shot = 0; shot < shots; shot++) total += shot % 2 === 0 ? floodDamage : drainDamage;
+    return total / 3;
+  }
   return (shots * w.damage * riskMult * eff * coef) / 3;
 }
 
@@ -942,6 +962,30 @@ function envelopeGates(): void {
   section("[REVIEW] envelope: canonical PU bands (boss sustained / burst / passive)");
   check("1 PU is the pistol: exactly 12.5 practical single-target DPS",
     PU_DPS === 12.5 && Math.abs(idealBossDps("pistol", false) - PU_DPS) < 1e-9);
+  {
+    const sluice = WEAPONS.sluicegate;
+    const coef = WEAPON_BOSS_COEF.sluicegate ?? 1;
+    const flood = sluice.damage
+      * (1 + (sluice.pellets - 1) * BOSS_NATIVE_PELLET_COEF)
+      * coef / sluice.fireCd / PU_DPS;
+    const drain = sluice.modeShift!.alternate.damage * coef / sluice.fireCd / PU_DPS;
+    const average = idealBossDps("sluicegate", false) / PU_DPS;
+    check("Sluicegate reports FLOOD .394 / DRAIN .628 / two-shot average .511 PU",
+      Math.abs(flood - 0.394) < 0.001
+      && Math.abs(drain - 0.628) < 0.001
+      && Math.abs(average - 0.511) < 0.001,
+      `${flood.toFixed(3)}/${drain.toFixed(3)}/${average.toFixed(3)}`);
+  }
+  {
+    const oddBase = idealBossDps("oddsmaker", false) / PU_DPS;
+    check("Oddsmaker's four one-payload outcomes share the locked .495 base PU envelope",
+      Math.abs(oddBase - 0.495) < 0.001
+      && WEAPONS.oddsmaker.gamble?.outcomes.length === 4,
+      oddBase.toFixed(3));
+  }
+  check("Mooring .267 and Pathmaker .220 provisional base PU stay below 1.35",
+    Math.abs(idealBossDps("mooring_nail", false) / PU_DPS - 0.267) < 0.001
+    && Math.abs(idealBossDps("pathmaker", false) / PU_DPS - 0.220) < 0.001);
   // Band assignment. Direct single-target-capable weapons hold the neutral band; pack/
   // swarm/control specialists are exempt from the FLOOR (their damage lives in rooms,
   // priced by their boss coefficients) but bound by the same ceiling; lob artillery
@@ -994,7 +1038,8 @@ function envelopeGates(): void {
     (["sword", "longsword", "spear"] as WeaponId[]).every((id) =>
       WEAPONS[id].melee!.reach <= 80 && WEAPONS[id].fireCd >= 0.18));
   check("≤3 persistent families ship per batch (shared caps/telemetry before more)",
-    ALL_WEAPONS.filter((id) => ARSENAL[id].authority.some((a) => a === "effects:zone" || a === "effects:wire" || a === "effects:sentry")).length <= 3);
+    new Set(ALL_WEAPONS.flatMap((id) => ARSENAL[id].authority)
+      .filter((channel) => channel === "effects:zone" || channel === "effects:wire" || channel === "effects:sentry")).size <= 3);
 
   section("[HOLD] envelope: party trap budget — the world holds at most 6 wires");
   {
@@ -1121,6 +1166,10 @@ function differentiationGates(m: Matrix): void {
         const baseline = measureRoom("pistol", "secondlane");
         ok = own.isCleared && own.clearTicks <= baseline.clearTicks * 0.85;
         detail = `own=${(own.clearTicks / 60).toFixed(1)}s baseline=${(baseline.clearTicks / 60).toFixed(1)}s`;
+      } else if (metric === "paving") {
+        const paint = WEAPONS[id].paint;
+        ok = paint?.isPaving === true && paint.radius >= 24 && paint.life >= 3;
+        detail = paint === undefined ? "no paint spec" : `radius=${paint.radius} life=${paint.life}`;
       } else if ((entry.resource === "health-risk" || entry.resource === "coin-fed") && metric !== "boss") {
         // Cost-paid run vs the room's neutral median: the payoff must be real (the
         // Lastlight pays in hearts, the Midas in coins — same paid-ceiling contract).
@@ -1150,9 +1199,11 @@ function differentiationGates(m: Matrix): void {
     const sorted = vals.slice().sort((a, b) => dir === "low" ? a - b : b - a);
     return sorted[Math.floor(sorted.length / 4)];
   };
-  const bossVals75 = p75(ALL_WEAPONS.map((id) => m.boss.get(id)!), "high");
-  const roomVals75 = p75(ALL_WEAPONS.map((id) => roomScore(id)), "high");
-  const safetyVals75 = p75(ALL_WEAPONS.map((id) => metricValue(m, id, "safety")), "low");
+  const waveA = new Set<WeaponId>(["mooring_nail", "sluicegate", "oddsmaker", "pathmaker"]);
+  const referenceWeapons = ALL_WEAPONS.filter((id) => !waveA.has(id));
+  const bossVals75 = p75(referenceWeapons.map((id) => m.boss.get(id)!), "high");
+  const roomVals75 = p75(referenceWeapons.map((id) => roomScore(id)), "high");
+  const safetyVals75 = p75(referenceWeapons.map((id) => metricValue(m, id, "safety")), "low");
   const allRounders = ALL_WEAPONS.filter((id) =>
     m.boss.get(id)! > bossVals75 && roomScore(id) > roomVals75 && metricValue(m, id, "safety") < safetyVals75);
   check("no weapon holds the boss + room + safety top quartiles at once", allRounders.length === 0,
@@ -1164,7 +1215,8 @@ function differentiationGates(m: Matrix): void {
 function creativeGates(m: Matrix): void {
   // Every post-cluster addition is audited: the effect wave AND the legendary wave.
   const NEW_WAVE: WeaponId[] = ["lastlight", "breach", "snapwire", "frostline", "halo", "sentry", "crook",
-    "reaper", "swarm", "midas", "phase", "vortex"];
+    "reaper", "swarm", "midas", "phase", "vortex",
+    "mooring_nail", "sluicegate", "oddsmaker", "pathmaker"];
   const mechSig = (wep: Weapon): string => [
     wep.melee ? (wep.melee.isThrust ? "thrust" : "sweep") : "",
     wep.charge ? "charge" : "", wep.wire ? "wire" : "", wep.paint ? "paint" : "",
@@ -1179,6 +1231,8 @@ function creativeGates(m: Matrix): void {
     wep.killShards !== undefined ? "reap" : "", wep.accel !== undefined ? "accel" : "",
     wep.coinBoost !== undefined ? "gilded" : "", wep.isPhase === true ? "phase" : "",
     wep.implode !== undefined ? "implode" : "",
+    wep.grapple !== undefined ? "grapple" : "", wep.modeShift !== undefined ? "modeshift" : "",
+    wep.gamble !== undefined ? "gamble" : "", wep.paint?.isPaving === true ? "pave" : "",
   ].filter((x) => x.length > 0).join("+") || "plain";
 
   section("[MAJOR] creative audit: every addition moves a whole play dimension");

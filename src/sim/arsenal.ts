@@ -28,7 +28,7 @@ export type RoomId = "swarm" | "anchor" | "brawl" | "lane" | "cover" | "kite" | 
 // A declared performance metric (balancer envelope): the room clear times plus the
 // cross-room aggregates. Each weapon declares 1-2 metrics it beats the arsenal median
 // on by >=15% (proven in test/arsenal.test.ts) — its authored, measurable identity.
-export type MetricId = RoomId | "safety" | "control" | "boss";
+export type MetricId = RoomId | "safety" | "control" | "boss" | "paving";
 export type RangeBand = "point-blank" | "close" | "mid" | "long" | "self" | "placed";
 export type TargetProfile = "swarm" | "single" | "pack" | "lane" | "anchor" | "control" | "mixed";
 // "coin-fed" (the Midas): the run economy amplifies the shot — never gates it. The
@@ -677,5 +677,77 @@ export const ARSENAL: Record<WeaponId, WeaponManifestEntry> = {
     visual: "#c58bff violet round collapsing inward, then a bursting nova; held_singularity",
     authority: ["bullets"],
     excelRoom: "swarm", weakRoom: "anchor",
+  },
+  mooring_nail: {
+    role: "wall grappler: nail the room and pull yourself onto a new line",
+    metrics: ["lane", "door"],
+    novelty: {
+      nearest: "crook",
+      axes: ["positioning", "geometry"],
+      note: "The Crooked Chain moves a body relative to the player; the Mooring Nail bites room geometry and moves the player to the anchor.",
+    },
+    idealRange: "long", target: "control",
+    strength: "A wall hit crosses danger and opens a firing angle while the deep-piercing nail clears its path.",
+    weakness: "Open ground offers no anchor, and the modest nail stalls on a lone heavy body.",
+    resource: "position", status: "none",
+    modifiers: "Life and speed extend anchor reach; damage, pierce, crit, and status map to the nail.",
+    audio: "shootMooringNail",
+    visual: "#d6c7a1 pale iron nail and taut anchor trail; held_mooring_nail hook",
+    authority: ["bullets"],
+    excelRoom: "cover", weakRoom: "anchor",
+  },
+  sluicegate: {
+    role: "alternating gate: flood the near pack, then drain the long lane",
+    metrics: ["lane", "cover"],
+    novelty: {
+      nearest: "burst",
+      axes: ["timing", "geometry"],
+      note: "Its geometry changes every committed shot: a short wide fan and a long piercing lance form a fixed two-beat sequence.",
+    },
+    idealRange: "mid", target: "pack",
+    strength: "The fixed two-beat sequence answers a crowd and its back-line anchor without changing weapons.",
+    weakness: "The wrong half of the cycle is deliberately poor for the current room shape.",
+    resource: "none", status: "none",
+    modifiers: "Damage, rate, size, pellets, pierce, crit, and status apply independently to both modes.",
+    audio: "shootSluicegate",
+    visual: "#78cbd1 wide flood fan alternating with a narrow drain lance; held_sluicegate hook",
+    authority: ["bullets"],
+    excelRoom: "lane", weakRoom: "kite",
+  },
+  oddsmaker: {
+    role: "payload gambler: commit before knowing how the room will bend",
+    metrics: ["brawl", "door"],
+    novelty: {
+      nearest: "midas",
+      axes: ["timing", "priority", "geometry"],
+      note: "Midas prices a known shot with coins; Oddsmaker deterministically rolls one of four spatial payloads per owner and shot.",
+    },
+    idealRange: "mid", target: "pack",
+    strength: "Every outcome edits the room differently: bank, seek, blast, or pierce.",
+    weakness: "No outcome can be demanded; repeats are possible, and a poor roll costs the full cycle.",
+    resource: "none", status: "none",
+    modifiers: "Standard shot modifiers apply; the four equally weighted payload verbs remain authored.",
+    audio: "shootOddsmaker",
+    visual: "#efb85f brass die chamber with four payload tracer reads; held_oddsmaker hook",
+    authority: ["bullets"],
+    excelRoom: "swarm", weakRoom: "anchor",
+  },
+  pathmaker: {
+    role: "safe-route painter: cleanse hostile ground and pave the crossing",
+    metrics: ["paving"],
+    novelty: {
+      nearest: "frostline",
+      axes: ["geometry", "positioning"],
+      note: "Frostline controls enemy travel; Pathmaker edits the players' route by removing hostile residue and paving safe ground across floor hazards.",
+    },
+    idealRange: "mid", target: "control",
+    strength: "A bead trail opens a stable route through silk, cinders, corruption, and dangerous floor tiles.",
+    weakness: "Its direct hit is intentionally feeble and paved ground does not control enemies.",
+    resource: "none", status: "none",
+    modifiers: "Size maps to paved width and life to route duration; standard shot damage and status modifiers still apply.",
+    audio: "shootPathmaker",
+    visual: "#a8d7a0 pale safe-route plates under a quiet bead; held_pathmaker hook",
+    authority: ["bullets", "effects:zone"],
+    excelRoom: "ambush", weakRoom: "anchor",
   },
 };

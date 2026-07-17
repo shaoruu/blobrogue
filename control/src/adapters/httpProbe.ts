@@ -77,7 +77,9 @@ import type {
 // v31: authoritative PvP shield-break event before its offense.
 // v32: shared spawn protection end ticks and held-offense arming feedback.
 // v33: authority-plane receipt/capability/generation admission hard cut.
-export const SYNTHETIC_JOIN_PROTOCOL = 34;
+// v34: Batch0 encounter architecture (`enc` on snapshots).
+// v35: Wave A closed WeaponId and per-weapon cycle state.
+export const SYNTHETIC_JOIN_PROTOCOL = 35;
 export const SYNTHETIC_COOP_TICKET_ENVELOPE = "v1";
 export const SYNTHETIC_PVP_TICKET_ENVELOPE = "v2";
 export const SYNTHETIC_ADMISSION_ENVELOPE = "a2";

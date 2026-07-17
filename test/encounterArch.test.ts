@@ -135,8 +135,8 @@ function encounterStateTests(): void {
 }
 
 function wireTests(): void {
-  section("Wire/HUD: EncounterWire on snapshot (protocol v34)");
-  check("PROTOCOL_VERSION is 34", PROTOCOL_VERSION === 34);
+  section("Wire/HUD: EncounterWire on snapshot (protocol v35)");
+  check("PROTOCOL_VERSION is 35", PROTOCOL_VERSION === 35);
   const w = createWorld(0x5150, 50, { skipLocalPlayer: true, isShared: true });
   spawnPlayerInWorld(w, "alice");
   const snap = buildSnapshot(w, "alice", 0, [], 0, true, {

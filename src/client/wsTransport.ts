@@ -30,6 +30,11 @@ import {
 import { applySnapshotDelta, snapshotToWire } from "../net/snapshotDelta.js";
 import { applyPlayerSnapshot } from "../net/playerSnapshot.js";
 import type { Enemy, Bullet, Prop, Pickup, Chest } from "../sim/types.js";
+import {
+  CURRENT_CONTENT_CATALOG_VERSION,
+} from "../sim/contentCatalog.js";
+import type { ContentCatalogVersion } from "../sim/contentCatalog.js";
+import { createWeaponBag } from "../sim/weaponBag.js";
 
 // A server blessing offer as surfaced to the game: the id must be echoed back with the choice
 // so the server can validate the answer against exactly this offer.
@@ -156,6 +161,7 @@ function pidOf(e: SimEvent): PlayerId | undefined {
 // and pass anyway; the local player's own copies still play exactly once (deduped by id).
 const REMOTE_AUDIBLE_EVENTS: ReadonlySet<SimEvent["t"]> = new Set<SimEvent["t"]>([
   "shot", "meleeSwing", "playerHurt", "heal", "pickup", "pvpShieldBreak",
+  "grappleResolved", "blessingProc", "reviveHandoff",
 ]);
 
 export class WSTransport implements Transport {
@@ -239,6 +245,7 @@ export class WSTransport implements Transport {
   // the game to refresh its cosmetic floor state (biome/torches/music) off the new world.
   private curSeed = -1;
   private curFloor = -1;
+  private curCatalogVersion: ContentCatalogVersion = CURRENT_CONTENT_CATALOG_VERSION;
   // The world MODE the local pred/render worlds are currently built in. Part of the authoritative
   // world IDENTITY (the pvp: prefix), so a pvp arena join builds the arena locally instead of a
   // co-op dungeon; re-derived from every snapshot's `wid` alongside seed/floor.
@@ -281,8 +288,15 @@ export class WSTransport implements Transport {
     this.curMode = mode;
     this.curSeed = STAGE_B_SEED;
     this.curFloor = STAGE_B_FLOOR;
-    this.predState = createWorld(STAGE_B_SEED, STAGE_B_FLOOR, { mode });
-    this.renderState = createWorld(STAGE_B_SEED, STAGE_B_FLOOR, { mode });
+    // Fresh online join / restart must not inherit a prior session's legacy catalog latch —
+    // otherwise a Wave A run after a legacy join stays stuck on catalog 0 until a snap rebuild.
+    this.curCatalogVersion = CURRENT_CONTENT_CATALOG_VERSION;
+    this.predState = createWorld(STAGE_B_SEED, STAGE_B_FLOOR, {
+      mode, catalogVersion: this.curCatalogVersion,
+    });
+    this.renderState = createWorld(STAGE_B_SEED, STAGE_B_FLOOR, {
+      mode, catalogVersion: this.curCatalogVersion,
+    });
     this.pendingOffer = null;
     this.pending = [];
     this.nextInput = null;
@@ -579,13 +593,25 @@ export class WSTransport implements Transport {
   // Rebuild the client's predicted + render dungeon geometry to match the authoritative seed +
   // floor (initial join and every party-wide descend). Enemies/bullets/props ride the snapshot,
   // so only the walls + a local player need to exist; the next reconcile snaps self to truth.
-  private maybeRebuildWorld(seed: number, floor: number, playerCountAtLock: number, mode: WorldMode): void {
-    if (seed === this.curSeed && floor === this.curFloor && mode === this.curMode) return;
+  private maybeRebuildWorld(
+    seed: number,
+    floor: number,
+    playerCountAtLock: number,
+    mode: WorldMode,
+    catalogVersion: ContentCatalogVersion,
+  ): void {
+    if (seed === this.curSeed && floor === this.curFloor
+      && mode === this.curMode && catalogVersion === this.curCatalogVersion) return;
     this.curSeed = seed;
     this.curFloor = floor;
     this.curMode = mode;
+    this.curCatalogVersion = catalogVersion;
     this.predState.seed = seed;
     this.renderState.seed = seed;
+    this.predState.catalogVersion = catalogVersion;
+    this.renderState.catalogVersion = catalogVersion;
+    this.predState.weaponBag = createWeaponBag(seed, catalogVersion);
+    this.renderState.weaponBag = createWeaponBag(seed, catalogVersion);
     // Carry the authoritative world MODE onto the local worlds so loadFloorIntoWorld builds the
     // SAME geometry the server did — the fixed pvp arena for a pvp world, the seeded dungeon for
     // co-op. Without it the client always rebuilt a co-op dungeon, so a pvp arena rendered as a
@@ -644,7 +670,11 @@ export class WSTransport implements Transport {
     this.pruneSnapBaselines();
     // The world MODE rides the authoritative world id (isPvpWorldId(wid)) — the SAME predicate
     // the server's room factory keys off — so the client rebuilds the matching arena/dungeon.
-    this.maybeRebuildWorld(snap.seed, snap.floor, snap.pcl, isPvpWorldId(snap.wid) ? "pvp" : "coop");
+    this.maybeRebuildWorld(
+      snap.seed, snap.floor, snap.pcl,
+      isPvpWorldId(snap.wid) ? "pvp" : "coop",
+      snap.cat,
+    );
     if (this.predState.match !== null && snap.match !== null) {
       this.predState.match.phase = snap.match.ph;
       this.predState.match.phaseEndTick = snap.match.end;
@@ -733,7 +763,8 @@ export class WSTransport implements Transport {
       }
       // Keep global/world events, this client's OWN player events, and the shared moments
       // that everyone standing at them must replay: revive, plus a NETWORKED player's combat
-      // FX (shot/meleeSwing/playerHurt/heal/pickup — v14). Those now ride "pos" scope, so the
+      // FX (shot/meleeSwing/playerHurt/heal/pickup and Wave A positional feedback). Those ride
+      // "pos" scope, so the
       // server delivers a teammate's actions to nearby clients; the client replays them
       // POSITIONALLY (handleSimEvent branches self vs remote), so a friend is audible to all.
       if (pid === undefined || pid === this.selfServerId || e.t === "revive" || REMOTE_AUDIBLE_EVENTS.has(e.t)) this.events.push(e);
@@ -903,7 +934,7 @@ export class WSTransport implements Transport {
     // stock (its locally-rebuilt geometry still names the shop ROOM; the snapshot names
     // what is on the pedestals and who claimed what).
     this.renderState.shop = this.latestSnap?.shop
-      ? shopFromWire(this.latestSnap.shop, this.selfServerId)
+      ? shopFromWire(this.latestSnap.shop, this.selfServerId, this.latestSnap.cat)
       : null;
     // Self-owned effects re-key to LOCAL_ID so the render/audio layers recognize the
     // local player's own ring/tether/charge exactly like solo (owner-anchored draws,
@@ -987,8 +1018,10 @@ export class WSTransport implements Transport {
         facing: p.fac,
         hp: p.hp, maxHp: p.mhp,
         weapon: p.wpn, floor: snap.floor,
+        isSluiceDrain: p.isDrain,
         isDown: p.down,
         reviveProgress: p.rv,
+        reviveBy: p.rvb.length > 0 ? p.rvb : null,
         isOut: p.out,
         isAbsent: p.ab,
         // Dash keyed to the RENDERED pose (not the latest snapshot), so the FX play exactly

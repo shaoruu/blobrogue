@@ -46,9 +46,12 @@ import {
 } from "./balance.js";
 import type { PremiumTier, ShopMode } from "./balance.js";
 import { isBossFloor } from "./enemies.js";
-import { PICKUP_WEAPONS, WEAPONS, rollWeaponRarity, rollMysteryTwist } from "./weapons.js";
+import { WEAPONS, rollWeaponRarity, rollMysteryTwist } from "./weapons.js";
 import { MAX_OWNED_WEAPONS } from "./constants.js";
-import { ITEMS, MAX_ITEM_LEVEL, itemLevelsOf, itemMaxLevel, itemById, rollItemChoicesWith, CORE_ITEM_IDS } from "./items.js";
+import {
+  ITEMS, MAX_ITEM_LEVEL, itemLevelsOf, itemMaxLevel, itemById, normalItemsForCatalog,
+  rollItemChoicesWith, CORE_ITEM_IDS,
+} from "./items.js";
 import { rollWeaponOfferWithHistory } from "./weaponBag.js";
 import {
   recordBlessingOffer,
@@ -58,6 +61,11 @@ import type {
   BlessingOfferHistory,
   WeaponOfferHistory,
 } from "./offerHistory.js";
+import {
+  CURRENT_CONTENT_CATALOG_VERSION,
+  contentCatalogFor,
+} from "./contentCatalog.js";
+import type { ContentCatalogVersion } from "./contentCatalog.js";
 
 // The Dealer's cadence: every third depth — except boss floors (whose capstone owns the
 // whole map) and premium landings (whose milestone stall displaces the waystation).
@@ -125,6 +133,7 @@ export interface ShopSlot {
 }
 
 export interface ShopState {
+  catalogVersion: ContentCatalogVersion;
   mode: ShopMode;                   // which stall this floor hosts (wire: every client agrees)
   keeperX: number; keeperY: number; // Patch + stall anchor (back wall of the room)
   slots: ShopSlot[];
@@ -189,15 +198,16 @@ interface ShopWeaponRoll {
 
 function rollShopWeapon(
   rng: Rng, floor: number, taken: readonly (WeaponId | null)[], exclude: readonly WeaponId[],
-  mayBeMystery: boolean, forceTier?: WeaponRarity, history?: WeaponOfferHistory,
+  mayBeMystery: boolean, catalogVersion: ContentCatalogVersion,
+  forceTier?: WeaponRarity, history?: WeaponOfferHistory,
 ): ShopWeaponRoll {
   const isMystery = forceTier === undefined && mayBeMystery && floor >= MYSTERY.minFloor && rng.chance(MYSTERY.shopChance);
-  const rolled = rollWeaponRarity(() => rng.next(), floor, { isMystery });
+  const rolled = rollWeaponRarity(() => rng.next(), floor, { isMystery }, catalogVersion);
   const ceiling = dealerRarityCeiling(floor);
   const tier = forceTier ?? (isMystery || RARITY_RANK[rolled] <= RARITY_RANK[ceiling] ? rolled : ceiling);
   // Below the legendary floor gate an identified stall may never fall back into the
   // legendary tier either (the mystery gamble is the one sanctioned path past the gate).
-  const pool = PICKUP_WEAPONS.filter((id) =>
+  const pool = contentCatalogFor(catalogVersion).pickupWeapons.filter((id) =>
     isMystery || forceTier === "legendary" || floor >= LEGENDARY_MIN_FLOOR || WEAPONS[id].rarity !== "legendary");
   const inTier = pool.filter((id) => WEAPONS[id].rarity === tier);
   let weapon: WeaponId;
@@ -234,14 +244,19 @@ export function shopWeaponPrice(basePrice: number, weapon: WeaponId, isMystery: 
 
 // The blessing pedestal holds ONE item everyone sees identically (per-player validity is
 // read at buy time: a buyer at Lv3 reads MAX LV). Weighted by rarity off the full pool.
-function rollShopBlessing(rng: Rng): string {
-  const picks = rollItemChoicesWith(1, () => rng.next());
+function rollShopBlessing(rng: Rng, catalogVersion: ContentCatalogVersion): string {
+  const picks = rollItemChoicesWith(1, () => rng.next(), [], {
+    eligibleItems: normalItemsForCatalog(catalogVersion),
+  });
   return picks.length > 0 ? picks[0].id : ITEMS[0].id;
 }
 
 // The premium 1-of-1 rare blessing: rare pool only, viewer-independent stock.
-function rollShopRareBlessing(rng: Rng): string {
-  const picks = rollItemChoicesWith(1, () => rng.next(), [], { isRareOnly: true });
+function rollShopRareBlessing(rng: Rng, catalogVersion: ContentCatalogVersion): string {
+  const picks = rollItemChoicesWith(1, () => rng.next(), [], {
+    isRareOnly: true,
+    eligibleItems: normalItemsForCatalog(catalogVersion),
+  });
   return picks.length > 0 ? picks[0].id : ITEMS[0].id;
 }
 
@@ -262,10 +277,12 @@ function stockPremiumSlot(
   rng: Rng,
   exclude: readonly WeaponId[],
   taken: WeaponId[],
+  catalogVersion: ContentCatalogVersion,
   history?: WeaponOfferHistory,
 ): void {
   if (slot.kind === "legendary" || slot.kind === "mythic_weapon" || slot.kind === "artifact") {
-    const band = PICKUP_WEAPONS.filter((id) => WEAPONS[id].rarity === "legendary");
+    const band = contentCatalogFor(catalogVersion).pickupWeapons
+      .filter((id) => WEAPONS[id].rarity === "legendary");
     if (history) {
       slot.weapon = rollWeaponOfferWithHistory(
         band,
@@ -281,7 +298,7 @@ function stockPremiumSlot(
     }
     taken.push(slot.weapon);
   } else if (slot.kind === "rare_blessing") {
-    slot.itemId = rollShopRareBlessing(rng);
+    slot.itemId = rollShopRareBlessing(rng, catalogVersion);
   } else if (slot.kind === "core_infusion") {
     slot.itemId = rng.pick(CORE_ITEM_IDS);
   }
@@ -308,6 +325,7 @@ function gateTiers(tiers: readonly PremiumTier[], floor: number): PremiumTier[] 
 function pushSinkRow(
   slots: ShopSlot[], picked: readonly PremiumTier[], floor: number, rng: Rng,
   exclude: readonly WeaponId[], taken: WeaponId[], cx: number, y: number,
+  catalogVersion: ContentCatalogVersion,
   sharedWeaponHistory?: WeaponOfferHistory,
 ): void {
   const start = slots.length;
@@ -318,7 +336,10 @@ function pushSinkRow(
       premiumPriceAt(tier, floor),
       cx + (i - (picked.length - 1) / 2) * TILE * 2, y,
     );
-    stockPremiumSlot(slot, rng, exclude, taken, slot.isShared ? sharedWeaponHistory : undefined);
+    stockPremiumSlot(
+      slot, rng, exclude, taken, catalogVersion,
+      slot.isShared ? sharedWeaponHistory : undefined,
+    );
     slots.push(slot);
   }
 }
@@ -331,6 +352,7 @@ function pushMythicSlot(
   taken: WeaponId[],
   x: number,
   y: number,
+  catalogVersion: ContentCatalogVersion,
   sharedWeaponHistory?: WeaponOfferHistory,
 ): void {
   // The mythic rides its own salted stream so the capstone's OPTION is identical across
@@ -341,7 +363,7 @@ function pushMythicSlot(
   const mythicRng = new Rng((seed ^ 0x3417c0de) + floor * 92821);
   const kind = mythicRng.pick(["mythic_weapon", "mythic_trio", "mythic_amber"] as const);
   const slot = makeSlot(slots.length, kind, true, premiumPriceAt("mythic", floor), x, y);
-  stockPremiumSlot(slot, mythicRng, exclude, taken, sharedWeaponHistory);
+  stockPremiumSlot(slot, mythicRng, exclude, taken, catalogVersion, sharedWeaponHistory);
   slots.push(slot);
 }
 
@@ -357,6 +379,7 @@ function buildPremiumShopState(
   room: Room,
   exclude: readonly WeaponId[],
   players: number,
+  catalogVersion: ContentCatalogVersion,
   sharedWeaponHistory?: WeaponOfferHistory,
 ): ShopState {
   const cx = (room.cx + 0.5) * TILE;
@@ -373,11 +396,20 @@ function buildPremiumShopState(
   }
   const slots: ShopSlot[] = [];
   const taken: WeaponId[] = [];
-  pushSinkRow(slots, tiers.slice(0, count), floor, rng, exclude, taken, cx, midY, sharedWeaponHistory);
+  pushSinkRow(
+    slots, tiers.slice(0, count), floor, rng, exclude, taken, cx, midY,
+    catalogVersion, sharedWeaponHistory,
+  );
   if (floor >= PREMIUM.mythicFromFloor) {
-    pushMythicSlot(slots, seed, floor, exclude, taken, cx + TILE * 3, backY, sharedWeaponHistory);
+    pushMythicSlot(
+      slots, seed, floor, exclude, taken, cx + TILE * 3, backY,
+      catalogVersion, sharedWeaponHistory,
+    );
   }
-  return { mode: "premium", keeperX: cx, keeperY: backY, slots, viewerStock: {}, rerollsUsed: 0 };
+  return {
+    catalogVersion, mode: "premium", keeperX: cx, keeperY: backY,
+    slots, viewerStock: {}, rerollsUsed: 0,
+  };
 }
 
 // The CLIMAX vendor (F29 — the F30 milestone's landing, always present): the designer's
@@ -389,6 +421,7 @@ function buildClimaxShopState(
   floor: number,
   room: Room,
   exclude: readonly WeaponId[],
+  catalogVersion: ContentCatalogVersion,
   sharedWeaponHistory?: WeaponOfferHistory,
 ): ShopState {
   const rng = shopRng(seed, floor, 0);
@@ -399,7 +432,10 @@ function buildClimaxShopState(
   const taken: WeaponId[] = [];
   const row = PREMIUM.climaxTiers.slice(0, 5);
   const row2 = PREMIUM.climaxTiers.slice(5);
-  pushSinkRow(slots, row, floor, rng, exclude, taken, cx, midY, sharedWeaponHistory);
+  pushSinkRow(
+    slots, row, floor, rng, exclude, taken, cx, midY,
+    catalogVersion, sharedWeaponHistory,
+  );
   pushSinkRow(
     slots,
     row2,
@@ -409,10 +445,17 @@ function buildClimaxShopState(
     taken,
     cx - TILE * 2,
     (room.cy + 2.5) * TILE,
+    catalogVersion,
     sharedWeaponHistory,
   );
-  pushMythicSlot(slots, seed, floor, exclude, taken, cx + TILE * 3, backY, sharedWeaponHistory);
-  return { mode: "climax", keeperX: cx, keeperY: backY, slots, viewerStock: {}, rerollsUsed: 0 };
+  pushMythicSlot(
+    slots, seed, floor, exclude, taken, cx + TILE * 3, backY,
+    catalogVersion, sharedWeaponHistory,
+  );
+  return {
+    catalogVersion, mode: "climax", keeperX: cx, keeperY: backY,
+    slots, viewerStock: {}, rerollsUsed: 0,
+  };
 }
 
 // The SPOILS row: 1-3 seeded premium items (the post-boss windfall's sink). Count and
@@ -442,10 +485,13 @@ export function buildShopState(
   exclude: readonly WeaponId[] = [],
   players = 1,
   sharedWeaponHistory?: WeaponOfferHistory,
+  catalogVersion: ContentCatalogVersion = CURRENT_CONTENT_CATALOG_VERSION,
 ): ShopState {
   const mode = shopModeFor(floor);
   if (mode === "climax") {
-    return buildClimaxShopState(seed, floor, room, exclude, sharedWeaponHistory);
+    return buildClimaxShopState(
+      seed, floor, room, exclude, catalogVersion, sharedWeaponHistory,
+    );
   }
   const rng = shopRng(seed, floor, 0);
   if (mode === "premium") {
@@ -456,6 +502,7 @@ export function buildShopState(
       room,
       exclude,
       players,
+      catalogVersion,
       sharedWeaponHistory,
     );
   }
@@ -481,6 +528,7 @@ export function buildShopState(
           weapons,
           exclude,
           mayBeMystery,
+          catalogVersion,
           isShowcase ? "legendary" : undefined,
           sharedWeaponHistory,
         )
@@ -491,7 +539,7 @@ export function buildShopState(
         kind: isWeapon ? "weapon" : "blessing",
         isShared: isWeapon,
         weapon: roll ? roll.weapon : null,
-        itemId: isWeapon ? null : rollShopBlessing(rng),
+        itemId: isWeapon ? null : rollShopBlessing(rng, catalogVersion),
         price: roll
           ? (isShowcase ? premiumPriceAt("legendary", floor) : shopWeaponPrice(SHOP.pedestalPrices[i], roll.weapon, roll.isMystery))
           : SHOP.pedestalPrices[i],
@@ -526,6 +574,7 @@ export function buildShopState(
       taken,
       cx,
       isDealer ? (room.cy + 2.5) * TILE : midY,
+      catalogVersion,
       sharedWeaponHistory,
     );
   } else if (floor >= PREMIUM.dealerSlotFromFloor) {
@@ -533,10 +582,16 @@ export function buildShopState(
     // the stall. Drawn AFTER the classic stock so the staples' stream never shifts.
     const tier = rng.pick(gateTiers(PREMIUM.dealerTiers, floor));
     const slot = makeSlot(slots.length, SINK_KIND_BY_TIER[tier]!, false, premiumPriceAt(tier, floor), cx, (room.cy + 2.5) * TILE);
-    stockPremiumSlot(slot, rng, exclude, taken, slot.isShared ? sharedWeaponHistory : undefined);
+    stockPremiumSlot(
+      slot, rng, exclude, taken, catalogVersion,
+      slot.isShared ? sharedWeaponHistory : undefined,
+    );
     slots.push(slot);
   }
-  return { mode, keeperX: cx, keeperY: backY, slots, viewerStock: {}, rerollsUsed: 0 };
+  return {
+    catalogVersion, mode, keeperX: cx, keeperY: backY,
+    slots, viewerStock: {}, rerollsUsed: 0,
+  };
 }
 
 export interface ShopStockViewerSource {
@@ -621,7 +676,8 @@ export function stockShopForViewer(
       const blocked = new Set<WeaponId>(viewer.ownedWeapons);
       for (const id of takenWeapons) blocked.add(id);
       const weapon = rollWeaponOfferWithHistory(
-        PICKUP_WEAPONS.filter((id) => WEAPONS[id].rarity === "legendary"),
+        contentCatalogFor(shop.catalogVersion).pickupWeapons
+          .filter((id) => WEAPONS[id].rarity === "legendary"),
         () => rng.next(),
         viewer.weaponOfferHistory,
         blocked,
@@ -649,7 +705,7 @@ export function stockShopForViewer(
         history: viewer.blessingOfferHistory,
         eligibleItems: slot.kind === "core_infusion"
           ? ITEMS.filter((item) => CORE_ITEM_IDS.includes(item.id))
-          : undefined,
+          : normalItemsForCatalog(shop.catalogVersion),
         excludedIds: excludedBlessings,
         isPremiumAllowed: slot.kind === "core_infusion",
       },
@@ -722,6 +778,7 @@ export function restockShop(
           keptWeapons,
           exclude,
           mayBeMystery,
+          shop.catalogVersion,
           isShowcase ? "legendary" : undefined,
           sharedWeaponHistory,
         );
@@ -733,7 +790,7 @@ export function restockShop(
           : shopWeaponPrice(SHOP.pedestalPrices[slot.id], roll.weapon, roll.isMystery);
         keptWeapons.push(slot.weapon);
       } else {
-        slot.itemId = rollShopBlessing(rng);
+        slot.itemId = rollShopBlessing(rng, shop.catalogVersion);
       }
       continue;
     }
@@ -744,6 +801,7 @@ export function restockShop(
         rng,
         exclude,
         keptWeapons.filter((id): id is WeaponId => id !== null),
+        shop.catalogVersion,
         slot.isShared ? sharedWeaponHistory : undefined,
       );
     }
