@@ -319,7 +319,22 @@ export const FIXED_DT = 1 / TICK_HZ; // 50ms authoritative step
 // v37: Content Wave B catalog `2` stacked on Sever v36 / Wave A catalog `1` — closed WeaponId
 //   additions (resonant_fork / red_pen / margin_call / sidewinder) and `cat` admitting version 2.
 //   Wave A fields remain on v35 semantics; Sever worldsplit wire remains on v36.
-export const PROTOCOL_VERSION = 37;
+// v38 (PALE THRONE F75 GIANT encounter — the SECOND giant, reusing the AD-locked Gorge shell-peel
+//   machinery via a shared giant-encounter core): two closed-set widenings, no new EnemyWire field.
+//   - TWO new enemy kinds ride the wire: `pale` (the F75 giant boss) and `pale_seam` (its cold
+//     tectonic weak-point — the peel-verb mechanic body). isEnemyKind keys off ENEMY_ARCHETYPES,
+//     so a v37 client rejects a snapshot carrying either.
+//   - a NEW PropKind `pale_debris` rides `props` (the giant's sloughed cold-shell cover). PROP_KINDS
+//     is a validated closed set, so a v37 client rejects it.
+//   - the giant needs NO new EnemyWire field — exactly like Gorge: its SHELL PHASE (stone/cracked/
+//     core) rides `bph` (boss.phase — the client swaps the shell sprite off it) and its GUARDED/
+//     EXPOSED state rides `aux` (the exposed remainder). The COLD material is a client-render/
+//     telegraph-color swap only (never on the wire). Compact by construction.
+// v38 also includes authoritative giant telegraph phase and local warmth state. AttackWire carries
+// the giant commitment clock/counters used by exact ring2 and dual-sweep tells; SelfWire carries
+// the reconciled warmth timer/path/chill state so reconnect and prediction cannot diverge.
+export const PROTOCOL_VERSION = 38;
+
 
 // How long the server reserves a disconnected player's body (their seat) before the
 // authoritative leave lifecycle applies. 90s per the studio balance gate's reconnect
@@ -366,6 +381,9 @@ export interface SelfWire {
   fng: number;                 // Vampire Fang shared proc cooldown
   fac: number;                 // facing (-1/1)
   down: boolean;               // isDown
+  wit: number;                 // authoritative warmth idle seconds
+  wpx: number;                 // cumulative self-propelled thaw path
+  wch: boolean;                // authoritative chilled state
   rev: number;                 // reviveProgress seconds (authoritative revive hold readout)
   out: boolean;                // past the floor's down limit: unrevivable until the descent
   wpn: WeaponId;
@@ -487,6 +505,10 @@ export interface AttackWire {
   wu: number;                  // windup 0..1
   lk: boolean; la: number;     // isAimLocked, lockedAngle
   mx: number; my: number;      // AoE marker
+  tm: number;                  // authoritative seconds in the current attack phase
+  ac: number;                  // boss commitment count (ring gap rotation)
+  sc: number;                  // boss sequence count (ring2/sweep emission)
+  bp: number;                  // boss burst parity (sweep wheel offset)
 }
 
 // A server-owned enemy. Positions interpolate; the rest is the latest authoritative value.
@@ -842,6 +864,7 @@ const PROP_KINDS: Record<PropKind, true> = {
   crate: true, pot: true, barrel: true, barrel_explosive: true, brazier: true,
   root_wall: true, silt_mound: true, clinker_brick: true, // worker constructions (ecology gate)
   gorge_debris: true, // the GORGE giant's sloughed shell cover (F50)
+  pale_debris: true, // the PALE THRONE giant's sloughed shell cover (F75)
 };
 const PICKUP_KINDS: Record<PickupKind, true> = { heart: true, coin: true, weapon: true };
 const SHOP_SLOT_KINDS: Record<ShopSlotKind, true> = {
@@ -870,6 +893,9 @@ const ATTACK_MOVES: Record<AttackMove, true> = {
   tracer: true, beam: true, spew: true, hurl: true, rip: true,
   // v35 SEVER F55 signature — display name WORLDSPLIT everywhere client-facing.
   worldsplit: true,
+  // PALE F75 signature — display name THE LAST LIGHT FALLS; wire id last_light.
+  // Fits existing AttackWire/EncounterState flags — no PROTOCOL_VERSION bump required.
+  last_light: true,
 };
 const ENEMY_TIERS: Record<EnemyTier, true> = { swarm: true, standard: true, brute: true, elite: true };
 const SLUICE_MODES: Record<SluiceMode, true> = { flood: true, drain: true };
@@ -1199,6 +1225,9 @@ function validateSelfWire(v: unknown): SelfWire {
     fng: num(o, "fng", 0, 1e4),
     fac: num(o, "fac", -1, 1),
     down: boolOf(o, "down"),
+    wit: num(o, "wit", 0, 1e4),
+    wpx: num(o, "wpx", 0, 1e6),
+    wch: boolOf(o, "wch"),
     rev: num(o, "rev", 0, 1e4),
     out: boolOf(o, "out"),
     wpn: weaponOf(o, "wpn"),
@@ -1298,6 +1327,10 @@ function validateEnemyWire(v: unknown): EnemyWire {
       wu: num(a, "wu", 0, 1),
       lk: boolOf(a, "lk"), la: num(a, "la", -1000, 1000),
       mx: num(a, "mx", -POS_LIMIT, POS_LIMIT), my: num(a, "my", -POS_LIMIT, POS_LIMIT),
+      tm: num(a, "tm", 0, 1e4),
+      ac: intOf(a, "ac", 0, Number.MAX_SAFE_INTEGER),
+      sc: intOf(a, "sc", 0, Number.MAX_SAFE_INTEGER),
+      bp: intOf(a, "bp", 0, 1),
     },
     bph: num(o, "bph", 0, 16),
     brr: boolOf(o, "brr"),
@@ -1687,7 +1720,8 @@ export function selfWireFromSnapshot(s: AuthoritativePlayerSnapshot): SelfWire {
   return {
     x: s.x, y: s.y, hp: s.hp, mhp: s.maxHp, inv: s.invuln, dnv: s.dashInvuln,
     dcd: s.dashCd, dti: s.dashTime, ddx: s.dashDx, ddy: s.dashDy, fcd: s.fireCd, chg: s.chargeT, fng: s.fangCd,
-    fac: s.facing, down: s.isDown, rev: s.reviveProgress, out: false, wpn: s.weapon,
+    fac: s.facing, down: s.isDown, wit: s.warmthIdleSec, wpx: s.warmthPathPx,
+    wch: s.isWarmthChilled, rev: s.reviveProgress, out: false, wpn: s.weapon,
     wpns: s.ownedWeapons,
     wcd: s.ownedWeapons.map((weapon) => s.weaponFireCooldowns[weapon] ?? 0),
     sgc: s.weaponCycles.sluicegate, ogc: s.weaponCycles.oddsmaker, isMds: s.isMuddyRefundSpent,
@@ -1712,7 +1746,8 @@ export function snapshotFromSelfWire(w: SelfWire): AuthoritativePlayerSnapshot {
   return {
     x: w.x, y: w.y, hp: w.hp, maxHp: w.mhp, invuln: w.inv, dashInvuln: w.dnv,
     dashCd: w.dcd, dashTime: w.dti, dashDx: w.ddx, dashDy: w.ddy, fireCd: w.fcd, chargeT: w.chg, fangCd: w.fng,
-    facing: w.fac, isDown: w.down, reviveProgress: w.rev, weapon: w.wpn,
+    facing: w.fac, isDown: w.down, warmthIdleSec: w.wit, warmthPathPx: w.wpx,
+    isWarmthChilled: w.wch, reviveProgress: w.rev, weapon: w.wpn,
     ownedWeapons: w.wpns.slice(),
     weaponFireCooldowns: Object.fromEntries(
       w.wpns.flatMap((weapon, index) => w.wcd[index] > 0 ? [[weapon, w.wcd[index]]] : []),
@@ -1803,7 +1838,19 @@ export function toEnemyWire(e: Enemy): EnemyWire {
   const a = e.attack;
   return {
     id: e.id, kind: e.kind, x: e.x, y: e.y, hp: e.hp, mhp: e.maxHp, r: e.radius, tr: e.tier,
-    atk: { ph: a.phase, mv: a.move, wu: a.windup, lk: a.isAimLocked, la: a.lockedAngle, mx: a.markX, my: a.markY },
+    atk: {
+      ph: a.phase,
+      mv: a.move,
+      wu: a.windup,
+      lk: a.isAimLocked,
+      la: a.lockedAngle,
+      mx: a.markX,
+      my: a.markY,
+      tm: a.time,
+      ac: e.boss?.attackCount ?? 0,
+      sc: e.boss?.spinCount ?? 0,
+      bp: e.boss?.burstParity ?? 0,
+    },
     bph: e.boss ? e.boss.phase : 0,
     brr: e.boss ? e.boss.roar !== null : false,
     mfm: e.boss ? e.boss.mirrorFamily : -1,
@@ -1837,7 +1884,7 @@ export function enemyFromWire(w: EnemyWire, x: number, y: number): Enemy {
     burn: w.burn, burnDmg: 0, chill: w.chill, shock: w.shock, markT: w.mkt, revealT: 0, statusTick: 0, burnOwner: null,
     mirrorOf: w.mir.length > 0 ? w.mir : null,
     attack: {
-      phase: w.atk.ph, time: 0, move: w.atk.mv, windup: w.atk.wu, cooldown: 0,
+      phase: w.atk.ph, time: w.atk.tm, move: w.atk.mv, windup: w.atk.wu, cooldown: 0,
       lockedAngle: w.atk.la, isAimLocked: w.atk.lk, markX: w.atk.mx, markY: w.atk.my,
     },
     boss: w.bph > 0
@@ -1847,8 +1894,8 @@ export function enemyFromWire(w: EnemyWire, x: number, y: number): Enemy {
         // Quorum merge-fuse VFX bind to it). The banked floorHp/queued/queuedBy are
         // sim-internal (they never travel — the client only renders the beat, never resolves it).
         phase: w.bph, transitionsDone: 0, roar: w.brr ? { floorHp: 0, queued: 0, queuedBy: null } : null,
-        addTimer: 0, attackCount: 0,
-        isNextRadial: false, burstParity: 0, beatAddIds: [], spinCount: 0,
+        addTimer: 0, attackCount: w.atk.ac,
+        isNextRadial: false, burstParity: w.atk.bp, beatAddIds: [], spinCount: w.atk.sc,
         // Earned windows: the exposed remainder rides the aux channel (the render key), restored
         // into boss.exposed so the client's guard/expose art reads the SAME flag as the damage
         // gate (isBossExposed). The bank + mechanic id lists are sim-internal and never travel.

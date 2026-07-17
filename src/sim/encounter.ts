@@ -82,7 +82,14 @@ export function initArenaEncounter(dungeon: Dungeon): EncounterState {
     failureCount: 0,
     completed: false,
     failed: false,
-    flags: {},
+    flags: {
+      // PALE F75 THE LAST LIGHT FALLS — sim-internal reconnect/spectate bag (AttackWire carries mv/ph).
+      lastLightPhase: "idle",      // idle | tell | scars | fall | punish
+      lastLightOutcome: "idle",    // idle | pending | success | survival | failure
+      lastLightScarIndex: 0,       // next/active scar 0..2 (3 = complete)
+      lastLightScarId: -1,         // live highlighted scar enemy id
+      lastLightRelit: 0,           // scars successfully relit this cast (0..3)
+    },
   };
 }
 

@@ -25,7 +25,7 @@ const ENEMY_KINDS: readonly EnemyKind[] = [
   "slime", "bat", "skeleton", "ghost", "spitter", "charger", "burrower", "orbiter", "shielder",
   "boss", "marrow", "choir", "weaver", "gilded",
   // Wave 1 deep bosses (spawn the core; it raises its own husks / slabs / mirror pool).
-  "jet", "tithe", "quorum",
+  "jet", "tithe", "quorum", "gorge", "pale",
 ];
 const WEAPON_IDS: readonly WeaponId[] = [
   "pistol", "shotgun", "rapid", "smg", "cannon", "burst", "ricochet", "homing", "tesla",
@@ -46,10 +46,10 @@ const BOSS_AFFIXES: ReadonlyArray<readonly [BossAffixId, string]> = [
   ["emberwake", "Emberwake"], ["sundering", "Sundering"], ["amberrain", "Amberrain"],
 ];
 
-const PROP_KINDS: readonly PropKind[] = ["crate", "pot", "barrel", "barrel_explosive", "brazier", "root_wall", "silt_mound", "clinker_brick", "gorge_debris"];
+const PROP_KINDS: readonly PropKind[] = ["crate", "pot", "barrel", "barrel_explosive", "brazier", "root_wall", "silt_mound", "clinker_brick", "gorge_debris", "pale_debris"];
 const PROP_LABEL: Record<PropKind, string> = {
   crate: "Crate", pot: "Pot", barrel: "Barrel", barrel_explosive: "Boom Barrel", brazier: "Brazier",
-  root_wall: "Root Wall", silt_mound: "Silt Mound", clinker_brick: "Clinker Brick", gorge_debris: "Shell Debris",
+  root_wall: "Root Wall", silt_mound: "Silt Mound", clinker_brick: "Clinker Brick", gorge_debris: "Shell Debris", pale_debris: "Pale Shell Debris",
 };
 
 // Sprite filenames mostly follow WeaponId; melee uses its display-name art filenames.
@@ -124,6 +124,14 @@ export function bootSandbox(canvas: HTMLCanvasElement, minimap: HTMLCanvasElemen
   (window as Window & { __game?: Game }).__game = game;
 
   buildPanel(game);
+  const params = new URLSearchParams(window.location.search);
+  if (params.get("qa") === "pale") {
+    const players = Number.parseInt(params.get("players") ?? "1", 10);
+    const phase = Number.parseInt(params.get("phase") ?? "1", 10);
+    game.devSetupPaleCapture(players, phase);
+    game.devSetBossNameHidden(params.get("hideBossName") !== "0");
+    game.devSetHitRadiusVisible(params.get("hitDebug") === "1");
+  }
 }
 
 function buildPanel(game: Game): void {
@@ -374,6 +382,31 @@ function buildPanel(game: Game): void {
   realRow.appendChild(btn("Real here", () => game.devLoadRealFloor(floor), "mini"));
   floorSec.appendChild(realRow);
   panel.appendChild(floorSec);
+
+  const paleSec = section("Pale F75 QA");
+  const paleSetup = h("div", "dev-row");
+  for (const players of [1, 2, 4]) {
+    paleSetup.appendChild(btn(`${players}P setup`, () => game.devSetupPaleCapture(players, 1), "mini"));
+  }
+  paleSec.appendChild(paleSetup);
+  const palePhases = h("div", "dev-row");
+  for (const phase of [1, 2, 3]) {
+    palePhases.appendChild(btn(`Freeze P${phase}`, () => game.devSetPalePhase(phase), "mini"));
+  }
+  paleSec.appendChild(palePhases);
+  const paleBeats = h("div", "dev-row");
+  paleBeats.appendChild(btn("Ring 2 tell", () => game.devSetPaleBeat("ring2"), "mini"));
+  paleBeats.appendChild(btn("Sweep warn", () => game.devSetPaleBeat("sweepWindup"), "mini"));
+  paleBeats.appendChild(btn("Sweep active", () => game.devSetPaleBeat("sweepActive"), "mini"));
+  paleBeats.appendChild(btn("Crack-off", () => game.devSetPaleBeat("crackOff"), "mini"));
+  paleSec.appendChild(paleBeats);
+  const paleDebug = h("div", "dev-row");
+  paleDebug.appendChild(btn("Hide boss name", () => game.devSetBossNameHidden(true), "mini"));
+  paleDebug.appendChild(btn("Show hit circle", () => game.devSetHitRadiusVisible(true), "mini"));
+  paleDebug.appendChild(btn("Full chill", () => game.devSetPaleWarmth(true), "mini"));
+  paleDebug.appendChild(btn("Thaw", () => game.devSetPaleWarmth(false), "mini"));
+  paleSec.appendChild(paleDebug);
+  panel.appendChild(paleSec);
 
   // ---- Wave 1 randomness: force every mutator / elite affix / boss affix in isolation ----
   const randSec = section("Wave 1 Randomness");

@@ -1,0 +1,108 @@
+{
+  "schema": 1,
+  "seed": 63322,
+  "floor": 75,
+  "playerCount": 1,
+  "ticks": 1836,
+  "spawn": {
+    "kind": "pale",
+    "count": 1,
+    "maxHp": 1220,
+    "x": 1560,
+    "y": 792
+  },
+  "phaseAt": [
+    0.7213,
+    0.4098
+  ],
+  "phaseFloor": [
+    0.64,
+    0.33
+  ],
+  "phaseEntries": [
+    {
+      "phase": 1,
+      "tick": 0,
+      "hp": 1220
+    },
+    {
+      "phase": 2,
+      "tick": 558,
+      "hp": 812
+    },
+    {
+      "phase": 3,
+      "tick": 1065,
+      "hp": 432
+    }
+  ],
+  "earnedWindowsByPhase": [
+    6,
+    5,
+    5
+  ],
+  "peelEvents": 16,
+  "debrisMax": 2,
+  "dualSweep": {
+    "windupTick": 1231,
+    "recoverTick": 1454,
+    "emissions": 27,
+    "bulletsPerEmission": [
+      12,
+      12,
+      12,
+      12,
+      12,
+      12,
+      12,
+      12,
+      12,
+      12,
+      12,
+      12,
+      12,
+      12,
+      12,
+      12,
+      12,
+      12,
+      12,
+      12,
+      12,
+      12,
+      12,
+      12,
+      12,
+      12,
+      12
+    ],
+    "hash": "f2215f43f7680018b6b07b421f01aba2658caee748b5116a1f109339c2b3d5e5"
+  },
+  "warmth": {
+    "activeTick": 1066,
+    "chilledTick": 1156,
+    "clearedTick": 1185,
+    "chilledPerTick": 1.6667,
+    "freePerTick": 3.3333,
+    "speedRatio": 0.5,
+    "hpBefore": 6,
+    "hpAfter": 6
+  },
+  "completion": {
+    "deathTick": 1805,
+    "bossKillEvents": 1,
+    "bossPhaseEvents": 2,
+    "bossTransitionEvents": 4,
+    "chestCount": 2,
+    "isBossDead": true,
+    "finalPhase": 3,
+    "finalHp": -68,
+    "finalAttack": "active:sweep:2.3",
+    "finalExposed": 0,
+    "finalAddTimer": 1.4,
+    "finalSeamLife": 0,
+    "finalLiveSeams": 0
+  },
+  "stateHash": "004baa2eec7e4188e21c10e8a92db73b0669135211fdc1f358c4a19e763d5a3a",
+  "eventHash": "7dc27f215b6b8b80ed63496c0d42e3d9e1bb8fe5e346b47d4d077b46848cd380"
+}

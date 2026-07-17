@@ -99,6 +99,8 @@ export const AIMED_MOVES: Readonly<Record<AttackMove, boolean>> = {
   // Batch1 Sever F55: WORLDSPLIT is a planted fracture lane — body keeps travel facing
   // through plant/fracture/punish (aim is encoded in the fracture geometry, not pose).
   worldsplit: false,
+  // PALE F75 THE LAST LIGHT FALLS: meteor/scar sequence — body stays front-facing set-piece.
+  last_light: false,
 };
 
 // The renderer-facing pose contract: everything a draw pass (or the AD's sheet set)

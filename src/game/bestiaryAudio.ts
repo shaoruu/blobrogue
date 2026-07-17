@@ -81,13 +81,15 @@ export const AUDIO_BEHAVIOR: Readonly<Record<EnemyKind, AudioBehavior>> = {
   jet_echo: "kite", // the reflection warns, locks, and fires ONE salvo (ranged-hold grammar)
   gorge: "boss", gorge_seam: "decoy", // the F50 giant + its planted weak-point (decoy grammar)
   sever: "boss", sever_anchor: "decoy",
+  pale: "boss", pale_seam: "decoy", // the F75 giant + its cold planted weak-point (decoy grammar)
 };
 
 // ---- body materials ----
 
 export type AudioMaterial =
   | "goo" | "leather" | "bone" | "mist" | "chitin" | "earth"
-  | "wood" | "root" | "brass" | "bell" | "ember" | "voice" | "stone" | "gold";
+  | "wood" | "root" | "brass" | "bell" | "ember" | "voice" | "stone" | "gold"
+  | "giantAmber" | "pale";
 
 export const AUDIO_MATERIAL: Readonly<Record<EnemyKind, AudioMaterial>> = {
   slime: "goo",
@@ -130,8 +132,11 @@ export const AUDIO_MATERIAL: Readonly<Record<EnemyKind, AudioMaterial>> = {
   // PLACEHOLDER: the giant reuses the Warden's heavy-slammer bank (gold), its weak-points the
   // Weaver's lattice mechanic-body rows (chitin, like the Tithe slab) — until the audio director's
   // bespoke giant stems land (half-time footfall + colossal downbeat; see the manifest).
-  gorge: "gold", gorge_seam: "chitin",
+  gorge: "giantAmber", gorge_seam: "giantAmber",
   sever: "gold", sever_anchor: "chitin",
+  // PALE THRONE (F75 giant) — dedicated pale material bank (see F75 audio hooks).
+  pale: "pale", pale_seam: "pale",
+
 };
 
 // SAME-MATERIAL fallback law: until a row's generated stem lands, its declared fallback
@@ -153,6 +158,8 @@ export const MATERIAL_FALLBACK_SAMPLES: Readonly<Record<AudioMaterial, readonly 
   voice: ["enemyAttack", "tesla", "bossSpawn", "shootShotgun", "enemyDeath", "floorClear", "cannon"],
   stone: ["cannon", "meleeHit", "bossSpawn"],
   gold: ["coin", "chest", "cannon", "meleeHit", "enemyAttack", "dash", "floorClear", "homing", "parry", "bossSpawn", "blessing", "enemyDeath"],
+  giantAmber: [],
+  pale: [],
 };
 
 // Fallback pitch window (contract: "no oscillator or extreme rate"): a transform may
@@ -300,21 +307,23 @@ export const BESTIARY_CUES: Readonly<Record<EnemyKind, Readonly<Record<string, W
   quorum_splinter: { move: "slime.move", commit: "slime.commit" },
   // JET's echo sings the mirror body's own cues (King goo bank): warn/lock/fire on its salvo.
   jet_echo: { warn: "king.hopWarn", lock: "king.hopLock", fire: "king.radialFire" },
-  // GORGE (F50 giant) — PLACEHOLDER audio reusing the Warden's heavy-slammer bank (gold — the
-  // closest colossal slam/quake match) until the audio director's giant stems land (half-time
-  // footfall motive + colossal downbeat — see the manifest). Its weak-points sing the Weaver's
-  // lattice mechanic-body rows (like the Tithe slab).
   gorge: {
-    windup: "warden.prisonWarn", lock: "warden.turretLock", active: "warden.turretFire", impact: "warden.prisonClose",
-    recover: "warden.exposed", entrance: "gilded.entrance", phase: "warden.phase", special: "warden.glyphWarn", death: "warden.death",
+    windup: "gorge.ringWarn", lock: "gorge.ring2Warn", active: "gorge.spokeActive", impact: "gorge.ringImpact",
+    recover: "gorge.exposed", entrance: "gorge.entrance", phase: "gorge.phase", special: "gorge.zoneWarn", death: "gorge.death",
   },
-  gorge_seam: { fuse: "weaver.latticeWarn", toll: "weaver.latticeFire" },
+  gorge_seam: { fuse: "gorge.seamWarn", toll: "gorge.seamBreak" },
   // SEVER F55 — PLACEHOLDER (Weaver bank); display-facing name WORLDSPLIT.
   sever: {
     windup: "weaver.blinkTell", lock: "weaver.latticeWarn", active: "weaver.blinkDepart", impact: "weaver.blinkArriveStrike",
     recover: "weaver.recover", entrance: "weaver.entrance", phase: "weaver.phase", special: "weaver.latticeFire", death: "weaver.death",
   },
   sever_anchor: { fuse: "weaver.latticeWarn", toll: "weaver.latticeFire" },
+
+  pale: {
+    windup: "pale.ringWarn", lock: "pale.ring2Warn", active: "pale.spokeActive", impact: "pale.ringImpact",
+    recover: "pale.exposed", entrance: "pale.entrance", phase: "pale.phase", special: "pale.zoneWarn", death: "pale.death",
+  },
+  pale_seam: { fuse: "pale.seamWarn", toll: "pale.seamBreak" },
 };
 
 export function bestiaryCue(kind: EnemyKind, hook: string): WaveEventId | null {

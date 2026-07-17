@@ -1108,6 +1108,9 @@ export const PHASE_TIME_BASE: Readonly<Partial<Record<EnemyKind, number>>> = {
   // GORGE (F50 giant): a three-shell fight, so a longer per-phase budget than the lean roster
   // (each shell is its own mini earned-window fight). PROVISIONAL — the balancer tunes on build.
   gorge: 18,
+  // PALE THRONE (F75 giant): the region cap — heavier shells (1.3× Gorge) + a tighter per-phase
+  // window bank make each shell a touch longer than Gorge's. PROVISIONAL — the balancer tunes.
+  pale: 20,
 };
 
 // One curated pool entry: a known readable creature at a tier, weighted for the draw.
@@ -1874,6 +1877,49 @@ export function quorumHpForFloor(floor: number): number {
   return anchoredBossHp(QUORUM.baseHp, QUORUM.baseHpFloor, floor);
 }
 
+// ---- THE GIANT GRAMMAR (shared tunable surface) ----
+// GORGE (below) is the reference shape; every giant — GORGE (F50), PALE (F75), and the future
+// F100 Unmaker — declares the SAME field set so ONE shared giant-encounter core (world.ts
+// updateGiant) drives them all, parameterized only by this constants block + material/colors.
+// The as-const literals are widened here (scalars → number, tuples → readonly number[]) so a
+// tuned giant (PALE) is assignable alongside the reference (GORGE) without fighting the types.
+//
+// GIANT AXES + SIGNATURE (the "mechanics step" between giants): each deeper giant escalates NOT by
+// tightening the base pattern but by adding ONE NEW READABLE AXIS per phase plus a cross-cutting
+// regional SIGNATURE. These are OPTIONAL fields — ABSENT on Gorge (so Gorge plays exactly as
+// shipped, byte-identical), PRESENT on Pale (its F75 axes below), and F100 adds its own. The
+// shared giant core reads each `!== undefined` to switch the axis on. Gorge is the base fight;
+// Pale is base + these axes; F100 will be base + compounded axes + a "subtraction" signature.
+interface GiantAxes {
+  // P1 SEQUENCING axis — a SECOND counter-offset ring (undefined = single ring, like Gorge).
+  readonly ring2DelaySec?: number;        // the 2nd ring follows this long behind the 1st (the sequence read)
+  readonly ring2GapOffsetSlots?: number;  // the 2nd ring's gap offset from the 1st, in ring slots (~half the ring)
+  readonly seamBanksMinPlayers?: number;
+  readonly seamBankMinSeparationRad?: number;
+  // P2 POSITIONING-OVER-TIME axis — MIGRATING pools (undefined = static pools, like Gorge). Each
+  // pool CREEPS outward from the giant (zoneSpreadTilesPerSec) AND new pools seed at the edge of
+  // the nearest-to-expiring one (isZoneChurnEnabled) so the safe floor DRIFTS; the denial stays capped
+  // (zoneCap ≤ ⅓ arena) so the pocket always survives.
+  readonly zoneSpreadTilesPerSec?: number; // outward creep speed of each pool, in tiles/sec
+  readonly isZoneChurnEnabled?: boolean;   // seed new pools at the edge of the nearest-to-expiring one (migrate, don't re-center)
+  // P3 DUAL-READ axis — a COUNTER-ROTATING second sweep (undefined = single sweep, like Gorge).
+  // spoke2Step counter-rotates (opposite sign, same magnitude); the safe spot is the drifting
+  // INTERSECTION of the two wedges. spoke2Gap widens the 2nd sweep's gap when a full pair would
+  // seal the intersection (the fairness escape hatch — pale.test.ts asserts it never fully closes).
+  readonly spoke2Step?: number;       // the counter-sweep's per-emission rotation (opposite sign)
+  readonly spoke2Gap?: number;        // the counter-sweep's gap in slots (>= spokeGap; wider = sparser = fairer)
+  readonly spokeLife?: number;
+  // The regional SIGNATURE — WARMTH-DRAIN (undefined = none, like Gorge). A per-player stillness
+  // chill that punishes CAMPING: idle too long → move ×warmthDrainSlow, cleared by moving a real
+  // distance, telegraphed by a ramping frost vignette. A SLOW, never damage; reuses CHILL_SLOW.
+  readonly warmthDrainIdleSec?: number;        // stillness before the chill creeps in
+  readonly warmthDrainMoveClearTiles?: number; // move at least this many tiles to clear the idle timer (thaw)
+  readonly warmthDrainSlow?: number;           // the move-speed multiplier while chilled (= CHILL_SLOW 0.5)
+}
+export type GiantConst = {
+  readonly [K in keyof typeof GORGE]: (typeof GORGE)[K] extends readonly number[] ? readonly number[] : number;
+} & GiantAxes;
+
 // ---- GORGE (F50 GIANT #1 — the Sump cap; the AD-LOCKED giant TEMPLATE for F75/F100) ----
 // A colossal ~192px STATIONARY front-facing set-piece PINNED to floor 50 (never in the seeded
 // deep rotation). It does not chase; its whole threat is SPACE-CONTROL (rings / zones / spokes)
@@ -2029,7 +2075,142 @@ export function severHpForFloor(floor: number): number {
 export function severAnchorHpForFloor(floor: number): number {
   return Math.max(1, anchoredBossHp(SEVER.anchorHp, SEVER.baseHpFloor, floor));
 }
+// ---- PALE THRONE (F75 GIANT #2 — the Pale region cap; the SECOND giant, reusing the AD-LOCKED
+// Gorge shell-peel template EXACTLY via the shared giant-encounter core) ----
+// A colossal ~192px STATIONARY front-facing set-piece PINNED to floor 75, mechanically IDENTICAL
+// to Gorge (same 3-phase shell-peel, same weak-point peel verb, same rings/zones/spokes) — only
+// the MATERIAL is COLD (warmth-drain, never amber; a client-render/telegraph swap, no sim impact)
+// and the calibration is the region-cap step. PALE is Gorge's grammar with (a) the balancer's
+// HP/bank calibration overridden and (b) the per-phase PATTERN params surfaced as explicit GD
+// variant slots; the shared giant MACHINERY (guard, the roar crack-off transition, contact damage,
+// entrance grace, seam durability, debris) is inherited by spread so it can never drift (and F100
+// Unmaker slots in the same way).
+//
+// CALIBRATION (balancer, F75 EXPLICIT anchor — see paleHpForFloor for why NOT the §3 curve):
+//   - total 1220 = a modest 1.3× Gorge's 930 (a felt PRESTIGE step for the region cap, NOT a
+//     sponge; hard ceiling ~1.35× = 1260, never exceeded). The F50→F75 difficulty is carried by
+//     MECHANICS (the tightened per-phase bank + the higher min-legal floor), not HP — because
+//     player DPS is flat this deep, HP can't be the lever without sponging (which the giant rule
+//     forbids).
+//   - per-shell [340, 380, 500] (stone/cracked/core), still BACK-LOADED (rind<chitin<core) so the
+//     fight escalates INTO the cold core reveal.
+//   - windowBankFrac 0.20 (TIGHTER than Gorge's 0.22): a deep high-roll build sits at the top of
+//     the flat DPS band, so the region-cap giant needs the full ~5 windows/phase with NO slack —
+//     0.20 caps the core window at ~100 dmg (500/100 = 5 windows; rind 68, chitin 76 → 5 each).
+export const PALE = {
+  ...GORGE,
+  shellHp: [340, 380, 500] as readonly number[], // stone / cracked / core (F75 explicit anchor)
+  baseHpFloor: 75,
+  // phaseAt[k] = the cumulative-from-full complement of shellHp = [1 - 340/1220, 1 - 720/1220] =
+  // [0.7213, 0.4098] (kept in lockstep with shellHp; pale.test.ts asserts the two agree). phaseFloor
+  // is the anti-burst floor (queued overflow lands after the crack-off), ~0.08 under each threshold.
+  phaseAt: [0.7213, 0.4098] as readonly number[],
+  phaseFloor: [0.64, 0.33] as readonly number[],
+  windowBankFrac: 0.20,
+  // ---- per-phase PATTERN + PEEL-TASK params (the GD's F75 variant slots) ----
+  // For NOW these MIRROR Gorge (the encounter reuses the Gorge patterns — see the scaling gate's
+  // exposed-efficiency check, which surfaces this as the sponge failure mode until the variants
+  // land). The GD's F75 variants — tighter windows, denser telegraphs in disjoint lanes, a phase-3
+  // wrinkle — drop in HERE, in one obvious place, without touching the shared giant core. Named
+  // explicitly (overriding the spread) so a variant lands cleanly and the two giants' patterns
+  // diverge independently. The scaling gate then proves F75's exposed-efficiency drops below F50's.
+  //
+  // Peel task + earned windows (tighter windows = shorter seamLife / peelExpose, denser = more/wider seams):
+  peelExpose: 3.2,
+  seamBaseByShell: [2, 3, 4] as readonly number[],       // seams per exposure, per shell (solo base)
+  seamPerPlayer: 1,
+  seamCap: 6,
+  seamRingDist: 96,
+  seamArcByShell: [Math.PI * 0.55, Math.PI * 0.85, Math.PI * 1.0] as readonly number[], // front-arc width per shell (disjoint lanes)
+  seamExposeInterval: 1.4,
+  seamFirstAt: 2.0,
+  seamLifeByShell: [11.0, 9.5, 8.0] as readonly number[], // the exposure retract window, per shell (the "tighten" knob)
+  attackCd: [0, 3.0, 2.8, 2.4] as readonly number[],      // spatial-pattern cadence, per phase
+  // P1 RADIAL ring — KEEP Gorge's gap/count/speed (the 2nd ring is the difficulty, NOT a narrower
+  // gap); TIGHTEN the windup 0.9→0.7 (>0.6 floor) + recover 0.7→0.5 (>0.35 floor).
+  ringWindup: 0.7, ringRecover: 0.5, ringCount: 16, ringGap: 3, ringSpeed: 240, ringDebris: 2, ringDebrisDist: 150,
+  // P2 ZONING slag pools — KEEP zoneCount 3 (the DRIFT is the difficulty, not more pools) + zoneCap
+  // 10 (so it churns, never seals ≤ ⅓ arena); TIGHTEN windup 0.8→0.7 + recover 0.7→0.5.
+  zoneWindup: 0.7, zoneRecover: 0.5, zoneCount: 3, zoneRing: 150, zoneRadius: 30, zoneLife: 9.0, zoneCap: 10,
+  // P3 CONVERGENT spokes — the counter-rotation is the difficulty. The wider gaps and slower
+  // angular step preserve a continuous walk-only route while warmth-drain is at its ×0.5 worst.
+  spokeWindup: 0.7, spokeRecover: 0.4, spokeDuration: 3.0, spokeInterval: 0.2, spokeCount: 18, spokeGap: 12, spokeStep: 0.03, spokeSpeed: 250,
+  // The shared projectile glob (shape across all three patterns):
+  globRadius: 8, globDamage: 1, globLife: 2.8,
+  // ---- THE F75 MECHANICS STEP: one NEW READABLE AXIS per phase + the PALE cross-cutting SIGNATURE
+  // (GD doctrine — escalate by adding a second thing to READ, never by tightening the same pattern;
+  // the shared giant core switches each axis on because these fields are present, absent on Gorge).
+  // Each is chosen to lower exposed-efficiency (add read/motion load), the proof metric. ----
+  // P1 SEQUENCING — ring 1 releases into an immediately armed exact ring-2 footprint. The next
+  // gap shifts one slot around the rim and leaves enough time for the far edge of gap A to walk
+  // into gap B with margin; dash remains a rescue, never the required answer.
+  ring2DelaySec: 1.1,
+  ring2GapOffsetSlots: 1,
+  seamBanksMinPlayers: 2,
+  seamBankMinSeparationRad: Math.PI / 2,
+  // P2 POSITIONING-OVER-TIME — each pool CREEPS outward ~1 tile / 1.5s (0.67 tiles/s) AND new pools
+  // seed at the edge of the nearest-to-expiring one (churn), so the safe floor MIGRATES; zoneCap 10
+  // keeps total denial ≤ ⅓ arena (never seals the pocket — pale.test.ts asserts it).
+  zoneSpreadTilesPerSec: 0.67,
+  isZoneChurnEnabled: true,
+  // P3 DUAL-READ — a counter-rotating second wheel with the same readable rate and widened gap.
+  // The time-integrated navigation gate owns the physical proof over persistent projectiles,
+  // pools, debris, walls, player radius, and worst-case warmth slow.
+  spoke2Step: -0.03,
+  spokeLife: 2.0,
+  // THE PALE SIGNATURE — WARMTH-DRAIN (P3-ONLY, the prestige "the Pale turns on you" finale beat;
+  // gated to the core-reveal phase in resolveWarmthDrain). Stay within ~½ tile for > warmthDrainIdleSec
+  // → move ×warmthDrainSlow (the shipped CHILL_SLOW); clears the instant you move warmthDrainMoveClearTiles.
+  // Punishes camping — coherent with the three motion axes. A slow, NEVER damage, never stacks into a
+  // stun; telegraphed by a frost vignette ramping over the idle window. Per-player, deterministic.
+  warmthDrainIdleSec: 1.5,
+  warmthDrainMoveClearTiles: 1.0,
+  warmthDrainSlow: 0.5,     // = CHILL_SLOW (constants.ts) — a single ×0.5, capped there
+  // THE LAST LIGHT FALLS (OWNER LOCK signature ult — success counter, NOT warmth-drain):
+  // 1.8s ceiling/meteor tell → three sequential scar relights (≥0.65s each, one active) →
+  // 1.0s redirected fall → 4.0s core punish. Authoritative at TICK_HZ=20; tests allow ±1 tick.
+  lastLightTell: 1.8,
+  lastLightScarCommit: 0.65,
+  lastLightScarCount: 3,
+  lastLightFall: 1.0,
+  lastLightPunish: 4.0,
+  lastLightScarHp: 18,          // highlighted scar target HP (mechanic body)
+  lastLightCadence: 14.0,       // seconds between signature commits (spatial patterns fill the rest)
+} as const;
 
+export function paleHpForFloor(): number {
+  // F75 is a FRESH EXPLICIT anchor, deliberately NOT ridden up the §3 floor curve from Gorge's
+  // F50. The FLOOR_HP_MULT curve CLAMPS flat past F10, so floorHpMult(75)/floorHpMult(50) === 1.00
+  // — riding the curve would hand F75 the SAME 930 as F50 (no increase at all). refDpsForFloor
+  // also clamps flat this deep, so players are NOT out-DPSing F50 at F75. HP therefore cannot be
+  // the difficulty lever without pure sponge (the giant rule forbids it): the F50→F75 step lives
+  // in MECHANICS (the tightened bank + the higher min-legal), with HP a modest 1.3× prestige bump.
+  // So the giant's pool is the LITERAL per-shell F75 anchor, summed — floor-independent by design.
+  let hp = 0;
+  for (const shell of PALE.shellHp) hp += shell;
+  return hp;
+}
+
+// The fraction of the giant's pool held by shell `phase` (1..3) — drives the PER-PHASE window bank
+// (0.20 × this shell's HP chunk). Back-loaded: stone < cracked < core. Mirrors gorgeShellFracFor.
+export function paleShellFracFor(phase: number): number {
+  const total = PALE.shellHp.reduce((a, b) => a + b, 0);
+  return PALE.shellHp[Math.max(0, Math.min(PALE.shellHp.length - 1, phase - 1))] / total;
+}
+
+// One weak-point's HP at a floor (the peel-task pacing — a mechanic body, NEVER part of the giant's
+// own pool). Anchored at F75. Mirrors gorgeSeamHpForFloor.
+export function paleSeamHpForFloor(floor: number): number {
+  return Math.max(1, anchoredBossHp(PALE.seamHp, PALE.baseHpFloor, floor));
+}
+
+// N weak-points for a shell phase (1..3) at the snapshotted party size — the co-op TASK scale
+// (more players = more seams, never fatter HP). Capped for readability. Mirrors gorgeSeamCountFor.
+export function paleSeamCountFor(phase: number, players: number): number {
+  const base = PALE.seamBaseByShell[Math.max(0, Math.min(PALE.seamBaseByShell.length - 1, phase - 1))];
+  const p = Math.max(1, Math.min(4, players));
+  return Math.min(PALE.seamCap, base + (p - 1) * PALE.seamPerPlayer);
+}
 
 // ---- §5f the F10 MINIBOSS GAUNTLET (corrected gate §3, exact formula) ----
 // Three sequential CAPTAINS derived from calibrated Marrow HP — commander round10(.28×),
@@ -2110,6 +2291,9 @@ export const BOSS_DPS_CEILING: Readonly<Partial<Record<EnemyKind, number>>> = {
   // sweep tops out ~47.9 practical DPS, so 55 is a safe non-breaking guard). The multi-boss health
   // gate CALIBRATES the giant's real bands (its per-shell HP + peel task pace the true TTK).
   gorge: 55,
+  // PALE THRONE (F75 giant): PROVISIONAL backstop ceiling, same 55 as the deep roster / Gorge (the
+  // giant's real bands are calibrated by the multi-boss health gate). Re-measure on build.
+  pale: 55,
 };
 
 // ---- the balancer envelope's canonical unit ----

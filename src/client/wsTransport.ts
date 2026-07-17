@@ -10,7 +10,7 @@
 // native-WebSocket factory; the harness passes a `ws` (optionally latency-wrapped) one.
 
 import type { Transport, PollResult } from "./transport.js";
-import { createWorld, stepPlayerPhase, loadFloorIntoWorld } from "../sim/world.js";
+import { createWorld, stepPlayerPhase, loadFloorIntoWorld, resolveWarmthDrain } from "../sim/world.js";
 import type { WorldState } from "../sim/world.js";
 import type { WorldMode } from "../sim/pvp.js";
 import type { SimEvent } from "../sim/events.js";
@@ -741,6 +741,12 @@ export class WSTransport implements Transport {
     this.predState.props = snap.props.map(propFromWire);
     this.predState.obstacleRev++;
     this.predState.hazards = snap.hzds.map(hazardFromWire);
+    // The PALE THRONE warmth-drain SIGNATURE is an environmental slow the server applies to a
+    // still player — mirror its ACTIVE state from the snapshot enemies (predState carries no
+    // enemies) so the predicted walk feels the same ×0.5 the server will, exactly like the web
+    // slow above (no rubber-band when a chilled player starts to move). Null off a giant floor and
+    // in the giant's P1/P2 shells (the phase from EnemyWire.bph gates the P3-only signature).
+    this.predState.warmthDrain = resolveWarmthDrain(snap.enemies.map((e) => ({ kind: e.kind, phase: e.bph })));
 
     // Reliable event channel: events are id-tagged. Dedupe (skip ids already processed — a resent
     // event after a dropped snapshot arrives again) and advance the ack high-water mark. Keep

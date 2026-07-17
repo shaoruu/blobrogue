@@ -143,7 +143,57 @@ export const SELECTED_DEEP_TAKES = {
   resinDrip: ["amb/deep_resin_drip_r4_v1", "amb/deep_resin_drip_r4_v2", "amb/deep_resin_drip_r4_v3"],
 } as const;
 
+function pendingGiantSound(stem: string, priority: number = WAVE_PRIORITY.bossTell): WaveSoundSpec {
+  return {
+    stem,
+    variants: 1,
+    gain: 0.85,
+    bus: "voiceTell",
+    priority,
+    jitter: 0,
+    spatial: true,
+    isOffCameraUncapped: true,
+    cooldownMs: 120,
+    isPerEntityCooldown: true,
+  };
+}
+
 export const WAVE_SOUNDS = {
+  "gorge.entrance": pendingGiantSound("boss/gorge_entrance"),
+  "gorge.phase": pendingGiantSound("boss/gorge_phase"),
+  "gorge.death": pendingGiantSound("boss/gorge_death"),
+  "gorge.ringWarn": pendingGiantSound("boss/gorge_ring_warn"),
+  "gorge.ring2Warn": pendingGiantSound("boss/gorge_ring2_warn", WAVE_PRIORITY.bossLock),
+  "gorge.ringImpact": pendingGiantSound("boss/gorge_ring_impact"),
+  "gorge.zoneWarn": pendingGiantSound("boss/gorge_zone_warn"),
+  "gorge.zoneActive": pendingGiantSound("boss/gorge_zone_active"),
+  "gorge.spokeWarn": pendingGiantSound("boss/gorge_spoke_warn"),
+  "gorge.spokeActive": pendingGiantSound("boss/gorge_spoke_active"),
+  "gorge.exposed": pendingGiantSound("boss/gorge_exposed"),
+  "gorge.peel": pendingGiantSound("boss/gorge_peel"),
+  "gorge.coreReveal": pendingGiantSound("boss/gorge_core_reveal"),
+  "gorge.seamWarn": pendingGiantSound("boss/gorge_seam_warn"),
+  "gorge.seamBreak": pendingGiantSound("boss/gorge_seam_break"),
+
+  "pale.entrance": pendingGiantSound("boss/pale_entrance"),
+  "pale.phase": pendingGiantSound("boss/pale_phase"),
+  "pale.death": pendingGiantSound("boss/pale_death"),
+  "pale.ringWarn": pendingGiantSound("boss/pale_ring_warn"),
+  "pale.ring2Warn": pendingGiantSound("boss/pale_ring2_warn", WAVE_PRIORITY.bossLock),
+  "pale.ringImpact": pendingGiantSound("boss/pale_ring_impact"),
+  "pale.zoneWarn": pendingGiantSound("boss/pale_zone_warn"),
+  "pale.zoneActive": pendingGiantSound("boss/pale_zone_active"),
+  "pale.spokeWarn": pendingGiantSound("boss/pale_spoke_warn"),
+  "pale.spokeActive": pendingGiantSound("boss/pale_spoke_active"),
+  "pale.exposed": pendingGiantSound("boss/pale_exposed"),
+  "pale.peel": pendingGiantSound("boss/pale_peel"),
+  "pale.coreReveal": pendingGiantSound("boss/pale_core_reveal"),
+  "pale.seamWarn": pendingGiantSound("boss/pale_seam_warn"),
+  "pale.seamBreak": pendingGiantSound("boss/pale_seam_break"),
+  "pale.warmthWarn": pendingGiantSound("boss/pale_warmth_warn"),
+  "pale.warmthChill": pendingGiantSound("boss/pale_warmth_chill"),
+  "pale.warmthClear": pendingGiantSound("boss/pale_warmth_clear"),
+
   // ---- §2 MARROW — bone/shale + sub impact ------------------------------------------
   // Shipped: one listen take, one charge take (pinned to their _v1 stems until the full
   // variant sets land). No fallback for the growl rows: the old enemyAttack/dash
@@ -1718,14 +1768,15 @@ export const WAVE_TELLS: Readonly<Record<string, Readonly<Record<string, MoveTel
     slam: { windup: "warden.prisonWarn", lock: "warden.turretLock", impact: "warden.prisonClose", recover: "warden.exposed" },
     sweep: { windup: "warden.glyphWarn", active: "warden.turretFire", recover: "warden.exposed" },
   },
-  // GORGE (F50 giant) — PLACEHOLDER tells on the Warden's heavy-slammer bank until the audio
-  // director's giant stems land: the P1 shockwave RING (slam), the P2 slag ZONES (spew) and the
-  // P3 rotating SPOKES (sweep) each get a >=0.6s windup tell (the shell crack-off roar rides the
-  // bespoke boss-phase row).
   gorge: {
-    slam: { windup: "warden.prisonWarn", impact: "warden.prisonClose" },
-    spew: { windup: "warden.glyphWarn", active: "warden.turretFire" },
-    sweep: { windup: "warden.glyphWarn", active: "warden.turretFire" },
+    slam: { windup: "gorge.ringWarn", impact: "gorge.ringImpact" },
+    spew: { windup: "gorge.zoneWarn", active: "gorge.zoneActive" },
+    sweep: { windup: "gorge.spokeWarn", active: "gorge.spokeActive" },
+  },
+  pale: {
+    slam: { windup: "pale.ringWarn", impact: "pale.ringImpact" },
+    spew: { windup: "pale.zoneWarn", active: "pale.zoneActive" },
+    sweep: { windup: "pale.spokeWarn", active: "pale.spokeActive" },
   },
   skeleton: {
     lunge: { windup: "skeleton.commit" },
@@ -1798,12 +1849,14 @@ export const WAVE_BOSS_PHASE: Readonly<Record<string, WaveEventId>> = {
   boss: "king.phase",
   marrow: "marrow.phase", choir: "choir.phase", weaver: "weaver.phase", gilded: "warden.phase",
   marshal: "marshal.shatter", toll: "toll.phase",
+  gorge: "gorge.phase", pale: "pale.phase",
 };
 
 export const WAVE_BOSS_DEATH: Readonly<Record<string, WaveEventId>> = {
   boss: "king.death",
   marrow: "marrow.death", choir: "choir.death", weaver: "weaver.death", gilded: "warden.death",
   marshal: "marshal.death", toll: "toll.death",
+  gorge: "gorge.death", pale: "pale.death",
 };
 
 // Bespoke entrance per boss-grade body (played at floor load / captain spawn).
@@ -1811,6 +1864,7 @@ export const WAVE_BOSS_ENTRANCE: Readonly<Record<string, WaveEventId>> = {
   boss: "king.entrance",
   marrow: "marrow.entrance", choir: "choir.entrance", weaver: "weaver.entrance", gilded: "gilded.entrance",
   marshal: "marshal.entrance", toll: "toll.entrance",
+  gorge: "gorge.entrance", pale: "pale.entrance",
 };
 
 // Every event a boss OR regular archetype kind can raise — its preload group (§10:

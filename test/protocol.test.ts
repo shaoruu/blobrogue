@@ -48,6 +48,7 @@ function distinctivePlayer(): PlayerSim {
   const p = createPlayer("pX", 1234.5, -678.25);
   p.hp = 7; p.maxHp = 11;
   p.invuln = 0.375; p.dashInvuln = 0.125;
+  p.warmthIdleSec = 1.25; p.warmthPathPx = 31.5; p.isWarmthChilled = true;
   p.spawnGraceT = 17; p.spawnShieldT = 41;
   p.spawnProtectionStartedTick = 100;
   p.spawnHardGraceEndsAtTick = 115;
@@ -274,7 +275,7 @@ function serverRoundTripTests(): void {
 // who is actually there (the Sev-0 readout).
 function worldBindingWireTests(): void {
   section("v4: authoritative world id + roster are required, strict, and round-trip");
-  check("protocol version covers Wave B catalog 2 after Sever worldsplit (v37)", PROTOCOL_VERSION === 37, `v=${PROTOCOL_VERSION}`);
+  check("protocol version covers Pale Throne after Wave B catalog 2 / Sever worldsplit (v38)", PROTOCOL_VERSION === 38, `v=${PROTOCOL_VERSION}`);
   check("room code maps to its world id", worldIdForRoomCode(" abcd ") === "room:ABCD");
   check("room world ids pass the shared charset gate", isValidWorldId(worldIdForRoomCode("ZZZZ")) && isValidWorldId("arena-1"));
   check("junk world ids fail the shared charset gate", !isValidWorldId("room:../../etc") && !isValidWorldId(""));
@@ -559,6 +560,35 @@ function eventScopeTests(): void {
   }
 }
 
+function paleAuthorityWireTests(): void {
+  section("v38: Pale telegraph phase and warmth state reconcile authoritatively");
+  const w = createWorld(0xF75A, 75, { isShared: true, skipLocalPlayer: true });
+  const player = spawnPlayerInWorld(w, "pMe");
+  player.warmthIdleSec = 1.25;
+  player.warmthPathPx = 22.5;
+  player.isWarmthChilled = true;
+  const boss = devSpawnEnemy(w, "pale", player.x + 180, player.y);
+  boss.boss!.attackCount = 7;
+  boss.boss!.spinCount = 4;
+  boss.boss!.burstParity = 1;
+  boss.attack.phase = "active";
+  boss.attack.move = "sweep";
+  boss.attack.time = 0.65;
+  const decoded = jsonCodec.decodeServer(jsonCodec.encodeServer(
+    buildSnapshot(w, "pMe", 0, [], 0, false, { worldId: "w-pale" }),
+  ));
+  if (decoded.t !== "snap") throw new Error("expected Pale snapshot");
+  const pale = decoded.enemies.find((enemy) => enemy.id === boss.id);
+  check("Pale attack time/count/sequence/parity survive the strict wire",
+    pale !== undefined
+    && pale.atk.tm === 0.65
+    && pale.atk.ac === 7
+    && pale.atk.sc === 4
+    && pale.atk.bp === 1);
+  check("local warmth timer/path/chill survive the strict wire",
+    decoded.self?.wit === 1.25 && decoded.self.wpx === 22.5 && decoded.self.wch === true);
+}
+
 function main(): void {
   clientRoundTripTests();
   unknownFieldTests();
@@ -570,6 +600,7 @@ function main(): void {
   projectionTests();
   interestHysteresisTests();
   eventScopeTests();
+  paleAuthorityWireTests();
   process.stdout.write(`\n${passed} checks passed, ${failed} failed\n`);
   if (failed > 0) { process.stdout.write(`FAILURES:\n${failures.map((f) => "  - " + f).join("\n")}\n`); process.exit(1); }
   process.stdout.write("\nAll protocol contract assertions passed.\n");
