@@ -2395,6 +2395,42 @@ async function main(): Promise<void> {
     localStorage.removeItem(SEEN_KEY);
   }
 
+  section("Amber Camp Kennel: pet thumbnails + price digits + CTA geometry");
+  {
+    const profile = makeProfile({
+      amber: 40,
+      unlocks: ["camp_shell", "pet_doggie", "pet_cat"],
+      equippedPet: "doggie",
+      masteryLevel: 1,
+    });
+    const { menu, overlay, session } = makeMenu({ profile });
+    await session.login();
+    await menu.showCamp();
+    check("camp screen mounts", byClass(overlay, "camp-screen").length === 1);
+    check("kennel lists all four companions",
+      byClass(overlay, "camp-pet-card").length === 4);
+    const thumbs = byClass(overlay, "pet-card-thumb").filter((thumb) => thumb.tagName === "CANVAS");
+    check("every Kennel pet card has a shared-render thumbnail canvas",
+      thumbs.length === 4
+      && thumbs.every((thumb) => thumb.width === 56 && thumb.height === 56));
+    check("owned following doggie shows following chip",
+      byClass(overlay, "camp-pet-card").some((card) => textOf(card).includes("Doggie")
+        && textOf(card).includes("following")));
+    check("rescued cat offers bring along",
+      byClass(overlay, "camp-pet-card").some((card) => textOf(card).includes("Cat")
+        && textOf(card).toLowerCase().includes("bring along")));
+    check("leave-companion CTA has breathing room copy",
+      collect(overlay, (node) => node.tagName === "BUTTON"
+        && textOf(node).toLowerCase().includes("leave your companion at camp")).length === 1);
+    const prices = byClass(overlay, "camp-price");
+    check("camp upgrade prices use camp-price VT323 markup",
+      prices.length >= 1
+      && prices.every((p) => /\u25c6\s*\d+/.test(textOf(p)))
+      && byClass(overlay, "camp-node").some((btn) => (btn.className ?? "").includes("buyable")
+        && byClass(btn, "camp-price").length === 1));
+    await menu.showTitle();
+  }
+
   process.stdout.write(`\n${passed} checks passed, ${failed} failed\n`);
   if (failed > 0) { process.stdout.write(`FAILURES:\n${failures.map((f) => "  - " + f).join("\n")}\n`); process.exit(1); }
   process.stdout.write("\nAll menu one-path + redesign assertions passed.\n");

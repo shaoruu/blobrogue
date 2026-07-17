@@ -2423,13 +2423,29 @@ export class Menu {
 
   // A companion pet card in the Kennel: rescued+following / rescued (click to bring along) /
   // still-lost teaser pointing to its rescue floor. Reuses the camp-card grid styling so the
-  // Kennel reads identically to the Camp Upgrades sinks — no bespoke chrome.
+  // Kennel reads identically to the Camp Upgrades sinks — no bespoke chrome. Pet thumbnails
+  // share createPetThumbnail / drawPetFrame with the loadout pet picker (sprites via
+  // petSpriteFor → public/sprites/pets/*). If a future pet has no sprite yet, the shared
+  // renderer shows the purple settle disc until art lands — do NOT procedural-draw pets here.
   private campPetCard(node: CampNodeDef, owned: readonly string[], equippedPet: string | null, note: HTMLElement, rebuild: () => HTMLElement): HTMLElement {
     const isOwned = isNodeOwned(node.id, owned);
     const isEquipped = isOwned && node.pet !== undefined && equippedPet === node.pet;
-    const card = el("div", `camp-card ${isEquipped ? "owned" : isOwned ? "buyable" : "locked"}`);
-    card.appendChild(el("span", "camp-card-name", node.name));
-    card.appendChild(el("span", "camp-card-desc", node.desc));
+    const card = el("div", `camp-card camp-pet-card ${isEquipped ? "owned" : isOwned ? "buyable" : "locked"}`);
+    const head = el("div", "camp-pet-head");
+    // TODO(art): wire any new companion sprite through petSpriteFor + /public/sprites/pets —
+    // Kennel + loadout pick surfaces both consume createPetThumbnail; no PIL/procedural pets.
+    if (node.pet !== undefined) {
+      head.appendChild(createPetThumbnail(node.pet, 56));
+    } else {
+      const missing = el("span", "pet-card-thumb pet-card-none", "\u2014");
+      missing.setAttribute("aria-hidden", "true");
+      head.appendChild(missing);
+    }
+    const meta = el("div", "camp-pet-meta");
+    meta.appendChild(el("span", "camp-card-name", node.name));
+    meta.appendChild(el("span", "camp-card-desc", node.desc));
+    head.appendChild(meta);
+    card.appendChild(head);
     if (!isOwned) {
       card.appendChild(el("span", "camp-card-chip",
         node.rescueFloor !== undefined ? `reach floor ${node.rescueFloor}` : "rescue to unlock"));
@@ -2457,9 +2473,11 @@ export class Menu {
     if (isOwned) {
       card.appendChild(el("span", "camp-card-chip", "\u2713 owned"));
     } else {
-      const buy = el("button", afford && !locked ? "camp-node buyable" : "camp-node locked", `\u25c6 ${node.cost}`);
+      const buy = el("button", afford && !locked ? "camp-node buyable" : "camp-node locked");
       buy.type = "button";
       buy.disabled = locked;
+      // camp-price forces VT323 numerals (see index.html) so ♦25 stays clean on yellow CTAs.
+      buy.appendChild(el("span", "camp-price", `\u25c6 ${node.cost}`));
       buy.onclick = () => {
         if (!afford) { note.textContent = `Not enough Amber \u2014 need \u25c6 ${node.cost}.`; return; }
         void this.campBuy(node.id, note, rebuild);
