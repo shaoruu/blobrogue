@@ -1313,6 +1313,56 @@ export const WAVE_SOUNDS = {
     stem: "pet/slime_plop", variants: 1, gain: 0.26, bus: "pet", priority: WAVE_PRIORITY.pet,
     jitter: 0.05, spatial: true, cooldownMs: 8000,
   },
+  // Pack #2 Wren-LOCKED companions — Vale-locked stems on the pet bus (move/settle/happy).
+  // variants:1 (no _vN suffix): files ship as pet/<stem>.ogg|.mp3 in public/audio/pet/.
+  "wick.move": {
+    stem: "pet/wick_flicker", variants: 1, gain: 0.28, bus: "pet", priority: WAVE_PRIORITY.pet,
+    jitter: 0.05, spatial: true, cooldownMs: 6500,
+  },
+  "wick.settle": {
+    stem: "pet/wick_drift", variants: 1, gain: 0.26, bus: "pet", priority: WAVE_PRIORITY.pet,
+    jitter: 0.05, spatial: true, cooldownMs: 8000,
+  },
+  "wick.happy": {
+    stem: "pet/wick_spark", variants: 1, gain: 0.32, bus: "pet", priority: WAVE_PRIORITY.pet,
+    jitter: 0.05, spatial: true, cooldownMs: 1500,
+  },
+  "pebble.move": {
+    stem: "pet/pebble_hop", variants: 1, gain: 0.28, bus: "pet", priority: WAVE_PRIORITY.pet,
+    jitter: 0.05, spatial: true, cooldownMs: 6500,
+  },
+  "pebble.settle": {
+    stem: "pet/pebble_puff", variants: 1, gain: 0.26, bus: "pet", priority: WAVE_PRIORITY.pet,
+    jitter: 0.05, spatial: true, cooldownMs: 8000,
+  },
+  "pebble.happy": {
+    stem: "pet/pebble_blink", variants: 1, gain: 0.3, bus: "pet", priority: WAVE_PRIORITY.pet,
+    jitter: 0.05, spatial: true, cooldownMs: 1500,
+  },
+  "clatter.move": {
+    stem: "pet/clatter_scuttle", variants: 1, gain: 0.28, bus: "pet", priority: WAVE_PRIORITY.pet,
+    jitter: 0.05, spatial: true, cooldownMs: 6500,
+  },
+  "clatter.settle": {
+    stem: "pet/clatter_settle", variants: 1, gain: 0.26, bus: "pet", priority: WAVE_PRIORITY.pet,
+    jitter: 0.05, spatial: true, cooldownMs: 8000,
+  },
+  "clatter.happy": {
+    stem: "pet/clatter_click", variants: 1, gain: 0.3, bus: "pet", priority: WAVE_PRIORITY.pet,
+    jitter: 0.05, spatial: true, cooldownMs: 1500,
+  },
+  "nullfin.move": {
+    stem: "pet/nullfin_glide", variants: 1, gain: 0.28, bus: "pet", priority: WAVE_PRIORITY.pet,
+    jitter: 0.05, spatial: true, cooldownMs: 6500,
+  },
+  "nullfin.settle": {
+    stem: "pet/nullfin_bubble", variants: 1, gain: 0.26, bus: "pet", priority: WAVE_PRIORITY.pet,
+    jitter: 0.05, spatial: true, cooldownMs: 8000,
+  },
+  "nullfin.happy": {
+    stem: "pet/nullfin_puff", variants: 1, gain: 0.3, bus: "pet", priority: WAVE_PRIORITY.pet,
+    jitter: 0.05, spatial: true, cooldownMs: 1500,
+  },
   // Amber Camp UI cues (menu-triggered, non-positional, ui bus). Warm amber materials, not
   // combat sounds. A camp purchase/denied/panel-open gets a voice so the meta loop reads.
   "camp.purchase": {

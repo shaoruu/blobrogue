@@ -20,6 +20,10 @@ import {
   CAT_NODE_ID, CAT_PET_ID, CAT_RESCUE_FLOOR,
   DRAGON_NODE_ID, DRAGON_PET_ID, DRAGON_RESCUE_FLOOR,
   SLIME_NODE_ID, SLIME_PET_ID, SLIME_RESCUE_FLOOR,
+  WICK_NODE_ID, WICK_PET_ID, WICK_RESCUE_FLOOR,
+  PEBBLE_NODE_ID, PEBBLE_PET_ID, PEBBLE_RESCUE_FLOOR,
+  CLATTER_NODE_ID, CLATTER_PET_ID, CLATTER_RESCUE_FLOOR,
+  NULLFIN_NODE_ID, NULLFIN_PET_ID, NULLFIN_RESCUE_FLOOR,
 } from "../src/sim/camp_nodes.js";
 import { petSpriteFor } from "../src/game/pets.js";
 import { createWorld, spawnPlayerInWorld, stepWorld } from "../src/sim/world.js";
@@ -177,27 +181,80 @@ function multiPetTests(): void {
     rescueNodesForRun(CAT_RESCUE_FLOOR).includes(CAT_NODE_ID)
     && rescueNodesForRun(CAT_RESCUE_FLOOR).includes(DOGGIE_NODE_ID)
     && !rescueNodesForRun(CAT_RESCUE_FLOOR).includes(DRAGON_NODE_ID));
-  check("reaching the dragon's floor earns doggie+cat+dragon, not yet the slime",
-    rescueNodesForRun(DRAGON_RESCUE_FLOOR).sort().join(",")
-      === [DOGGIE_NODE_ID, CAT_NODE_ID, DRAGON_NODE_ID].sort().join(",")
+  check("reaching the dragon's floor earns doggie+cat+dragon (and any shallower pack pet), not yet the slime",
+    rescueNodesForRun(DRAGON_RESCUE_FLOOR).includes(DOGGIE_NODE_ID)
+    && rescueNodesForRun(DRAGON_RESCUE_FLOOR).includes(CAT_NODE_ID)
+    && rescueNodesForRun(DRAGON_RESCUE_FLOOR).includes(DRAGON_NODE_ID)
     && !rescueNodesForRun(DRAGON_RESCUE_FLOOR).includes(SLIME_NODE_ID));
-  check("reaching the slime's floor (the deepest) earns all four companions",
-    rescueNodesForRun(SLIME_RESCUE_FLOOR).sort().join(",")
-      === [DOGGIE_NODE_ID, CAT_NODE_ID, DRAGON_NODE_ID, SLIME_NODE_ID].sort().join(","));
   check("a run below the shallowest rescue floor earns nothing",
     rescueNodesForRun(DOGGIE_RESCUE_FLOOR - 1).length === 0);
   check("isDoggieRescuedByRun still agrees with the generalized grant for the pup",
     isDoggieRescuedByRun(DOGGIE_RESCUE_FLOOR) && rescueNodesForRun(DOGGIE_RESCUE_FLOOR).includes(DOGGIE_NODE_ID));
+
+  // The robust, addition-proof contract for EVERY rescue node (original pack + pack #2 + any
+  // future companion): a pet is granted at exactly its rescueFloor, never one floor before, and
+  // the grant is monotone in depth (a deeper run is a superset of a shallower one).
+  section("every rescue node appears at exactly its floor, never before, monotone in depth");
+  const rescueNodes = CAMP_NODES.filter((n) => n.rescue && n.rescueFloor !== undefined);
+  check("appears AT its rescue floor",
+    rescueNodes.every((n) => rescueNodesForRun(n.rescueFloor!).includes(n.id)),
+    rescueNodes.filter((n) => !rescueNodesForRun(n.rescueFloor!).includes(n.id)).map((n) => n.id).join(","));
+  check("does NOT appear one floor before its rescue floor",
+    rescueNodes.every((n) => !rescueNodesForRun(n.rescueFloor! - 1).includes(n.id)),
+    rescueNodes.filter((n) => rescueNodesForRun(n.rescueFloor! - 1).includes(n.id)).map((n) => n.id).join(","));
+  let monotone = true;
+  for (let f = 0; f <= NULLFIN_RESCUE_FLOOR + 2; f++) {
+    const shallow = new Set(rescueNodesForRun(f));
+    for (const id of shallow) if (!rescueNodesForRun(f + 1).includes(id)) monotone = false;
+  }
+  check("a deeper run is a superset of the shallower run (monotone grant)", monotone);
+  check("the deepest pack-#2 floor earns ALL eight companions together",
+    rescueNodesForRun(NULLFIN_RESCUE_FLOOR).sort().join(",")
+      === [DOGGIE_NODE_ID, CAT_NODE_ID, DRAGON_NODE_ID, SLIME_NODE_ID,
+        WICK_NODE_ID, PEBBLE_NODE_ID, CLATTER_NODE_ID, NULLFIN_NODE_ID].sort().join(","));
 
   section("petSpriteFor maps every known pet to its render sprite, unknown ids to null");
   check("doggie -> doggie", petSpriteFor(DOGGIE_PET_ID) === "doggie");
   check("cat -> cat", petSpriteFor(CAT_PET_ID) === "cat");
   check("dragon -> dragon", petSpriteFor(DRAGON_PET_ID) === "dragon");
   check("slime -> slime_pet (distinct from the slime ENEMY sprite)", petSpriteFor(SLIME_PET_ID) === "slime_pet");
+  check("wick -> wick", petSpriteFor(WICK_PET_ID) === "wick");
+  check("pebble -> pebble", petSpriteFor(PEBBLE_PET_ID) === "pebble");
+  check("clatter -> clatter", petSpriteFor(CLATTER_PET_ID) === "clatter");
+  check("nullfin -> nullfin", petSpriteFor(NULLFIN_PET_ID) === "nullfin");
   check("an unknown pet id renders nothing (graceful null, never a crash)",
     petSpriteFor("griffin") === null && petSpriteFor("") === null);
   check("every companion node's pet id has a render sprite (no dangling pet)",
     CAMP_NODES.filter((n) => n.category === "companion").every((n) => n.pet !== undefined && petSpriteFor(n.pet) !== null));
+}
+
+// Pack #2 — the four NEW rescued companions (Wren-locked: wick/pebble/clatter/nullfin). Same
+// hard contract as the original pack: companion + rescue (never buyable), grants its pet once
+// its node is owned, interleaved rescue floors, and Amber can never buy any of them.
+function packTwoTests(): void {
+  section("pack #2: wick/pebble/clatter/nullfin are RESCUED companions (never bought)");
+  const pack = [
+    { node: WICK_NODE_ID, pet: WICK_PET_ID, floor: WICK_RESCUE_FLOOR },
+    { node: PEBBLE_NODE_ID, pet: PEBBLE_PET_ID, floor: PEBBLE_RESCUE_FLOOR },
+    { node: CLATTER_NODE_ID, pet: CLATTER_PET_ID, floor: CLATTER_RESCUE_FLOOR },
+    { node: NULLFIN_NODE_ID, pet: NULLFIN_PET_ID, floor: NULLFIN_RESCUE_FLOOR },
+  ];
+  for (const p of pack) {
+    const def = campNodeById(p.node);
+    check(`${p.node} is a companion RESCUE (cost 0, rescue flag, grants ${p.pet})`,
+      def?.category === "companion" && def?.rescue === true && def?.cost === 0
+      && def?.pet === p.pet && def?.rescueFloor === p.floor);
+    const buy = canBuyNode(p.node, 9999, [CAMP_SHELL_ID]);
+    check(`Amber can NEVER buy ${p.node} (refused as a rescue)`, !buy.ok && buy.reason === "rescue");
+    check(`${p.pet} is owned only once ${p.node} is rescued`,
+      !isPetOwned(p.pet, [CAMP_SHELL_ID]) && isPetOwned(p.pet, [CAMP_SHELL_ID, p.node]));
+  }
+  check("the four ids are the Wren-locked lowercase tokens",
+    WICK_PET_ID === "wick" && PEBBLE_PET_ID === "pebble"
+    && CLATTER_PET_ID === "clatter" && NULLFIN_PET_ID === "nullfin");
+  check("the rescue floors are 5 / 9 / 14 / 20 (spread past the original 3/7/12/18)",
+    WICK_RESCUE_FLOOR === 5 && PEBBLE_RESCUE_FLOOR === 9
+    && CLATTER_RESCUE_FLOOR === 14 && NULLFIN_RESCUE_FLOOR === 20);
 }
 
 // The pet is a CLIENT-SIDE cosmetic companion — it rides the identity/wire like hat/face and
@@ -252,6 +309,7 @@ function main(): void {
   amberEarnTests();
   campSpendTests();
   multiPetTests();
+  packTwoTests();
   petOutOfSimTests();
   process.stdout.write(`\n${passed} checks passed, ${failed} failed\n`);
   if (failed > 0) { process.stdout.write(`FAILURES:\n${failures.map((f) => "  - " + f).join("\n")}\n`); process.exit(1); }

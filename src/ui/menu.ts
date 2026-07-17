@@ -1139,9 +1139,16 @@ export class Menu {
         cards.push(card);
         grid.appendChild(card);
       }
-      const reserved = el("div", "pet-option reserved");
-      reserved.setAttribute("aria-hidden", "true");
-      grid.appendChild(reserved);
+      // Pad the final row with inert placeholder cells so the grid always reads as a complete
+      // rectangle (no ragged last row) whatever the companion count — zero cells when the
+      // options already fill the desktop 3-col rows evenly (e.g. No Pet + 8 companions = 9).
+      const petGridCols = 3;
+      const petGridPad = (petGridCols - (cards.length % petGridCols)) % petGridCols;
+      for (let i = 0; i < petGridPad; i++) {
+        const reserved = el("div", "pet-option reserved");
+        reserved.setAttribute("aria-hidden", "true");
+        grid.appendChild(reserved);
+      }
       layout.append(previewBox, grid);
       view.body.appendChild(layout);
 

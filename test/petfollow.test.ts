@@ -14,7 +14,8 @@ import {
   createPetFollow, stepPetFollow,
   PET_REST_OFFSET, PET_STOP_DIST, PET_WARP_DIST, PET_COLLIDE_RADIUS, PET_MOVE_EPS,
 } from "../src/game/petFollow.js";
-import { frameCount } from "../src/game/anim.js";
+import { frameCount, oneShotFrameIndex } from "../src/game/anim.js";
+import { resolvePetClip } from "../src/game/petRenderer.js";
 import { TILE } from "../src/sim/types.js";
 
 let pass = 0, fail = 0;
@@ -215,6 +216,40 @@ function makeIsWallAt(grid: number[][]): (x: number, y: number) => boolean {
   check("non-64 tall strip infers from height (192x48 -> 4)", frameCount(192, 48) === 4);
   check("absent height (not decoded) falls back to a 64px frame, never divide-by-zero", frameCount(256, 0) === 4);
   check("frame count is always at least 1 (a 0-width sheet never yields 0)", frameCount(0, 64) === 1);
+}
+
+// ---- 5) ATTACK EMOTE clip resolution: a one-shot beat that degrades gracefully ----
+{
+  // The requested clip wins when its sheet is loaded.
+  const allLoaded = () => true;
+  check("a loaded attack sheet plays the attack clip", resolvePetClip("attack", false, allLoaded) === "attack");
+  check("a loaded walk sheet plays walk while moving", resolvePetClip("walk", true, allLoaded) === "walk");
+  check("a loaded idle sheet plays idle while settled", resolvePetClip("idle", false, allLoaded) === "idle");
+
+  // A MISSING attack sheet degrades to the motion clip (walk trotting, idle settled) — never a
+  // blank, never a crash. This is the drop-in-file-by-file contract: the emote lights up the
+  // moment the attack PNG lands, and before then the pet just keeps trotting/breathing.
+  const noAttack = (clip: "idle" | "walk" | "attack") => clip !== "attack";
+  check("a missing attack sheet falls back to WALK while trotting", resolvePetClip("attack", true, noAttack) === "walk");
+  check("a missing attack sheet falls back to IDLE while settled", resolvePetClip("attack", false, noAttack) === "idle");
+
+  // With NOTHING loaded, every request still resolves to a real clip name (the draw path then
+  // falls to the static base + procedural juice — the frame picker never sees an invalid clip).
+  const noneLoaded = () => false;
+  check("nothing loaded: attack -> motion clip (draw path handles the static base)",
+    resolvePetClip("attack", true, noneLoaded) === "walk" && resolvePetClip("attack", false, noneLoaded) === "idle");
+  check("nothing loaded: walk/idle stay themselves (static base fallback)",
+    resolvePetClip("walk", true, noneLoaded) === "walk" && resolvePetClip("idle", false, noneLoaded) === "idle");
+}
+
+// ---- 6) ONE-SHOT frame mapping: the attack beat plays through once and HOLDS the last frame ----
+{
+  check("start of the beat is frame 0", oneShotFrameIndex(6, 0) === 0);
+  check("mid-beat lands mid-strip", oneShotFrameIndex(6, 0.5) === 3);
+  check("end of the beat holds the LAST frame (never wraps to 0)", oneShotFrameIndex(6, 1) === 5);
+  check("progress clamps past 1 (no out-of-range index)", oneShotFrameIndex(6, 2) === 5);
+  check("progress clamps below 0", oneShotFrameIndex(6, -1) === 0);
+  check("a single-frame strip is always frame 0", oneShotFrameIndex(1, 0.7) === 0);
 }
 
 console.log(`\n${pass} checks passed, ${fail} failed`);

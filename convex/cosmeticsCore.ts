@@ -106,6 +106,16 @@ export const COSMETICS: readonly CosmeticDef[] = [
   { id: "hat_headphones", slot: "hat", name: "Headphones", unlock: "earned", need: { totalKills: 100 }, hint: "100 all-time kills", assetKey: "hat_headphones" },
   { id: "hat_helmet", slot: "hat", name: "Helmet", unlock: "earned", need: { totalKills: 250 }, hint: "250 all-time kills", assetKey: "hat_helmet" },
   { id: "hat_horns", slot: "hat", name: "Horns", unlock: "earned", need: { totalKills: 1000 }, hint: "1000 all-time kills", assetKey: "hat_horns" },
+  // hats, pack #2 — Wren-locked names/ids, a mix of starters + earned (assetKey matches the file
+  // stem; the sprite is the only art, so a still-streaming file renders nothing, never a placeholder).
+  { id: "hat_cork", slot: "hat", name: "Corked Cap", unlock: "starter", assetKey: "hat_cork" },
+  { id: "hat_lamp_brim", slot: "hat", name: "Lamplighter's Brim", unlock: "earned", need: { deepestFloor: 6 }, hint: "reach floor 6", assetKey: "hat_lamp_brim" },
+  { id: "hat_root", slot: "hat", name: "Root Circlet", unlock: "earned", need: { deepestFloor: 9 }, hint: "reach floor 9", assetKey: "hat_root" },
+  { id: "hat_ember_visor", slot: "hat", name: "Ember Visor", unlock: "earned", need: { deepestFloor: 11 }, hint: "reach floor 11", assetKey: "hat_ember_visor" },
+  { id: "hat_bone_band", slot: "hat", name: "Bone Band", unlock: "earned", need: { deepestFloor: 14 }, hint: "reach floor 14", assetKey: "hat_bone_band" },
+  { id: "hat_brass", slot: "hat", name: "Brass Archivist Cap", unlock: "earned", need: { deepestFloor: 16 }, hint: "reach floor 16", assetKey: "hat_brass" },
+  { id: "hat_pale_hood", slot: "hat", name: "Pale Hood", unlock: "earned", need: { deepestFloor: 18 }, hint: "reach floor 18", assetKey: "hat_pale_hood" },
+  { id: "hat_null_crown", slot: "hat", name: "Null Crown", unlock: "earned", need: { deepestFloor: 28 }, hint: "reach floor 28", assetKey: "hat_null_crown" },
   // face
   { id: "face_round", slot: "face", name: "Round Specs", unlock: "starter", assetKey: "round_glasses" },
   { id: "face_shades", slot: "face", name: "Shades", unlock: "starter", assetKey: "face_shades" },
@@ -113,6 +123,13 @@ export const COSMETICS: readonly CosmeticDef[] = [
   { id: "face_star_shades", slot: "face", name: "Star Shades", unlock: "earned", need: { totalKills: 750 }, hint: "750 all-time kills", assetKey: "face_star_shades" },
   { id: "face_3d_glasses", slot: "face", name: "3D Glasses", unlock: "earned", need: { deepestFloor: 25 }, hint: "reach floor 25", assetKey: "face_3d_glasses" },
   { id: "face_monocle", slot: "face", name: "Monocle", unlock: "earned", need: { totalKills: 500 }, hint: "500 all-time kills", assetKey: "face_monocle" },
+  // faces, pack #2 — Wren-locked names/ids, starters + earned (assetKey matches the file stem).
+  { id: "face_amber_specs", slot: "face", name: "Amber Specs", unlock: "starter", assetKey: "face_amber_specs" },
+  { id: "face_coal_smudge", slot: "face", name: "Coal Smudge", unlock: "starter", assetKey: "face_coal_smudge" },
+  { id: "face_shale_goggles", slot: "face", name: "Shale Goggles", unlock: "earned", need: { deepestFloor: 13 }, hint: "reach floor 13", assetKey: "face_shale_goggles" },
+  { id: "face_pale_bandage", slot: "face", name: "Pale Bandage", unlock: "earned", need: { deepestFloor: 17 }, hint: "reach floor 17", assetKey: "face_pale_bandage" },
+  { id: "face_resin_monocle", slot: "face", name: "Resin Monocle", unlock: "earned", need: { totalKills: 200 }, hint: "200 all-time kills", assetKey: "face_resin_monocle" },
+  { id: "face_choir_veil", slot: "face", name: "Choir Veil", unlock: "earned", need: { deepestFloor: 24 }, hint: "reach floor 24", assetKey: "face_choir_veil" },
   // titles — text honors, earned only (the empty slot is the default)
   { id: "title_depth_diver", slot: "title", name: "Depth Diver", unlock: "earned", need: { deepestFloor: 10 }, hint: "reach floor 10" },
   { id: "title_blob_slayer", slot: "title", name: "Blob Slayer", unlock: "earned", need: { totalKills: 500 }, hint: "500 all-time kills" },

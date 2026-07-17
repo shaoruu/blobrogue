@@ -153,7 +153,8 @@ export function createPetThumbnail(petId: string, size = 60): HTMLCanvasElement 
     ctx.clearRect(0, 0, size, size);
     drawPetFrame(ctx, sprites(), {
       petId,
-      clip: "idle",
+      isMoving: false,
+      emoteProgress: null,
       cx: size / 2,
       cy: size / 2,
       size: Math.round(size * 0.88),
@@ -319,7 +320,8 @@ export function createLoadoutPreview(
       const trotOffset = isTrotting ? Math.sin(clock * 5) * 10 : 0;
       drawPetFrame(ctx, sprites(), {
         petId,
-        clip: isTrotting ? "walk" : "idle",
+        isMoving: isTrotting,
+        emoteProgress: null,
         cx: width * 0.76 + trotOffset,
         cy: height * 0.64,
         size: Math.min(58, width * 0.27),

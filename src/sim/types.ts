@@ -980,5 +980,7 @@ export type SpriteName =
   // Client-side cosmetic companion pets (META spec §3). A pure render key mapping to a
   // swappable placeholder asset; the sim never references it (pets are OUT of the sim). The
   // slime companion's key is "slime_pet" so it never collides with the "slime" ENEMY sprite.
+  // Pack #2 (wick/pebble/clatter/nullfin) are the same purely-cosmetic render keys.
   | "doggie" | "cat" | "dragon" | "slime_pet"
+  | "wick" | "pebble" | "clatter" | "nullfin"
   | "heart" | "coin" | "gun" | "spit";

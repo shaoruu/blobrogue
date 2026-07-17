@@ -153,6 +153,17 @@ export const COSMETIC_ASSET_SOURCES: Record<string, CosmeticAssetDef> = {
   hat_headphones: { socket: "head", sizePx: 68, offsetY: 11, src: orientedSources("hat_headphones") },
   hat_helmet: { socket: "head", sizePx: 48, src: orientedSources("hat_helmet") },
   hat_horns: { socket: "head", sizePx: 48, offsetY: -6, src: orientedSources("hat_horns") },
+  // hats, pack #2 (Wren-locked; assetKey == file stem == catalog id). Sizes/offsets are start
+  // points the AD can tune per line; a tall/perched piece rides higher (-y), a low band sits
+  // lower (+y).
+  hat_cork: { socket: "head", sizePx: 46, offsetY: -3, src: orientedSources("hat_cork") },
+  hat_lamp_brim: { socket: "head", sizePx: 50, offsetY: -3, src: orientedSources("hat_lamp_brim") },
+  hat_root: { socket: "head", sizePx: 48, offsetY: 2, src: orientedSources("hat_root") },
+  hat_ember_visor: { socket: "head", sizePx: 46, offsetY: 1, src: orientedSources("hat_ember_visor") },
+  hat_bone_band: { socket: "head", sizePx: 46, offsetY: 3, src: orientedSources("hat_bone_band") },
+  hat_brass: { socket: "head", sizePx: 48, offsetY: -2, src: orientedSources("hat_brass") },
+  hat_pale_hood: { socket: "head", sizePx: 50, offsetY: -2, src: orientedSources("hat_pale_hood") },
+  hat_null_crown: { socket: "head", sizePx: 48, offsetY: 2, src: orientedSources("hat_null_crown") },
   // faces
   round_glasses: { socket: "face", sizePx: 40, offsetX: -3, offsetY: -4, src: orientedSources("round_glasses") },
   face_shades: { socket: "face", sizePx: 40, offsetX: -3, offsetY: -3, src: orientedSources("face_shades") },
@@ -160,6 +171,13 @@ export const COSMETIC_ASSET_SOURCES: Record<string, CosmeticAssetDef> = {
   face_star_shades: { socket: "face", sizePx: 40, offsetX: -3, offsetY: -4, src: orientedSources("face_star_shades") },
   face_3d_glasses: { socket: "face", sizePx: 40, offsetX: -3, offsetY: -4, src: orientedSources("face_3d_glasses") },
   face_monocle: { socket: "face", sizePx: 24, offsetX: -14, offsetY: -4, src: orientedSources("face_monocle") },
+  // faces, pack #2 (Wren-locked; assetKey == file stem == catalog id).
+  face_amber_specs: { socket: "face", sizePx: 40, offsetX: -3, offsetY: -4, src: orientedSources("face_amber_specs") },
+  face_coal_smudge: { socket: "face", sizePx: 40, offsetX: -3, offsetY: -2, src: orientedSources("face_coal_smudge") },
+  face_shale_goggles: { socket: "face", sizePx: 40, offsetX: -3, offsetY: -5, src: orientedSources("face_shale_goggles") },
+  face_pale_bandage: { socket: "face", sizePx: 36, offsetX: -3, offsetY: -2, src: orientedSources("face_pale_bandage") },
+  face_resin_monocle: { socket: "face", sizePx: 24, offsetX: -14, offsetY: -4, src: orientedSources("face_resin_monocle") },
+  face_choir_veil: { socket: "face", sizePx: 42, offsetX: -3, offsetY: -3, src: orientedSources("face_choir_veil") },
 };
 
 // The layered-hero base (the canonical hero body WITHOUT the baked-in cowboy hat) and its

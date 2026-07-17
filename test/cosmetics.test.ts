@@ -98,6 +98,36 @@ function ownershipTests(): void {
   check("sanitizeEquip refuses a mis-slotted pick", sanitizeEquip(wrongSlot, lockedItem.id, [lockedItem.id]) === undefined);
 }
 
+// Pack #2 cosmetics — 8 new hats + 6 new faces (Wren-locked ids). The catalog/socket gates
+// already sweep every entry generically; this locks the SPECIFIC new ids, their unlock tiers,
+// and that sanitizeEquip treats the earned ones exactly like the rest (owned only once granted).
+function packTwoCosmeticsTests(): void {
+  section("pack #2 cosmetics: 8 hats + 6 faces, wired ids, honest tiers, sanitizeEquip");
+  const newHats = ["hat_cork", "hat_lamp_brim", "hat_root", "hat_ember_visor", "hat_bone_band", "hat_brass", "hat_pale_hood", "hat_null_crown"];
+  const newFaces = ["face_amber_specs", "face_coal_smudge", "face_shale_goggles", "face_pale_bandage", "face_resin_monocle", "face_choir_veil"];
+  check("all 8 new hats exist in the hat slot", newHats.every((id) => cosmeticById(id)?.slot === "hat"), newHats.filter((id) => cosmeticById(id)?.slot !== "hat").join(","));
+  check("all 6 new faces exist in the face slot", newFaces.every((id) => cosmeticById(id)?.slot === "face"), newFaces.filter((id) => cosmeticById(id)?.slot !== "face").join(","));
+  check("every new id passes the wire/claim format gate", [...newHats, ...newFaces].every(isCosmeticIdFormat));
+  check("every new overlay has real art (assetKey == file stem, sockets wired)",
+    [...newHats, ...newFaces].every((id) => hasCosmeticArt(id) && cosmeticById(id)?.assetKey === id));
+  check("the pack mixes starters and earned in BOTH slots",
+    newHats.some((id) => cosmeticById(id)?.unlock === "starter") && newHats.some((id) => cosmeticById(id)?.unlock === "earned")
+    && newFaces.some((id) => cosmeticById(id)?.unlock === "starter") && newFaces.some((id) => cosmeticById(id)?.unlock === "earned"));
+
+  // A new STARTER equips out of the box; a new EARNED item is refused until granted, then accepted.
+  const starterHat = "hat_cork";
+  check("a new starter hat is owned with zero unlocks + equips", isCosmeticOwned(cosmeticById(starterHat)!, []) && sanitizeEquip("hat", starterHat, []) === starterHat);
+  const earnedFace = "face_shale_goggles";
+  check("a new earned face is LOCKED until granted (sanitizeEquip refuses it)", sanitizeEquip("face", earnedFace, []) === undefined);
+  check("a new earned face equips once granted", sanitizeEquip("face", earnedFace, [earnedFace]) === earnedFace);
+  check("a new earned hat's floor grant flows through earnedCosmeticsFor",
+    earnedCosmeticsFor({ deepestFloor: 28, totalKills: 0 }).includes("hat_null_crown")
+    && !earnedCosmeticsFor({ deepestFloor: 27, totalKills: 0 }).includes("hat_null_crown"));
+  check("a new earned face's kill grant flows through earnedCosmeticsFor",
+    earnedCosmeticsFor({ deepestFloor: 0, totalKills: 200 }).includes("face_resin_monocle")
+    && !earnedCosmeticsFor({ deepestFloor: 0, totalKills: 199 }).includes("face_resin_monocle"));
+}
+
 function grantTests(): void {
   section("earned grants key off all-time stats (the recordRun grant path)");
   check("nothing granted at zero stats", earnedCosmeticsFor({ deepestFloor: 0, totalKills: 0 }).length === 0);
@@ -425,6 +455,7 @@ function authHygieneTests(): void {
 function main(): void {
   catalogTests();
   bodyPaletteTests();
+  packTwoCosmeticsTests();
   ownershipTests();
   grantTests();
   purityTests();
