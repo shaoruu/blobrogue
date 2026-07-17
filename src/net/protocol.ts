@@ -343,7 +343,13 @@ export const FIXED_DT = 1 / TICK_HZ; // 50ms authoritative step
 //   isComeback), and mode-gated draft events carry balance telemetry. The strict join gate
 //   makes older clients terminally refresh instead of rendering a co-op offer surface against
 //   a live arena.
-export const PROTOCOL_VERSION = 40;
+// v41 (Batch2B Undertow F65): the closed AttackMove set grows `river_comes_back` (display name
+//   THE RIVER COMES BACK). Enemy kinds `undertow` / `warm_pulse` / `relief_vent` / `flood_front`
+//   ride via ENEMY_ARCHETYPES (no new EnemyWire fields). EncounterState flags (riverPhase /
+//   riverOutcome / pulseDepositVentId / floodProgress / ventsUsedMask / manifestCount /
+//   escapeDirection) ride Batch0's existing enc wire. PROTOCOL 40 = PVP #143; Undertow owns
+//   PROTOCOL 41. BLACK_TIDE retired — never revive.
+export const PROTOCOL_VERSION = 41;
 
 
 // How long the server reserves a disconnected player's body (their seat) before the
@@ -911,6 +917,9 @@ const ATTACK_MOVES: Record<AttackMove, true> = {
   last_light: true,
   // HOLLOW CHOIRMASTER F60 signature — display name THE LAST NOTE; wire id last_note.
   last_note: true,
+  // UNDERTOW F65 signature — display name THE RIVER COMES BACK; wire id river_comes_back.
+  // Never black_tide.
+  river_comes_back: true,
 };
 const ENEMY_TIERS: Record<EnemyTier, true> = { swarm: true, standard: true, brute: true, elite: true };
 const SLUICE_MODES: Record<SluiceMode, true> = { flood: true, drain: true };

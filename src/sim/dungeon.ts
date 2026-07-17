@@ -760,10 +760,14 @@ export function generateDungeon(seed: number, floor: number): Dungeon {
   // - F60 Choirmaster (Batch2A OWNER LOCK): structureKind 'split' — ONE multi-lobed super-room
   //   (final arena + side chambers as lobes in the SAME encounter space). NOT a RoomEdge chase.
   //   chaseEdgeIds reserved empty; objectiveRoomIds = lobe room ids (≥3) for pillar placement.
+  // - F65 Undertow (Batch2B OWNER LOCK): structureKind 'escape' — steal Warm Pulse in the deep/
+  //   final room, then reverse journey SPAWNWARD across ≥2 RoomEdges (width≥3). objectiveRoomIds
+  //   = reverse checkpoint rooms (deep → mid → near-spawn); chaseEdgeIds = authored reverse path.
   let blueprint: EncounterBlueprint | null = null;
   if (bossArena !== null) {
     const isHuntFloor = floor === 55; // SEVER_FLOOR — keep literal to avoid enemies↔dungeon cycle
     const isSplitFloor = floor === 60; // CHOIRMASTER_FLOOR — literal to avoid enemies↔dungeon cycle
+    const isEscapeFloor = floor === 65; // UNDERTOW_FLOOR — literal to avoid enemies↔dungeon cycle
     if (isHuntFloor && chain.length >= 4) {
       // Checkpoints: approach mid-band rooms (not spawn, not final exit-only). Prefer last 4 rooms.
       const n = chain.length;
@@ -817,6 +821,40 @@ export function generateDungeon(seed: number, floor: number): Dungeon {
         spawnRoomId,
         objectiveRoomIds: lobeIds,
         chaseEdgeIds: [], // NOT a RoomEdge chase — OWNER LOCK
+      };
+    } else if (isEscapeFloor && chain.length >= 4) {
+      // Reverse-floor escape: Pulse stolen in deep/final room; flee SPAWNWARD toward chain[0].
+      // Checkpoints authored deep → mid → near-spawn so reverse journey crosses ≥2 RoomEdges.
+      const n = chain.length;
+      const deep = last.id;
+      const mid = chain[Math.max(1, n - 3)].id;
+      const near = chain[Math.max(1, Math.floor(n / 3))].id;
+      const objectiveRoomIds = [deep, mid, near];
+      const chaseEdgeIds: number[] = [];
+      const wantPairs = [[deep, mid], [mid, near]];
+      // Prefer an extra edge toward spawn if graph allows (≥2 required).
+      if (near !== chain[0].id) wantPairs.push([near, chain[0].id]);
+      for (const [a, b] of wantPairs) {
+        let ei = edges.findIndex((e) => !e.isShortcut && ((e.a === a && e.b === b) || (e.a === b && e.b === a)));
+        if (ei < 0) ei = edges.findIndex((e) => (e.a === a && e.b === b) || (e.a === b && e.b === a));
+        if (ei >= 0) {
+          if (edges[ei].width < 3) edges[ei].width = 3;
+          if (chaseEdgeIds.indexOf(ei) < 0) chaseEdgeIds.push(ei);
+        }
+      }
+      if (chaseEdgeIds.length < 2) {
+        for (let i = 0; i < edges.length && chaseEdgeIds.length < 2; i++) {
+          if (!edges[i].isShortcut && chaseEdgeIds.indexOf(i) < 0) {
+            if (edges[i].width < 3) edges[i].width = 3;
+            chaseEdgeIds.push(i);
+          }
+        }
+      }
+      blueprint = {
+        structureKind: "escape",
+        spawnRoomId: deep, // steal site = deep/final room
+        objectiveRoomIds,
+        chaseEdgeIds,
       };
     } else {
       const spawnRoomId = last.id;

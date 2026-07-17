@@ -139,6 +139,8 @@ export const AUDIO_MATERIAL: Readonly<Record<EnemyKind, AudioMaterial>> = {
   sever: "chitin", sever_anchor: "chitin",
   // CHOIRMASTER F60 — voice bank (Choir family); pillars reuse chitin lattice mechanic rows.
   choirmaster: "voice", choir_pillar: "chitin",
+  // UNDERTOW F65 — mist/voice bank placeholder; pulse/vent/flood reuse chitin mechanic rows.
+  undertow: "voice", warm_pulse: "chitin", relief_vent: "chitin", flood_front: "mist",
   // PALE THRONE (F75 giant) — dedicated pale material bank (see F75 audio hooks).
   pale: "pale", pale_seam: "pale",
 
@@ -329,6 +331,15 @@ export const BESTIARY_CUES: Readonly<Record<EnemyKind, Readonly<Record<string, W
     recover: "choir.recover", entrance: "choir.entrance", phase: "choir.phase", special: "choir.floorDischarge", death: "choir.death",
   },
   choir_pillar: { fuse: "choir.strikeWarn", toll: "choir.swellFire" },
+  // UNDERTOW F65 — PLACEHOLDER (Choir/Weaver bank); display-facing name THE RIVER COMES BACK.
+  // Audio stems/events use undertow.river* story pattern (hooks only; no generation this PR).
+  undertow: {
+    windup: "choir.swellWarn", lock: "choir.strikeLock", active: "choir.swellFire", impact: "choir.strikeImpact",
+    recover: "choir.recover", entrance: "choir.entrance", phase: "choir.phase", special: "choir.floorDischarge", death: "choir.death",
+  },
+  warm_pulse: { fuse: "choir.strikeWarn", toll: "choir.swellFire" },
+  relief_vent: { fuse: "weaver.latticeWarn", toll: "weaver.latticeFire" },
+  flood_front: { fuse: "choir.swellWarn", toll: "choir.swellFire" },
 
   pale: {
     windup: "pale.ringWarn", lock: "pale.ring2Warn", active: "pale.spokeActive", impact: "pale.ringImpact",

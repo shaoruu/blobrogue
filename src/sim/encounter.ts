@@ -181,6 +181,47 @@ export function initSplitEncounter(dungeon: Dungeon): EncounterState {
   };
 }
 
+
+// Batch2B Undertow F65: escape/steal reverse-floor encounter on the Batch0 room graph.
+// flags (OWNER LOCK): pulseRoomId / pulseDropped / pulseDepositVentId /
+// floodFrontEdgeId / floodProgress / riverPhase / riverOutcome /
+// ventsUsedMask / manifestCount / escapeDirection
+export function initEscapeEncounter(dungeon: Dungeon): EncounterState {
+  const bp = dungeon.blueprint;
+  // Deep/final room = steal site; reverse journey runs spawnward along chaseEdgeIds.
+  const spawnRoomId = bp?.spawnRoomId ?? (dungeon.rooms.length > 0 ? dungeon.rooms[dungeon.rooms.length - 1].id : 0);
+  const routeEdgeId = bp && bp.chaseEdgeIds.length > 0 ? bp.chaseEdgeIds[0] : (dungeon.edges.length > 0 ? 0 : null);
+  return {
+    kind: "escape",
+    // Inactive until Warm Pulse is stolen — no flood / manifestation before steal.
+    active: false,
+    structureKind: "escape",
+    currentRoomId: spawnRoomId,
+    routeEdgeId,
+    checkpoint: 0, // 0 = deep steal room; advances spawnward along reverse route
+    objectiveProgress: 0,
+    carrierPlayerId: null,
+    failureCount: 0,
+    completed: false,
+    failed: false,
+    flags: {
+      pulseRoomId: spawnRoomId,
+      pulseDropped: false,
+      pulseDepositVentId: -1,
+      floodFrontEdgeId: routeEdgeId ?? -1,
+      floodProgress: 0, // 0..1 along current edge/room
+      riverPhase: "idle", // idle | tell | front | punish | pursuit
+      riverOutcome: "idle", // idle | pending | success | survival | failure
+      ventsUsedMask: 0,
+      manifestCount: 0,
+      escapeDirection: "spawnward",
+      pulseStolen: false,
+      alcoveRoomId: -1,
+      highlightedVentId: -1,
+    },
+  };
+}
+
 export function completeEncounter(e: EncounterState): void {
   e.completed = true;
   e.active = true;
