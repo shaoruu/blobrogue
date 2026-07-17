@@ -645,10 +645,10 @@ async function main(): Promise<void> {
     await menu.showKitPicker();
     const cards = byClass(overlay, "kit-option");
     check("the kit picker screen renders all four kit cards", cards.length === 4, `cards=${cards.length}`);
-    check("the remembered kit is visibly LAST USED, not silently confirmed",
-      cards.some((card) => (card.className ?? "").includes("last-used") && textOf(card).includes("MENDER")));
-    check("NEXT stays disabled until the player explicitly selects a card",
-      collect(overlay, (node) => node.tagName === "BUTTON" && textOf(node).includes("NEXT"))[0]?.disabled === true);
+    check("the remembered kit opens pre-selected so a returning player never re-clicks the same card",
+      cards.some((card) => (card.className ?? "").includes("selected") && textOf(card).includes("MENDER")));
+    check("NEXT is enabled immediately once a valid kit is remembered",
+      collect(overlay, (node) => node.tagName === "BUTTON" && textOf(node).includes("NEXT"))[0]?.disabled === false);
     check("the picker offers a back door to the title", buttonsOf(overlay).some((b) => /back/i.test(b)));
     await passLoadoutGate(overlay, "mender");
     localStorage.removeItem("blobrogue.selectedKit"); // restore the fresh-player default for later sections
@@ -786,27 +786,78 @@ async function main(): Promise<void> {
     await menu.showTitle();
     collect(overlay, (node) => node.tagName === "BUTTON" && textOf(node) === "PLAY SOLO")[0]?.onclick?.();
     const sameSessionMender = byClass(overlay, "kit-option").find((card) => card.getAttribute?.("data-kit") === "mender");
-    check("same Menu reopens with Mender LAST USED but unselected",
-      textOf(sameSessionMender ?? {}).includes("LAST USED")
-      && sameSessionMender?.getAttribute?.("aria-checked") === "false"
-      && collect(overlay, (node) => node.tagName === "BUTTON" && textOf(node).includes("NEXT"))[0]?.disabled === true);
+    check("same Menu reopens with the remembered Mender pre-selected so NEXT is ready without a re-click",
+      textOf(sameSessionMender ?? {}).includes("SELECTED")
+      && sameSessionMender?.getAttribute?.("aria-checked") === "true"
+      && collect(overlay, (node) => node.tagName === "BUTTON" && textOf(node).includes("NEXT"))[0]?.disabled === false);
     sameSessionMender?.onclick?.();
     collect(overlay, (node) => node.tagName === "BUTTON" && textOf(node).includes("NEXT · CHOOSE PET"))[0]?.onclick?.();
     const sameSessionNoPet = byClass(overlay, "pet-option").find((card) => card.getAttribute?.("data-pet") === "none");
-    check("same Menu reopens with No Pet LAST USED but unselected",
-      textOf(sameSessionNoPet ?? {}).includes("LAST USED")
-      && sameSessionNoPet?.getAttribute?.("aria-checked") === "false"
-      && byClass(overlay, "loadout-review-next")[0]?.disabled === true);
+    check("same Menu reopens with the remembered explicit No Pet pre-selected so REVIEW is one click away",
+      textOf(sameSessionNoPet ?? {}).includes("SELECTED")
+      && sameSessionNoPet?.getAttribute?.("aria-checked") === "true"
+      && byClass(overlay, "loadout-review-next")[0]?.disabled === false);
     await menu.showTitle();
     const reload = makeMenu({ isLoadoutPreserved: true });
     await reload.menu.showTitle();
     collect(reload.overlay, (node) => node.tagName === "BUTTON" && textOf(node) === "PLAY SOLO")[0]?.onclick?.();
-    check("guest reload preselects Mender but the new run gates again",
+    check("guest reload preselects Mender as an advanceable choice yet still never auto-starts the run",
       byClass(reload.overlay, "kit-option").some((card) => textOf(card).includes("MENDER")
-        && textOf(card).includes("LAST USED"))
-      && collect(reload.overlay, (node) => node.tagName === "BUTTON" && textOf(node).includes("NEXT"))[0]?.disabled === true
+        && (card.className ?? "").includes("selected"))
+      && collect(reload.overlay, (node) => node.tagName === "BUTTON" && textOf(node).includes("NEXT"))[0]?.disabled === false
       && reload.soloLaunches.length === 0);
     await reload.menu.showTitle();
+    localStorage.removeItem("blobrogue.selectedKit");
+    localStorage.removeItem("blobrogue.lastPetId");
+  }
+
+  section("a returning player with a saved kit and pet reaches Review without re-clicking, but still confirms once");
+  {
+    localStorage.removeItem("blobrogue.selectedKit");
+    localStorage.removeItem("blobrogue.lastPetId");
+    const profile = makeProfile({
+      isAccount: true,
+      unlocks: ["pet_doggie"],
+      equippedPet: "doggie",
+      lastKitId: "mender",
+      masteryLevel: 1,
+    });
+    const { menu, overlay, soloLaunches, session } = makeMenu({ profile, loadoutPersist: "ok" });
+    await session.login();
+    await menu.showTitle();
+    collect(overlay, (node) => node.tagName === "BUTTON" && textOf(node) === "PLAY SOLO")[0]?.onclick?.();
+    const menderKit = byClass(overlay, "kit-option").find((card) => card.getAttribute?.("data-kit") === "mender");
+    check("KIT opens with the saved Mender already chosen (no card click needed)",
+      (menderKit?.className ?? "").includes("selected")
+      && menderKit?.getAttribute?.("aria-checked") === "true");
+    const next = collect(overlay, (node) => node.tagName === "BUTTON" && textOf(node).includes("NEXT · CHOOSE PET"))[0];
+    check("NEXT is enabled straight away for the remembered kit", next?.disabled === false);
+    next?.onclick?.();
+    const doggiePet = byClass(overlay, "pet-option").find((card) => card.getAttribute?.("data-pet") === "doggie");
+    check("PET opens with the saved Doggie already chosen (no card click needed)",
+      (doggiePet?.className ?? "").includes("selected")
+      && doggiePet?.getAttribute?.("aria-checked") === "true");
+    const review = byClass(overlay, "loadout-review-next")[0];
+    check("REVIEW is enabled straight away for the remembered pet", review?.disabled === false);
+    review?.onclick?.();
+    check("Review shows the remembered pair and offers the final confirm, having launched nothing yet",
+      textOf(overlay).includes("REVIEW LOADOUT")
+      && byClass(overlay, "loadout-confirm")[0]?.disabled !== true
+      && soloLaunches.length === 0);
+    byClass(overlay, "loadout-confirm")[0]?.onclick?.();
+    await settle();
+    await settle();
+    check("the single Review confirm launches the remembered Mender + Doggie with zero kit/pet re-clicks",
+      soloLaunches.length === 1
+      && soloLaunches[0]?.kitId === "mender"
+      && soloLaunches[0]?.petId === "doggie");
+    await menu.showTitle();
+    collect(overlay, (node) => node.tagName === "BUTTON" && textOf(node) === "PLAY SOLO")[0]?.onclick?.();
+    byClass(overlay, "kit-option").find((card) => card.getAttribute?.("data-kit") === "gunner")?.onclick?.();
+    check("changing the remembered kit still works (Gunner selected, Mender released)",
+      (byClass(overlay, "kit-option").find((card) => card.getAttribute?.("data-kit") === "gunner")?.className ?? "").includes("selected")
+      && !(byClass(overlay, "kit-option").find((card) => card.getAttribute?.("data-kit") === "mender")?.className ?? "").includes("selected"));
+    await menu.showTitle();
     localStorage.removeItem("blobrogue.selectedKit");
     localStorage.removeItem("blobrogue.lastPetId");
   }
