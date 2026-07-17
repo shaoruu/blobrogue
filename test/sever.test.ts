@@ -170,12 +170,134 @@ function fleeAndEscapeSoft(): void {
   check("custom completion still opens exit after escapes", isFloorCleared(w) === true);
 }
 
+// Live driver: pins a pressuring player next to the Sever each tick. When `breakAnchors`, it
+// destroys the resin anchors the instant they are planted (a perfect intercept), so the hunt
+// advances through its checkpoints. Returns the sequence of rooms the boss actually occupied.
+function driveHunt(w: WorldState, breakAnchors: boolean, maxTicks: number): { seq: number[]; crossings: number; completedAt: number } {
+  const boss = w.enemies.find((e) => e.kind === "sever");
+  if (!boss) return { seq: [], crossings: 0, completedAt: -1 };
+  boss.spawnTimer = 0;
+  const p = w.players.get(LOCAL_ID)!;
+  const seq: number[] = [];
+  let last = -99, crossings = 0, completedAt = -1;
+  for (let i = 0; i < maxTicks; i++) {
+    const enc = w.encounter!;
+    p.x = boss.x + 40; p.y = boss.y; p.invuln = 999999;
+    if (breakAnchors && String(enc.flags.interceptState) === "trap") {
+      for (const a of w.enemies) if (a.kind === "sever_anchor" && !a.dead) a.dead = true;
+    }
+    step(w, 1);
+    const rid = enc.currentRoomId;
+    if (rid !== last) { if (last !== -99) crossings++; seq.push(rid); last = rid; }
+    if (enc.completed) { completedAt = i; break; }
+  }
+  return { seq, crossings, completedAt };
+}
+
+function fleeLiveCrossesEdges(): void {
+  section("Live flee crosses ≥2 RoomEdges across the 3 checkpoints, then completes");
+  for (const seed of [0x51a9eb0b, 0xC0FFEE, 0xDEAD, 0x1111]) {
+    const w = createWorld(seed, 55, {});
+    const cps = w.dungeon.blueprint?.objectiveRoomIds ?? [];
+    const { seq, crossings, completedAt } = driveHunt(w, true, 6000);
+    const distinct = new Set(seq);
+    const visitedAllCps = cps.every((c) => distinct.has(c));
+    check(`seed ${seed.toString(16)}: boss crosses ≥2 edges`, crossings >= 2, `crossings=${crossings} seq=${JSON.stringify(seq)}`);
+    check(`seed ${seed.toString(16)}: visits all 3 checkpoint rooms`, visitedAllCps, `cps=${JSON.stringify(cps)} distinct=${JSON.stringify([...distinct])}`);
+    check(`seed ${seed.toString(16)}: intercept objective completes`, completedAt >= 0 && w.encounter!.completed);
+    check(`seed ${seed.toString(16)}: completion opens the exit`, isFloorCleared(w) === true);
+  }
+}
+
+function escapeLiveSoftFail(): void {
+  section("Live escape (no intercept) climbs escapeMeter to the cap — soft fail, never a wipe");
+  const w = createWorld(0x2a, 55, {});
+  const { completedAt } = driveHunt(w, false, 8000);
+  const enc = w.encounter!;
+  check("never-intercepted hunt does NOT complete", completedAt < 0 && !enc.completed);
+  check("escapeMeter reaches its cap", Number(enc.flags.escapeMeter) === SEVER.escapeMeterMax, `meter=${enc.flags.escapeMeter}`);
+  check("terminal state is 'escaped'", enc.flags.interceptState === "escaped");
+  check("soft-failed run marks failed (route worsened)", enc.failed === true);
+  check("soft fail never wipes: all players alive", [...w.players.values()].every((p) => p.hp > 0));
+  check("soft fail stays winnable: Sever core still alive", w.enemies.some((e) => e.kind === "sever" && !e.dead));
+  check("uncompleted hunt keeps the exit closed", isFloorCleared(w) === false);
+}
+
+function noPreActivationAggro(): void {
+  section("No pre-activation aggro: an un-approached Sever holds (no WORLDSPLIT, no anchors)");
+  const w = createWorld(0x2a, 55, {});
+  const boss = w.enemies.find((e) => e.kind === "sever")!;
+  boss.spawnTimer = 0;
+  const p = w.players.get(LOCAL_ID)!;
+  let sawWorldsplit = false, sawAnchor = false;
+  for (let i = 0; i < 200; i++) {
+    p.x = 60; p.y = 60; p.invuln = 999999; // parked far from the hunt
+    step(w, 1);
+    if (boss.attack.move === "worldsplit") sawWorldsplit = true;
+    if (w.enemies.some((e) => e.kind === "sever_anchor")) sawAnchor = true;
+  }
+  check("no WORLDSPLIT commits while un-approached", !sawWorldsplit);
+  check("no anchors planted while un-approached", !sawAnchor);
+  check("stays in the hunt state (dormant presence)", w.encounter!.flags.interceptState === "hunt");
+  check("sever_anchor never a boss kind (mechanic body)", !isBossKind("sever_anchor"));
+}
+
+function reconnectRestoresTrap(): void {
+  section("Reconnect restores checkpoint / route / anchor-trap state bit-identical");
+  const w = createWorld(0x1111, 55, {});
+  const boss = w.enemies.find((e) => e.kind === "sever")!;
+  boss.spawnTimer = 0;
+  const p = w.players.get(LOCAL_ID)!;
+  let trapped = false;
+  for (let i = 0; i < 2000 && !trapped; i++) {
+    p.x = boss.x + 40; p.y = boss.y; p.invuln = 999999;
+    step(w, 1);
+    if (String(w.encounter!.flags.interceptState) === "trap") trapped = true;
+  }
+  check("hunt reaches an anchor trap", trapped);
+  const liveAnchors = w.enemies.filter((e) => e.kind === "sever_anchor" && !e.dead).length;
+  check("2 anchors planted per checkpoint", liveAnchors === SEVER.anchorsPerCheckpoint, `n=${liveAnchors}`);
+  check("boss tracks its anchors", boss.boss!.windowAddIds.length === SEVER.anchorsPerCheckpoint);
+
+  const frozen = cloneEncounter(w.encounter!);
+  const re = createWorld(0x1111, 1, {});
+  loadFloorIntoWorld(re, 55);
+  restoreEncounterInWorld(re, frozen);
+  check("reconnect restores trap encounter bit-identical", encounterEqual(re.encounter, frozen));
+  check("restored checkpoint matches", re.encounter!.checkpoint === frozen.checkpoint);
+  check("restored route edge matches", re.encounter!.routeEdgeId === frozen.routeEdgeId);
+  check("restored interceptState is trap", re.encounter!.flags.interceptState === "trap");
+}
+
+function coopIsolation(): void {
+  section("Co-op isolation: two independent F55 worlds never cross-contaminate");
+  const wA = createWorld(0x51a9eb0b, 55, {});
+  const wB = createWorld(0x51a9eb0b, 55, {});
+  // Advance world A to a completed intercept run.
+  const a = driveHunt(wA, true, 6000);
+  // World B only ever sees a far, un-engaging player — it must stay dormant at checkpoint 0.
+  const bossB = wB.enemies.find((e) => e.kind === "sever")!;
+  bossB.spawnTimer = 0;
+  const pB = wB.players.get(LOCAL_ID)!;
+  for (let i = 0; i < 400; i++) { pB.x = 60; pB.y = 60; pB.invuln = 999999; step(wB, 1); }
+  check("world A completed its own hunt", a.completedAt >= 0 && wA.encounter!.completed);
+  check("world B untouched by A: still checkpoint 0", wB.encounter!.checkpoint === 0);
+  check("world B untouched by A: still hunting", wB.encounter!.flags.interceptState === "hunt");
+  check("world B untouched by A: not completed", !wB.encounter!.completed);
+  check("the two encounters are distinct objects", wA.encounter !== wB.encounter);
+}
+
 pinGates();
 huntBlueprint();
 encounterFlagsAndReconnect();
 worldsplitTimings();
 worldsplitLive();
 fleeAndEscapeSoft();
+fleeLiveCrossesEdges();
+escapeLiveSoftFail();
+noPreActivationAggro();
+reconnectRestoresTrap();
+coopIsolation();
 
 process.stdout.write(`\n${passed} passed, ${failed} failed\n`);
 if (failed) {
