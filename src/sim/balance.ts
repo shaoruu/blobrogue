@@ -2082,14 +2082,15 @@ export function severAnchorHpForFloor(floor: number): number {
 // ONE isBossKind conductor; choir_pillar bodies are mechanic entities (never boss kinds).
 // Success = silence FIRST live pillar before sheet reaches it → openBossWindow(4.0).
 // Survival = acoustic shadow behind a previously broken pillar (no window). Failure soft, never wipe.
-// BALANCER_TODO: Quill owns final HP/TTK/bank — provisional calibration only.
+// Calibrated on EXPOSED time (silence-gated like Choir F30): deep-boss band between Sever F55 and
+// Pale F75 — earned LAST NOTE windows are the pacing, not chip or sponge HP (Quill FINAL).
 export const CHOIRMASTER = {
-  baseHp: 680, // BALANCER_TODO
+  baseHp: 860,
   baseHpFloor: 60,
   phaseAt: [0.66, 0.33] as readonly number[],
   phaseFloor: [0.58, 0.25] as readonly number[],
-  guardMult: 0.24, // BALANCER_TODO
-  windowBankFrac: 0.26, // BALANCER_TODO
+  guardMult: 0.20,        // silence-gated chip band (matches Choir deep earned-window hard-ish gate)
+  windowBankFrac: 0.22,   // ≥2 silenced phrases per phase (matches deep roster Choir/Jet band)
   contactDamage: 2,
   entranceGrace: 1.4,
   attackCd: [0, 3.2, 2.9, 2.6] as readonly number[],
@@ -2099,11 +2100,11 @@ export const CHOIRMASTER = {
   lastNotePunish: 4.0,
   // Phrase / pillars
   pillarCount: 4,           // ≥3 lobes + one spare for acoustic-shadow survival
-  pillarHp: 32,             // BALANCER_TODO
+  pillarHp: 44,             // silence task readable at F60; not a second boss (Quill FINAL)
   phrasePillars: 3,         // silenced pillars to complete a phrase (checkpoint)
   pressureRadius: 260,      // activation / phrase pressure
   sheetHalfWidth: 16, // 2-tile directional sheet (half-width = 16px = 1 tile)
-  sheetDamage: 2,           // BALANCER_TODO soft pressure, not wipe
+  sheetDamage: 2,           // soft pressure, never wipe (Quill FINAL)
   wrongPillarPressure: 1,   // soft escalate damage ping
   roarDuration: 1.0,
   roarDamageReduction: 0.35,
