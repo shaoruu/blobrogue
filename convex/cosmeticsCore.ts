@@ -106,7 +106,7 @@ export const COSMETICS: readonly CosmeticDef[] = [
   { id: "hat_headphones", slot: "hat", name: "Headphones", unlock: "earned", need: { totalKills: 100 }, hint: "100 all-time kills", assetKey: "hat_headphones" },
   { id: "hat_helmet", slot: "hat", name: "Helmet", unlock: "earned", need: { totalKills: 250 }, hint: "250 all-time kills", assetKey: "hat_helmet" },
   { id: "hat_horns", slot: "hat", name: "Horns", unlock: "earned", need: { totalKills: 1000 }, hint: "1000 all-time kills", assetKey: "hat_horns" },
-  // Overnight Wren hats (awaiting Sable art pass — assets included).
+  // Overnight Wren hats (Sable ART PASS).
   { id: "hat_cork", slot: "hat", name: "Cork Stopper", unlock: "starter", assetKey: "hat_cork" },
   { id: "hat_lamp_brim", slot: "hat", name: "Lamp Brim", unlock: "starter", assetKey: "hat_lamp_brim" },
   { id: "hat_root", slot: "hat", name: "Root Circlet", unlock: "earned", need: { deepestFloor: 6 }, hint: "reach floor 6", assetKey: "hat_root" },
@@ -122,7 +122,7 @@ export const COSMETICS: readonly CosmeticDef[] = [
   { id: "face_star_shades", slot: "face", name: "Star Shades", unlock: "earned", need: { totalKills: 750 }, hint: "750 all-time kills", assetKey: "face_star_shades" },
   { id: "face_3d_glasses", slot: "face", name: "3D Glasses", unlock: "earned", need: { deepestFloor: 25 }, hint: "reach floor 25", assetKey: "face_3d_glasses" },
   { id: "face_monocle", slot: "face", name: "Monocle", unlock: "earned", need: { totalKills: 500 }, hint: "500 all-time kills", assetKey: "face_monocle" },
-  // Overnight Wren faces (awaiting Sable art pass — assets included).
+  // Overnight Wren faces (Sable ART PASS).
   { id: "face_amber_specs", slot: "face", name: "Amber Specs", unlock: "starter", assetKey: "face_amber_specs" },
   { id: "face_coal_smudge", slot: "face", name: "Coal Smudge", unlock: "starter", assetKey: "face_coal_smudge" },
   { id: "face_resin_monocle", slot: "face", name: "Resin Monocle", unlock: "earned", need: { deepestFloor: 7 }, hint: "reach floor 7", assetKey: "face_resin_monocle" },

@@ -2513,6 +2513,7 @@ export class Game {
         }
         this.meleeFlipDir = -this.meleeFlipDir; // alternate the visual sweep; the hitbox wedge is symmetric
         triggerRecoil(this.playerAnim, FIRE_RECOIL[e.weapon] * settings.effectiveRecoil);
+        this.triggerPetAttackEmote();
         if (m) this.spawnSlashWind(e.x, e.y, e.aim, m, w.color);
         if (feel) sfx(feel.swingSfx, { rate: feel.swingRate, gain: feel.swingGain });
         else sfx(SHOOT_SFX[e.weapon]);
