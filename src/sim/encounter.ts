@@ -114,7 +114,9 @@ export function initHuntEncounter(dungeon: Dungeon): EncounterState {
   const routeEdgeId = bp && bp.chaseEdgeIds.length > 0 ? bp.chaseEdgeIds[0] : (dungeon.edges.length > 0 ? 0 : null);
   return {
     kind: "hunt",
-    active: true,
+    // Inactive until a player enters the approach / pressure radius — no global aggro
+    // before encounter activation (Batch1 OWNER LOCK).
+    active: false,
     structureKind: "hunt",
     currentRoomId: spawnRoomId,
     routeEdgeId,
@@ -130,6 +132,7 @@ export function initHuntEncounter(dungeon: Dungeon): EncounterState {
       interceptState: "hunt", // hunt | trap | window | escaped
       chosenExitEdgeId: routeEdgeId ?? -1,
       worldsplitPhase: "idle", // idle | plant | fracture | punish
+      anchorsPlantedCp: -1, // last checkpoint that received resin anchors
     },
   };
 }

@@ -179,8 +179,10 @@ export function encounterObjectiveCopy(enc: HudState["encounter"]): string | nul
   if (enc.completed) return "OBJECTIVE COMPLETE";
   const pct = Math.round(Math.max(0, Math.min(1, enc.progress)) * 100);
   // Sever F55 hunt: story name WORLDSPLIT on the objective lane when natural.
+  // Soft carrier pip: show a marker when a player holds intercept credit.
   if (enc.kind === "hunt") {
-    return `WORLDSPLIT \u00b7 INTERCEPT ${pct}% \u00b7 CP ${enc.checkpoint}/2`;
+    const pip = enc.carrierId ? " \u25cf" : "";
+    return `WORLDSPLIT \u00b7 INTERCEPT ${pct}% \u00b7 CP ${enc.checkpoint}/2${pip}`;
   }
   return `OBJECTIVE ${pct}% \u00b7 CP ${enc.checkpoint}`;
 }
