@@ -441,7 +441,13 @@ export type WeaponId =
   //  - red_pen: SET / REWRITE — ink marks a body, a snap consumes the mark for burst;
   //  - margin_call: COPY-ONE — stores one payload class off another weapon and echoes it;
   //  - sidewinder: ENCIRCLE / FLANK — a two-arc volley that curves in to hit the flank.
-  | "resonant_fork" | "red_pen" | "margin_call" | "sidewinder";
+  | "resonant_fork" | "red_pen" | "margin_call" | "sidewinder"
+  // Content Wave C — four guns-only room verbs (catalog 3), same isolated-field pattern:
+  //  - hushiron: ROOT / RAMP — standing still ramps stance stacks that tighten spread + pierce;
+  //  - backtalk: PARRY / RETURN — a frontal window catches an enemy shot and fires it back;
+  //  - lamplighter: RELIGHT — a shot through warm light gains pierce and plants a safe patch;
+  //  - faultlink: LINK / SHARE — marks two bodies and echoes primary damage between them.
+  | "hushiron" | "backtalk" | "lamplighter" | "faultlink";
 
 // Drop-quality tier. Drives drop weighting (legendaries are genuinely rare and gated off
 // the earliest floors), the pickup/hotbar/tooltip rarity treatment, and shop pricing.
@@ -635,6 +641,14 @@ export interface Bullet {
   crosscurrentCoef?: number;    // crosscurrent: jump damage vs the prior hit
   crosscurrentPreferNew?: boolean; // crosscurrent Lv3: prefer an unhit target
   crosscurrentTax?: number;     // crosscurrent combo tax multiplier on jump damage (1 = none)
+  // Wave C round channels (undefined on every other round; sim-internal unless noted).
+  isHushSlug?: boolean;     // hushiron: a stance-ramp slug (tracks lit-travel distance for FX)
+  isBacktalkReturn?: boolean; // backtalk: the caught-and-returned round (1.15x caught dmg)
+  isLampShot?: boolean;     // lamplighter: a relight round (accrues lit-travel for pierce/patch)
+  lampLitDist?: number;     // lamplighter: px this round has travelled through warm/objective light
+  lampLit?: boolean;        // lamplighter: latched once the lit-path threshold is crossed
+  isFaultPrimary?: boolean; // faultlink: a primary round that marks the body it hits
+  isFaultEcho?: boolean;    // faultlink: a shared echo round (no crit/status/proc/recurse)
   // Elemental status a bullet stamps on the enemy it hits (see applyBulletStatuses).
   // Undefined on plain rounds; the value is the status duration in seconds.
   burn?: number;           // seconds of burn DoT the round applies

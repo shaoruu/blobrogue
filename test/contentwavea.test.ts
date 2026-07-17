@@ -49,6 +49,7 @@ import {
   LEGACY_CONTENT_CATALOG_VERSION,
   WAVE_A_CONTENT_CATALOG_VERSION,
   WAVE_B_CONTENT_CATALOG_VERSION,
+  WAVE_C_CONTENT_CATALOG_VERSION,
   contentCatalogFor,
 } from "../src/sim/contentCatalog.js";
 import { readFileSync } from "node:fs";
@@ -172,8 +173,9 @@ section("canonical roadmap and additive catalog migration");
     legacy: { catalogVersion: 0; pickupCount: number; firstPass: WeaponId[] };
     waveA: { catalogVersion: 1; pickupCount: number; firstPass: WeaponId[] };
     waveB: { catalogVersion: 2; pickupCount: number; firstPass: WeaponId[] };
+    waveC: { catalogVersion: 3; pickupCount: number; firstPass: WeaponId[] };
   };
-  const deal = (version: 0 | 1 | 2): WeaponId[] => {
+  const deal = (version: 0 | 1 | 2 | 3): WeaponId[] => {
     const bag = createWeaponBag(fixture.seed, version);
     return contentCatalogFor(version).pickupWeapons
       .map(() => drawWeaponFromBag(bag, new Set()));
@@ -191,7 +193,12 @@ section("canonical roadmap and additive catalog migration");
     contentCatalogFor(WAVE_B_CONTENT_CATALOG_VERSION).pickupWeapons.length === fixture.waveB.pickupCount
     && JSON.stringify(waveBDeal) === JSON.stringify(fixture.waveB.firstPass)
     && fixture.waveB.catalogVersion === 2);
-  for (const version of [0, 1, 2] as const) {
+  const waveCDeal = deal(WAVE_C_CONTENT_CATALOG_VERSION);
+  check("Wave C catalog golden is deterministic and includes every addition",
+    contentCatalogFor(WAVE_C_CONTENT_CATALOG_VERSION).pickupWeapons.length === fixture.waveC.pickupCount
+    && JSON.stringify(waveCDeal) === JSON.stringify(fixture.waveC.firstPass)
+    && fixture.waveC.catalogVersion === 3);
+  for (const version of [0, 1, 2, 3] as const) {
     const bag = createWeaponBag(0xCA7105, version);
     for (let draw = 0; draw < 9; draw++) drawWeaponFromBag(bag, new Set());
     const restored = JSON.parse(JSON.stringify(bag)) as WeaponBag;
@@ -210,8 +217,8 @@ section("canonical roadmap and additive catalog migration");
     && legacyWorld.weaponBag.catalogVersion === LEGACY_CONTENT_CATALOG_VERSION
     && legacyWorld.weaponBag.order.join(",") !== legacyBagOrder
     && legacyWorld.weaponBag.order.every((id) => !WAVE_A_WEAPONS.includes(id)));
-  check("genuinely fresh production worlds select Wave B without a browser field",
-    createWorld(0xCA7108, 1).catalogVersion === WAVE_B_CONTENT_CATALOG_VERSION);
+  check("genuinely fresh production worlds select Wave C without a browser field",
+    createWorld(0xCA7108, 1).catalogVersion === WAVE_C_CONTENT_CATALOG_VERSION);
 
   const snap = buildSnapshot(createWorld(0xCA7109, 1, {
     catalogVersion: WAVE_A_CONTENT_CATALOG_VERSION,
@@ -223,7 +230,7 @@ section("canonical roadmap and additive catalog migration");
   delete oldWire.cat;
   check("old snapshots missing catalog decode legacy, never current", validateSnap(oldWire).cat === 0);
   let isUnknownRejected = false;
-  try { validateSnap({ ...snap, cat: 3 }); } catch { isUnknownRejected = true; }
+  try { validateSnap({ ...snap, cat: 4 }); } catch { isUnknownRejected = true; }
   check("unsupported future catalog versions fail closed", isUnknownRejected);
 
   let isForgedClientFieldRejected = false;

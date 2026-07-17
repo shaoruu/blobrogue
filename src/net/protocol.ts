@@ -361,7 +361,13 @@ export const FIXED_DT = 1 / TICK_HZ; // 50ms authoritative step
 //   convoyWarmth / highlightedBlockerId / blockersClearedMask / processionPhase / processionOutcome /
 //   thresholdIndex / manifestCount / shadowBehind / convoyPlanted) ride Batch0's existing enc wire
 //   (escort kind). Wake owns PROTOCOL 43. NIGHTFALL_PROCESSION retired — never revive.
-export const PROTOCOL_VERSION = 43;
+// v44 (Content Wave C catalog `3` — guns-only +4): closed WeaponId additions (hushiron /
+//   backtalk / lamplighter / faultlink) ride the wire, and the authoritative `cat` snapshot
+//   field admits catalog version 3. No new blessings, no new EnemyWire/PropKind fields — the
+//   four verbs are server-owned TRANSIENT combat state (sub-10s), never reconciled. The bump
+//   is purely so a pre-v44 client cleanly rejects a `cat=3` run instead of decoding it.
+//   MERGE ORDER: Wake (43) is on main — Wave C owns PROTOCOL 44.
+export const PROTOCOL_VERSION = 44;
 
 
 // How long the server reserves a disconnected player's body (their seat) before the

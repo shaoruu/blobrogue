@@ -96,7 +96,7 @@ function pinGates(): void {
   check("PROCESSION lock at 0.9 (0.6 of tell)", Math.abs(WAKE.processionTell * WAKE.processionLockFrac - 0.9) < 1e-9);
   check("PROCESSION punish 4.0", WAKE.processionPunish === 4.0);
   check("front is a bounded moving-front (frontMaxDuration > 0)", WAKE.frontMaxDuration > 0);
-  check("PROTOCOL_VERSION is 43", PROTOCOL_VERSION === 43);
+  check("PROTOCOL_VERSION is 44", PROTOCOL_VERSION === 44);
   for (const seed of [0x51a9eb0b, 0xC0FFEE, 42, 0xDEAD]) {
     check(`seed ${seed.toString(16)} F50=gorge`, bossKindForFloor(seed, GORGE_FLOOR) === "gorge");
     check(`seed ${seed.toString(16)} F55=sever`, bossKindForFloor(seed, SEVER_FLOOR) === "sever");

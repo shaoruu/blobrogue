@@ -34,7 +34,7 @@ import { Rng } from "../src/sim/rng.js";
 import * as C from "../src/sim/constants.js";
 
 const DT = 1 / 60;
-const LEGENDARIES: readonly WeaponId[] = ["reaper", "swarm", "midas", "phase", "vortex", "singularity", "oddsmaker", "margin_call"];
+const LEGENDARIES: readonly WeaponId[] = ["reaper", "swarm", "midas", "phase", "vortex", "singularity", "oddsmaker", "margin_call", "faultlink"];
 
 let passed = 0, failed = 0;
 const failures: string[] = [];

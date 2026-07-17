@@ -73,7 +73,7 @@ function forceOwed(w: WorldState, boss: Enemy): void {
 }
 
 function pinGates(): void {
-  section("F70 Claimant pin + chain + protocol 42");
+  section("F70 Claimant pin + chain + protocol 44");
   check("CLAIMANT_FLOOR is 70", CLAIMANT_FLOOR === 70);
   check("claimant is a boss kind", isBossKind("claimant"));
   check("claim_token is NOT a boss kind", !isBossKind("claim_token"));
@@ -82,7 +82,7 @@ function pinGates(): void {
   check("OWED lock at 0.84 (0.6 of tell)", CLAIMANT.owedTell * CLAIMANT.owedLockFrac === 0.84);
   check("OWED descent 0.6", CLAIMANT.owedDescent === 0.6);
   check("OWED punish 3.0", CLAIMANT.owedPunish === 3.0);
-  check("PROTOCOL_VERSION is 43", PROTOCOL_VERSION === 43);
+  check("PROTOCOL_VERSION is 44", PROTOCOL_VERSION === 44);
   check("carrier guard is a chip, never immunity", CLAIMANT.carrierGuardMult > 0 && CLAIMANT.carrierGuardMult < CLAIMANT.guardMult);
   for (const seed of [0x51a9eb0b, 0xC0FFEE, 42, 0xDEAD]) {
     check(`seed ${seed.toString(16)} F50=gorge`, bossKindForFloor(seed, GORGE_FLOOR) === "gorge");

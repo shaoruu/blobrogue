@@ -1,6 +1,6 @@
 import type { WeaponId } from "./types.js";
 
-export type ContentCatalogVersion = 0 | 1 | 2;
+export type ContentCatalogVersion = 0 | 1 | 2 | 3;
 
 export interface ContentCatalog {
   readonly version: ContentCatalogVersion;
@@ -11,7 +11,8 @@ export interface ContentCatalog {
 export const LEGACY_CONTENT_CATALOG_VERSION: ContentCatalogVersion = 0;
 export const WAVE_A_CONTENT_CATALOG_VERSION: ContentCatalogVersion = 1;
 export const WAVE_B_CONTENT_CATALOG_VERSION: ContentCatalogVersion = 2;
-export const CURRENT_CONTENT_CATALOG_VERSION = WAVE_B_CONTENT_CATALOG_VERSION;
+export const WAVE_C_CONTENT_CATALOG_VERSION: ContentCatalogVersion = 3;
+export const CURRENT_CONTENT_CATALOG_VERSION = WAVE_C_CONTENT_CATALOG_VERSION;
 
 const LEGACY_PICKUP_WEAPONS: readonly WeaponId[] = [
   "shotgun", "rapid", "smg", "cannon", "burst", "ricochet", "homing", "tesla",
@@ -33,6 +34,11 @@ const WAVE_B_PICKUP_WEAPONS: readonly WeaponId[] = [
   "resonant_fork", "red_pen", "margin_call", "sidewinder",
 ];
 
+const WAVE_C_PICKUP_WEAPONS: readonly WeaponId[] = [
+  ...WAVE_B_PICKUP_WEAPONS,
+  "hushiron", "backtalk", "lamplighter", "faultlink",
+];
+
 const LEGACY_NORMAL_BLESSING_IDS: readonly string[] = [
   "glass_cannon", "hair_trigger", "split_shot", "scattergun", "full_metal",
   "swift_boots", "big_iron", "vampire_fang", "adrenaline", "berserk",
@@ -52,6 +58,10 @@ const WAVE_B_NORMAL_BLESSING_IDS: readonly string[] = [
   "crosscurrent", "last_warm_round", "known_by_touch", "remember_me", "carry_the_light",
 ];
 
+// Wave C is a guns-only wave (+4 pickup weapons); it adds NO new blessings, so the normal
+// blessing pool is identical to Wave B's (program mix stays 8 identity / 2 support).
+const WAVE_C_NORMAL_BLESSING_IDS: readonly string[] = WAVE_B_NORMAL_BLESSING_IDS;
+
 export const CONTENT_CATALOGS: Readonly<Record<ContentCatalogVersion, ContentCatalog>> = {
   0: {
     version: LEGACY_CONTENT_CATALOG_VERSION,
@@ -68,6 +78,11 @@ export const CONTENT_CATALOGS: Readonly<Record<ContentCatalogVersion, ContentCat
     pickupWeapons: WAVE_B_PICKUP_WEAPONS,
     normalBlessingIds: WAVE_B_NORMAL_BLESSING_IDS,
   },
+  3: {
+    version: WAVE_C_CONTENT_CATALOG_VERSION,
+    pickupWeapons: WAVE_C_PICKUP_WEAPONS,
+    normalBlessingIds: WAVE_C_NORMAL_BLESSING_IDS,
+  },
 };
 
 export function contentCatalogFor(version: ContentCatalogVersion): ContentCatalog {
@@ -77,5 +92,6 @@ export function contentCatalogFor(version: ContentCatalogVersion): ContentCatalo
 export function isContentCatalogVersion(value: number): value is ContentCatalogVersion {
   return value === LEGACY_CONTENT_CATALOG_VERSION
     || value === WAVE_A_CONTENT_CATALOG_VERSION
-    || value === WAVE_B_CONTENT_CATALOG_VERSION;
+    || value === WAVE_B_CONTENT_CATALOG_VERSION
+    || value === WAVE_C_CONTENT_CATALOG_VERSION;
 }

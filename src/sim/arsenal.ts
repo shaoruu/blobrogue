@@ -31,7 +31,10 @@ export type RoomId = "swarm" | "anchor" | "brawl" | "lane" | "cover" | "kite" | 
 export type MetricId = RoomId | "safety" | "control" | "boss" | "paving"
   // Content Wave B verb-identity metrics (spec-checks, like "paving"): a low-DPS identity
   // weapon proves its authored verb rather than a raw room-clear time.
-  | "link" | "mark" | "copy" | "flank";
+  | "link" | "mark" | "copy" | "flank"
+  // Content Wave C verb-identity metrics (guns-only): stance ramp, parry/return, relight
+  // patches, and the fault link/share echo (distinct from the Fork's raw resonance "link").
+  | "stance" | "parry" | "relight" | "share";
 export type RangeBand = "point-blank" | "close" | "mid" | "long" | "self" | "placed";
 export type TargetProfile = "swarm" | "single" | "pack" | "lane" | "anchor" | "control" | "mixed";
 // "coin-fed" (the Midas): the run economy amplifies the shot — never gates it. The
@@ -824,5 +827,77 @@ export const ARSENAL: Record<WeaponId, WeaponManifestEntry> = {
     visual: "#7fd48a twin green arcs sweeping wide of the aim line; held_sidewinder hook",
     authority: ["bullets"],
     excelRoom: "kite", weakRoom: "anchor",
+  },
+  hushiron: {
+    role: "still-stance slug: root down to ramp accuracy and pass-through",
+    metrics: ["stance"],
+    novelty: {
+      nearest: "railgun",
+      axes: ["timing", "positioning"],
+      note: "The Railgun's slug is always the same; Hushiron rewards HOLDING GROUND — a still stance ramps stacks that tighten spread and add pierce (never raw damage), and moving vents them.",
+    },
+    idealRange: "long", target: "pack",
+    strength: "A rooted stance turns a loose slug into a tight, pack-piercing lance.",
+    weakness: "Any movement bleeds the stance, and a ramped owner is a flushable sitting target.",
+    resource: "position", status: "none",
+    modifiers: "Damage, rate, size, crit, and status map to the slug; the stance stacks are authored.",
+    audio: "shootHushiron",
+    visual: "#9fb4c4 cold iron slug that sharpens as the stance ramps; held_hushiron hook",
+    authority: ["bullets"],
+    excelRoom: "lane", weakRoom: "kite",
+  },
+  backtalk: {
+    role: "counterpuncher: catch an incoming shot and throw it back harder",
+    metrics: ["parry"],
+    novelty: {
+      nearest: "ricochet",
+      axes: ["timing", "priority"],
+      note: "The Ricochet bounces YOUR round off walls; Backtalk opens a frontal PARRY beat that catches an ENEMY shot and returns it at 1.15x, rewarding a read of the threat, not geometry.",
+    },
+    idealRange: "mid", target: "control",
+    strength: "A well-timed catch answers a heavy shot with a bigger one on the enemy's own budget.",
+    weakness: "An empty catch beat is a feeble stub on a real cooldown, and boss hazards never catch.",
+    resource: "none", status: "none",
+    modifiers: "Damage, rate, size, and status map to the stub; the return coefficient is authored.",
+    audio: "shootBacktalk",
+    visual: "#d68a5c amber stub with a bright frontal catch flare; held_backtalk hook",
+    authority: ["bullets"],
+    excelRoom: "anchor", weakRoom: "swarm",
+  },
+  lamplighter: {
+    role: "lightkeeper: shots through warm light pierce and plant safe patches",
+    metrics: ["relight"],
+    novelty: {
+      nearest: "pathmaker",
+      axes: ["positioning", "priority"],
+      note: "The Pathmaker paves a safe route on the floor; Lamplighter EDITS the light — a shot that crosses warm/objective light gains pierce and plants a small safe patch where it lands.",
+    },
+    idealRange: "mid", target: "control",
+    strength: "In lit rooms it pierces further and leaves footholds of safe ground on the way.",
+    weakness: "In the dark it is a plain, unremarkable round with no pierce and no patch.",
+    resource: "none", status: "none",
+    modifiers: "Damage, rate, size, crit, and status map to the round; the lit pierce/patch are authored.",
+    audio: "shootLamplighter",
+    visual: "#ffdd8a warm lamp round that flares brighter once lit; held_lamplighter hook",
+    authority: ["bullets"],
+    excelRoom: "cover", weakRoom: "kite",
+  },
+  faultlink: {
+    role: "fault surveyor: mark two bodies and echo damage across the seam",
+    metrics: ["share"],
+    novelty: {
+      nearest: "resonant_fork",
+      axes: ["priority", "geometry"],
+      note: "The Fork tunes ONE neighbour to tick over time; Faultlink LINKS two marked bodies and SHARES a fraction of every primary hit across the seam, rewarding focus fire on a linked pair.",
+    },
+    idealRange: "mid", target: "pack",
+    strength: "Focus one linked endpoint and the seam echoes real damage onto the other for free.",
+    weakness: "The link needs LOS on both ends within range; break sight and the seam snaps shut.",
+    resource: "none", status: "none",
+    modifiers: "Damage, rate, size, and crit map to the primary; echoes carry no crit/status/proc.",
+    audio: "shootFaultlink",
+    visual: "#8ad6c9 teal round with a taut fault seam between endpoints; held_faultlink hook",
+    authority: ["bullets"],
+    excelRoom: "swarm", weakRoom: "cover",
   },
 };

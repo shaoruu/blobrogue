@@ -20,5 +20,12 @@
     "maxPracticalDps": 49.96,
     "strongestBuild": "midas + [big_iron,glass_cannon,hair_trigger,overload,quickdraw,second_wind,skirmisher,swift_boots,vitality]",
     "rationale": "Wave B catalog 2 expands the weapon/blessing space after Sever v36; Quill-locked Wave B verb numbers unchanged. Fail-closed Odds\u00d7Margin (gamble not storeable) preserved."
+  },
+  "waveC": {
+    "catalogVersion": 3,
+    "sourceCommit": "45cac19",
+    "maxPracticalDps": 46.786,
+    "strongestBuild": "rapid + [deadeye,elementalist,executioner,glass_cannon,hair_trigger,hair_trigger,hair_trigger,last_warm_round,overload,quickdraw,static_charge,vampire_fang]",
+    "rationale": "Wave C catalog 3 is guns-only (+4 pickup weapons, no new blessings). The four new weapons widen the deterministic 100k build sample space, shifting the strongest SAMPLED combination while every global cap, coefficient, and blessing stays unchanged and the new verbs sit far below the estimator ceiling."
   }
 }

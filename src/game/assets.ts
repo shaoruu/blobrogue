@@ -516,6 +516,10 @@ const HELD_SOURCES: Partial<Record<WeaponId, string>> = {
   red_pen: "/sprites/held_red_pen.png",
   margin_call: "/sprites/held_margin_call.png",
   sidewinder: "/sprites/held_sidewinder.png",
+  hushiron: "/sprites/held_hushiron.png",
+  backtalk: "/sprites/held_backtalk.png",
+  lamplighter: "/sprites/held_lamplighter.png",
+  faultlink: "/sprites/held_faultlink.png",
 };
 
 // Floor-pickup art (64px side-profile) per weapon. Mirrors HELD_SOURCES: a weapon
@@ -574,6 +578,10 @@ const PICKUP_SOURCES: Partial<Record<WeaponId, string>> = {
   red_pen: "/sprites/weapon_red_pen.png",
   margin_call: "/sprites/weapon_margin_call.png",
   sidewinder: "/sprites/weapon_sidewinder.png",
+  hushiron: "/sprites/weapon_hushiron.png",
+  backtalk: "/sprites/weapon_backtalk.png",
+  lamplighter: "/sprites/weapon_lamplighter.png",
+  faultlink: "/sprites/weapon_faultlink.png",
 };
 
 // The weapon's icon art for DOM HUD surfaces (the hotbar): its pickup side profile.

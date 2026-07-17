@@ -47,6 +47,7 @@ import {
   LEGACY_CONTENT_CATALOG_VERSION,
   WAVE_A_CONTENT_CATALOG_VERSION,
   WAVE_B_CONTENT_CATALOG_VERSION,
+  WAVE_C_CONTENT_CATALOG_VERSION,
 } from "../src/sim/contentCatalog.js";
 import type { ContentCatalogVersion } from "../src/sim/contentCatalog.js";
 
@@ -1284,14 +1285,17 @@ function godBuildGates(): void {
   const legacy = measureGodBuild(LEGACY_CONTENT_CATALOG_VERSION);
   const waveA = measureGodBuild(WAVE_A_CONTENT_CATALOG_VERSION);
   const waveB = measureGodBuild(WAVE_B_CONTENT_CATALOG_VERSION);
+  const waveC = measureGodBuild(WAVE_C_CONTENT_CATALOG_VERSION);
   const fixtures = JSON.parse(readFileSync(GOD_CATALOG_FIXTURES_PATH, "utf8")) as {
     legacy: { maxPracticalDps: number; strongestBuild: string };
     waveA: { maxPracticalDps: number; strongestBuild: string };
     waveB: { maxPracticalDps: number; strongestBuild: string };
+    waveC: { maxPracticalDps: number; strongestBuild: string };
   };
   const roundedLegacy = Math.round(legacy.maxDps * 100) / 100;
   const roundedWaveA = Math.round(waveA.maxDps * 1000) / 1000;
   const roundedWaveB = Math.round(waveB.maxDps * 1000) / 1000;
+  const roundedWaveC = Math.round(waveC.maxDps * 1000) / 1000;
   record("godBuild.maxPracticalDps", roundedLegacy);
   check("legacy catalog preserves the reviewed 47.94 estimator fixture",
     roundedLegacy === fixtures.legacy.maxPracticalDps
@@ -1305,6 +1309,10 @@ function godBuildGates(): void {
     roundedWaveB === fixtures.waveB.maxPracticalDps
     && waveB.top[0].build === fixtures.waveB.strongestBuild,
     `${roundedWaveB} ${waveB.top[0].build}`);
+  check("Wave C catalog matches the reviewed catalog-3 estimator fixture (guns-only: no new blessings)",
+    roundedWaveC === fixtures.waveC.maxPracticalDps
+    && waveC.top[0].build === fixtures.waveC.strongestBuild,
+    `${roundedWaveC} ${waveC.top[0].build}`);
   check("the versioned strongest-build change is intentional while global ceilings remain unchanged",
     legacy.top[0].build !== waveA.top[0].build
     && roundedWaveA < roundedLegacy);
@@ -1313,6 +1321,8 @@ function godBuildGates(): void {
       waveA.maxDps <= ceiling, waveA.maxBuild);
     check(`Wave B 100k-build max practical DPS ${waveB.maxDps.toFixed(1)} ≤ the ${kind} ceiling ${ceiling}`,
       waveB.maxDps <= ceiling, waveB.maxBuild);
+    check(`Wave C 100k-build max practical DPS ${waveC.maxDps.toFixed(1)} ≤ the ${kind} ceiling ${ceiling}`,
+      waveC.maxDps <= ceiling, waveC.maxBuild);
   }
   if (process.argv.includes("--write-god-candidate")) {
     writeFileSync(new URL("./fixtures/god_build_report.wave_a.candidate.json", import.meta.url), JSON.stringify({

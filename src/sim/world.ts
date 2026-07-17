@@ -202,6 +202,27 @@ export interface DisabledBlessing {
   life: number;
 }
 
+// ---- Content Wave C transient state shapes (server-owned) ----
+// Lamplighter's safe patch: a small, short-lived footing that shields a standing player from
+// floor-hazard damage (like a temporary Pathmaker pave) without deleting the hazard itself.
+export interface LampPatch {
+  x: number;
+  y: number;
+  radius: number;
+  life: number; // seconds remaining
+}
+// Faultlink's pending A mark (awaiting a second body to form the link).
+export interface FaultMark {
+  eid: number;
+  life: number; // seconds remaining
+}
+// Faultlink's formed A<->B link (fixed lifetime; breaks on death / range / LOS loss).
+export interface FaultLink {
+  aEid: number;
+  bEid: number;
+  life: number; // seconds remaining
+}
+
 // A live melee swing, resolving hits over its short duration (sim state, per player).
 export interface MeleeSwing {
   timer: number;
@@ -318,6 +339,21 @@ export interface PlayerSim {
   rememberMeArmed: boolean;          // remember_me: lethal-save available this floor
   disabledBlessing: DisabledBlessing | null; // remember_me: the blessing muted by a save
   lightSoloDashIcd: number;          // carry_the_light: solo dash-restore cooldown
+  // ---- Content Wave C server-owned transient combat state (never on the reconcile wire;
+  // all sub-10s, rebuilt from live inputs after a resume) ----
+  hushStacks: number;        // hushiron: current stance stacks (0..maxStacks)
+  hushStillT: number;        // hushiron: seconds standing still (arms stacking at stillDelay)
+  hushStackT: number;        // hushiron: accumulator toward the next stance stack
+  hushVentT: number;         // hushiron: accumulator toward the next vented stack while moving
+  backtalkHoldT: number;     // backtalk: held-fire accumulator that opens the parry window
+  backtalkWindowT: number;   // backtalk: seconds the frontal catch window stays open
+  backtalkCd: number;        // backtalk: parry cooldown (starts on a SUCCESSFUL catch only)
+  backtalkReturnT: number;   // backtalk: seconds the caught return shot stays armed
+  backtalkCaughtDmg: number; // backtalk: damage of the caught shot (0 when unarmed)
+  backtalkLock: number;      // backtalk: input lock after a miss / expired empty window
+  lampPatches: LampPatch[];  // lamplighter: live safe patches (cap 3, oldest despawns)
+  faultMark: FaultMark | null;  // faultlink: the pending A mark awaiting a B to link
+  faultLink: FaultLink | null;  // faultlink: the formed A<->B link
   isDown: boolean;
   // Network-absent (authoritative server only): the player's connection dropped and their body
   // is RESERVED for the reconnect grace window. An absent body is paused and safe — it cannot
@@ -696,6 +732,10 @@ export function createPlayer(id: PlayerId, x: number, y: number): PlayerSim {
     forkLink: null, penMarks: new Map(), penSkillCd: 0, penInputLock: 0,
     marginStore: null, sidewinderArcT: 0, sidewinderArcAim: 0,
     revealIcdT: 0, rememberMeArmed: true, disabledBlessing: null, lightSoloDashIcd: 0,
+    hushStacks: 0, hushStillT: 0, hushStackT: 0, hushVentT: 0,
+    backtalkHoldT: 0, backtalkWindowT: 0, backtalkCd: 0, backtalkReturnT: 0,
+    backtalkCaughtDmg: 0, backtalkLock: 0, lampPatches: [],
+    faultMark: null, faultLink: null,
     isDown: false, isAbsent: false, warmthIdleSec: 0, warmthPathPx: 0, isWarmthChilled: false,
     reviveProgress: 0, reviveBy: null, downsThisFloor: 0, isInteracting: false, rewindTicks: 0,
 
@@ -1980,6 +2020,7 @@ export function loadFloorIntoWorld(w: WorldState, floor: number, playerCountAtLo
     p.lightSoloDashIcd = 0;
     p.rememberMeArmed = true;
     p.disabledBlessing = null;
+    resetWaveCState(p);
   }
   w.sameTargetWindow.clear();
   for (const p of w.players.values()) p.hasClaimedBossChoice = false;
@@ -2130,6 +2171,7 @@ export function resetRunInWorld(w: WorldState, seed: number): void {
     p.rememberMeArmed = true;
     p.disabledBlessing = null;
     p.lightSoloDashIcd = 0;
+    resetWaveCState(p);
   }
   w.procWindow.clear();
   w.sameTargetWindow.clear();
@@ -2685,6 +2727,15 @@ function resolveShot(w: WorldState, p: PlayerSim, weapon: WeaponId): ShotSpec {
   if (gamble === "pierce") shot.pierce = Math.min(4, shot.pierce + 2);
   if (p.mods.reclaimedBounceDamage > 0 && isReclaimableWeapon(wep)) {
     shot.reclaimedBounceDamage = p.mods.reclaimedBounceDamage;
+  }
+  // Hushiron (ROOT / RAMP): the stance stacks tighten spread and add pierce + size — and
+  // NEVER raw damage (Quill hard rule). Pierce shares CAPS.pierce (the min(4) cap above).
+  if (wep.stance !== undefined && p.hushStacks > 0) {
+    const s = wep.stance;
+    const stacks = Math.min(s.maxStacks, p.hushStacks);
+    shot.spread = Math.max(0, shot.spread * (1 - s.spreadPerStack * stacks));
+    shot.pierce = Math.min(4, shot.pierce + Math.min(2, Math.floor(stacks / 2)));
+    shot.radius += Math.floor(stacks / 3); // 0 -> +1px at 3+ stacks
   }
   // Crosscurrent (blessing): every round the player fires gains chain jumps + jump damage.
   // The combined pierce+chain specialists pay a 55% tax on the JUMP channel only.
@@ -4216,6 +4267,9 @@ function endBossDanger(w: WorldState, boss: Enemy, ev: SimEvent[]): void {
 // the heavy Thunderbolt its plate shrugged off.
 const BOSS_SIGNATURE_WEAPON: Readonly<Partial<Record<Enemy["kind"], WeaponId>>> = {
   boss: "mortar", marrow: "railgun", choir: "beam", weaver: "tesla", gilded: "cannon",
+  // Content Wave C boss-clear reward leads (Quill FINAL). Quorum hands the run's new
+  // Faultlink; Jet/Tithe/Gorge hand their authored answers (Oddsmaker/Sluicegate/Breach).
+  jet: "oddsmaker", tithe: "sluicegate", quorum: "faultlink", gorge: "breach",
 };
 
 // The lead weapon a boss chest bakes. Deep bosses hand their single authored signature;
@@ -4866,10 +4920,268 @@ function triggerKnownByTouch(w: WorldState, p: PlayerSim, ev: SimEvent[]): void 
   }
 }
 
+// ===================== Content Wave C: verbs + safety (guns-only) =====================
+
+// Every Wave C verb is server-owned TRANSIENT combat state (sub-10s), rebuilt from live
+// inputs after a resume. This is the single reset the floor build + run reset call.
+function resetWaveCState(p: PlayerSim): void {
+  p.hushStacks = 0; p.hushStillT = 0; p.hushStackT = 0; p.hushVentT = 0;
+  p.backtalkHoldT = 0; p.backtalkWindowT = 0; p.backtalkCd = 0;
+  p.backtalkReturnT = 0; p.backtalkCaughtDmg = 0; p.backtalkLock = 0;
+  p.lampPatches = [];
+  p.faultMark = null; p.faultLink = null;
+}
+
+// Per-tick Wave C timers + verbs (hushiron stance, backtalk parry, lamp patches, fault link).
+function tickWaveCSystems(w: WorldState, p: PlayerSim, input: InputCmd, dt: number, ev: SimEvent[]): void {
+  tickHushStance(p, input, dt);
+  tickBacktalk(w, p, input, dt, ev);
+  tickLampPatches(p, dt);
+  tickFaultlink(w, p, dt);
+}
+
+// Hushiron — ROOT / RAMP. Standing still ramps stance stacks (accuracy + pass-through, NEVER
+// damage); movement vents them one at a time; a dash rips them all out at once.
+function tickHushStance(p: PlayerSim, input: InputCmd, dt: number): void {
+  const s = WEAPONS.hushiron.stance;
+  if (s === undefined || p.weapon !== "hushiron") return;
+  if (p.dashTime > 0) {
+    p.hushStacks = 0; p.hushStillT = 0; p.hushStackT = 0; p.hushVentT = 0;
+    return;
+  }
+  const isMoving = input.moveX * input.moveX + input.moveY * input.moveY > 0.01;
+  if (isMoving) {
+    p.hushStillT = 0; p.hushStackT = 0;
+    if (p.hushStacks > 0) {
+      p.hushVentT += dt;
+      while (p.hushVentT >= s.moveClearInterval && p.hushStacks > 0) {
+        p.hushVentT -= s.moveClearInterval;
+        p.hushStacks--;
+      }
+      if (p.hushStacks === 0) p.hushVentT = 0;
+    } else {
+      p.hushVentT = 0;
+    }
+    return;
+  }
+  p.hushVentT = 0;
+  p.hushStillT += dt;
+  if (p.hushStillT < s.stillDelay || p.hushStacks >= s.maxStacks) return;
+  p.hushStackT += dt;
+  while (p.hushStackT >= s.stackInterval && p.hushStacks < s.maxStacks) {
+    p.hushStackT -= s.stackInterval;
+    p.hushStacks++;
+  }
+}
+
+// Backtalk — PARRY / RETURN. Holding fire while ready opens a short frontal window; a caught
+// enemy shot arms a return that the next fire throws back at 1.15x the caught damage.
+function tickBacktalk(w: WorldState, p: PlayerSim, input: InputCmd, dt: number, ev: SimEvent[]): void {
+  if (p.backtalkCd > 0) p.backtalkCd = p.backtalkCd > dt ? p.backtalkCd - dt : 0;
+  if (p.backtalkLock > 0) p.backtalkLock = p.backtalkLock > dt ? p.backtalkLock - dt : 0;
+  if (p.backtalkReturnT > 0) {
+    p.backtalkReturnT -= dt;
+    if (p.backtalkReturnT <= 0) { p.backtalkReturnT = 0; p.backtalkCaughtDmg = 0; }
+  }
+  const spec = WEAPONS.backtalk.parry;
+  if (spec === undefined || p.weapon !== "backtalk") { p.backtalkHoldT = 0; p.backtalkWindowT = 0; return; }
+  const isReady = p.backtalkCd <= 0 && p.backtalkReturnT <= 0 && p.backtalkLock <= 0;
+  if (input.firing && isReady) {
+    p.backtalkHoldT += dt;
+    if (p.backtalkHoldT >= spec.holdOpen) p.backtalkWindowT = spec.windowDur;
+  } else {
+    p.backtalkHoldT = 0;
+  }
+  if (p.backtalkWindowT <= 0) return;
+  // The frontal catch: the earliest legal enemy shot inside the window is caught + returned.
+  if (tryBacktalkCatch(w, p, spec, ev)) return;
+  p.backtalkWindowT -= dt;
+  if (p.backtalkWindowT <= 0) {
+    p.backtalkWindowT = 0;
+    p.backtalkLock = spec.missLock; // an expired empty window locks input briefly (no CD refund)
+  }
+}
+
+// Legal catch: an enemy bullet (damage ≥ 1) in the frontal window. Boss mechanic hazards
+// (flood fronts, choir sheets, pale/gorge arena bodies) are enemies/effects, never plain
+// enemy bullets, so they can never enter this set; ally shots are friendly and excluded.
+function tryBacktalkCatch(w: WorldState, p: PlayerSim, spec: NonNullable<Weapon["parry"]>, ev: SimEvent[]): boolean {
+  const catchRange = 220;
+  for (const b of w.bullets) {
+    if (b.friendly || b.owner !== null || b.damage < 1) continue;
+    const dx = b.x - p.x, dy = b.y - p.y;
+    if (dx * dx + dy * dy > catchRange * catchRange) continue;
+    if (Math.abs(normalizeAngle(Math.atan2(dy, dx) - p.aimAngle)) > spec.windowArc) continue;
+    b.life = 0;
+    p.backtalkCaughtDmg = b.damage;
+    p.backtalkCd = spec.cooldown;        // cooldown starts ONLY on a successful catch
+    p.backtalkReturnT = spec.returnWindow;
+    p.backtalkWindowT = 0;
+    p.backtalkHoldT = 0;
+    ev.push({ t: "cue", name: "backtalk.parry", x: p.x, y: p.y, rate: 1, gain: 0.72, trauma: 0.03 });
+    return true;
+  }
+  return false;
+}
+
+// Backtalk fire: throw the caught return when armed, else the feeble ready stub. A fire while
+// input-locked (after a missed window) fails closed.
+function fireBacktalk(w: WorldState, p: PlayerSim, wep: Weapon, ev: SimEvent[]): void {
+  const spec = wep.parry!;
+  if (p.backtalkLock > 0) return;
+  const muzzleX = p.x + Math.cos(p.aimAngle) * 18;
+  const muzzleY = p.y + Math.sin(p.aimAngle) * 18;
+  if (p.backtalkReturnT > 0 && p.backtalkCaughtDmg > 0) {
+    const dmg = Math.min(spec.returnMax, Math.max(spec.returnMin, p.backtalkCaughtDmg * spec.returnCoef));
+    const b: Bullet = {
+      x: muzzleX, y: muzzleY,
+      vx: Math.cos(p.aimAngle) * spec.returnSpeed * p.mods.bulletSpeedMult,
+      vy: Math.sin(p.aimAngle) * spec.returnSpeed * p.mods.bulletSpeedMult,
+      radius: wep.bulletRadius * p.mods.bulletSizeMult,
+      life: spec.returnLife * p.mods.bulletLifeMult,
+      friendly: true, owner: p.id, damage: dmg, color: "#fff2e6",
+      pierce: 0, hitList: null, isCrit: false, enemyHits: 0, critX: 1,
+      bossCoef: 0.65, fx: "backtalk", isBacktalkReturn: true,
+      bornTick: w.tick, lagRewind: p.rewindTicks,
+    };
+    w.bullets.push(b);
+    p.backtalkReturnT = 0;
+    p.backtalkCaughtDmg = 0;
+    ev.push({ t: "cue", name: "backtalk.return", x: muzzleX, y: muzzleY, rate: 1, gain: 0.7, trauma: 0.02 });
+  } else {
+    const shot = resolveShot(w, p, "backtalk");
+    for (const b of fire(shot, muzzleX, muzzleY, p.aimAngle, w.rng, p.id)) {
+      b.bornTick = w.tick;
+      b.lagRewind = p.rewindTicks;
+      w.bullets.push(b);
+    }
+    captureMarginStore(p, wep, shot);
+  }
+  setActiveWeaponFireCooldown(p, wep.fireCd / currentFireRate(p));
+  p.shotSeq++;
+  ev.push({
+    t: "shot", pid: p.id, weapon: "backtalk", x: muzzleX, y: muzzleY, aim: p.aimAngle,
+    px: p.x, py: p.y, chg: 0, mode: "none", outcome: "none",
+  });
+  applyWeaponKick(w, p, ev);
+}
+
+// Lamplighter — RELIGHT. Live safe patches decay; expired ones despawn.
+function tickLampPatches(p: PlayerSim, dt: number): void {
+  if (p.lampPatches.length === 0) return;
+  for (const patch of p.lampPatches) patch.life -= dt;
+  p.lampPatches = p.lampPatches.filter((patch) => patch.life > 0);
+}
+
+// A point is in warm light if it sits inside any live Carry-the-Light aura or an Undertow
+// warm-pulse carry (the objective light source). This is the lit-path source for Lamplighter.
+function isInWarmLight(w: WorldState, x: number, y: number): boolean {
+  for (const p of w.players.values()) {
+    if (p.isDown || p.isAbsent || p.mods.lightRadius <= 0) continue;
+    const r = p.mods.lightRadius;
+    if ((p.x - x) ** 2 + (p.y - y) ** 2 <= r * r) return true;
+  }
+  for (const e of w.enemies) {
+    if (e.dead || e.kind !== "warm_pulse") continue;
+    const r = e.radius + 40;
+    if ((e.x - x) ** 2 + (e.y - y) ** 2 <= r * r) return true;
+  }
+  return false;
+}
+
+// A point is on a live Lamplighter safe patch (any owner). Read by the floor-hazard funnel.
+function isOnLampPatch(w: WorldState, x: number, y: number): boolean {
+  for (const p of w.players.values()) {
+    for (const patch of p.lampPatches) {
+      if (patch.life <= 0) continue;
+      if ((patch.x - x) ** 2 + (patch.y - y) ** 2 <= patch.radius * patch.radius) return true;
+    }
+  }
+  return false;
+}
+
+// Plant a Lamplighter safe patch (cap maxPatches; oldest despawns). NEVER deletes a hazard,
+// boss tell, or pave — it only shields a standing player from floor-hazard damage.
+function plantLampPatch(w: WorldState, p: PlayerSim, x: number, y: number, ev: SimEvent[]): void {
+  const spec = WEAPONS.lamplighter.relight!;
+  // Pathmaker overlap tax: once at the patch cap, a plant landing on existing pave has a 45%
+  // chance to be skipped — the pave already covers that ground (Quill combo gate).
+  if (isPavedAt(w, x, y) && p.lampPatches.length >= spec.maxPatches && w.rng.next() < 0.45) return;
+  // Carry the Light tax: while the objective aura is up, patches burn 40% faster.
+  const life = p.mods.lightRadius > 0 ? spec.patchLife * (1 - 0.40) : spec.patchLife;
+  p.lampPatches.push({ x, y, radius: spec.patchRadius, life });
+  while (p.lampPatches.length > spec.maxPatches) p.lampPatches.shift();
+  ev.push({ t: "cue", name: "lamplighter.patch", x, y, rate: 1, gain: 0.5, trauma: 0 });
+}
+
+// Faultlink — LINK / SHARE. Tick the pending mark + formed link; break the link on death,
+// range, or LOS loss.
+function tickFaultlink(w: WorldState, p: PlayerSim, dt: number): void {
+  if (p.faultMark !== null) {
+    p.faultMark.life -= dt;
+    if (p.faultMark.life <= 0 || findEnemyById(w, p.faultMark.eid) === null) p.faultMark = null;
+  }
+  const link = p.faultLink;
+  if (link === null) return;
+  const spec = WEAPONS.faultlink.faultlink!;
+  link.life -= dt;
+  const a = findEnemyById(w, link.aEid);
+  const b = findEnemyById(w, link.bEid);
+  if (link.life <= 0 || a === null || b === null
+    || Math.hypot(a.x - b.x, a.y - b.y) > spec.range
+    || !hasLineOfSight(w, a.x, a.y, b.x, b.y)) {
+    p.faultLink = null;
+  }
+}
+
+// A Faultlink primary hit: echo across a live seam, or advance the mark → link handshake.
+function faultOnPrimaryHit(w: WorldState, p: PlayerSim, e: Enemy, dmg: number, ev: SimEvent[]): void {
+  const spec = WEAPONS.faultlink.faultlink!;
+  const link = p.faultLink;
+  if (link !== null) {
+    const otherId = e.id === link.aEid ? link.bEid : e.id === link.bEid ? link.aEid : null;
+    if (otherId !== null) { faultEcho(w, p, otherId, dmg, ev); return; }
+  }
+  // No live seam on this body: mark it, or close the seam if a different body is already marked.
+  const mark = p.faultMark;
+  if (mark !== null && mark.eid !== e.id) {
+    const a = findEnemyById(w, mark.eid);
+    if (a !== null && Math.hypot(a.x - e.x, a.y - e.y) <= spec.range
+      && hasLineOfSight(w, a.x, a.y, e.x, e.y)) {
+      p.faultLink = { aEid: mark.eid, bEid: e.id, life: spec.linkDur };
+      p.faultMark = null;
+      ev.push({ t: "cue", name: "faultlink.link", x: e.x, y: e.y, rate: 1, gain: 0.55, trauma: 0 });
+      return;
+    }
+  }
+  p.faultMark = { eid: e.id, life: spec.markDur };
+}
+
+// Echo a fraction of a primary hit onto the linked endpoint. No crit / status / proc / recurse;
+// rate-clamped to ≤4/s and same-target-repeat 0.25 (Quill echo channel).
+function faultEcho(w: WorldState, p: PlayerSim, targetId: number, primaryDmg: number, ev: SimEvent[]): void {
+  const spec = WEAPONS.faultlink.faultlink!;
+  const target = findEnemyById(w, targetId);
+  if (target === null) return;
+  if (!w.procWindow.admit(procKey(p.id, target.id, "faultecho"), w.waveBClock)) return;
+  const isBoss = isBossGradeKind(target);
+  let dmg = primaryDmg * (isBoss ? spec.echoBoss : spec.echoRoom);
+  if (!w.sameTargetWindow.admit(procKey(p.id, target.id, "faultecho"), w.waveBClock)) {
+    dmg *= C.WAVE_C_FAULT_ECHO_REPEAT;
+  }
+  const dir = Math.atan2(target.y - p.y, target.x - p.x);
+  strikeEnemy(w, p, target, {
+    damage: dmg, isCrit: false, critX: 1, bossCoef: 1,
+    puffX: target.x, puffY: target.y, kbDirX: Math.cos(dir), kbDirY: Math.sin(dir),
+    isMelee: false, ownerId: p.id, fxWeapon: "faultlink",
+  }, ev);
+}
+
 function updateShooting(w: WorldState, p: PlayerSim, input: InputCmd, dt: number, ev: SimEvent[]): void {
   if (isPvpSpawnAttackSuppressed(w, p)) return;
   tickWeaponFireCooldowns(p, dt);
   tickWaveBSystems(w, p, dt, ev);
+  tickWaveCSystems(w, p, input, dt, ev);
   if (isPvp(w) && !isPvpWeaponSupported(p.weapon)) return;
   const wep = WEAPONS[p.weapon];
   // Hold-charge weapons (the Breach) own the whole trigger lifecycle: hold accumulates
@@ -4898,6 +5210,7 @@ function updateShooting(w: WorldState, p: PlayerSim, input: InputCmd, dt: number
     if (wep.rewrite) { fireRedPen(w, p, wep, ev); return; }
     if (wep.margin) { fireMarginCall(w, p, wep, ev); return; }
     if (wep.sidewinder) { fireSidewinder(w, p, wep, ev); return; }
+    if (wep.parry) { fireBacktalk(w, p, wep, ev); return; }
     const muzzleX = p.x + Math.cos(p.aimAngle) * 18;
     const muzzleY = p.y + Math.sin(p.aimAngle) * 18;
     const spec = resolveShot(w, p, p.weapon);
@@ -4920,6 +5233,12 @@ function updateShooting(w: WorldState, p: PlayerSim, input: InputCmd, dt: number
       if (spec.grapplePull !== undefined && index > 0) b.grapplePull = undefined;
       // Resonant Fork: the primary round opens/refreshes the owner's single tune link on hit.
       if (wep.resonate !== undefined) b.isForkPrimary = true;
+      // Hushiron: a stance slug (tracked for FX only; its stance mods are baked into the shot).
+      if (wep.stance !== undefined) b.isHushSlug = true;
+      // Lamplighter: a relight round accrues lit-travel distance to earn its pierce + patch.
+      if (wep.relight !== undefined) { b.isLampShot = true; b.lampLitDist = 0; b.lampLit = false; }
+      // Faultlink: a primary round marks the body it hits (and echoes across a formed link).
+      if (wep.faultlink !== undefined) b.isFaultPrimary = true;
       // Anchor lag-comp at fire time: record the tick + the shooter's rewind depth NOW, so hit
       // tests use the shooter's fire-time view and decay to present as the projectile travels.
       b.bornTick = w.tick;
@@ -5319,6 +5638,15 @@ function updateBullets(w: WorldState, dt: number, ev: SimEvent[]): void {
       }
     }
     b.x += b.vx * dt; b.y += b.vy * dt; b.life -= dt;
+    // Lamplighter: a relight round accrues distance through warm/objective/Carry-the-Light
+    // light; once past the lit threshold it latches +1 pierce (shares CAPS.pierce).
+    if (b.isLampShot === true && b.lampLit !== true && isInWarmLight(w, b.x, b.y)) {
+      b.lampLitDist = (b.lampLitDist ?? 0) + Math.hypot(b.vx, b.vy) * dt;
+      if (b.lampLitDist >= (WEAPONS.lamplighter.relight?.litDist ?? Infinity)) {
+        b.lampLit = true;
+        b.pierce = Math.min(4, b.pierce + 1);
+      }
+    }
     const wallContact = !(b.friendly && b.isPhase === true)
       ? b.grapplePull !== undefined
         ? firstWallContact(w, b.prevX, b.prevY, b.x, b.y)
@@ -5374,6 +5702,11 @@ function updateBullets(w: WorldState, dt: number, ev: SimEvent[]): void {
       if (b.bounce !== undefined && b.bounce > 0) { bounceOffWall(w, b, dt, ev); continue; }
       b.life = 0;
       if (b.isSilk === true) plantWeb(w, b.prevX ?? b.x, b.prevY ?? b.y, WEAVER.silkWebRadius, ev);
+      // Lamplighter: a LIT round that reaches a wall plants its safe patch on the wall face.
+      if (b.isLampShot === true && b.lampLit === true && b.owner !== null) {
+        const lampOwner = w.players.get(b.owner);
+        if (lampOwner !== undefined) plantLampPatch(w, lampOwner, wallContact.x, wallContact.y, ev);
+      }
       ev.push({ t: "bulletWall", x: b.x, y: b.y, aim: Math.atan2(-b.vy, -b.vx) }); continue;
     }
     if (!b.friendly) {
@@ -6476,6 +6809,18 @@ function updateEnemies(w: WorldState, dt: number, ev: SimEvent[]): void {
         if ((b.crosscurrentJumps ?? 0) > 0) {
           crosscurrentJump(w, shooter, b, e, ev);
           b.crosscurrentJumps = 0;
+        }
+        // Faultlink: a primary hit marks the body, forms the seam, or echoes across it.
+        if (b.isFaultPrimary === true && b.owner !== null) {
+          const faultOwner = w.players.get(b.owner);
+          if (faultOwner !== undefined) faultOnPrimaryHit(w, faultOwner, e, strikeDmg, ev);
+        }
+        // Lamplighter: a LIT round plants a safe patch on its FIRST enemy hit (once).
+        if (b.isLampShot === true && b.lampLit === true && b.owner !== null) {
+          const lampOwner = w.players.get(b.owner);
+          if (lampOwner !== undefined) plantLampPatch(w, lampOwner, sweptHit.x, sweptHit.y, ev);
+          b.isLampShot = false;
+          b.lampLit = false;
         }
         // The Reaper's harvest: a KILLING round bursts the body into seeking shards
         // (shards carry the field too, so kills cascade at geometrically decaying damage).
@@ -15175,7 +15520,7 @@ function updateFloorHazards(w: WorldState, dt: number, ev: SimEvent[]): void {
     // damagePlayer); the rift drag must respect the same freeze — nothing may move a
     // player who cannot answer.
     if (p.isDown || p.hp <= 0 || w.pendingBlessings.has(p.id)) continue;
-    if (isPavedAt(w, p.x, p.y)) continue;
+    if (isPavedAt(w, p.x, p.y) || isOnLampPatch(w, p.x, p.y)) continue;
     // Rift drag: escapable pressure (85px/s against a 200px/s walk), through the normal
     // wall-aware move so it can never push a player into geometry, and line-of-sight
     // gated so a rift never pulls through a wall.
@@ -15251,6 +15596,19 @@ function damagePlayer(
   // BELOW the pvp branch by design: a mid-match PvP draft is free power, not a free combat
   // iframe. Its chooser is paused but remains vulnerable until the quick 1-of-3 decision lands.
   if (w.pendingBlessings.has(p.id)) return;
+  // Hushiron flusher vulnerability (Quill FINAL): a ROOTED, ramped (stacks ≥ flusherStacks)
+  // owner is exposed — an enemy hit lands a flat +1 and flushes the whole stance. A readable
+  // counter to camping the ramp, never a silent per-hit HP tax (only while the iron is held
+  // and fully ramped, which no other system triggers). BALANCER_TODO: the FILL scopes this to
+  // hits that DISPLACE ≥24px; the central damage funnel has no displacement, so this pass
+  // applies it to enemy-sourced hits and documents the approximation for the balancer gate.
+  if (by === null && amount > 0 && p.weapon === "hushiron") {
+    const stance = WEAPONS.hushiron.stance;
+    if (stance !== undefined && p.hushStacks >= stance.flusherStacks) {
+      amount += C.WAVE_C_HUSH_FLUSHER_DAMAGE;
+      p.hushStacks = 0; p.hushStillT = 0; p.hushStackT = 0; p.hushVentT = 0;
+    }
+  }
   // BULWARK HARDENED (spec §2.3/§10): flat damage reduction with NO invuln, applied HERE in the
   // damage-taken math BEFORE any co-op/mode pressure, and clamped so total DR never stacks past
   // MAX_TOTAL_DR. Integer HP is preserved by SOAKING the reduced fraction into the passive

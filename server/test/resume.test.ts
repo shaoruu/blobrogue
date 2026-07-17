@@ -140,7 +140,7 @@ async function main(): Promise<void> {
           && self.items.filter((it) => it === "it_dmg").length === 2
           && self.sgc === 0x0ffffffe && self.ogc === 0x0fffffff && self.isMds
           && self.wcd[self.wpns.indexOf("tesla")] === 0.375
-          && bot.transport.getLatestSnapshot()?.cat === 2
+          && bot.transport.getLatestSnapshot()?.cat === 3
           && bot.transport.getLatestSnapshot()!.floor === 1
           && Math.abs(self.x - wantX) < 1 && Math.abs(self.y - wantY) < 1,
           `hp=${self?.hp} coins=${self?.coins}`);

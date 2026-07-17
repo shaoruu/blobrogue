@@ -1579,6 +1579,7 @@ export const WEAPON_RESONANCE: Readonly<Record<WeaponId, ResonanceFamily>> = {
   cryobolt: "rapid", firebomb: "lob", tracker: "arc", singularity: "lob",
   mooring_nail: "lance", sluicegate: "spread", oddsmaker: "arc", pathmaker: "lob",
   resonant_fork: "spread", red_pen: "lance", margin_call: "rapid", sidewinder: "arc",
+  hushiron: "lance", backtalk: "spread", lamplighter: "lance", faultlink: "rapid",
 };
 
 export function weaponResonanceFamily(id: WeaponId): ResonanceFamily {
@@ -2573,6 +2574,14 @@ export const WEAPON_BOSS_COEF: Readonly<Partial<Record<WeaponId, number>>> = {
   red_pen: 0.85,
   margin_call: 0.9,
   sidewinder: 0.55,
+  // Wave C (Quill FINAL): the fire-time base coefficient is the weapon's PRIMARY channel.
+  // Backtalk's fire-time base is the STUB (0.90); its RETURN channel (0.65) is re-priced in
+  // its own return path (like the red_pen snap). Faultlink echoes (room 0.25 / boss 0.15)
+  // ride the primary coefficient's boss factor in their echo path.
+  hushiron: 0.72,
+  backtalk: 0.90,
+  lamplighter: 0.65,
+  faultlink: 0.70,
 };
 
 // ---- §6 power budget: raw caps (temporary per-run blessings) ----

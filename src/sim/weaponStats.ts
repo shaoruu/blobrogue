@@ -87,7 +87,8 @@ export type CoverageKind =
   // Effect-wave coverage kinds: what the placed/worn/charged output does to space.
   | "ARTILLERY" | "TRAP" | "ORBIT" | "TURRET" | "TETHER" | "GROUND"
   | "GRAPPLE" | "MODESHIFT" | "GAMBLE" | "PAVE"
-  | "TUNE" | "REWRITE" | "COPY" | "FLANK";
+  | "TUNE" | "REWRITE" | "COPY" | "FLANK"
+  | "STANCE" | "PARRY" | "RELIGHT" | "LINK";
 
 export interface WeaponCoverage {
   kind: CoverageKind;
@@ -126,6 +127,10 @@ function roleOf(w: Weapon): string {
   if (w.rewrite !== undefined) return "MARK AND REWRITE";
   if (w.margin !== undefined) return "STORE AND ECHO";
   if (w.sidewinder !== undefined) return "FLANK THE TARGET";
+  if (w.stance !== undefined) return "ROOT AND RAMP";
+  if (w.parry !== undefined) return "PARRY AND RETURN";
+  if (w.relight !== undefined) return "RELIGHT THE ROOM";
+  if (w.faultlink !== undefined) return "LINK AND SHARE";
   if (w.paint?.isPaving === true) return "CLEANSE AND PAVE";
   if (w.paint !== undefined) return "CUT THE ROOM IN TWO";
   if (w.lowHpBonus !== undefined) return "TRADE SAFETY FOR THE KILL";
@@ -195,6 +200,10 @@ function coverageOf(w: Weapon, pellets: number, spread: number): WeaponCoverage 
   if (w.rewrite !== undefined) return { kind: "REWRITE", patternOrder: null };
   if (w.margin !== undefined) return { kind: "COPY", patternOrder: null };
   if (w.sidewinder !== undefined) return { kind: "FLANK", patternOrder: null };
+  if (w.stance !== undefined) return { kind: "STANCE", patternOrder: null };
+  if (w.parry !== undefined) return { kind: "PARRY", patternOrder: null };
+  if (w.relight !== undefined) return { kind: "RELIGHT", patternOrder: null };
+  if (w.faultlink !== undefined) return { kind: "LINK", patternOrder: null };
   if (w.paint?.isPaving === true) return { kind: "PAVE", patternOrder: null };
   if (w.paint !== undefined) return { kind: "GROUND", patternOrder: null };
   if (w.blast !== undefined) return { kind: "AREA", patternOrder: null };
@@ -235,6 +244,10 @@ function mechanicsOf(w: Weapon, mods: PlayerMods): WeaponMechanic[] {
   if (w.rewrite !== undefined) m.push({ tag: "REWRITE", text: "INK MARKS; A SNAP REWRITES IT FOR A BURST", mag: w.rewrite.snapCoef });
   if (w.margin !== undefined) m.push({ tag: "COPY", text: "STORES ONE PAYLOAD CLASS AND ECHOES IT", mag: w.margin.maxCopyPellets });
   if (w.sidewinder !== undefined) m.push({ tag: "FLANK", text: "TWO CURVING ARCS BITE THE FLANK", mag: w.sidewinder.arcs });
+  if (w.stance !== undefined) m.push({ tag: "STANCE", text: "STAND STILL TO RAMP SPREAD + PIERCE", mag: w.stance.maxStacks });
+  if (w.parry !== undefined) m.push({ tag: "PARRY", text: "A FRONTAL WINDOW CATCHES A SHOT TO RETURN", mag: w.parry.returnCoef });
+  if (w.relight !== undefined) m.push({ tag: "RELIGHT", text: "A LIT SHOT PIERCES AND PLANTS A SAFE PATCH", mag: w.relight.patchRadius });
+  if (w.faultlink !== undefined) m.push({ tag: "LINK", text: "MARKS TWO BODIES AND ECHOES DAMAGE BETWEEN", mag: w.faultlink.range });
   if (w.paint?.isPaving === true) m.push({ tag: "PAVE", text: "CLEARS HOSTILE GROUND; PAVES FLOOR HAZARDS", mag: w.paint.radius });
   if (w.melee?.isThrust) m.push({ tag: "THRUST", text: "PIERCING THRUST", mag: 1 });
   if (w.chain !== undefined) m.push({ tag: "CHAIN", text: `CHAINS TO ${w.chain} MORE`, mag: w.chain });

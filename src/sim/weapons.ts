@@ -150,6 +150,56 @@ export interface SidewinderSpec {
   flankArc: number;   // radians: half-window of the rear arc that earns the bonus
 }
 
+// Hushiron (ROOT / RAMP): standing still ramps stance stacks that tighten spread and add
+// pierce/size. There is NO damage multiplier from stacks — the ramp buys accuracy + pass-
+// through, never raw DPS. Movement vents stacks; a dash clears them all.
+export interface StanceSpec {
+  stillDelay: number;   // seconds standing still before the first stack accrues
+  stackInterval: number;// seconds between stacks while still
+  maxStacks: number;    // hard stack cap
+  spreadPerStack: number; // spread × (1 − spreadPerStack × stacks), floored at 0
+  moveClearSpeed: number; // px/s of movement that starts venting stacks
+  moveClearInterval: number; // seconds per vented stack while moving
+  flusherStacks: number;  // stacks ≥ this arms the readable flusher vulnerability
+  flusherDisplace: number;// px an enemy blast/KB must displace the owner to flush +1 damage
+}
+
+// Backtalk (PARRY / RETURN): a frontal window catches an incoming enemy shot and lets the
+// next fire throw it back. The catch is the logical trigger; the return is the payoff.
+export interface ParrySpec {
+  holdOpen: number;     // seconds of held-fire that opens the parry window
+  windowDur: number;    // seconds the frontal catch window stays open
+  windowArc: number;    // radians: half-window of the frontal catch cone
+  cooldown: number;     // seconds before another parry can open (starts on a SUCCESSFUL catch)
+  returnWindow: number; // seconds after a catch the return shot stays armed
+  returnCoef: number;   // return damage = returnCoef × caught damage (clamped to [min,max])
+  returnMin: number;    // return damage floor
+  returnMax: number;    // return damage ceiling
+  returnSpeed: number;  // return round speed
+  returnLife: number;   // return round lifetime
+  missLock: number;     // input lock on a miss / expired empty window
+}
+
+// Lamplighter (RELIGHT): a shot that travels far enough through warm / objective / Carry-
+// the-Light light gains pierce +1 and plants a small safe patch on first enemy hit / wall.
+export interface RelightSpec {
+  litDist: number;      // px a shot must travel through light to become "lit"
+  patchRadius: number;  // safe-patch radius planted by a lit shot
+  patchLife: number;    // seconds a planted patch lives
+  maxPatches: number;   // max live patches per owner (oldest despawns)
+}
+
+// Faultlink (LINK / SHARE): a primary hit marks a body; two marked bodies link, and each
+// primary hit on one endpoint echoes a fraction of its damage onto the other.
+export interface FaultlinkSpec {
+  markDur: number;      // seconds a fresh A mark lives before it fades
+  linkDur: number;      // seconds a formed A→B link holds (fixed)
+  range: number;        // max px between endpoints (LOS both ends); link breaks past it
+  echoRoom: number;     // echo damage vs primary hit, room bodies
+  echoBoss: number;     // echo damage vs primary hit, boss-grade bodies
+  echoRatePerSec: number; // hard clamp on echoes per second (aligns the global proc clamp)
+}
+
 export const WEAPON_CYCLE_IDS = ["sluicegate", "oddsmaker"] as const;
 export type WeaponCycleId = typeof WEAPON_CYCLE_IDS[number];
 export type WeaponCycles = Record<WeaponCycleId, number>;
@@ -205,6 +255,10 @@ export interface Weapon {
   rewrite?: RewriteSpec;
   margin?: MarginSpec;
   sidewinder?: SidewinderSpec;
+  stance?: StanceSpec;
+  parry?: ParrySpec;
+  relight?: RelightSpec;
+  faultlink?: FaultlinkSpec;
   // Legendary signature mechanics — one per legendary, never shared, never a stat reskin.
   // Each stamps one field onto its bullets (or gates the trigger pull, for the Midas) and
   // switches an isolated branch in the update loop, exactly like the Tier B fields above.
@@ -592,6 +646,40 @@ export const WEAPONS: Record<WeaponId, Weapon> = {
       flankBonus: 0.25, flankArc: 50 * Math.PI / 180,
     },
     special: "ENCIRCLE / FLANK — a two-arc volley curves in to strike the target's flank.",
+  },
+  // ---- Content Wave C (catalog 3, Quill FINAL) — guns-only +4 ----
+  hushiron: {
+    id: "hushiron", name: "HUSHIRON", rarity: "rare", fireCd: 0.36, speed: 560, life: 0.95,
+    damage: 1.8, pellets: 1, spread: 0.04, bulletRadius: 5, color: "#9fb4c4", muzzle: 2,
+    stance: {
+      stillDelay: 0.25, stackInterval: 0.40, maxStacks: 5, spreadPerStack: 0.08,
+      moveClearSpeed: 40, moveClearInterval: 0.15, flusherStacks: 3, flusherDisplace: 24,
+    },
+    special: "ROOT / RAMP — stand still to ramp stance: tighter spread and pass-through, never raw damage.",
+  },
+  backtalk: {
+    id: "backtalk", name: "BACKTALK", rarity: "rare", fireCd: 0.42, speed: 520, life: 0.85,
+    damage: 1.5, pellets: 1, spread: 0.03, bulletRadius: 5, color: "#d68a5c", muzzle: 2,
+    parry: {
+      holdOpen: 0.20, windowDur: 0.35, windowArc: 45 * Math.PI / 180, cooldown: 4.5,
+      returnWindow: 3.0, returnCoef: 1.15, returnMin: 1.5, returnMax: 6, returnSpeed: 500,
+      returnLife: 0.90, missLock: 0.10,
+    },
+    special: "PARRY / RETURN — a frontal catch takes an enemy shot and throws it back.",
+  },
+  lamplighter: {
+    id: "lamplighter", name: "LAMPLIGHTER", rarity: "common", fireCd: 0.40, speed: 500, life: 1.0,
+    damage: 1.7, pellets: 1, spread: 0.02, bulletRadius: 5, color: "#ffdd8a", muzzle: 2,
+    relight: { litDist: 40, patchRadius: 22, patchLife: 1.2, maxPatches: 3 },
+    special: "RELIGHT — a shot through warm light gains pierce and plants a safe patch.",
+  },
+  faultlink: {
+    id: "faultlink", name: "FAULTLINK", rarity: "legendary", fireCd: 0.18, speed: 600, life: 1.0,
+    damage: 2.2, pellets: 1, spread: 0, bulletRadius: 5, color: "#8ad6c9", muzzle: 2,
+    faultlink: {
+      markDur: 3.0, linkDur: 5.0, range: 300, echoRoom: 0.25, echoBoss: 0.15, echoRatePerSec: 4,
+    },
+    special: "LINK / SHARE — marks two bodies and echoes primary damage between them.",
   },
 };
 
