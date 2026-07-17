@@ -20,7 +20,7 @@ import { ITEMS, itemById } from "../src/sim/items.js";
 import { isPvpBlessingId } from "../src/sim/items.js";
 import { isPvpWeaponSupported, pvpUnsupportedWeaponIds } from "../src/sim/pvp.js";
 import { buildSnapshot, validateSnap, jsonCodec } from "../src/net/protocol.js";
-import { heldWeaponSrc, weaponIconSrc } from "../src/game/assets.js";
+import { heldWeaponSrc, weaponIconSrc, HELD_ART_ANGLE } from "../src/game/assets.js";
 import { createWeaponBag, drawWeaponFromBag } from "../src/sim/weaponBag.js";
 import {
   LEGACY_CONTENT_CATALOG_VERSION,
@@ -109,6 +109,18 @@ section("catalog v3, typed hooks, and additive migration");
     check(`${id} has typed held and pickup asset hooks`,
       heldWeaponSrc(id) === `/sprites/held_${id}.png` && weaponIconSrc(id) === `/sprites/weapon_${id}.png`);
   }
+  // Diagonal held-gun aim: Wave C sprites are authored up-right ~30–40° (same convention as
+  // cleaver/tracker). Without HELD_ART_ANGLE the barrel points off the true aim — Ian's
+  // prior diagonal-gun bug. Assert each Wave C gun has a measured correction, and that a
+  // horizontally-authored baseline (pistol) stays at the default 0.
+  for (const id of WAVE_C_WEAPONS) {
+    const ang = HELD_ART_ANGLE[id];
+    check(`${id} has a diagonal held-art-angle correction (barrel not +X)`,
+      typeof ang === "number" && Number.isFinite(ang) && ang < -0.3 && ang > -0.9,
+      `ang=${ang}`);
+  }
+  check("pistol stays at the default held-art-angle (horizontally authored)",
+    HELD_ART_ANGLE.pistol === undefined);
   check("Lamplighter is COMMON in code (Quill/Rook FINAL)", WEAPONS.lamplighter.rarity === "common");
   check("Hushiron and Backtalk are rare; Faultlink is legendary (1C / 2R / 1L)",
     WEAPONS.hushiron.rarity === "rare" && WEAPONS.backtalk.rarity === "rare"
