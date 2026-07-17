@@ -1,0 +1,234 @@
+{
+  "schema_version": 1,
+  "batch": "wave-c-guns-v1",
+  "pr": 174,
+  "branch": "vale/wave-c-gun-audio",
+  "base_tip_before_remaster": "bd88005c114e0a6600287ac98bd625316e45770a",
+  "model": "fal-ai/elevenlabs/sound-effects/v2",
+  "prompt_influence": 0.35,
+  "naming": "Selected take ships as {stem}_v1.ogg/.mp3; waveSpec takes: [\"sfx/{stem}_v1\"] (no _vN dump)",
+  "ear_gate": {
+    "source_block": "Vale Wave C #173 EAR BLOCK tip f1fdc6ba \u2014 systemic clip peak=1.00 + late/empty",
+    "verdict_target": "PASS after remaster on #174",
+    "actions": [
+      "loudnorm I=-16 TP=-2 LRA=11 + alimiter=limit=.89 on every shipped ogg+mp3",
+      "trim leading silence to ~8ms onset (5\u201315ms window)",
+      "REJECT/regen faultlink_link (take_05 denser immediate latch)",
+      "prefer denser hushiron_fire_take_01 over late take_02",
+      "prefer denser faultlink_fire_take_01 over sparse take_02",
+      "encode-headroom scale so sample peak stays < -1 dBFS after ogg/mp3"
+    ]
+  },
+  "selected": [
+    {
+      "stem": "hushiron_fire",
+      "event": "shootHushiron",
+      "selected_raw_take": "hushiron_fire_take_01",
+      "ship_stem": "sfx/hushiron_fire_v1",
+      "ship_files": [
+        "hushiron_fire_v1.ogg",
+        "hushiron_fire_v1.mp3"
+      ],
+      "target_duration_s": 0.42,
+      "gain": 0.62,
+      "post": "silenceremove(start_silence=8ms)+highpass35+loudnorm(I=-16,TP=-2,LRA=11)+alimiter(limit=.89)+encode-headroom scale",
+      "qa": {
+        "onset_ms": 0.0,
+        "peak_db": -3.24,
+        "true_peak_dbtp": -2.8,
+        "integrated_lufs": -26.55,
+        "silence_pct": 51.6,
+        "duration_s": 0.42,
+        "mp3_peak_db": -3.59,
+        "mp3_true_peak_dbtp": -3.19
+      },
+      "note": "dense planted crack; replaced late-onset take_02 (~69ms) per Vale EAR BLOCK",
+      "rejected": [
+        "hushiron_fire_take_02 (late onset ~69ms)"
+      ]
+    },
+    {
+      "stem": "backtalk_fire",
+      "event": "shootBacktalk",
+      "selected_raw_take": "backtalk_fire_take_02",
+      "ship_stem": "sfx/backtalk_fire_v1",
+      "ship_files": [
+        "backtalk_fire_v1.ogg",
+        "backtalk_fire_v1.mp3"
+      ],
+      "target_duration_s": 0.36,
+      "gain": 0.6,
+      "post": "silenceremove(start_silence=8ms)+highpass35+loudnorm(I=-16,TP=-2,LRA=11)+alimiter(limit=.89)+encode-headroom scale",
+      "qa": {
+        "onset_ms": 0.0,
+        "peak_db": -5.67,
+        "true_peak_dbtp": -5.67,
+        "integrated_lufs": -Infinity,
+        "silence_pct": 51.8,
+        "duration_s": 0.36,
+        "mp3_peak_db": -5.66,
+        "mp3_true_peak_dbtp": -5.62
+      },
+      "note": "thin stub; denser early transient than take_03",
+      "rejected": []
+    },
+    {
+      "stem": "backtalk_parry",
+      "event": "backtalk.parry",
+      "selected_raw_take": "backtalk_parry_take_01",
+      "ship_stem": "sfx/backtalk_parry_v1",
+      "ship_files": [
+        "backtalk_parry_v1.ogg",
+        "backtalk_parry_v1.mp3"
+      ],
+      "target_duration_s": 0.32,
+      "gain": 0.72,
+      "post": "silenceremove(start_silence=8ms)+highpass35+loudnorm(I=-16,TP=-2,LRA=11)+alimiter(limit=.89)+encode-headroom scale",
+      "qa": {
+        "onset_ms": 0.0,
+        "peak_db": -3.14,
+        "true_peak_dbtp": -2.7,
+        "integrated_lufs": -Infinity,
+        "silence_pct": 52.5,
+        "duration_s": 0.32,
+        "mp3_peak_db": -2.57,
+        "mp3_true_peak_dbtp": -2.38
+      },
+      "note": "glass-metal latch; remastered off peak=1.00 clip",
+      "rejected": []
+    },
+    {
+      "stem": "backtalk_return",
+      "event": "backtalk.return",
+      "selected_raw_take": "backtalk_return_take_03",
+      "ship_stem": "sfx/backtalk_return_v1",
+      "ship_files": [
+        "backtalk_return_v1.ogg",
+        "backtalk_return_v1.mp3"
+      ],
+      "target_duration_s": 0.48,
+      "gain": 0.7,
+      "post": "silenceremove(start_silence=8ms)+highpass35+loudnorm(I=-16,TP=-2,LRA=11)+alimiter(limit=.89)+encode-headroom scale",
+      "qa": {
+        "onset_ms": 0.0,
+        "peak_db": -3.29,
+        "true_peak_dbtp": -3.25,
+        "integrated_lufs": -22.45,
+        "silence_pct": 54.4,
+        "duration_s": 0.48,
+        "mp3_peak_db": -3.54,
+        "mp3_true_peak_dbtp": -3.05
+      },
+      "note": "heavy return punch; remastered off peak=1.00 clip",
+      "rejected": []
+    },
+    {
+      "stem": "lamplighter_fire",
+      "event": "shootLamplighter",
+      "selected_raw_take": "lamplighter_fire_take_02",
+      "ship_stem": "sfx/lamplighter_fire_v1",
+      "ship_files": [
+        "lamplighter_fire_v1.ogg",
+        "lamplighter_fire_v1.mp3"
+      ],
+      "target_duration_s": 0.38,
+      "gain": 0.58,
+      "post": "silenceremove(start_silence=8ms)+highpass35+loudnorm(I=-16,TP=-2,LRA=11)+alimiter(limit=.89)+encode-headroom scale",
+      "qa": {
+        "onset_ms": 0.0,
+        "peak_db": -3.45,
+        "true_peak_dbtp": -2.84,
+        "integrated_lufs": -Infinity,
+        "silence_pct": 30.1,
+        "duration_s": 0.38,
+        "mp3_peak_db": -2.82,
+        "mp3_true_peak_dbtp": -2.41
+      },
+      "note": "soft crystalline tick; remastered (avoid harsh take_03 after declip)",
+      "rejected": [
+        "lamplighter_fire_take_03 (harsh after declip \u2014 soft reject)"
+      ]
+    },
+    {
+      "stem": "lamplighter_patch",
+      "event": "lamplighter.patch",
+      "selected_raw_take": "lamplighter_patch_take_01",
+      "ship_stem": "sfx/lamplighter_patch_v1",
+      "ship_files": [
+        "lamplighter_patch_v1.ogg",
+        "lamplighter_patch_v1.mp3"
+      ],
+      "target_duration_s": 0.55,
+      "gain": 0.5,
+      "post": "silenceremove(start_silence=8ms)+highpass35+loudnorm(I=-16,TP=-2,LRA=11)+alimiter(limit=.89)+encode-headroom scale",
+      "qa": {
+        "onset_ms": 0.0,
+        "peak_db": -3.99,
+        "true_peak_dbtp": -3.88,
+        "integrated_lufs": -19.51,
+        "silence_pct": 35.2,
+        "duration_s": 0.55,
+        "mp3_peak_db": -4.33,
+        "mp3_true_peak_dbtp": -3.82
+      },
+      "note": "warm soft bloom; remastered off peak=1.00 clip",
+      "rejected": []
+    },
+    {
+      "stem": "faultlink_fire",
+      "event": "shootFaultlink",
+      "selected_raw_take": "faultlink_fire_take_01",
+      "ship_stem": "sfx/faultlink_fire_v1",
+      "ship_files": [
+        "faultlink_fire_v1.ogg",
+        "faultlink_fire_v1.mp3"
+      ],
+      "target_duration_s": 0.34,
+      "gain": 0.66,
+      "post": "silenceremove(start_silence=8ms)+highpass35+loudnorm(I=-16,TP=-2,LRA=11)+alimiter(limit=.89)+encode-headroom scale",
+      "qa": {
+        "onset_ms": 0.0,
+        "peak_db": -5.63,
+        "true_peak_dbtp": -5.07,
+        "integrated_lufs": -Infinity,
+        "silence_pct": 69.2,
+        "duration_s": 0.34,
+        "mp3_peak_db": -5.53,
+        "mp3_true_peak_dbtp": -5.01
+      },
+      "note": "brittle conductive crack; denser than sparse take_02 (89% silence BLOCK)",
+      "rejected": [
+        "faultlink_fire_take_02 (sparse / high silence)"
+      ]
+    },
+    {
+      "stem": "faultlink_link",
+      "event": "faultlink.link",
+      "selected_raw_take": "faultlink_link_take_05",
+      "ship_stem": "sfx/faultlink_link_v1",
+      "ship_files": [
+        "faultlink_link_v1.ogg",
+        "faultlink_link_v1.mp3"
+      ],
+      "target_duration_s": 0.45,
+      "gain": 0.55,
+      "post": "silenceremove(start_silence=8ms)+highpass35+loudnorm(I=-16,TP=-2,LRA=11)+alimiter(limit=.89)+encode-headroom scale",
+      "qa": {
+        "onset_ms": 0.0,
+        "peak_db": -2.91,
+        "true_peak_dbtp": -2.59,
+        "integrated_lufs": -22.55,
+        "silence_pct": 57.5,
+        "duration_s": 0.45,
+        "mp3_peak_db": -2.88,
+        "mp3_true_peak_dbtp": -2.33
+      },
+      "note": "regen denser immediate latch (take_05); rejected take_02 onset~101ms / ~90% silence",
+      "rejected": [
+        "faultlink_link_take_01 (onset 154ms / 90% silence)",
+        "faultlink_link_take_02 (onset ~80\u2013101ms / ~90% silence) \u2014 Vale REJECT",
+        "faultlink_link_take_03/04 (weaker early energy than take_05)"
+      ]
+    }
+  ]
+}
