@@ -42,14 +42,38 @@ export const SHEETS: Partial<Record<string, SheetDef>> = {
   // procedural squash; a missing IDLE strip -> the static base PNG + a procedural breathe (so
   // a settled pet is never a dead frame). The slime companion registers under "slime_pet" so
   // it never collides with the "slime" ENEMY sheets above.
+  // Each pet also gets an ATTACK strip: a one-shot "emote" beat played when its owner fires (a
+  // cute owner-fires / pet-reacts flourish, NOT combat — pets never touch the sim). It is the
+  // same drop-in contract as walk/idle (horizontal N-frame strip, count inferred from width),
+  // and it degrades gracefully — a missing attack strip falls back to the walk/idle sheet, then
+  // the static base + procedural juice (see petRenderer.drawPetFrame + resolvePetClip).
   "doggie.walk": { src: "/sprites/pets/doggie_walk.png", fps: 9 },
   "doggie.idle": { src: "/sprites/pets/doggie_idle.png", fps: 5 },
+  "doggie.attack": { src: "/sprites/pets/doggie_attack.png", fps: 12 },
   "cat.walk": { src: "/sprites/pets/cat_walk.png", fps: 9 },
   "cat.idle": { src: "/sprites/pets/cat_idle.png", fps: 5 },
+  "cat.attack": { src: "/sprites/pets/cat_attack.png", fps: 12 },
   "dragon.walk": { src: "/sprites/pets/dragon_walk.png", fps: 9 },
   "dragon.idle": { src: "/sprites/pets/dragon_idle.png", fps: 5 },
+  "dragon.attack": { src: "/sprites/pets/dragon_attack.png", fps: 12 },
   "slime_pet.walk": { src: "/sprites/pets/slime_walk.png", fps: 9 },
   "slime_pet.idle": { src: "/sprites/pets/slime_idle.png", fps: 5 },
+  "slime_pet.attack": { src: "/sprites/pets/slime_attack.png", fps: 12 },
+  // Pack #2 companions (emberfox/owlet/mothling/rolly): the full walk + idle + attack contract,
+  // render key == pet id == file stem. Swappable placeholders like the pack above — the AD drops
+  // the generated PNGs at these exact paths with zero code change.
+  "emberfox.walk": { src: "/sprites/pets/emberfox_walk.png", fps: 9 },
+  "emberfox.idle": { src: "/sprites/pets/emberfox_idle.png", fps: 5 },
+  "emberfox.attack": { src: "/sprites/pets/emberfox_attack.png", fps: 12 },
+  "owlet.walk": { src: "/sprites/pets/owlet_walk.png", fps: 9 },
+  "owlet.idle": { src: "/sprites/pets/owlet_idle.png", fps: 5 },
+  "owlet.attack": { src: "/sprites/pets/owlet_attack.png", fps: 12 },
+  "mothling.walk": { src: "/sprites/pets/mothling_walk.png", fps: 9 },
+  "mothling.idle": { src: "/sprites/pets/mothling_idle.png", fps: 5 },
+  "mothling.attack": { src: "/sprites/pets/mothling_attack.png", fps: 12 },
+  "rolly.walk": { src: "/sprites/pets/rolly_walk.png", fps: 9 },
+  "rolly.idle": { src: "/sprites/pets/rolly_idle.png", fps: 5 },
+  "rolly.attack": { src: "/sprites/pets/rolly_attack.png", fps: 12 },
   "slime.walk": { src: "/sprites/slime_walk.png", fps: 10 },
   "bat.walk": { src: "/sprites/bat_walk.png", fps: 12 },
   "skeleton.walk": { src: "/sprites/skeleton_walk.png", fps: 11 },
@@ -446,6 +470,11 @@ const SOURCES: Record<SpriteName, string> = {
   cat: "/sprites/pets/cat.png",
   dragon: "/sprites/pets/dragon.png",
   slime_pet: "/sprites/pets/slime.png",
+  // Pack #2 companion base sprites (same 64x64 format). Render key == pet id == file stem.
+  emberfox: "/sprites/pets/emberfox.png",
+  owlet: "/sprites/pets/owlet.png",
+  mothling: "/sprites/pets/mothling.png",
+  rolly: "/sprites/pets/rolly.png",
   heart: "/sprites/heart.png",
   coin: "/sprites/coin.png",
   gun: "/sprites/gun.png",

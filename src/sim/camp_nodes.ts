@@ -58,11 +58,33 @@ export const DRAGON_NODE_ID = "pet_dragon";
 export const DRAGON_PET_ID = "dragon";
 export const DRAGON_RESCUE_FLOOR = 12;
 
-// Pet #4 — the baby slime, the DEEPEST rescue of the pack (a blob befriending a baby blob).
-// RESCUED like the rest, never bought — reaching its floor on any run grants it one time.
+// Pet #4 — the baby slime, the DEEPEST rescue of the ORIGINAL pack (a blob befriending a baby
+// blob). RESCUED like the rest, never bought — reaching its floor on any run grants it one time.
 export const SLIME_NODE_ID = "pet_slime";
 export const SLIME_PET_ID = "slime";
 export const SLIME_RESCUE_FLOOR = 18;
+
+// Pack #2 — four more RESCUED companions (never bought, canBuyNode refuses them). Provisional
+// ids the parent may rename via follow-up; each is a pure cosmetic wire label like the pack
+// above, granted the one-time a run reaches its floor. Their rescue floors INTERLEAVE with the
+// original pack (the grant is data-driven off rescueFloor, never per-pet), so a deep run brings
+// several companions home at once.
+// #5 — the Ember Fox kit, an amber fox found in the shallow depths.
+export const EMBERFOX_NODE_ID = "pet_emberfox";
+export const EMBERFOX_PET_ID = "emberfox";
+export const EMBERFOX_RESCUE_FLOOR = 5;
+// #6 — the Hollow Owlet, a little owl roosting deeper down.
+export const OWLET_NODE_ID = "pet_owlet";
+export const OWLET_PET_ID = "owlet";
+export const OWLET_RESCUE_FLOOR = 10;
+// #7 — the Glow Mothling, a soft-lit moth fluttering in the dark.
+export const MOTHLING_NODE_ID = "pet_mothling";
+export const MOTHLING_PET_ID = "mothling";
+export const MOTHLING_RESCUE_FLOOR = 15;
+// #8 — Rolly, a curl-up pillbug from the deepest dark of this pack.
+export const ROLLY_NODE_ID = "pet_rolly";
+export const ROLLY_PET_ID = "rolly";
+export const ROLLY_RESCUE_FLOOR = 22;
 
 // Whether a run that reached `deepestFloorThisRun` earns the one-time doggie rescue. Pure so
 // the server bank (recordRun) and any client hint agree.
@@ -104,6 +126,26 @@ export const CAMP_NODES: readonly CampNodeDef[] = [
     id: SLIME_NODE_ID, name: "Baby Slime", category: "companion", cost: 0, prereqs: [],
     desc: "A wobbling baby blob from the deepest dark — one blob befriending another; carry it home and it bounces along at your side.",
     pet: SLIME_PET_ID, rescue: true, rescueFloor: SLIME_RESCUE_FLOOR,
+  },
+  {
+    id: EMBERFOX_NODE_ID, name: "Ember Fox", category: "companion", cost: 0, prereqs: [],
+    desc: "A tiny amber fox kit warming itself in the shallows — carry it home and it trots at your heels, tail flickering like a coal.",
+    pet: EMBERFOX_PET_ID, rescue: true, rescueFloor: EMBERFOX_RESCUE_FLOOR,
+  },
+  {
+    id: OWLET_NODE_ID, name: "Hollow Owlet", category: "companion", cost: 0, prereqs: [],
+    desc: "A wide-eyed little owl roosting in the deeper dark — bring it back and it bobs along at your side, blinking at the gloom.",
+    pet: OWLET_PET_ID, rescue: true, rescueFloor: OWLET_RESCUE_FLOOR,
+  },
+  {
+    id: MOTHLING_NODE_ID, name: "Glow Mothling", category: "companion", cost: 0, prereqs: [],
+    desc: "A soft-glowing moth drawn to your lantern in the dark — carry it home and it flutters after you, lighting the way a little.",
+    pet: MOTHLING_PET_ID, rescue: true, rescueFloor: MOTHLING_RESCUE_FLOOR,
+  },
+  {
+    id: ROLLY_NODE_ID, name: "Rolly", category: "companion", cost: 0, prereqs: [],
+    desc: "A round little pillbug curled up in the deepest dark of the pack — carry it home and it ambles along beside you, ready to tuck into a ball.",
+    pet: ROLLY_PET_ID, rescue: true, rescueFloor: ROLLY_RESCUE_FLOOR,
   },
   {
     id: "stash_slot_1", name: "Stash Slot", category: "convenience", cost: 25, prereqs: [CAMP_SHELL_ID],
