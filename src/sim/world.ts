@@ -15,6 +15,7 @@ import {
   initHuntEncounter,
   initSplitEncounter,
   initEscapeEncounter,
+  initClaimantEncounter,
   isEncounterObjectiveComplete,
   completeEncounter,
   cloneEncounter,
@@ -28,6 +29,7 @@ export {
   initHuntEncounter,
   initSplitEncounter,
   initEscapeEncounter,
+  initClaimantEncounter,
   initSmokeEncounter,
   isEncounterObjectiveComplete,
   completeEncounter,
@@ -52,7 +54,7 @@ import { placeFloorHazards, isFloorHazardDamaging, floorHazardPhaseAt, FLOOR_HAZ
 import { Rng } from "./rng.js";
 import {
   ENEMY_ARCHETYPES, BOSS_KIN, spawnFloorEnemies, createEnemy, threatCostOf, isBossFloor,
-  isBossKind, isComplexMover, isGauntletFloor, eliteAffixOf, isMinibossKind,
+  isBossKind, isComplexMover, isGauntletFloor, eliteAffixOf, isMinibossKind, bossKindForFloor,
 } from "./enemies.js";
 import {
   WEAPONS, DEFAULT_WEAPON, MAX_WIRES, MAX_WIRES_PARTY, MAX_ORBIT_BLADES, fire,
@@ -110,7 +112,7 @@ import { PRIVATE_DRAFT_PVP_POLICY } from "../pvpPolicyId.js";
 import * as C from "./constants.js";
 import {
   PLAYER, SUSTAIN, SHOP, REVIVE, FANG_PROC_COOLDOWN, BOSS, MARROW, CHOIR, WEAVER, GILDED,
-  JET, TITHE, QUORUM, GORGE, SEVER, CHOIRMASTER, UNDERTOW, PALE, jetSimulCapFor, titheSlabHpForFloor, gorgeSeamHpForFloor, gorgeSeamCountFor, gorgeShellFracFor, severAnchorHpForFloor, choirPillarHpForFloor, paleSeamHpForFloor, paleSeamCountFor, paleShellFracFor, weaponResonanceFamily, RESONANCE_FAMILIES, RESONANCE_TELEGRAPH_COLOR,
+  JET, TITHE, QUORUM, GORGE, SEVER, CHOIRMASTER, UNDERTOW, PALE, CLAIMANT, jetSimulCapFor, titheSlabHpForFloor, gorgeSeamHpForFloor, gorgeSeamCountFor, gorgeShellFracFor, severAnchorHpForFloor, choirPillarHpForFloor, paleSeamHpForFloor, paleSeamCountFor, paleShellFracFor, weaponResonanceFamily, RESONANCE_FAMILIES, RESONANCE_TELEGRAPH_COLOR,
   GAUNTLET, gauntletCaptainHp, TIERS, coopBossHpMult, EXPOSE_WINDOW_CAP,
   activeThreatCap, clampPlayers, coopThreatMult, coopHeartRateMult,
   REINFORCE_STAGGER, BIOME_PRESSURE, BRUTE_HEAVY_DAMAGE, ELITE_BRACE, BOSS_VULN_CAP,
@@ -1921,7 +1923,11 @@ export function loadFloorIntoWorld(w: WorldState, floor: number, playerCountAtLo
   if (pvp || isBare) {
     w.encounter = null;
   } else if (w.dungeon.blueprint !== null && w.dungeon.blueprint.structureKind === "arena") {
-    w.encounter = initArenaEncounter(w.dungeon);
+    // Both the Claimant (F70) and Pale/Gorge arenas are structureKind 'arena'; the boss the floor
+    // pins decides which arena flags attach (Claimant's compact coordination bag vs the giant's).
+    w.encounter = bossKindForFloor(w.seed, floor) === "claimant"
+      ? initClaimantEncounter(w.dungeon)
+      : initArenaEncounter(w.dungeon);
   } else if (w.dungeon.blueprint !== null && w.dungeon.blueprint.structureKind === "hunt") {
     w.encounter = initHuntEncounter(w.dungeon);
   } else if (w.dungeon.blueprint !== null && w.dungeon.blueprint.structureKind === "split") {
@@ -3730,6 +3736,9 @@ const EARNED_WINDOWS: Readonly<Partial<Record<Enemy["kind"], EarnedWindowDef>>> 
   sever: { guardMult: SEVER.guardMult, bankFrac: SEVER.windowBankFrac },
   choirmaster: { guardMult: CHOIRMASTER.guardMult, bankFrac: CHOIRMASTER.windowBankFrac },
   undertow: { guardMult: UNDERTOW.guardMult, bankFrac: UNDERTOW.windowBankFrac },
+  // CLAIMANT (F70): guarded coordination core — non-carrier fire chips at guardMult, the Owed
+  // window is opened ONLY by the dedicated socket deposit after aim lock (openBossWindow).
+  claimant: { guardMult: CLAIMANT.guardMult, bankFrac: CLAIMANT.windowBankFrac },
   // PALE THRONE (F75 giant): the same hard-gate shell as Gorge (guardMult 0.0), with the region-cap
   // TIGHTER per-window bank (0.20 vs Gorge's 0.22) — the ONLY damage path is peeling the cold seams.
   pale: { guardMult: PALE.guardMult, bankFrac: PALE.windowBankFrac },
@@ -3899,6 +3908,13 @@ function damageEnemy(w: WorldState, by: PlayerId | null, e: Enemy, dmg: number, 
       boss.windowBank -= applied;
       if (boss.windowBank <= 1e-9) { boss.exposed = 0; boss.windowBank = 0; }
       dmg = applied;
+    } else if (e.kind === "claimant") {
+      // CLAIMANT guard (PASS-THE-CLAIM): the claim-token carrier's fire CANNOT break the guard
+      // (chipped far harder — a reduction, never immunity), so the team must deliberately pass to
+      // a non-carrier. The Owed window itself is opened only by the socket deposit after lock.
+      const enc = claimantEnc(w);
+      const isCarrierShot = enc !== null && by !== null && enc.carrierPlayerId === by;
+      dmg *= isCarrierShot ? CLAIMANT.carrierGuardMult : earned.guardMult;
     } else {
       dmg *= earned.guardMult;
     }
@@ -6712,6 +6728,9 @@ function updateEnemyAI(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): voi
     case "warm_pulse": return; // inert: Warm Pulse is a carry/deposit prop, not an actor
     case "relief_vent": return; // inert: deposit/relief target, not an actor
     case "flood_front": return; // inert: untargetable flood marker, not an actor
+    case "claimant": updateClaimant(w, e, dt, ev); return;
+    case "claim_token": return; // inert: claim-token is a carry/pass/deposit prop, not an actor
+    case "claim_socket": return; // inert: deposit socket target, not an actor
     case "pale": updateGiant(w, e, dt, ev, GIANT_SPEC.pale!); return;
     case "pale_seam": return; // inert: a tectonic weak-point is a peel target, not an actor
     default: updateChaser(w, e, dt); return;
@@ -12684,6 +12703,361 @@ function enc_alive_carrier(w: WorldState): boolean {
   if (!enc || !enc.carrierPlayerId) return false;
   const p = w.players.get(enc.carrierPlayerId);
   return !!p && !p.isDown && !p.isAbsent && p.hp > 0;
+}
+
+// ---- CLAIMANT (F70 PASS-THE-CLAIM + ALL THINGS OWED) — Batch3A OWNER LOCK ----
+// Compact coordination arena (structureKind 'arena'; NOT a RoomEdge chase). One player carries the
+// claim-token (the marked target); carrier fire cannot break the Claimant's guard (see damageEnemy),
+// so the team must deliberately PASS to a non-carrier. Three correct passes / socket deposits
+// (checkpoint 0..3) bait an overcommit → ALL THINGS OWED: 1.4s angular crown/beam tell → aim locks
+// at 0.84s (60% of tell) → ONE socket lights → 0.6s descent → 3.0s kneel punish. Success = deposit
+// the token into the lit socket after lock and before impact → the crown hits an empty socket,
+// shatters → openBossWindow(3.0). Survival = carrier dashes perpendicular out of the crown-lane
+// (keeps token, no window). Failure = capped hit to the carrier; anti-one-shot holds; never a wipe.
+// ONE isBossKind claimant; claim_token / claim_socket = mechanics. CROWNFALL retired — cues use the
+// claimant.owed* story pattern. Outcome rides boss.mirrorLastFamily (-1 idle,0 pending,1 success,
+// 2 survival,3 failure), same as the other Batch bosses.
+type ClaimantOutcome = "idle" | "pending" | "success" | "survival" | "failure";
+
+function claimantEnc(w: WorldState) {
+  return w.encounter && w.encounter.structureKind === "arena" && "owedPhase" in w.encounter.flags
+    ? w.encounter : null;
+}
+
+function claimantSetOutcome(w: WorldState, e: Enemy, outcome: ClaimantOutcome): void {
+  const enc = claimantEnc(w);
+  if (enc) enc.flags.owedOutcome = outcome;
+  const map = { idle: -1, pending: 0, success: 1, survival: 2, failure: 3 } as const;
+  e.boss!.mirrorLastFamily = map[outcome];
+}
+
+function claimantNearestSocket(w: WorldState, x: number, y: number): Enemy | null {
+  let best: Enemy | null = null;
+  let bestD = Infinity;
+  for (const o of w.enemies) {
+    if (o.kind !== "claim_socket" || o.dead) continue;
+    const d = (o.x - x) * (o.x - x) + (o.y - y) * (o.y - y);
+    if (d < bestD) { bestD = d; best = o; }
+  }
+  return best;
+}
+
+function claimantClearHighlight(w: WorldState, enc: EncounterState | null): void {
+  for (const o of w.enemies) {
+    if (o.kind === "claim_socket" && o.aux === 10) o.aux = 0;
+  }
+  if (enc) enc.flags.highlightedSocketId = -1;
+}
+
+function claimantEnsureTokenAndSockets(w: WorldState, e: Enemy, ev: SimEvent[]): void {
+  const enc = claimantEnc(w);
+  if (!enc || enc.flags.tokenPlanted === true) return;
+  const boss = e.boss!;
+  const room = w.dungeon.rooms.find((r) => r.id === enc.currentRoomId) ?? w.dungeon.rooms[w.dungeon.rooms.length - 1];
+  const cx = room.cx * TILE + TILE / 2;
+  const cy = room.cy * TILE + TILE / 2;
+  // Sockets ring the arena so the coordination space is symmetric on every side (fair reach).
+  for (let i = 0; i < CLAIMANT.socketCount; i++) {
+    const ang = (i / CLAIMANT.socketCount) * Math.PI * 2;
+    let x = cx + Math.cos(ang) * (TILE * 3);
+    let y = cy + Math.sin(ang) * (TILE * 3);
+    if (!settleSpawnPoint(w, x, y, ENEMY_ARCHETYPES.claim_socket.radius)) {
+      x = cx + Math.cos(ang) * (TILE * 2);
+      y = cy + Math.sin(ang) * (TILE * 2);
+      settleSpawnPoint(w, x, y, ENEMY_ARCHETYPES.claim_socket.radius);
+    }
+    const sock = createEnemy("claim_socket", settlePoint.x, settlePoint.y, w.floor, w.rng, w.nextEnemyId++, {
+      isSummoned: true, players: w.encounterPlayers,
+    });
+    sock.hp = sock.maxHp = CLAIMANT.socketHp;
+    sock.spawnTimer = 0;
+    sock.aux = i; // slot index (10 = highlighted during the Owed cast)
+    w.enemies.push(sock);
+    boss.windowAddIds.push(sock.id);
+    ev.push({ t: "enemySpawn", eid: sock.id, kind: sock.kind, tier: sock.tier, x: sock.x, y: sock.y });
+  }
+  // Token starts as a world-pickup near the arena center (never a boss core).
+  let tx = cx + TILE;
+  let ty = cy;
+  settleSpawnPoint(w, tx, ty, ENEMY_ARCHETYPES.claim_token.radius);
+  const token = createEnemy("claim_token", settlePoint.x, settlePoint.y, w.floor, w.rng, w.nextEnemyId++, {
+    isSummoned: true, players: w.encounterPlayers,
+  });
+  token.hp = token.maxHp = CLAIMANT.tokenHp;
+  token.spawnTimer = 0;
+  token.aux = 0; // 0 world, 1 carried, 2 socketed
+  w.enemies.push(token);
+  boss.windowAddIds.push(token.id);
+  ev.push({ t: "enemySpawn", eid: token.id, kind: token.kind, tier: token.tier, x: token.x, y: token.y });
+  ev.push({ t: "cue", name: "claimant.owed.plant", x: token.x, y: token.y, rate: 1.0, gain: 0.5, trauma: 0.02 });
+  enc.flags.tokenPlanted = true;
+}
+
+function claimantTryActivate(w: WorldState, e: Enemy, ev: SimEvent[]): boolean {
+  const enc = claimantEnc(w);
+  if (!enc) return false;
+  if (enc.active) {
+    if (enc.flags.tokenPlanted !== true) claimantEnsureTokenAndSockets(w, e, ev);
+    return true;
+  }
+  const arenaRoom = w.dungeon.blueprint?.spawnRoomId ?? enc.currentRoomId;
+  let near = false;
+  for (const p of w.players.values()) {
+    if (p.isDown || p.isAbsent || p.hp <= 0) continue;
+    const rid = roomIdAt(w.dungeon, Math.floor(p.x / TILE), Math.floor(p.y / TILE));
+    if (rid === arenaRoom) { near = true; break; }
+    if (Math.hypot(p.x - e.x, p.y - e.y) <= CLAIMANT.pressureRadius) { near = true; break; }
+  }
+  if (!near) return false;
+  enc.active = true;
+  enc.currentRoomId = arenaRoom;
+  claimantEnsureTokenAndSockets(w, e, ev);
+  ev.push({ t: "cue", name: "claimant.activate", x: e.x, y: e.y, rate: 0.75, gain: 0.65, trauma: 0.04 });
+  return true;
+}
+
+function claimantCountPass(enc: EncounterState, ev: SimEvent[], x: number, y: number): void {
+  const next = Math.min(CLAIMANT.passesToOvercommit, Number(enc.flags.passesCompleted) + 1);
+  enc.flags.passesCompleted = next;
+  enc.flags.passCount = Number(enc.flags.passCount) + 1;
+  enc.checkpoint = next;
+  enc.objectiveProgress = Math.min(1, next / CLAIMANT.passesToOvercommit);
+  ev.push({ t: "cue", name: "claimant.owed.pass", x, y, rate: 0.9, gain: 0.55, trauma: 0.02 });
+}
+
+function claimantTokenLoop(w: WorldState, e: Enemy, ev: SimEvent[]): void {
+  const enc = claimantEnc(w);
+  if (!enc || !enc.active) return;
+  const token = w.enemies.find((o) => o.kind === "claim_token" && !o.dead);
+  if (!token) return;
+  const isCasting = e.attack.move === "all_things_owed" && e.attack.phase !== "none";
+
+  if (enc.carrierPlayerId) {
+    const carrier = w.players.get(enc.carrierPlayerId);
+    if (!carrier || carrier.isDown || carrier.isAbsent || carrier.hp <= 0) {
+      // Absent carrier → world pickup after grace (never deadlock).
+      enc.carrierPlayerId = null;
+      setEncounterCarrier(enc, null);
+      enc.flags.tokenDropped = true;
+      token.aux = 0;
+      token.x = e.x;
+      token.y = e.y;
+      ev.push({ t: "cue", name: "claimant.owed.drop", x: token.x, y: token.y, rate: 1.1, gain: 0.45, trauma: 0.02 });
+      return;
+    }
+    token.x = carrier.x;
+    token.y = carrier.y;
+    token.aux = 1;
+    enc.flags.tokenDropped = false;
+    if (!isCasting) {
+      // Coop PASS: a DIFFERENT living player within reach receives the token (deliberate pass).
+      for (const p of w.players.values()) {
+        if (p.id === carrier.id) continue;
+        if (p.isDown || p.isAbsent || p.hp <= 0) continue;
+        if (Math.hypot(p.x - carrier.x, p.y - carrier.y) < TILE * 1.1) {
+          enc.carrierPlayerId = p.id;
+          setEncounterCarrier(enc, p.id);
+          claimantCountPass(enc, ev, p.x, p.y);
+          return;
+        }
+      }
+      // Solo DEPOSIT: carrier deposits into any socket to count a pass (no partner needed), then the
+      // token re-emerges at the socket as a world-pickup so the loop continues.
+      const sock = claimantNearestSocket(w, carrier.x, carrier.y);
+      if (sock && Math.hypot(carrier.x - sock.x, carrier.y - sock.y) < CLAIMANT.depositRadius) {
+        claimantCountPass(enc, ev, sock.x, sock.y);
+        token.aux = 0;
+        token.x = sock.x;
+        token.y = sock.y;
+        enc.carrierPlayerId = null;
+        setEncounterCarrier(enc, null);
+        enc.flags.tokenDropped = true;
+      }
+    }
+    return;
+  }
+  // World pickup: first living player near the token carries it.
+  for (const p of w.players.values()) {
+    if (p.isDown || p.isAbsent || p.hp <= 0) continue;
+    if (Math.hypot(p.x - token.x, p.y - token.y) < TILE * 1.1) {
+      enc.carrierPlayerId = p.id;
+      setEncounterCarrier(enc, p.id);
+      enc.flags.tokenDropped = false;
+      token.aux = 1;
+      ev.push({ t: "cue", name: "claimant.owed.take", x: p.x, y: p.y, rate: 0.9, gain: 0.55, trauma: 0.02 });
+      break;
+    }
+  }
+}
+
+function claimantCarrierAtLitSocket(w: WorldState): boolean {
+  const enc = claimantEnc(w);
+  if (!enc || !enc.carrierPlayerId) return false;
+  const sockId = Number(enc.flags.highlightedSocketId);
+  if (sockId < 0) return false;
+  const sock = w.enemies.find((o) => o.id === sockId && o.kind === "claim_socket" && !o.dead);
+  const carrier = w.players.get(enc.carrierPlayerId);
+  if (!sock || !carrier) return false;
+  return Math.hypot(carrier.x - sock.x, carrier.y - sock.y) < CLAIMANT.depositRadius;
+}
+
+function claimantOwedSuccess(w: WorldState, e: Enemy, ev: SimEvent[]): void {
+  const enc = claimantEnc(w);
+  const a = e.attack;
+  // The token drops into the lit socket → the crown hits an EMPTY socket, shatters → boss kneels.
+  if (enc) {
+    const sockId = Number(enc.flags.highlightedSocketId);
+    const sock = w.enemies.find((o) => o.id === sockId && o.kind === "claim_socket" && !o.dead);
+    const token = w.enemies.find((o) => o.kind === "claim_token" && !o.dead);
+    if (sock && token) { token.aux = 2; token.x = sock.x; token.y = sock.y; enc.flags.tokenSocketId = sock.id; }
+    enc.carrierPlayerId = null;
+    setEncounterCarrier(enc, null);
+    enc.flags.tokenDropped = false;
+    enc.flags.owedPhase = "punish";
+  }
+  claimantSetOutcome(w, e, "success");
+  openBossWindow(e, CLAIMANT.owedPunish, ev);
+  claimantClearHighlight(w, enc);
+  a.phase = "recover";
+  a.time = 0;
+  ev.push({ t: "cue", name: "claimant.owed.success", x: e.x, y: e.y, rate: 0.8, gain: 0.75, trauma: 0.08 });
+}
+
+function claimantOutOfLane(e: Enemy, a: Enemy["attack"], px: number, py: number): boolean {
+  // Perpendicular distance from the elongated crown-lane axis (boss → locked mark). A carrier who
+  // dashes perpendicular beyond the lane half-width is clear (survival); the lane is NOT circular.
+  const dx = px - e.x;
+  const dy = py - e.y;
+  const perp = Math.abs(-Math.sin(a.lockedAngle) * dx + Math.cos(a.lockedAngle) * dy);
+  return perp > CLAIMANT.laneHalfWidth;
+}
+
+function claimantMaybeBeginOwed(w: WorldState, e: Enemy, ev: SimEvent[]): boolean {
+  const enc = claimantEnc(w);
+  const boss = e.boss!;
+  if (!enc || !enc.active) return false;
+  if (e.attack.phase !== "none" || boss.exposed > 0) return false;
+  const overcommit = Number(enc.flags.passesCompleted) >= CLAIMANT.passesToOvercommit;
+  if (e.attack.cooldown > 0 && !overcommit) return false;
+  const carrier = enc.carrierPlayerId ? w.players.get(enc.carrierPlayerId) : null;
+  if (!carrier || carrier.isDown || carrier.isAbsent || carrier.hp <= 0) return false;
+  beginWindup(e, "all_things_owed");
+  e.attack.cooldown = CLAIMANT.attackCd[boss.phase] ?? CLAIMANT.attackCd[3];
+  claimantSetOutcome(w, e, "pending");
+  enc.flags.owedPhase = "tell";
+  enc.flags.aimLockedAt = 0;
+  enc.flags.highlightedSocketId = -1; // the socket lights only AFTER the aim lock
+  // The passes are SPENT to bait the overcommit — reset the count for the next cycle.
+  enc.flags.passesCompleted = 0;
+  enc.checkpoint = 0;
+  ev.push({ t: "cue", name: "claimant.owed.tell", x: e.x, y: e.y, rate: 0.65, gain: 0.7, trauma: 0.05 });
+  return true;
+}
+
+function claimantOwedStep(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void {
+  const a = e.attack;
+  const enc = claimantEnc(w);
+  const lockAt = CLAIMANT.owedTell * CLAIMANT.owedLockFrac; // 0.84s
+  if (a.phase === "windup") {
+    // 1.4s angular crown/beam tell; aim locks at 0.84s.
+    a.time += dt;
+    a.windup = Math.min(1, a.time / CLAIMANT.owedTell);
+    if (!a.isAimLocked && a.time >= lockAt) {
+      a.isAimLocked = true;
+      const carrier = enc?.carrierPlayerId ? w.players.get(enc.carrierPlayerId) : null;
+      if (carrier) { a.markX = carrier.x; a.markY = carrier.y; a.lockedAngle = Math.atan2(carrier.y - e.y, carrier.x - e.x); }
+      else { a.markX = e.x; a.markY = e.y; }
+      if (enc) {
+        enc.flags.owedPhase = "locked";
+        enc.flags.aimLockedAt = a.time;
+        // ONE socket lights — the nearest to the locked carrier mark (reachable = fair).
+        const sock = claimantNearestSocket(w, a.markX, a.markY);
+        if (sock) { sock.aux = 10; enc.flags.highlightedSocketId = sock.id; }
+      }
+    } else if (enc && !a.isAimLocked) {
+      enc.flags.owedPhase = "tell";
+    }
+    // Success can fire once the socket is lit (after lock), through the rest of the tell.
+    if (a.isAimLocked && claimantCarrierAtLitSocket(w)) { claimantOwedSuccess(w, e, ev); return; }
+    if (a.time >= CLAIMANT.owedTell) {
+      a.phase = "active";
+      a.time = 0;
+      a.windup = 1;
+      if (enc) enc.flags.owedPhase = "descent";
+      ev.push({ t: "cue", name: "claimant.owed.descent", x: e.x, y: e.y, rate: 0.9, gain: 0.65, trauma: 0.04 });
+    }
+    return;
+  }
+  if (a.phase === "active") {
+    // 0.6s descent — the crown falls along the locked lane.
+    a.time += dt;
+    if (enc) enc.flags.owedPhase = "descent";
+    if (claimantCarrierAtLitSocket(w)) { claimantOwedSuccess(w, e, ev); return; }
+    if (a.time >= CLAIMANT.owedDescent) {
+      const carrier = enc?.carrierPlayerId ? w.players.get(enc.carrierPlayerId) : null;
+      // Survival: carrier dashed perpendicular out of the lane (keeps token). No carrier in lane
+      // (token passed/socketed away) also resolves without punish.
+      const survival = !carrier || claimantOutOfLane(e, a, carrier.x, carrier.y);
+      if (survival) {
+        claimantSetOutcome(w, e, "survival");
+        if (enc) enc.flags.owedPhase = "idle";
+        claimantClearHighlight(w, enc);
+        ev.push({ t: "cue", name: "claimant.owed.survival", x: e.x, y: e.y, rate: 1.1, gain: 0.45, trauma: 0.02 });
+        enterIdle(e);
+        return;
+      }
+      // Soft failure: capped hit to the carrier; anti-one-shot holds; never a wipe.
+      claimantSetOutcome(w, e, "failure");
+      if (enc) { enc.failed = true; enc.failureCount += 1; enc.flags.owedPhase = "idle"; }
+      if (carrier) damagePlayer(w, carrier, CLAIMANT.owedFailDamage, ev);
+      claimantClearHighlight(w, enc);
+      ev.push({ t: "cue", name: "claimant.owed.miss", x: e.x, y: e.y, rate: 0.95, gain: 0.55, trauma: 0.05 });
+      enterIdle(e);
+      return;
+    }
+    return;
+  }
+  if (a.phase === "recover") {
+    // 3.0s kneel punish (success path only) — runs alongside the exposed window.
+    a.time += dt;
+    if (enc) enc.flags.owedPhase = "punish";
+    if (a.time >= CLAIMANT.owedPunish) {
+      if (enc) enc.flags.owedPhase = "idle";
+      enterIdle(e);
+    }
+    return;
+  }
+}
+
+function updateClaimant(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void {
+  const boss = e.boss!;
+  if (!claimantTryActivate(w, e, ev)) {
+    e.attack.cooldown = Math.max(e.attack.cooldown, 0.5);
+    return;
+  }
+  if (e.spawnTimer > 0) {
+    claimantEnsureTokenAndSockets(w, e, ev);
+    return;
+  }
+  if (e.attack.cooldown > 0) e.attack.cooldown = Math.max(0, e.attack.cooldown - dt);
+
+  claimantTokenLoop(w, e, ev);
+
+  if (e.attack.move === "all_things_owed" && e.attack.phase !== "none") {
+    claimantOwedStep(w, e, dt, ev);
+    return;
+  }
+
+  // Light presence while guarded: the Claimant tracks the marked carrier (never a global aggro
+  // rush — the compact arena is about the pass loop, not a chase).
+  if (findTarget(w, e.x, e.y)) {
+    const ang = chaseAngle(w, e);
+    applyChaseStep(w, e, dt, ang, e.speed * 0.4 * dt);
+  }
+
+  if (e.attack.phase === "none" && boss.exposed <= 0) {
+    claimantMaybeBeginOwed(w, e, ev);
+  }
 }
 
 // ---- PALE THRONE F75 — THE LAST LIGHT FALLS (OWNER LOCK signature) ----

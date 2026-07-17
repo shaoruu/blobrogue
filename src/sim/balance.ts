@@ -308,6 +308,7 @@ export const BOSS_KINDS = [
   "boss", "marrow", "weaver", "gilded", "choir", "jet", "tithe", "quorum",
   "choirmaster",
   "undertow",
+  "claimant",
 ] as const;
 
 export function isBossKindId(kind: string): boolean {
@@ -2164,6 +2165,59 @@ export function undertowHpForFloor(floor: number): number {
 
 export function undertowVentHpForFloor(floor: number): number {
   return Math.max(1, anchoredBossHp(UNDERTOW.ventHp, UNDERTOW.baseHpFloor, floor));
+}
+
+// ---- CLAIMANT (F70 PASS-THE-CLAIM — ALL THINGS OWED signature) ----
+// Batch3A OWNER LOCK: ONE compact coordination arena (structureKind 'arena'). Timings LOCKED
+// at 20Hz: 1.4s angular crown/beam tell → aim locks at 0.84s (60% of tell) → 0.6s descent →
+// 3.0s kneel punish (±1 tick). ONE isBossKind claimant; claim_token / claim_socket = mechanic
+// entities. Verb PASS-THE-CLAIM: one player carries the claim-token (the marked target);
+// carrier fire cannot break the guard (heavily reduced, NEVER immune), so the team must
+// deliberately pass. Three correct passes / socket deposits bait an overcommit → ALL THINGS
+// OWED. Success = deposit token into the lit socket after aim lock and before impact → the
+// crown hits an empty socket, shatters → boss kneels → openBossWindow(3.0). Survival = carrier
+// dashes perpendicular out of the crown-lane (keeps token, no window). Failure = capped hit+KB
+// to the carrier; anti-one-shot holds; run remains winnable.
+// CROWNFALL retired — story name ALL THINGS OWED everywhere (wire: all_things_owed).
+// BALANCER_TODO: Quill owns final HP/TTK/bank — provisional calibration only.
+export const CLAIMANT = {
+  baseHp: 700, // BALANCER_TODO
+  baseHpFloor: 70,
+  phaseAt: [0.66, 0.33] as readonly number[],
+  phaseFloor: [0.58, 0.25] as readonly number[],
+  guardMult: 0.26, // BALANCER_TODO — non-carrier chip through the guard (reduction, never immunity)
+  carrierGuardMult: 0.08, // BALANCER_TODO — carrier fire CANNOT break guard (still a chip, never immune)
+  windowBankFrac: 0.26, // BALANCER_TODO
+  contactDamage: 2,
+  entranceGrace: 1.4,
+  attackCd: [0, 3.0, 2.7, 2.4] as readonly number[],
+  // ALL THINGS OWED timings (seconds) — authoritative at TICK_HZ=20; tests allow ±1 tick.
+  owedTell: 1.4,
+  owedLockFrac: 0.6,   // aim locks at 0.6 × 1.4 = 0.84s into the tell (≥0.30s reaction remains)
+  owedDescent: 0.6,
+  owedPunish: 3.0,
+  // Coordination arena / token / sockets
+  pressureRadius: 240,
+  passesToOvercommit: 3,    // correct passes / socket deposits that bait the overcommit
+  socketCount: 4,           // claim sockets around the arena (one lights during the Owed cast)
+  laneHalfWidth: 46,        // crown-lane half-width; perpendicular dash beyond it = survival
+  laneLength: 520,          // elongated crown-lane reach (not circular)
+  // The token / sockets are indestructible coordination MARKERS (deposit points, never DPS
+  // sponges): a high pool keeps incidental AoE / stray fire from removing them and soft-locking
+  // the pass loop. They despawn with the Claimant on boss death (endBossDanger).
+  tokenHp: 9999,
+  socketHp: 9999,
+  depositRadius: 40,        // carrier proximity to a socket that counts a deposit
+  tokenPickupGrace: 1.2,    // seconds before an absent carrier's token becomes a world-pickup
+  owedFailDamage: 2,        // soft capped failure hit to the carrier
+  owedFailKb: 200,
+  roarDuration: 1.0,
+  roarDamageReduction: 0.35,
+  roarBulletClearRadius: 72,
+} as const;
+
+export function claimantHpForFloor(floor: number): number {
+  return anchoredBossHp(CLAIMANT.baseHp, CLAIMANT.baseHpFloor, floor);
 }
 
 // ---- PALE THRONE (F75 GIANT #2 — the Pale region cap; the SECOND giant, reusing the AD-LOCKED

@@ -84,6 +84,7 @@ export const AUDIO_BEHAVIOR: Readonly<Record<EnemyKind, AudioBehavior>> = {
   choirmaster: "boss", choir_pillar: "decoy",
   pale: "boss", pale_seam: "decoy", // the F75 giant + its cold planted weak-point (decoy grammar)
   undertow: "boss", warm_pulse: "decoy", relief_vent: "decoy", flood_front: "decoy",
+  claimant: "boss", claim_token: "decoy", claim_socket: "decoy",
 };
 
 // ---- body materials ----
@@ -142,6 +143,7 @@ export const AUDIO_MATERIAL: Readonly<Record<EnemyKind, AudioMaterial>> = {
   choirmaster: "voice", choir_pillar: "chitin",
   // UNDERTOW F65 — mist/voice bank placeholder; pulse/vent/flood reuse chitin mechanic rows.
   undertow: "voice", warm_pulse: "chitin", relief_vent: "chitin", flood_front: "mist",
+  claimant: "voice", claim_token: "chitin", claim_socket: "chitin",
   // PALE THRONE (F75 giant) — dedicated pale material bank (see F75 audio hooks).
   pale: "pale", pale_seam: "pale",
 
@@ -341,6 +343,14 @@ export const BESTIARY_CUES: Readonly<Record<EnemyKind, Readonly<Record<string, W
   warm_pulse: { fuse: "choir.strikeWarn", toll: "choir.swellFire" },
   relief_vent: { fuse: "weaver.latticeWarn", toll: "weaver.latticeFire" },
   flood_front: { fuse: "choir.swellWarn", toll: "choir.swellFire" },
+  // CLAIMANT F70 — PLACEHOLDER (Choir/Weaver bank); display-facing name ALL THINGS OWED.
+  // Audio stems/events use claimant.owed* story pattern (hooks only; no generation this PR).
+  claimant: {
+    windup: "choir.swellWarn", lock: "choir.strikeLock", active: "choir.swellFire", impact: "choir.strikeImpact",
+    recover: "choir.recover", entrance: "choir.entrance", phase: "choir.phase", special: "choir.floorDischarge", death: "choir.death",
+  },
+  claim_token: { fuse: "choir.strikeWarn", toll: "choir.swellFire" },
+  claim_socket: { fuse: "weaver.latticeWarn", toll: "weaver.latticeFire" },
 
   pale: {
     windup: "pale.ringWarn", lock: "pale.ring2Warn", active: "pale.spokeActive", impact: "pale.ringImpact",

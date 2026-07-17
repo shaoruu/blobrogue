@@ -74,6 +74,7 @@ export const ENEMY_WAVE: Readonly<Record<EnemyKind, EnemyWave>> = {
   sever: "boss", sever_anchor: "B",
   choirmaster: "boss", choir_pillar: "B",
   undertow: "boss", warm_pulse: "B", relief_vent: "B", flood_front: "B",
+  claimant: "boss", claim_token: "B", claim_socket: "B",
   // PALE THRONE (F75 giant) is boss-grade; its cold tectonic weak-point is a Wave-B mechanic body.
   pale: "boss", pale_seam: "B",
 };
@@ -111,6 +112,8 @@ export const WAVE_B_SYNTHESIS: Readonly<Partial<Record<EnemyKind, readonly Enemy
   warm_pulse: ["caskbellows"],         // carry/deposit Warm Pulse (steal verb)
   relief_vent: ["caskbellows"],        // highlighted deposit / relief vent
   flood_front: ["caskbellows"],        // untargetable flood marker (mechanic)
+  claim_token: ["caskbellows"],        // carry/pass/deposit the claim-token (PASS-THE-CLAIM verb)
+  claim_socket: ["caskbellows"],       // highlighted deposit socket (the Owed success counter)
   pale_seam: ["caskbellows"],          // the F75 giant's cold weak-point — the same shoot-this-target peel verb as gorge_seam
 };
 
@@ -327,6 +330,10 @@ export const ENEMY_MOVESET: Readonly<Record<EnemyKind, readonly AttackMove[]>> =
   warm_pulse: [],
   relief_vent: [],
   flood_front: [],
+  // CLAIMANT (F70): coordination arena + ALL THINGS OWED signature.
+  claimant: ["all_things_owed", "roar"],
+  claim_token: [],
+  claim_socket: [],
   // PALE THRONE (F75 giant): shared-grammar patterns + THE LAST LIGHT FALLS signature.
   // "roar" remains the shell crack-off transition. Its weak-point commits nothing.
   pale: ["slam", "spew", "sweep", "roar", "last_light"],
@@ -406,6 +413,9 @@ export const SPRITE_CONTRACT: Readonly<Record<EnemyKind, SpriteContract>> = {
   warm_pulse: "decoy",
   relief_vent: "decoy",
   flood_front: "decoy",
+  claimant: "directional_walk", // placeholder: reuses Weaver walk sheets
+  claim_token: "decoy",
+  claim_socket: "decoy",
   // PALE THRONE (F75 giant): the same single front-facing SHELL-per-state "mass" contract as Gorge
   // (no orientations — the client swaps stone/cracked/core off boss.phase); its weak-point is a decoy.
   pale: "mass",

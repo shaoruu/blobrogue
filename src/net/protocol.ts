@@ -349,7 +349,13 @@ export const FIXED_DT = 1 / TICK_HZ; // 50ms authoritative step
 //   riverOutcome / pulseDepositVentId / floodProgress / ventsUsedMask / manifestCount /
 //   escapeDirection) ride Batch0's existing enc wire. PROTOCOL 40 = PVP #143; Undertow owns
 //   PROTOCOL 41. BLACK_TIDE retired — never revive.
-export const PROTOCOL_VERSION = 41;
+// v42 (Batch3A Claimant F70): the closed AttackMove set grows `all_things_owed` (display name
+//   ALL THINGS OWED). Enemy kinds `claimant` / `claim_token` / `claim_socket` ride via
+//   ENEMY_ARCHETYPES (no new EnemyWire fields). EncounterState flags (owedPhase / owedOutcome /
+//   tokenSocketId / highlightedSocketId / passesCompleted / passCount / aimLockedAt / lockFrac /
+//   tokenDropped) ride Batch0's existing enc wire (arena kind). Claimant owns PROTOCOL 42.
+//   CROWNFALL retired — never revive.
+export const PROTOCOL_VERSION = 42;
 
 
 // How long the server reserves a disconnected player's body (their seat) before the
@@ -920,6 +926,9 @@ const ATTACK_MOVES: Record<AttackMove, true> = {
   // UNDERTOW F65 signature — display name THE RIVER COMES BACK; wire id river_comes_back.
   // Never black_tide.
   river_comes_back: true,
+  // CLAIMANT F70 signature — display name ALL THINGS OWED; wire id all_things_owed.
+  // Never crownfall.
+  all_things_owed: true,
 };
 const ENEMY_TIERS: Record<EnemyTier, true> = { swarm: true, standard: true, brute: true, elite: true };
 const SLUICE_MODES: Record<SluiceMode, true> = { flood: true, drain: true };

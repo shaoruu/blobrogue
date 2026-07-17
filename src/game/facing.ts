@@ -103,6 +103,8 @@ export const AIMED_MOVES: Readonly<Record<AttackMove, boolean>> = {
   last_note: false,
   // UNDERTOW F65 THE RIVER COMES BACK: flood front is geometry (like WORLDSPLIT) — body keeps travel facing.
   river_comes_back: false,
+  // CLAIMANT F70 ALL THINGS OWED: the crown-lane aims at the claim-token carrier — the body faces its lock.
+  all_things_owed: true,
   // PALE F75 THE LAST LIGHT FALLS: meteor/scar sequence — body stays front-facing set-piece.
   last_light: false,
 };
