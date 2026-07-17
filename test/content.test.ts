@@ -983,7 +983,7 @@ function rotationTests(): void {
       const seed = 0x5EED + s * 977;
       let prev: EnemyKind | null = "choirmaster"; // F60 pin; F65 must not repeat it
       for (let floor = 65; floor <= 95; floor += 5) {
-        if (floor === 75) continue; // Pale pin
+        if (floor === 75) { prev = "pale"; continue; } // Pale pin — don't bridge F70↔F80
         const a = bossKindForFloor(seed, floor);
         if (a !== bossKindForFloor(seed, floor)) deterministic = false;
         if (a === null || a === prev) noRepeats = false;
