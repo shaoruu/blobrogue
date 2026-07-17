@@ -28,10 +28,10 @@ import { shouldShowSigninNudge, recordNudgeShown, recordNudgeDismissed, SIGNIN_B
 import {
   COPY_INVITE_LABEL, INVITE_COPIED_LABEL, INVITE_SHARED_LABEL, INVITE_COPY_FAILED_LABEL, INVITE_SHARE_HINT,
   INVITE_OFFLINE_NOTE, INVITE_UNREACHABLE_NOTE, INVITE_TRY_AGAIN_LABEL, inviteJoiningNote, inviteFailState,
-  ARENA_LABEL, ARENA_PATCHING_LABEL,
+  ARENA_LABEL, ARENA_PATCHING_LABEL, ARENA_PUBLIC_OFFLINE_NOTE,
 } from "./onlineCopy.js";
 import { inviteUrlFor, shareInviteUrl, stripInviteFromLocation } from "../net/inviteLink.js";
-import { PVP_PUBLIC_ENABLED, PVP_DISABLED_MESSAGE, isPvpDisabledCode } from "../net/pvpFlag.js";
+import { PVP_PUBLIC_ENABLED, PVP_PRIVATE_ENABLED, PVP_DISABLED_MESSAGE, isPvpDisabledCode } from "../net/pvpFlag.js";
 import { normalizeOnlineError } from "../net/onlineError.js";
 import type { NormalizedOnlineError } from "../net/onlineError.js";
 import { CHANGELOG, LATEST_VERSION } from "../generated/changelog.js";
@@ -2669,22 +2669,31 @@ export class Menu {
     quick.appendChild(quickSub);
     const modeRow = el("div", "actrow mode-toggle");
     const coopBtn = el("button", "secondary", "CO-OP");
-    // TEMP kill switch: while PVP is disabled the ARENA toggle stays visible but disabled with
-    // the patching copy, and CO-OP is force-selected. Any stale click still hits the typed
-    // backend pvp_disabled guard (create/quickPlay/join all enforce it independently).
-    const pvpBtn = el("button", "secondary", PVP_PUBLIC_ENABLED ? ARENA_LABEL : ARENA_PATCHING_LABEL);
-    if (!PVP_PUBLIC_ENABLED) {
+    // ARENA is playable whenever EITHER rollout flag is on. With private ON / public OFF (the
+    // current rollout) the toggle is live and CREATE ROOM / JOIN CODE run the private path; only
+    // QUICK PLAY stays blocked because it reaches the still-dark public pool. Only when NEITHER
+    // flag is on does the toggle show the PATCHING copy, disable, and force-select CO-OP. Any
+    // stale pvp request still hits the typed backend pvp_disabled guard (create/quickPlay/join
+    // each enforce it independently).
+    const isArenaEnabled = PVP_PUBLIC_ENABLED || PVP_PRIVATE_ENABLED;
+    const pvpBtn = el("button", "secondary", isArenaEnabled ? ARENA_LABEL : ARENA_PATCHING_LABEL);
+    if (!isArenaEnabled) {
       this.onlineMode = "coop";
       pvpBtn.disabled = true;
       pvpBtn.title = PVP_DISABLED_MESSAGE;
     }
+    // QUICK PLAY only reaches the PUBLIC pool, so an arena selection while public is dark has
+    // nothing to matchmake into — surface the CREATE ROOM guidance instead of the drop-in copy.
+    const isArenaQuickPlayOffline = (): boolean => this.onlineMode === "pvp" && !PVP_PUBLIC_ENABLED;
     const syncMode = (): void => {
       coopBtn.classList.toggle("sel", this.onlineMode === "coop");
       pvpBtn.classList.toggle("sel", this.onlineMode === "pvp");
-      quickSub.textContent = this.onlineMode === "pvp" ? "drop into an open arena deathmatch" : "drop into an open public room";
+      quickSub.textContent = isArenaQuickPlayOffline()
+        ? ARENA_PUBLIC_OFFLINE_NOTE
+        : this.onlineMode === "pvp" ? "drop into an open arena deathmatch" : "drop into an open public room";
     };
     coopBtn.addEventListener("click", () => { this.onlineMode = "coop"; syncMode(); });
-    pvpBtn.addEventListener("click", () => { if (!PVP_PUBLIC_ENABLED) return; this.onlineMode = "pvp"; syncMode(); });
+    pvpBtn.addEventListener("click", () => { if (!isArenaEnabled) return; this.onlineMode = "pvp"; syncMode(); });
     modeRow.append(coopBtn, pvpBtn);
     wrap.appendChild(modeRow);
 
@@ -2718,9 +2727,9 @@ export class Menu {
     row.appendChild(back);
     wrap.appendChild(row);
 
-    // While PVP is disabled the ARENA toggle is permanently disabled — keep it OUT of the
-    // busy-toggle set so re-arming after a busy cycle never re-enables the kill-switched button.
-    const buttons = PVP_PUBLIC_ENABLED ? [quick, create, join, coopBtn, pvpBtn] : [quick, create, join, coopBtn];
+    // When ARENA is fully disabled (both flags off) the toggle is permanently disabled — keep it
+    // OUT of the busy-toggle set so re-arming after a busy cycle never re-enables the dead button.
+    const buttons = isArenaEnabled ? [quick, create, join, coopBtn, pvpBtn] : [quick, create, join, coopBtn];
     const setBusy = (isBusy: boolean, text: string) => {
       buttons.forEach((b) => (b.disabled = isBusy));
       status.textContent = text;
@@ -2847,6 +2856,12 @@ export class Menu {
     const loadout = this.pendingOnlineLoadout;
     if (!loadout) {
       await this.showOnlineHome();
+      return;
+    }
+    // QUICK PLAY only matchmakes into the PUBLIC pool. While public arena is dark, never fire a
+    // doomed quickPlay(pvp) — steer the player to CREATE ROOM for the live private path instead.
+    if (this.onlineMode === "pvp" && !PVP_PUBLIC_ENABLED) {
+      setBusy(false, ARENA_PUBLIC_OFFLINE_NOTE);
       return;
     }
     setBusy(true, "finding a room\u2026");
