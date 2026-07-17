@@ -2117,6 +2117,43 @@ export function choirmasterHpForFloor(floor: number): number {
 export function choirPillarHpForFloor(floor: number): number {
   return Math.max(1, anchoredBossHp(CHOIRMASTER.pillarHp, CHOIRMASTER.baseHpFloor, floor));
 }
+// ---- UNDERTOW (F65 ESCAPE/STEAL — THE RIVER COMES BACK signature) ----
+// Batch2B OWNER LOCK: reverse-journey escape through connected rooms. Timings LOCKED at 20Hz:
+//   1.6s flood tell → 1.2s advancing front → 3.5s manifestation punish (±1 tick).
+// ONE isBossKind core (when manifested); pulse/vents/flood = mechanic entities.
+// Reuses Batch0 EncounterState (escape) + RoomEdge spawnward graph.
+// Chain: Gorge50 / Sever55 / Choirmaster60 / Undertow65 / Claimant70 / Pale75 / Wake80
+// BALANCER_TODO: Quill owns final HP/TTK/bank — provisional calibration only.
+export const UNDERTOW = {
+  baseHp: 700, // BALANCER_TODO
+  baseHpFloor: 65,
+  phaseAt: [0.66, 0.33] as readonly number[],
+  phaseFloor: [0.58, 0.25] as readonly number[],
+  guardMult: 0.22, // BALANCER_TODO
+  windowBankFrac: 0.26, // BALANCER_TODO
+  contactDamage: 2,
+  entranceGrace: 1.4,
+  attackCd: [0, 3.0, 2.7, 2.4] as readonly number[],
+  riverTell: 1.6,
+  riverFront: 1.2,
+  riverPunish: 3.5,
+  pressureRadius: 240,
+  fleeSpeedMult: 1.3,
+  pulseHp: 24,
+  ventCount: 3,
+  ventHp: 1,
+  floodEdgesPerPhase: 2,
+  checkpointsPerPhase: 2,
+  manifestHp: 0.15,
+  roarDuration: 1.0,
+  roarDamageReduction: 0.35,
+  roarBulletClearRadius: 68,
+} as const;
+
+export function undertowHpForFloor(floor: number): number {
+  return anchoredBossHp(UNDERTOW.baseHp, UNDERTOW.baseHpFloor, floor);
+}
+
 // ---- PALE THRONE (F75 GIANT #2 — the Pale region cap; the SECOND giant, reusing the AD-LOCKED
 // Gorge shell-peel template EXACTLY via the shared giant-encounter core) ----
 // A colossal ~192px STATIONARY front-facing set-piece PINNED to floor 75, mechanically IDENTICAL

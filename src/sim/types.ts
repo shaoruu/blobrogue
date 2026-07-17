@@ -89,6 +89,15 @@ export type EnemyKind =
   //  - choir_pillar: resonating pillar (mechanic body) in a linked lobe — silence the CURRENT
   //    live pillar to advance the phrase; wrong/dormant wakes pressure, never a wipe.
   | "choirmaster" | "choir_pillar"
+  // UNDERTOW (F65 ESCAPE/STEAL — Batch2B OWNER LOCK): ONE isBossKind chase core that manifests
+  // from a spawnward flood front. Signature move THE RIVER COMES BACK (wire: "river_comes_back").
+  //  - undertow_pulse: the stolen Warm Pulse (mechanic body) — carry it spawnward through relief
+  //    vents while the flood front advances. Never a boss kind.
+  //  - undertow_vent: relief vent checkpoint (mechanic body) — deposit the Pulse here before the
+  //    front arrives. Never a boss kind.
+  //  - undertow_flood: the advancing flood front marker (mechanic body) — untargetable zone
+  //    pressure. Never a boss kind.
+  | "undertow" | "undertow_pulse" | "undertow_vent" | "undertow_flood"
   // PALE THRONE (F75 GIANT #2 — the Pale region cap): the SECOND giant, inheriting the Gorge
   // shell-peel grammar EXACTLY (a ~192px STATIONARY front-facing set-piece pinned to floor 75,
   // shared giant-encounter core), with the MATERIAL swapped to COLD warmth-drain (a blazing
@@ -157,7 +166,10 @@ export type AttackMove =
   // HOLLOW CHOIRMASTER F60 signature — THE LAST NOTE: 1.6s silent inhale/gesture →
   // directional pressure sheet advances ~0.7s per linked span → 4.0s voiceless punish.
   // Display name THE LAST NOTE; wire id is the closed AttackMove.
-  | "last_note";
+  | "last_note"
+  // UNDERTOW F65 signature — THE RIVER COMES BACK: 1.6s flood tell → 1.2s advancing front →
+  // 3.5s manifestation punish. Display name THE RIVER COMES BACK; wire id is the closed AttackMove.
+  | "river_comes_back";
 
 // Grouped so the whole attack subsystem lives in one cohesive place per enemy
 // (allocated once at spawn, never per frame).
@@ -905,6 +917,8 @@ export type SpriteName =
   | "sever" | "sever_anchor"
   // HOLLOW CHOIRMASTER (F60): placeholder art hooks only (reuse Choir sheets) — no art generation.
   | "choirmaster" | "choir_pillar"
+  // UNDERTOW (F65): placeholder art hooks only (reuse Weaver sheets) — no art generation this batch.
+  | "undertow" | "undertow_pulse" | "undertow_vent" | "undertow_flood"
   // PALE THRONE (F75 GIANT #2): the AD-LOCKED committed COLD-material art — three single-frame
   // SHELL states swapped off boss.phase, inheriting the gorge peel-reveal shape. "pale" is the
   // base/idle body (pale_shell_stone, P1: frost-pale petrified dark stone, dormant/cold);

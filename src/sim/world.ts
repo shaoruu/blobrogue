@@ -14,6 +14,7 @@ import {
   initArenaEncounter,
   initHuntEncounter,
   initSplitEncounter,
+  initEscapeEncounter,
   isEncounterObjectiveComplete,
   completeEncounter,
   cloneEncounter,
@@ -26,6 +27,7 @@ export {
   initArenaEncounter,
   initHuntEncounter,
   initSplitEncounter,
+  initEscapeEncounter,
   initSmokeEncounter,
   isEncounterObjectiveComplete,
   completeEncounter,
@@ -108,7 +110,7 @@ import { PRIVATE_DRAFT_PVP_POLICY } from "../pvpPolicyId.js";
 import * as C from "./constants.js";
 import {
   PLAYER, SUSTAIN, SHOP, REVIVE, FANG_PROC_COOLDOWN, BOSS, MARROW, CHOIR, WEAVER, GILDED,
-  JET, TITHE, QUORUM, GORGE, SEVER, CHOIRMASTER, PALE, jetSimulCapFor, titheSlabHpForFloor, gorgeSeamHpForFloor, gorgeSeamCountFor, gorgeShellFracFor, severAnchorHpForFloor, choirPillarHpForFloor, paleSeamHpForFloor, paleSeamCountFor, paleShellFracFor, weaponResonanceFamily, RESONANCE_FAMILIES, RESONANCE_TELEGRAPH_COLOR,
+  JET, TITHE, QUORUM, GORGE, SEVER, CHOIRMASTER, UNDERTOW, PALE, jetSimulCapFor, titheSlabHpForFloor, gorgeSeamHpForFloor, gorgeSeamCountFor, gorgeShellFracFor, severAnchorHpForFloor, choirPillarHpForFloor, paleSeamHpForFloor, paleSeamCountFor, paleShellFracFor, weaponResonanceFamily, RESONANCE_FAMILIES, RESONANCE_TELEGRAPH_COLOR,
   GAUNTLET, gauntletCaptainHp, TIERS, coopBossHpMult, EXPOSE_WINDOW_CAP,
   activeThreatCap, clampPlayers, coopThreatMult, coopHeartRateMult,
   REINFORCE_STAGGER, BIOME_PRESSURE, BRUTE_HEAVY_DAMAGE, ELITE_BRACE, BOSS_VULN_CAP,
@@ -1924,6 +1926,8 @@ export function loadFloorIntoWorld(w: WorldState, floor: number, playerCountAtLo
     w.encounter = initHuntEncounter(w.dungeon);
   } else if (w.dungeon.blueprint !== null && w.dungeon.blueprint.structureKind === "split") {
     w.encounter = initSplitEncounter(w.dungeon);
+  } else if (w.dungeon.blueprint !== null && w.dungeon.blueprint.structureKind === "escape") {
+    w.encounter = initEscapeEncounter(w.dungeon);
   } else {
     w.encounter = null;
   }
@@ -3678,6 +3682,11 @@ const BOSS_BEATS: Readonly<Partial<Record<Enemy["kind"], BossBeatDef>>> = {
     damageReduction: CHOIRMASTER.roarDamageReduction, bulletClearRadius: CHOIRMASTER.roarBulletClearRadius,
     addCount: 0, isBreakable: false,
   },
+  undertow: {
+    phaseAt: UNDERTOW.phaseAt, phaseFloor: UNDERTOW.phaseFloor, move: "roar",
+    damageReduction: UNDERTOW.roarDamageReduction, bulletClearRadius: UNDERTOW.roarBulletClearRadius,
+    addCount: 0, isBreakable: false,
+  },
   // PALE THRONE (F75 giant): the same SHELL CRACK-OFF transition as Gorge (roar semantics — a
   // punctuated screen-punch that sloughs the layer, swaps the sprite stone → cracked → core, and
   // drops the cold shell as debris cover via giantShellSlough). No adds.
@@ -3720,6 +3729,7 @@ const EARNED_WINDOWS: Readonly<Partial<Record<Enemy["kind"], EarnedWindowDef>>> 
   gorge: { guardMult: GORGE.guardMult, bankFrac: GORGE.windowBankFrac },
   sever: { guardMult: SEVER.guardMult, bankFrac: SEVER.windowBankFrac },
   choirmaster: { guardMult: CHOIRMASTER.guardMult, bankFrac: CHOIRMASTER.windowBankFrac },
+  undertow: { guardMult: UNDERTOW.guardMult, bankFrac: UNDERTOW.windowBankFrac },
   // PALE THRONE (F75 giant): the same hard-gate shell as Gorge (guardMult 0.0), with the region-cap
   // TIGHTER per-window bank (0.20 vs Gorge's 0.22) — the ONLY damage path is peeling the cold seams.
   pale: { guardMult: PALE.guardMult, bankFrac: PALE.windowBankFrac },
@@ -6694,6 +6704,10 @@ function updateEnemyAI(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): voi
     case "sever_anchor": return; // inert: resin anchor tooth is an intercept target, not an actor
     case "choirmaster": updateChoirmaster(w, e, dt, ev); return;
     case "choir_pillar": return; // inert: resonating pillar is a silence target, not an actor
+    case "undertow": updateUndertow(w, e, dt, ev); return;
+    case "undertow_pulse": return; // inert: the Warm Pulse is a carry target, not an actor
+    case "undertow_vent": return; // inert: a relief vent is a deposit target, not an actor
+    case "undertow_flood": return; // inert: the flood front is zone pressure, not an actor
     case "pale": updateGiant(w, e, dt, ev, GIANT_SPEC.pale!); return;
     case "pale_seam": return; // inert: a tectonic weak-point is a peel target, not an actor
     default: updateChaser(w, e, dt); return;
@@ -12244,6 +12258,254 @@ function updateChoirmaster(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]):
   // Phase roar transitions use shared boss plumbing; otherwise try THE LAST NOTE.
   if (e.attack.phase === "none" && boss.exposed <= 0) {
     choirMaybeBeginLastNote(w, e, ev);
+  }
+}
+
+// ---- UNDERTOW F65 — THE RIVER COMES BACK (OWNER LOCK signature) ----
+// Timings LOCKED: 1.6s flood tell → 1.2s advancing front → 3.5s manifestation punish (±1 tick @20Hz).
+// Steal Warm Pulse in deep room → run SPAWNWARD on RoomEdges while untargetable flood advances.
+// Relief vents / checkpoints; carrier may drop/pass Pulse.
+// Success = deposit Pulse in highlighted vent before front → openBossWindow(3.5).
+// Survival = drop Pulse + marked alcove → lose bounded checkpoint progress; no window.
+// Failure = capped hit+KB; pursuit +1 checkpoint; never wipe.
+
+function undertowEnc(w: WorldState) {
+  return w.encounter && w.encounter.structureKind === "escape" ? w.encounter : null;
+}
+
+function undertowTryActivate(w: WorldState, e: Enemy, ev: SimEvent[]): boolean {
+  const enc = undertowEnc(w);
+  if (!enc) return false;
+  if (enc.active) return true;
+  for (const p of w.players.values()) {
+    if (p.isDown || p.isAbsent) continue;
+    if (Math.hypot(p.x - e.x, p.y - e.y) < UNDERTOW.pressureRadius) {
+      enc.active = true;
+      enc.flags.pulseState = "carried";
+      undertowPlantPulseAndVents(w, e, ev);
+      ev.push({ t: "cue", name: "undertow.riverActivate", x: e.x, y: e.y, rate: 0.8, gain: 0.6, trauma: 0.04 });
+      return true;
+    }
+  }
+  return false;
+}
+
+function undertowPlantPulseAndVents(w: WorldState, e: Enemy, ev: SimEvent[]): void {
+  const enc = undertowEnc(w);
+  if (!enc) return;
+  const bp = w.dungeon.blueprint;
+  if (!bp) return;
+  const cps = bp.objectiveRoomIds;
+
+  const deepRoom = w.dungeon.rooms.find((r) => r.id === cps[0]);
+  if (deepRoom) {
+    const pulse = createEnemy("undertow_pulse", (deepRoom.cx + 0.5) * TILE, (deepRoom.cy + 0.5) * TILE, w.floor, w.rng, w.nextEnemyId++, { isSummoned: true });
+    w.enemies.push(pulse);
+    enc.carrierPlayerId = null;
+    ev.push({ t: "cue", name: "undertow.pulseSpawn", x: pulse.x, y: pulse.y, rate: 1, gain: 0.5, trauma: 0.02 });
+  }
+
+  for (let i = 1; i < cps.length && i <= UNDERTOW.ventCount; i++) {
+    const room = w.dungeon.rooms.find((r) => r.id === cps[i]);
+    if (!room) continue;
+    const vent = createEnemy("undertow_vent", (room.cx + 0.5) * TILE, (room.cy + 0.5) * TILE, w.floor, w.rng, w.nextEnemyId++, { isSummoned: true });
+    vent.aux = i;
+    w.enemies.push(vent);
+  }
+}
+
+function undertowRiverSetOutcome(w: WorldState, outcome: "idle" | "pending" | "success" | "survival" | "failure"): void {
+  const enc = undertowEnc(w);
+  if (enc) enc.flags.riverOutcome = outcome;
+}
+
+function undertowBeginRiver(w: WorldState, e: Enemy, ev: SimEvent[]): boolean {
+  const boss = e.boss!;
+  if (boss.lastAddPick > 0) return false;
+  const enc = undertowEnc(w);
+  if (!enc) return false;
+  beginWindup(e, "river_comes_back");
+  e.attack.cooldown = UNDERTOW.attackCd[boss.phase] ?? UNDERTOW.attackCd[3];
+  boss.lastAddPick = Math.round(12.0 * 100);
+  enc.flags.riverPhase = "tell";
+  undertowRiverSetOutcome(w, "pending");
+  const flood = createEnemy("undertow_flood",
+    e.x, e.y, w.floor, w.rng, w.nextEnemyId++, { isSummoned: true });
+  w.enemies.push(flood);
+  enc.flags.floodFrontEdgeId = enc.routeEdgeId ?? -1;
+  enc.flags.floodProgress = 0;
+  ev.push({ t: "cue", name: "undertow.riverTell", x: e.x, y: e.y, rate: 0.7, gain: 0.65, trauma: 0.05 });
+  return true;
+}
+
+function undertowRiverStep(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void {
+  const a = e.attack;
+  const enc = undertowEnc(w);
+  if (!enc) return;
+
+  if (a.phase === "windup") {
+    a.time += dt;
+    a.windup = Math.min(1, a.time / UNDERTOW.riverTell);
+    if (a.time >= UNDERTOW.riverTell) {
+      a.phase = "active";
+      a.time = 0;
+      a.windup = 0;
+      enc.flags.riverPhase = "front";
+      ev.push({ t: "cue", name: "undertow.riverFront", x: e.x, y: e.y, rate: 0.9, gain: 0.6, trauma: 0.03 });
+    }
+    return;
+  }
+
+  if (a.phase === "active") {
+    a.time += dt;
+    enc.flags.floodProgress = Math.min(1, a.time / UNDERTOW.riverFront);
+    const pulse = w.enemies.find((o) => o.kind === "undertow_pulse" && !o.dead);
+    const nearVent = w.enemies.find((o) => o.kind === "undertow_vent" && !o.dead && pulse && Math.hypot(o.x - pulse.x, o.y - pulse.y) < 48);
+
+    if (nearVent && pulse) {
+      pulse.dead = true;
+      const mask = Number(enc.flags.ventsUsedMask) || 0;
+      enc.flags.ventsUsedMask = mask | (1 << nearVent.aux);
+      nearVent.dead = true;
+      enc.flags.riverPhase = "punish";
+      undertowRiverSetOutcome(w, "success");
+      a.phase = "recover";
+      a.time = 0;
+      openBossWindow(e, UNDERTOW.riverPunish, ev);
+      const mc = (Number(enc.flags.manifestCount) || 0) + 1;
+      enc.flags.manifestCount = mc;
+      ev.push({ t: "cue", name: "undertow.riverSuccess", x: e.x, y: e.y, rate: 1, gain: 0.7, trauma: 0.06 });
+      return;
+    }
+
+    if (a.time >= UNDERTOW.riverFront) {
+      a.phase = "recover";
+      a.time = 0;
+      if (pulse && !pulse.dead) {
+        enc.flags.riverPhase = "punish";
+        undertowRiverSetOutcome(w, "survival");
+        enc.checkpoint = Math.max(0, enc.checkpoint - 1);
+      } else {
+        enc.flags.riverPhase = "punish";
+        undertowRiverSetOutcome(w, "failure");
+        enc.failureCount++;
+      }
+      for (const f of w.enemies) if (f.kind === "undertow_flood" && !f.dead) f.dead = true;
+      ev.push({ t: "cue", name: "undertow.riverSettle", x: e.x, y: e.y, rate: 0.8, gain: 0.5, trauma: 0.03 });
+    }
+    return;
+  }
+
+  if (a.phase === "recover") {
+    a.time += dt;
+    if (a.time >= UNDERTOW.riverPunish) {
+      enc.flags.riverPhase = "idle";
+      for (const f of w.enemies) if (f.kind === "undertow_flood" && !f.dead) f.dead = true;
+      enterIdle(e);
+    }
+    return;
+  }
+}
+
+function undertowEscapeStep(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void {
+  const enc = undertowEnc(w);
+  if (!enc) {
+    if (findTarget(w, e.x, e.y)) applyChaseStep(w, e, dt, chaseAngle(w, e), e.speed * dt);
+    return;
+  }
+  const bp = w.dungeon.blueprint;
+  const cps = bp?.objectiveRoomIds ?? [];
+  const cp = Math.max(0, Math.min(cps.length - 1, enc.checkpoint));
+
+  const rid = roomIdAt(w.dungeon, Math.floor(e.x / TILE), Math.floor(e.y / TILE));
+  if (rid >= 0) enc.currentRoomId = rid;
+
+  const nextCpRoom = cps[Math.min(cps.length - 1, cp + 1)] ?? cps[cps.length - 1];
+  if (rid === nextCpRoom) {
+    enc.checkpoint = Math.min(cps.length - 1, cp + 1);
+    enc.objectiveProgress = enc.checkpoint / Math.max(1, cps.length - 1);
+    if (enc.checkpoint >= cps.length - 1) {
+      completeEncounter(enc);
+      grantEncounterCompletionReward(w);
+      ev.push({ t: "cue", name: "undertow.escapeComplete", x: e.x, y: e.y, rate: 1, gain: 0.7, trauma: 0.04 });
+      return;
+    }
+  }
+
+  const pressured = findTarget(w, e.x, e.y)
+    && Math.hypot(w.targetX - e.x, w.targetY - e.y) < UNDERTOW.pressureRadius;
+
+  if (pressured) {
+    const dest = w.dungeon.rooms.find((r) => r.id === nextCpRoom);
+    let chosen = -1;
+    let best = Infinity;
+    for (let i = 0; i < w.dungeon.edges.length; i++) {
+      const edge = w.dungeon.edges[i];
+      if (edge.locked) continue;
+      if (edge.a !== enc.currentRoomId && edge.b !== enc.currentRoomId) continue;
+      const isChase = bp && bp.chaseEdgeIds.indexOf(i) >= 0;
+      const other = edge.a === enc.currentRoomId ? edge.b : edge.a;
+      const room = w.dungeon.rooms.find((r) => r.id === other);
+      if (!room || !dest) continue;
+      const d = Math.abs(room.cx - dest.cx) + Math.abs(room.cy - dest.cy);
+      const score = d - (isChase ? 100 : 0);
+      if (score < best) { best = score; chosen = i; }
+    }
+    if (chosen >= 0) {
+      enc.routeEdgeId = chosen;
+      const edge = w.dungeon.edges[chosen];
+      const towardB = edge.a === enc.currentRoomId;
+      const path = edge.path;
+      if (path.length > 0) {
+        let bestI = 0, bestD = Infinity;
+        for (let pi = 0; pi < path.length; pi++) {
+          const d = Math.hypot(path[pi].x * TILE + TILE / 2 - e.x, path[pi].y * TILE + TILE / 2 - e.y);
+          if (d < bestD) { bestD = d; bestI = pi; }
+        }
+        const nextI = towardB ? Math.min(path.length - 1, bestI + 1) : Math.max(0, bestI - 1);
+        const tx = path[nextI].x * TILE + TILE / 2;
+        const ty = path[nextI].y * TILE + TILE / 2;
+        const ang = Math.atan2(ty - e.y, tx - e.x);
+        applyChaseStep(w, e, dt, ang, e.speed * UNDERTOW.fleeSpeedMult * dt);
+      }
+    }
+  }
+}
+
+function updateUndertow(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void {
+  const boss = e.boss;
+  if (!boss) return;
+  const a = e.attack;
+  const enc = undertowEnc(w);
+
+  if (enc) {
+    const rid = roomIdAt(w.dungeon, Math.floor(e.x / TILE), Math.floor(e.y / TILE));
+    if (rid >= 0) enc.currentRoomId = rid;
+  }
+
+  if (!undertowTryActivate(w, e, ev)) {
+    if (a.phase !== "none") enterIdle(e);
+    return;
+  }
+
+  if (e.spawnTimer > 0) return;
+
+  if (boss.lastAddPick > 0) {
+    boss.lastAddPick = Math.max(0, boss.lastAddPick - Math.max(1, Math.round(dt * 100)));
+  }
+  if (a.cooldown > 0) a.cooldown = Math.max(0, a.cooldown - dt);
+
+  if (a.move === "river_comes_back" && a.phase !== "none") {
+    undertowRiverStep(w, e, dt, ev);
+    return;
+  }
+
+  undertowEscapeStep(w, e, dt, ev);
+
+  if (a.phase === "none" && a.cooldown === 0 && boss.exposed <= 0 && !boss.roar) {
+    if (findTarget(w, e.x, e.y) && Math.hypot(w.targetX - e.x, w.targetY - e.y) < UNDERTOW.pressureRadius * 1.4) {
+      undertowBeginRiver(w, e, ev);
+    }
   }
 }
 

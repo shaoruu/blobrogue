@@ -5,11 +5,11 @@ import { Rng } from "./rng.js";
 import { biomeIndexForFloor } from "./biomes.js";
 import {
   TIERS, BIOME_PRESSURE, BOSS, MARROW, CHOIR, WEAVER, GILDED, GAUNTLET,
-  JET, TITHE, QUORUM, GORGE, SEVER, CHOIRMASTER, PALE,
+  JET, TITHE, QUORUM, GORGE, SEVER, CHOIRMASTER, UNDERTOW, PALE,
   MINIBOSS, ELITE_BULWARK, ELITE_COST_CAP, ENVELOPE, LIVE_CAPS, activeMoverCapFor,
   floorHpMult, floorSpeedMult, floorThreat, activeThreatCap, roundHalfToEven,
   bossHpForFloor, marrowHpForFloor, choirHpForFloor, weaverHpForFloor, gildedHpForFloor,
-  jetHpForFloor, titheHpForFloor, quorumHpForFloor, gorgeHpForFloor, severHpForFloor, choirmasterHpForFloor, choirPillarHpForFloor, paleHpForFloor,
+  jetHpForFloor, titheHpForFloor, quorumHpForFloor, gorgeHpForFloor, severHpForFloor, choirmasterHpForFloor, choirPillarHpForFloor, undertowHpForFloor, paleHpForFloor,
   captainHpForFloor, bossHpFracFor,
   coopMobHpMult, coopBossHpMult, coopThreatMult, coopKbResistMult,
   MAX_COMPLEX_PER_ROOM, BRUTE_ELITE_COMBO_FLOOR,
@@ -412,6 +412,28 @@ export const ENEMY_ARCHETYPES: Record<EnemyKind, EnemyArchetype> = {
     radius: 14, drawSize: 40, alpha: 1, tint: "#e0d4ff", kbResist: 100,
     baseHp: CHOIRMASTER.pillarHp, baseSpeed: 0, touchDamage: 0, threat: 0.25,
   },
+  // UNDERTOW (F65 ESCAPE/STEAL): ONE chase core (isBossKind when manifested). Spawnward
+  // reverse-journey escape; signature THE RIVER COMES BACK. Placeholder art reuses Weaver sheets.
+  undertow: {
+    kind: "undertow", sprite: "undertow", movement: "boss", isPhasing: false,
+    radius: 28, drawSize: 72, alpha: 1, tint: "#6b9eb8", kbResist: 40,
+    baseHp: undertowHpForFloor(UNDERTOW.baseHpFloor), baseSpeed: 90, touchDamage: UNDERTOW.contactDamage, threat: 0,
+  },
+  undertow_pulse: {
+    kind: "undertow_pulse", sprite: "undertow_pulse", movement: "drift", isPhasing: false,
+    radius: 14, drawSize: 36, alpha: 1, tint: "#ffcc66", kbResist: 100,
+    baseHp: UNDERTOW.pulseHp, baseSpeed: 0, touchDamage: 0, threat: 0.25,
+  },
+  undertow_vent: {
+    kind: "undertow_vent", sprite: "undertow_vent", movement: "drift", isPhasing: false,
+    radius: 14, drawSize: 36, alpha: 1, tint: "#88ddaa", kbResist: 100,
+    baseHp: UNDERTOW.ventHp, baseSpeed: 0, touchDamage: 0, threat: 0.25,
+  },
+  undertow_flood: {
+    kind: "undertow_flood", sprite: "undertow_flood", movement: "drift", isPhasing: false,
+    radius: 20, drawSize: 48, alpha: 0.7, tint: "#3a6888", kbResist: 200,
+    baseHp: 9999, baseSpeed: 0, touchDamage: 0, threat: 0.25,
+  },
   // PALE THRONE (F75 GIANT #2): the second giant, mechanically identical to Gorge (a stationary
   // ~192px set-piece the client swaps stone → cracked → core off boss.phase, radius ~60 hittable
   // core). Only the MATERIAL differs: tint = COLD crystalline core-blaze (#bfeaff), never amber.
@@ -469,6 +491,7 @@ export const ELITE_AFFIXES: Readonly<Record<EnemyKind, EliteAffix>> = {
   gorge: "brace", gorge_seam: "brace", // the giant + its weak-points never roll elite
   sever: "brace", sever_anchor: "brace", // Sever + resin anchors never roll elite
   choirmaster: "brace", choir_pillar: "brace", // Choirmaster + pillars never roll elite
+  undertow: "brace", undertow_pulse: "brace", undertow_vent: "brace", undertow_flood: "brace",
   pale: "brace", pale_seam: "brace", // the F75 giant + its weak-points never roll elite
 };
 
@@ -484,7 +507,7 @@ export function isBossFloor(floor: number): boolean {
 // Only the three FIGHT bodies are boss kinds (chest drop, danger-end, HP scaling, the
 // HUD bar). The Tithe's slab and the Quorum husks are satellite/mechanic bodies, never
 // boss kinds themselves.
-const BOSS_KINDS: readonly EnemyKind[] = ["boss", "marrow", "choir", "weaver", "gilded", "jet", "tithe", "quorum", "gorge", "sever", "choirmaster", "pale"];
+const BOSS_KINDS: readonly EnemyKind[] = ["boss", "marrow", "choir", "weaver", "gilded", "jet", "tithe", "quorum", "gorge", "sever", "choirmaster", "undertow", "pale"];
 
 export function isBossKind(kind: EnemyKind): boolean {
   return BOSS_KINDS.indexOf(kind) !== -1;
@@ -506,6 +529,7 @@ const BOSS_DISPLAY_NAME: Readonly<Partial<Record<EnemyKind, string>>> = {
   gorge: "The Gorge",
   sever: "Sever",
   choirmaster: "The Hollow Choirmaster",
+  undertow: "Undertow",
   pale: "The Pale Throne",
 };
 
@@ -538,6 +562,7 @@ export const BOSS_KIN: Readonly<Partial<Record<EnemyKind, EnemyKind>>> = {
   gorge: "skeleton",
   sever: "bat", // approach escort only; Sever summons no chase adds itself
   choirmaster: "ghost", // approach escort only; Choirmaster summons no adds itself
+  undertow: "ghost", // approach escort only; Undertow summons no adds itself
   // The PALE THRONE giant likewise summons no adds; its kin is only the F75 approach-room escort
   // (the Pale region's frozen hoard) — same space-control-not-chasing giant contract as Gorge.
   pale: "skeleton",
@@ -596,9 +621,13 @@ export function bossKindForFloor(seed: number, floor: number): EnemyKind | null 
   // to live at F55 (now F60 is step 0 of the deep walk — see SEVER_FLOOR comment).
   if (floor === SEVER_FLOOR) return "sever";
   // F60 is HOLLOW CHOIRMASTER — FIXED SPLIT/SILENCE set-piece (Batch2A OWNER LOCK). Early return
-  // so the seeded deep rotation (F65+) stays deterministic. Choirmaster consumes the old F60
-  // deep-rotation slot (step 0); deep walk resumes at F65.
+  // so the seeded deep rotation stays deterministic. Choirmaster consumes the old F60
+  // deep-rotation slot (step 0).
   if (floor === CHOIRMASTER_FLOOR) return "choirmaster";
+  // F65 is UNDERTOW — FIXED ESCAPE/STEAL set-piece (Batch2B OWNER LOCK). Early return so the
+  // seeded deep rotation (F70+) stays deterministic. Undertow consumes the old F65 slot;
+  // deep walk resumes at F70.
+  if (floor === UNDERTOW_FLOOR) return "undertow";
   // F75 is the PALE THRONE GIANT — the SECOND fixed set-piece (the Pale region cap), pinned the
   // exact same way as the F50 gorge: a pure early return that never touches the RNG, so the seeded
   // ladder stays byte-identical (deepBossIndex still walks unchanged, and pale — like gorge — can
@@ -606,8 +635,8 @@ export function bossKindForFloor(seed: number, floor: number): EnemyKind | null 
   if (floor === PALE_FLOOR) return "pale";
   const ladder = Math.floor(floor / BOSS_EVERY);
   if (ladder <= AUTHORED_BOSS_LADDER.length) return AUTHORED_BOSS_LADDER[Math.max(1, ladder) - 1];
-  // Deep rotation: F60 Choirmaster pin consumes the old F60 seeded slot via early return;
-  // F65+ keeps the pre-Choirmaster deepStep formula so Gorge/Sever/Pale goldens stay green.
+  // Deep rotation: Choirmaster/Undertow pins consume old F60/F65 seeded slots via early return;
+  // F70+ keeps the formula so Gorge/Sever/Pale goldens stay green.
   // step = ladder - authoredLen - 1 (Gorge F50) - 1 (Sever F55).
   const deepStep = ladder - AUTHORED_BOSS_LADDER.length - 1 - 1;
   if (deepStep < 0) return DEEP_BOSS_ROSTER[deepBossIndex(seed, 0)];
@@ -622,6 +651,8 @@ export const GORGE_FLOOR = 50;
 export const SEVER_FLOOR = 55;
 // F60 HOLLOW CHOIRMASTER SPLIT/SILENCE (Batch2A OWNER LOCK) — fixed set-piece, not seeded rotation.
 export const CHOIRMASTER_FLOOR = 60;
+// F65 UNDERTOW ESCAPE/STEAL (Batch2B OWNER LOCK) — fixed set-piece, not seeded rotation.
+export const UNDERTOW_FLOOR = 65;
 // The floor the PALE THRONE giant caps (the Pale region — F71-90). The SECOND giant set-piece,
 // pinned exactly like GORGE_FLOOR; F100 Unmaker will add its own pin the same way.
 export const PALE_FLOOR = 75;
@@ -656,6 +687,7 @@ export function enemyHpForFloor(kind: EnemyKind, floor: number): number {
     case "sever": return severHpForFloor(floor);
     case "choirmaster": return choirmasterHpForFloor(floor);
     case "choir_pillar": return choirPillarHpForFloor(floor);
+    case "undertow": return undertowHpForFloor(floor);
     case "pale": return paleHpForFloor(); // F75 fixed anchor (floor-independent — see paleHpForFloor)
     default: return roundHalfToEven(ENEMY_ARCHETYPES[kind].baseHp * floorHpMult(floor));
   }
@@ -768,6 +800,7 @@ const BOSS_ENTRANCE_GRACE: Readonly<Partial<Record<EnemyKind, number>>> = {
   jet: JET.entranceGrace, tithe: TITHE.entranceGrace, quorum: QUORUM.entranceGrace,
   gorge: GORGE.entranceGrace,
   sever: SEVER.entranceGrace, choirmaster: CHOIRMASTER.entranceGrace,
+  undertow: UNDERTOW.entranceGrace,
   pale: PALE.entranceGrace,
 };
 
@@ -1243,7 +1276,7 @@ export function spawnFloorEnemies(dungeon: Dungeon, seed: number, floor: number,
     const minionKind: EnemyKind = BOSS_KIN[bossKind] ?? "slime";
     const bpSpawn = dungeon.blueprint?.spawnRoomId;
     const bossRoom = (
-      (bossKind === "sever" || bossKind === "choirmaster")
+      (bossKind === "sever" || bossKind === "choirmaster" || bossKind === "undertow")
       && bpSpawn !== undefined && bpSpawn >= 0 && bpSpawn < roomCount
     ) ? bpSpawn : roomCount - 1;
     // pointInRoom is called unconditionally (it advances the seeded RNG the same way for every

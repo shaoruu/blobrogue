@@ -181,6 +181,38 @@ export function initSplitEncounter(dungeon: Dungeon): EncounterState {
   };
 }
 
+// Batch2B Undertow F65: escape/steal encounter on the Batch0 room graph (reverse-journey spawnward).
+// flags (OWNER LOCK): riverPhase, floodFrontEdgeId, floodProgress, riverOutcome,
+// ventsUsedMask, manifestCount, carrierPlayerId, pulseState
+export function initEscapeEncounter(dungeon: Dungeon): EncounterState {
+  const bp = dungeon.blueprint;
+  const deepRoom = bp?.objectiveRoomIds[bp.objectiveRoomIds.length - 1]
+    ?? (dungeon.rooms.length > 1 ? dungeon.rooms[dungeon.rooms.length - 1].id : 0);
+  const routeEdgeId = bp && bp.chaseEdgeIds.length > 0 ? bp.chaseEdgeIds[0] : (dungeon.edges.length > 0 ? 0 : null);
+  return {
+    kind: "escape",
+    active: false,
+    structureKind: "escape",
+    currentRoomId: deepRoom,
+    routeEdgeId,
+    checkpoint: 0,
+    objectiveProgress: 0,
+    carrierPlayerId: null,
+    failureCount: 0,
+    completed: false,
+    failed: false,
+    flags: {
+      pulseState: "idle",
+      floodFrontEdgeId: routeEdgeId ?? -1,
+      floodProgress: 0,
+      riverPhase: "idle",
+      riverOutcome: "idle",
+      ventsUsedMask: 0,
+      manifestCount: 0,
+    },
+  };
+}
+
 export function completeEncounter(e: EncounterState): void {
   e.completed = true;
   e.active = true;
