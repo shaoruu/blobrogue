@@ -531,6 +531,7 @@ const TELEGRAPH_COLOR: Record<AttackMove, string> = {
   worldsplit: "#e8d9b0", // Sever WORLDSPLIT: pale bone fracture tell
   last_light: "#bfeaff", // Pale THE LAST LIGHT FALLS: cold stolen-sun meteor tell
   last_note: "#d4c4ff", // Choirmaster THE LAST NOTE: hollow violet sheet tell
+  river_comes_back: "#5ac8ff", // Undertow THE RIVER COMES BACK: cold river-blue tell
 };
 
 // BOSS TELEGRAPH RENDER CONTRACT (docs/specs/blobrogue_TELEGRAPH_RENDER_CONTRACT.md +

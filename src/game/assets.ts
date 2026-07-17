@@ -401,6 +401,10 @@ const SOURCES: Record<SpriteName, string> = {
   sever_anchor: "/sprites/weaver2_px.png",
   choirmaster: "/sprites/choir.png",
   choir_pillar: "/sprites/choir.png",
+  undertow: "/sprites/choir.png",
+  undertow_pulse: "/sprites/choir.png",
+  undertow_vent: "/sprites/choir.png",
+  undertow_flood: "/sprites/choir.png",
   // PALE THRONE (F75 GIANT — AD-LOCKED committed art): the cold shell states the renderer swaps
   // off boss.phase (base "pale" = the stone/dormant shell), plus the small cold weak-point chunk.
   pale: "/sprites/pale_shell_stone.png",

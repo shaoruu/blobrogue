@@ -12290,7 +12290,7 @@ function undertowTryActivate(w: WorldState, e: Enemy, ev: SimEvent[]): boolean {
   return false;
 }
 
-function undertowPlantPulseAndVents(w: WorldState, e: Enemy, ev: SimEvent[]): void {
+function undertowPlantPulseAndVents(w: WorldState, _e: Enemy, ev: SimEvent[]): void {
   const enc = undertowEnc(w);
   if (!enc) return;
   const bp = w.dungeon.blueprint;

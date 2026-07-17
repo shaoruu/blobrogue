@@ -916,6 +916,7 @@ const ATTACK_MOVES: Record<AttackMove, true> = {
   last_light: true,
   // HOLLOW CHOIRMASTER F60 signature — display name THE LAST NOTE; wire id last_note.
   last_note: true,
+  river_comes_back: true,
 };
 const ENEMY_TIERS: Record<EnemyTier, true> = { swarm: true, standard: true, brute: true, elite: true };
 const SLUICE_MODES: Record<SluiceMode, true> = { flood: true, drain: true };

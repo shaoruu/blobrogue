@@ -83,6 +83,7 @@ export const AUDIO_BEHAVIOR: Readonly<Record<EnemyKind, AudioBehavior>> = {
   sever: "boss", sever_anchor: "decoy",
   choirmaster: "boss", choir_pillar: "decoy",
   pale: "boss", pale_seam: "decoy", // the F75 giant + its cold planted weak-point (decoy grammar)
+  undertow: "boss", undertow_pulse: "decoy", undertow_vent: "decoy", undertow_flood: "decoy",
 };
 
 // ---- body materials ----
@@ -141,7 +142,7 @@ export const AUDIO_MATERIAL: Readonly<Record<EnemyKind, AudioMaterial>> = {
   choirmaster: "voice", choir_pillar: "chitin",
   // PALE THRONE (F75 giant) — dedicated pale material bank (see F75 audio hooks).
   pale: "pale", pale_seam: "pale",
-
+  undertow: "mist", undertow_pulse: "chitin", undertow_vent: "earth", undertow_flood: "mist",
 };
 
 // SAME-MATERIAL fallback law: until a row's generated stem lands, its declared fallback
@@ -335,6 +336,10 @@ export const BESTIARY_CUES: Readonly<Record<EnemyKind, Readonly<Record<string, W
     recover: "pale.exposed", entrance: "pale.entrance", phase: "pale.phase", special: "pale.zoneWarn", death: "pale.death",
   },
   pale_seam: { fuse: "pale.seamWarn", toll: "pale.seamBreak" },
+  undertow: {},
+  undertow_pulse: {},
+  undertow_vent: {},
+  undertow_flood: {},
 };
 
 export function bestiaryCue(kind: EnemyKind, hook: string): WaveEventId | null {

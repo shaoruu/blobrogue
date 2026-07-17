@@ -103,6 +103,7 @@ export const AIMED_MOVES: Readonly<Record<AttackMove, boolean>> = {
   last_note: false,
   // PALE F75 THE LAST LIGHT FALLS: meteor/scar sequence — body stays front-facing set-piece.
   last_light: false,
+  river_comes_back: false,
 };
 
 // The renderer-facing pose contract: everything a draw pass (or the AD's sheet set)
