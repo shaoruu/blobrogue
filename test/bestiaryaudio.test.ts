@@ -118,7 +118,7 @@ function manifestGates(): void {
   }
   check("every kind resolves EVERY hook its behavior verb declares", isOk);
   check("boss-grade kinds also carry bespoke entrance/phase/death maps",
-    (["boss", "marrow", "choir", "weaver", "gilded", "marshal", "toll", "gorge", "pale"] as const).every(
+    (["boss", "marrow", "choir", "weaver", "gilded", "marshal", "toll", "gorge", "pale", "wake"] as const).every(
       (k) => WAVE_BOSS_ENTRANCE[k] !== undefined && WAVE_BOSS_PHASE[k] !== undefined && WAVE_BOSS_DEATH[k] !== undefined));
   check("every committed move of every kind is covered by tells (windup at minimum)",
     ALL_KINDS.every((kind) => ENEMY_MOVESET[kind].every((move) => {
@@ -151,6 +151,13 @@ const DE_FALLBACKED_ROWS: ReadonlySet<WaveEventId> = new Set<WaveEventId>([
   "pale.entrance", "pale.phase", "pale.death", "pale.ringWarn", "pale.ring2Warn",
   "pale.ringImpact", "pale.zoneWarn", "pale.zoneActive", "pale.spokeWarn",
   "pale.spokeActive", "pale.exposed", "pale.seamWarn", "pale.seamBreak",
+  // THE WAKE F80 — authored wake-procession-v1 stems (fail quiet if a file is missing).
+  "wake.processionEntrance", "wake.processionPhase", "wake.processionDeath",
+  "wake.processionTell", "wake.processionLock", "wake.processionFront",
+  "wake.processionPunish", "wake.processionRecover", "wake.processionFail",
+  "wake.processionBierPulse", "wake.processionBierAdvance",
+  "wake.processionBlockerHighlight", "wake.processionBlockerBreak",
+  "wake.processionThreshold", "wake.processionShelter", "wake.processionShadowWarn",
 ]);
 
 function rowHygieneGates(): void {
