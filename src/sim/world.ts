@@ -10416,7 +10416,7 @@ function updateQuorumSplinter(w: WorldState, e: Enemy, dt: number): void {
 // / cuts a route (soft fail — never wipes the run). Intercept: destroy 2 resin anchors that
 // trap both exits of a checkpoint room → earned window. Signature WORLDSPLIT:
 //   1.5s plant/tell → 1.2s moving fracture → 3.0s reel-back punish (±1 tick @20Hz).
-const WORLDSPLIT_PHASE = { idle: 0, plant: 1, fracture: 2, punish: 3 } as const;
+// worldsplitPhase (encounter flag) reads idle | plant | fracture | punish.
 
 function severEnc(w: WorldState) {
   return w.encounter && w.encounter.structureKind === "hunt" ? w.encounter : null;
@@ -10477,7 +10477,6 @@ function severHuntStep(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): voi
   if (pressured && enc.flags.interceptState !== "trap" && enc.flags.interceptState !== "window") {
     // Flee toward next checkpoint via authored chase edges.
     const nextCp = cps[Math.min(cps.length - 1, cp + (cps[cp] === enc.currentRoomId ? 1 : 0))] ?? cps[cps.length - 1];
-    const edges = neighbors(w.dungeon, enc.currentRoomId);
     let chosen = -1;
     let best = Infinity;
     const dest = w.dungeon.rooms.find((r) => r.id === nextCp);

@@ -519,6 +519,7 @@ const TELEGRAPH_COLOR: Record<AttackMove, string> = {
   spew: "#ffb43b",    // the Tithe's two-stage arcing pools: amber ooze
   hurl: "#c98b5a",    // the Tithe hurls its slab: heavy amber stone
   rip: "#ffcf6a",     // the Tithe's P3 rip: the all-slabs debris wheel (bright amber)
+  worldsplit: "#c8b4ff", // Sever F55 WORLDSPLIT: the resin-violet fracture lane
 };
 
 // BOSS TELEGRAPH RENDER CONTRACT (docs/specs/blobrogue_TELEGRAPH_RENDER_CONTRACT.md +
