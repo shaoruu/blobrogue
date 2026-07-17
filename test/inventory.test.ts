@@ -395,6 +395,35 @@ function swapTests(): void {
   }
 }
 
+// Bug A regression: a walk-over with FREE hotbar slots must always claim a NEW weapon, and
+// an already-owned duplicate must never be silently swallowed — it stays physical for an
+// ally (the WEAPONS/PROGRESSION duplicate rule; the client surfaces the OWNED proximity tag
+// in renderPickups, so a free-slot walk-over never feels like a dead no-op).
+function duplicatePickupTests(): void {
+  section("free-slot pickup: a NEW weapon auto-collects; an OWNED duplicate is never silently eaten (stays physical for an ally)");
+  const w = createWorld(0xd0b1e, 1, { isShared: true, skipLocalPlayer: true, isSandbox: true });
+  const a = spawnPlayerInWorld(w, "p1");
+  const b = spawnPlayerInWorld(w, "p2");
+  arm(w, "p1", ["shotgun", "railgun", "tesla"]); // owned: pistol, shotgun, railgun, tesla — two slots free under the cap
+  check("the collector has spare hotbar capacity", a.ownedWeapons.length < MAX_OWNED_WEAPONS, `owned=${a.ownedWeapons.length}/${MAX_OWNED_WEAPONS}`);
+  b.x = a.x + 600; b.y = a.y; // keep the teammate out of collect range for the first tick
+  const dupId = dropPickup(w, a.x, a.y, "shotgun");  // A: a weapon the collector already owns
+  const newId = dropPickup(w, a.x, a.y, "flamer");   // E: a weapon nobody owns yet
+  const inputs = new Map<PlayerId, InputCmd>([["p1", IDLE_INPUT], ["p2", IDLE_INPUT]]);
+  const ownedBefore = a.ownedWeapons.slice();
+  stepWorld(w, inputs, 1 / 60);
+  check("the NEW weapon auto-collects into a free slot", a.ownedWeapons.includes("flamer") && !w.pickups.some((q) => q.id === newId));
+  check("the OWNED duplicate is NOT collected (no phantom second copy)", a.ownedWeapons.filter((id) => id === "shotgun").length === 1);
+  check("the OWNED duplicate stays physical on the floor (never a silent no-op)", w.pickups.some((q) => q.id === dupId));
+  check("no other inventory slot shifted", deepEqual(a.ownedWeapons.filter((id) => id !== "flamer"), ownedBefore));
+  // The physical leftover is live loot, not dead: an ally who does NOT own it still claims it.
+  check("the teammate does not own the duplicate yet", !b.ownedWeapons.includes("shotgun"));
+  b.x = a.x; b.y = a.y;
+  stepWorld(w, inputs, 1 / 60);
+  check("an ally WITHOUT it collects the duplicate (available for ally)",
+    b.ownedWeapons.includes("shotgun") && !w.pickups.some((q) => q.id === dupId));
+}
+
 function slotSelectabilityTests(): void {
   section("every slot 1..MAX is selectable (the number-key contract at the sim level)");
   const { w, p } = sharedWorld();
@@ -476,6 +505,7 @@ function main(): void {
   dropPlacementTests();
   dropCollectionTests();
   capTests();
+  duplicatePickupTests();
   swapTests();
   slotSelectabilityTests();
   swapDeterminismTests();
