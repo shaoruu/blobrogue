@@ -4362,8 +4362,10 @@ function spawnMarginCopies(
   }
 }
 
-// Store exactly one payload CLASS off a committed shot from another owned weapon. The
-// Oddsmaker's gamble is never storeable (routes Margin Call to its stub).
+// Store exactly one payload CLASS off a committed shot from another owned weapon.
+// Odds×Margin combo tax (Quill/Rook): Oddsmaker's gamble is NEVER storeable — fail-closed
+// to Margin Call's empty stub (stubDamage/stubFireCd). Do not invent a second 50% tax;
+// the stub path IS the authored combo tax.
 function captureMarginStore(p: PlayerSim, wep: Weapon, spec: ShotSpec): void {
   if (wep.id === "margin_call" || !p.ownedWeapons.includes("margin_call")) return;
   const category = marginCategoryOf(wep, spec);

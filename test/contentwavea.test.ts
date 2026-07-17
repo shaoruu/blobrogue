@@ -171,8 +171,9 @@ section("canonical roadmap and additive catalog migration");
     seed: number;
     legacy: { catalogVersion: 0; pickupCount: number; firstPass: WeaponId[] };
     waveA: { catalogVersion: 1; pickupCount: number; firstPass: WeaponId[] };
+    waveB: { catalogVersion: 2; pickupCount: number; firstPass: WeaponId[] };
   };
-  const deal = (version: 0 | 1): WeaponId[] => {
+  const deal = (version: 0 | 1 | 2): WeaponId[] => {
     const bag = createWeaponBag(fixture.seed, version);
     return contentCatalogFor(version).pickupWeapons
       .map(() => drawWeaponFromBag(bag, new Set()));
@@ -185,7 +186,12 @@ section("canonical roadmap and additive catalog migration");
     contentCatalogFor(WAVE_A_CONTENT_CATALOG_VERSION).pickupWeapons.length === fixture.waveA.pickupCount
     && JSON.stringify(waveADeal) === JSON.stringify(fixture.waveA.firstPass)
     && WAVE_A_WEAPONS.every((id) => waveADeal.includes(id)));
-  for (const version of [0, 1] as const) {
+  const waveBDeal = deal(WAVE_B_CONTENT_CATALOG_VERSION);
+  check("Wave B catalog golden is deterministic and includes every addition",
+    contentCatalogFor(WAVE_B_CONTENT_CATALOG_VERSION).pickupWeapons.length === fixture.waveB.pickupCount
+    && JSON.stringify(waveBDeal) === JSON.stringify(fixture.waveB.firstPass)
+    && fixture.waveB.catalogVersion === 2);
+  for (const version of [0, 1, 2] as const) {
     const bag = createWeaponBag(0xCA7105, version);
     for (let draw = 0; draw < 9; draw++) drawWeaponFromBag(bag, new Set());
     const restored = JSON.parse(JSON.stringify(bag)) as WeaponBag;
