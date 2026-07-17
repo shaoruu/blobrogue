@@ -4,6 +4,8 @@ import {
   arenaLaneCopy,
   buildArenaMatchHud,
   formatArenaClock,
+  PVP_MATERIALIZE_FADE_TICKS,
+  PVP_MATERIALIZE_MIN,
   pvpMaterializeFraction,
   ticksLeftSeconds,
 } from "../src/game/arenaHud.js";
@@ -150,22 +152,54 @@ section("countdown, result, and respawn states");
     && nested.spawnProtectionFill === 1
     && graceEndsAtTick - originTick === 15
     && shieldEndsAtTick - originTick === 40);
-  check("body materialization ramps transparently to full over exactly 0.25s",
+  check("body materialization ramps from a visible floor to full over the fade window",
     pvpMaterializeFraction({
       startedTick: originTick,
       tick: originTick,
       shieldEndsAtTick,
-    }) === 0
+    }) === PVP_MATERIALIZE_MIN
     && pvpMaterializeFraction({
       startedTick: originTick,
       tick: originTick + 4,
       shieldEndsAtTick,
-    }) === 0.8
+    }) === PVP_MATERIALIZE_MIN + (1 - PVP_MATERIALIZE_MIN) * (4 / PVP_MATERIALIZE_FADE_TICKS)
     && pvpMaterializeFraction({
       startedTick: originTick,
-      tick: originTick + 5,
+      tick: originTick + PVP_MATERIALIZE_FADE_TICKS,
       shieldEndsAtTick,
     }) === 1);
+}
+
+section("materialize can never strand a living local body invisible");
+{
+  const tick = 500;
+  const shieldEndsAtTick = tick + 40;
+  const floor = PVP_MATERIALIZE_MIN;
+  check("an unset origin (spo === 0) is fully materialized, never faded to nothing",
+    pvpMaterializeFraction({ startedTick: 0, tick, shieldEndsAtTick }) === 1);
+  check("a negative/garbage origin is treated as fully materialized",
+    pvpMaterializeFraction({ startedTick: -12, tick, shieldEndsAtTick }) === 1);
+  check("an origin ahead of the render tick (stale wire) is fully materialized",
+    pvpMaterializeFraction({ startedTick: tick + 3, tick, shieldEndsAtTick }) === 1);
+  check("an origin frozen level with the render tick (countdown / reconnect pause) stays at the visible floor",
+    pvpMaterializeFraction({ startedTick: tick, tick, shieldEndsAtTick }) === floor);
+  check("an expired shield materializes fully even with a small elapsed",
+    pvpMaterializeFraction({ startedTick: tick - 1, tick, shieldEndsAtTick: tick }) === 1);
+  check("every point of the active fade window is at least the visible floor and never above full",
+    [0, 1, 2, 3, 4, 5, 6, 40].every((elapsed) => {
+      const value = pvpMaterializeFraction({ startedTick: tick - elapsed, tick, shieldEndsAtTick });
+      return value >= floor && value <= 1;
+    }));
+  check("the fade is monotonically non-decreasing across the whole window (no visible dip)",
+    (() => {
+      let previous = -1;
+      for (let elapsed = 0; elapsed <= PVP_MATERIALIZE_FADE_TICKS; elapsed++) {
+        const value = pvpMaterializeFraction({ startedTick: tick - elapsed, tick, shieldEndsAtTick });
+        if (value < previous) return false;
+        previous = value;
+      }
+      return true;
+    })());
 }
 
 section("arena copy cannot fall back to dungeon exit chrome");
