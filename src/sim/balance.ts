@@ -2011,11 +2011,14 @@ export const SEVER = {
   worldsplitPunish: 3.0,
   // Flee / intercept
   pressureRadius: 220,
-  fleeSpeedMult: 1.35,
-  escapeMeterMax: 3,          // escapes before route worsens (soft fail, never wipe)
-  anchorsPerCheckpoint: 2,    // trap both exits of a checkpoint room
+  fleeSpeedMult: 1.35,         // relocation speed while pressured (running to the next stand)
+  relocateSpeedMult: 0.6,      // relocation speed while unpressured (a stalking advance)
+  escapeMeterMax: 3,           // escapes before the route fully worsens (soft fail, never wipe)
+  anchorsPerCheckpoint: 2,     // trap both exits of a checkpoint room
   anchorHp: 28,
-  interceptWindow: 3.0,       // earned damage window after both anchors break
+  interceptWindow: 3.0,        // earned damage window after both anchors break
+  trapEscapeAttacks: 3,        // WORLDSPLITs held at a checkpoint before it tears free (failure)
+  checkpoints: 3,              // 3 chase checkpoints along the authored hunt chain
   roarDuration: 1.0,
   roarDamageReduction: 0.35,
   roarBulletClearRadius: 64,

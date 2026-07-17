@@ -32,8 +32,8 @@ export {
   bumpEncounterProgress,
   encounterEqual,
 } from "./encounter.js";
-import type { Dungeon, Room } from "./dungeon.js";
-import { roomIdAt, neighbors } from "./dungeon.js";
+import type { Dungeon, Room, RoomEdge } from "./dungeon.js";
+import { neighbors } from "./dungeon.js";
 import type { FlowField } from "./pathfind.js";
 import { createNav, markNavTargets, navChaseField, navReachField, navClassFor, navStepPoint, navPoint } from "./nav.js";
 import type { NavRuntime } from "./nav.js";
@@ -776,6 +776,23 @@ export function createWorld(seed: number, floor: number, opts: WorldOptions = {}
 
 // Add a fresh player to a live world at the current dungeon spawn (authoritative server:
 // on join). Returns the created PlayerSim. No-ops to the existing entry if the id is taken.
+// Batch1 Sever follow-up: a co-op late-joiner enters at the current hunt checkpoint room (the
+// party has already moved past the floor entrance), not the stale start spawn. The very first
+// arrival (nobody else present) still enters at the dungeon spawn and walks in as authored.
+function huntLateJoinSpawn(w: WorldState): { x: number; y: number } | null {
+  const enc = w.encounter;
+  if (enc === null || enc.structureKind !== "hunt" || !enc.active) return null;
+  if (w.players.size === 0) return null;
+  const cps = w.dungeon.blueprint?.objectiveRoomIds ?? [];
+  const roomId = cps[Math.max(0, Math.min(cps.length - 1, enc.checkpoint))] ?? enc.currentRoomId;
+  const room = w.dungeon.rooms.find((r) => r.id === roomId);
+  if (room === undefined) return null;
+  const cx = room.cx * TILE + TILE / 2;
+  const cy = room.cy * TILE + TILE / 2;
+  if (!settleSpawnPoint(w, cx, cy, 18)) return { x: cx, y: cy };
+  return { x: settlePoint.x, y: settlePoint.y };
+}
+
 export function spawnPlayerInWorld(
   w: WorldState,
   id: PlayerId,
@@ -783,8 +800,14 @@ export function spawnPlayerInWorld(
 ): PlayerSim {
   const existing = w.players.get(id);
   if (existing) return existing;
+  const lateJoin = huntLateJoinSpawn(w);
   const spawn = w.dungeon.spawn;
-  const p = createPlayer(id, spawn.x * TILE + TILE / 2, spawn.y * TILE + TILE / 2);
+  const px = lateJoin !== null ? lateJoin.x : spawn.x * TILE + TILE / 2;
+  const py = lateJoin !== null ? lateJoin.y : spawn.y * TILE + TILE / 2;
+  const p = createPlayer(id, px, py);
+  // Joining into a live hunt grants the same spawn-grace every floor entry does, so a fresh
+  // body never materializes mid-WORLDSPLIT already taking damage (anti-one-shot on join).
+  if (lateJoin !== null) p.invuln = Math.max(p.invuln, C.PLAYER_SPAWN_GRACE);
   p.offerIdentity = offerIdentity;
   w.players.set(id, p);
   if (isPvp(w)) initPvpPlayer(w, p);
@@ -3730,9 +3753,11 @@ function endBossDanger(w: WorldState, boss: Enemy, ev: SimEvent[]): void {
     other.dead = true;
     ev.push({ t: "puff", x: other.x, y: other.y, n: 6, color: ENEMY_ARCHETYPES[other.kind].tint });
   }
-  // Batch0: mirror arena completion onto EncounterState for HUD/wire/reconnect. Does NOT
-  // replace HP-death — this runs AFTER the classic clear path empties the floor.
-  if (w.encounter !== null && w.encounter.kind === "arena") {
+  // Batch0: mirror completion onto EncounterState for HUD/wire/reconnect. Does NOT replace
+  // HP-death — this runs AFTER the classic clear path empties the floor. The Sever hunt also
+  // completes on its core's death (the intercept objective is the intended path, HP is the
+  // fallback), so a leftover anchor never leaves the floor hanging.
+  if (w.encounter !== null && (w.encounter.kind === "arena" || w.encounter.kind === "hunt")) {
     completeEncounter(w.encounter);
     w.encounter.flags.bossKind = boss.kind;
   }
@@ -10412,14 +10437,44 @@ function updateQuorumSplinter(w: WorldState, e: Enemy, dt: number): void {
 
 
 // ---- SEVER (F55 HUNT/INTERCEPT + WORLDSPLIT) — Batch1 OWNER LOCK ----
-// 3 chase checkpoints on Batch0 RoomEdges. Flee when pressured; escape advances escapeMeter
-// / cuts a route (soft fail — never wipes the run). Intercept: destroy 2 resin anchors that
-// trap both exits of a checkpoint room → earned window. Signature WORLDSPLIT:
-//   1.5s plant/tell → 1.2s moving fracture → 3.0s reel-back punish (±1 tick @20Hz).
-// worldsplitPhase (encounter flag) reads idle | plant | fracture | punish.
+// ONE isBossKind chase core that stalks the party across 3 authored checkpoints on the Batch0
+// RoomEdge graph. The intercept loop drives interceptState:
+//   hunt   → engaged (pressured), it flees toward the current checkpoint room; on arrival it
+//            plants 2 resin anchors and makes a stand → trap. Unpressured it holds (no
+//            pre-activation aggro — it never leaves spawn until the party closes in).
+//   trap   → held at the checkpoint, casting WORLDSPLIT on cadence. Destroying BOTH anchors
+//            opens the earned window (success). Holding past trapEscapeAttacks casts without an
+//            intercept tears it free (failure): escapeMeter++, the corridor behind is cut, and
+//            it advances a checkpoint with NO window.
+//   window → the exposed reel: the party punishes. When it closes the hunt resumes toward the
+//            next checkpoint — or, on the final checkpoint, the objective completes.
+//   escaped→ escapeMeter hit its cap: a soft-failed run (route fully worsened) that stays
+//            winnable through the boss's own HP.
+// Signature WORLDSPLIT (LOCKED): 1.5s plant/tell → 1.2s moving fracture → 3.0s reel-back punish
+// (±1 tick @20Hz). worldsplitPhase (encounter flag) reads idle | plant | fracture | punish.
 
-function severEnc(w: WorldState) {
-  return w.encounter && w.encounter.structureKind === "hunt" ? w.encounter : null;
+function severEnc(w: WorldState): EncounterState | null {
+  return w.encounter !== null && w.encounter.structureKind === "hunt" ? w.encounter : null;
+}
+
+// The room whose CENTER the body has actually reached, or -1 while in transit. currentRoomId
+// updates only on a genuine arrival (near a room's center), never on a corridor merely clipping a
+// room's rect — some authored corridors run straight across a neighbouring room's rect, so a
+// rect test would flip currentRoomId mid-run and flip the flee's chosen edge every tick, wedging
+// the hunt between checkpoints. It stays STICKY on the last room arrived at while traversing.
+const SEVER_ARRIVE_DIST = TILE * 1.9;
+function severRoomArrivedAt(w: WorldState, x: number, y: number): number {
+  for (const r of w.dungeon.rooms) {
+    const dx = (r.cx + 0.5) * TILE - x, dy = (r.cy + 0.5) * TILE - y;
+    if (dx * dx + dy * dy <= SEVER_ARRIVE_DIST * SEVER_ARRIVE_DIST) return r.id;
+  }
+  return -1;
+}
+
+function severCheckpointRoom(w: WorldState, enc: EncounterState): number {
+  const cps = w.dungeon.blueprint?.objectiveRoomIds ?? [];
+  if (cps.length === 0) return enc.currentRoomId;
+  return cps[Math.max(0, Math.min(cps.length - 1, enc.checkpoint))];
 }
 
 function updateSever(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void {
@@ -10428,147 +10483,170 @@ function updateSever(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void 
   const a = e.attack;
   const enc = severEnc(w);
 
-  // Sync encounter room from body position (reconnect/late-join friendly).
-  if (enc) {
-    const rid = roomIdAt(w.dungeon, Math.floor(e.x / TILE), Math.floor(e.y / TILE));
-    if (rid >= 0) enc.currentRoomId = rid;
+  if (enc !== null) {
+    const arrived = severRoomArrivedAt(w, e.x, e.y);
+    if (arrived >= 0) enc.currentRoomId = arrived;
   }
 
-  // Anchor intercept loop (parallel): both anchors dead → open window + advance checkpoint.
+  // The phase-transition beat rides the shared roar plumbing (checkBossTransition → move "roar").
+  // Resolve it here — never through the WORLDSPLIT machine — or the boss would stall mid-roar.
+  if (a.phase === "windup" && a.move === "roar") {
+    a.time += dt;
+    a.windup = Math.min(1, a.time / SEVER.roarDuration);
+    if (a.time >= SEVER.roarDuration) { enterIdle(e); endBossTransition(w, e, ev); }
+    return;
+  }
+
+  // Intercept (parallel): both anchors down at any instant opens the earned window.
   severAnchorLoop(w, e, ev);
 
+  // WORLDSPLIT phase machine.
   if (a.phase === "windup") { severWorldsplitWindup(w, e, dt, ev); return; }
   if (a.phase === "active") { severWorldsplitActive(w, e, dt, ev); return; }
   if (a.phase === "recover") {
     a.time += dt;
     if (a.time >= SEVER.worldsplitPunish) {
-      if (enc) enc.flags.worldsplitPhase = "idle";
       enterIdle(e);
+      if (enc !== null) enc.flags.worldsplitPhase = "idle";
+      severEndTrapCast(w, e, enc, ev);
     }
     return;
   }
+  if (boss.roar) return; // mid-transition: never act between the beat and its windup
 
-  // Flee / hunt locomotion when not mid-WORLDSPLIT.
   severHuntStep(w, e, dt, ev);
-
-  if (a.cooldown === 0 && e.spawnTimer === 0 && !boss.roar && !(enc && enc.flags.interceptState === "window")) {
-    // Commit WORLDSPLIT when a player is in sightline / pressure range.
-    if (findTarget(w, e.x, e.y) && Math.hypot(w.targetX - e.x, w.targetY - e.y) < SEVER.pressureRadius * 1.4) {
-      beginWindup(e, "worldsplit");
-      a.cooldown = SEVER.attackCd[boss.phase] ?? SEVER.attackCd[3];
-      if (enc) enc.flags.worldsplitPhase = "plant";
-      ev.push({ t: "cue", name: "bossSpawn", x: e.x, y: e.y, rate: 0.7, gain: 0.55, trauma: 0.04 });
-    }
-  }
 }
 
+// Non-attacking locomotion + intercept-state transitions. A dev/sandbox floor without a hunt
+// blueprint degrades to a plain chase so a hand-spawned Sever still behaves.
 function severHuntStep(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void {
+  const boss = e.boss!;
+  const a = e.attack;
   const enc = severEnc(w);
-  if (!enc) {
+  if (enc === null) {
     if (findTarget(w, e.x, e.y)) applyChaseStep(w, e, dt, chaseAngle(w, e), e.speed * dt);
     return;
   }
-  const pressured = findTarget(w, e.x, e.y)
-    && Math.hypot(w.targetX - e.x, w.targetY - e.y) < SEVER.pressureRadius;
+  const state = String(enc.flags.interceptState);
+  const hasTarget = findTarget(w, e.x, e.y);
+  const pressured = hasTarget && Math.hypot(w.targetX - e.x, w.targetY - e.y) < SEVER.pressureRadius;
+
+  if (state === "window") {
+    // The exposed reel: hold, facing the party, until the punish window closes.
+    if (!enc.completed && boss.exposed <= 0) severAfterWindow(e, enc, ev);
+    else if (hasTarget) applyChaseStep(w, e, dt, chaseAngle(w, e), e.speed * 0.25 * dt);
+    return;
+  }
+
+  if (state === "trap") {
+    // Held at the stand: WORLDSPLIT on cadence while the anchors stand; a small facing shuffle
+    // between casts (never a chase — it is committed to this room).
+    if (a.cooldown === 0 && e.spawnTimer === 0 && !boss.roar && hasTarget) severBeginWorldsplit(e, enc, ev);
+    else if (hasTarget) applyChaseStep(w, e, dt, chaseAngle(w, e), e.speed * 0.2 * dt);
+    return;
+  }
+
+  if (state === "escaped") {
+    // Soft-failed run: a light hunting presence, still killable through HP.
+    if (hasTarget) applyChaseStep(w, e, dt, chaseAngle(w, e), e.speed * SEVER.relocateSpeedMult * dt);
+    return;
+  }
+
+  // state === "hunt": no pre-activation aggro — hold until the party closes in, then flee to the
+  // current checkpoint room and make a stand there.
+  if (!pressured) return;
+  const target = severCheckpointRoom(w, enc);
+  if (enc.currentRoomId === target) { severPlantAnchors(w, e, ev); return; }
+  severFleeToward(w, e, dt, enc, target, ev);
+}
+
+// Move one step toward `targetRoom` along the best authored RoomEdge (chase edges preferred,
+// so the body keeps to the guaranteed width≥3 flee route). It tracks the corridor CENTERLINE
+// waypoints rather than sighting the far door in a straight line, so L/Z bends never wedge the
+// big body on a wall corner. Cornered (every exit locked) it stands and casts rather than freeze.
+function severFleeToward(w: WorldState, e: Enemy, dt: number, enc: EncounterState, targetRoom: number, ev: SimEvent[]): void {
   const bp = w.dungeon.blueprint;
-  const cps = bp?.objectiveRoomIds ?? [];
-  const cp = Math.max(0, Math.min(2, enc.checkpoint));
-
-  if (pressured && enc.flags.interceptState !== "trap" && enc.flags.interceptState !== "window") {
-    // Flee toward next checkpoint via authored chase edges.
-    const nextCp = cps[Math.min(cps.length - 1, cp + (cps[cp] === enc.currentRoomId ? 1 : 0))] ?? cps[cps.length - 1];
-    let chosen = -1;
-    let best = Infinity;
-    const dest = w.dungeon.rooms.find((r) => r.id === nextCp);
-    for (let i = 0; i < w.dungeon.edges.length; i++) {
-      const edge = w.dungeon.edges[i];
-      if (edge.locked) continue;
-      if (edge.a !== enc.currentRoomId && edge.b !== enc.currentRoomId) continue;
-      // Prefer chaseEdgeIds
-      const isChase = bp && bp.chaseEdgeIds.indexOf(i) >= 0;
-      const other = edge.a === enc.currentRoomId ? edge.b : edge.a;
-      const room = w.dungeon.rooms.find((r) => r.id === other);
-      if (!room || !dest) continue;
-      const d = Math.abs(room.cx - dest.cx) + Math.abs(room.cy - dest.cy);
-      const score = d - (isChase ? 100 : 0);
-      if (score < best) { best = score; chosen = i; }
-    }
-    if (chosen >= 0) {
-      enc.routeEdgeId = chosen;
-      enc.flags.chosenExitEdgeId = chosen;
-      const edge = w.dungeon.edges[chosen];
-      const towardB = edge.a === enc.currentRoomId;
-      const door = towardB ? edge.doorB : edge.doorA;
-      const tx = door.x * TILE + TILE / 2;
-      const ty = door.y * TILE + TILE / 2;
-      const ang = Math.atan2(ty - e.y, tx - e.x);
-      applyChaseStep(w, e, dt, ang, e.speed * SEVER.fleeSpeedMult * dt);
-      // Arrived in next room along edge?
-      const newRoom = roomIdAt(w.dungeon, Math.floor(e.x / TILE), Math.floor(e.y / TILE));
-      if (newRoom >= 0 && newRoom !== enc.currentRoomId) {
-        const from = enc.currentRoomId;
-        enc.currentRoomId = newRoom;
-        // Soft escape: if players didn't intercept, bump escapeMeter (never fail the run).
-        const playersNear = [...w.players.values()].some((p) => !p.isDown && Math.hypot(p.x - e.x, p.y - e.y) < SEVER.pressureRadius * 0.85);
-        if (!playersNear) {
-          const meter = (Number(enc.flags.escapeMeter) || 0) + 1;
-          enc.flags.escapeMeter = meter;
-          enc.failureCount = meter;
-          // Carve/worsen: lock the edge just used (supportsCut bitmask).
-          const bit = 1 << (chosen & 31);
-          enc.flags.supportsCut = (Number(enc.flags.supportsCut) || 0) | bit;
-          edge.locked = true;
-          if (meter >= SEVER.escapeMeterMax) {
-            enc.failed = true; // soft — route worsened, run remains winnable
-            enc.flags.interceptState = "escaped";
-          }
-        }
-        // Advance checkpoint when reaching an objective room ahead.
-        const idx = cps.indexOf(newRoom);
-        if (idx > enc.checkpoint) {
-          enc.checkpoint = Math.min(2, idx);
-          severPlantAnchors(w, e, ev);
-          enc.flags.interceptState = "trap";
-        }
-        void from;
-      }
-      return;
-    }
+  const dest = w.dungeon.rooms.find((r) => r.id === targetRoom);
+  let chosen = -1, best = Infinity;
+  for (let i = 0; i < w.dungeon.edges.length; i++) {
+    const edge = w.dungeon.edges[i];
+    if (edge.locked) continue;
+    if (edge.a !== enc.currentRoomId && edge.b !== enc.currentRoomId) continue;
+    const other = edge.a === enc.currentRoomId ? edge.b : edge.a;
+    const room = w.dungeon.rooms.find((r) => r.id === other);
+    if (room === undefined || dest === undefined) continue;
+    const isChase = bp !== null && bp.chaseEdgeIds.indexOf(i) >= 0;
+    const d = Math.abs(room.cx - dest.cx) + Math.abs(room.cy - dest.cy) - (isChase ? 100 : 0);
+    if (d < best) { best = d; chosen = i; }
   }
-
-  // Default: keep distance / light chase facing the party (hunt presence).
-  if (findTarget(w, e.x, e.y)) {
-    const ang = chaseAngle(w, e);
-    applyChaseStep(w, e, dt, ang, e.speed * 0.55 * dt);
+  if (chosen < 0) {
+    if (e.attack.cooldown === 0 && e.spawnTimer === 0 && !e.boss!.roar && findTarget(w, e.x, e.y)) {
+      severBeginWorldsplit(e, enc, ev);
+    }
+    return;
   }
+  enc.routeEdgeId = chosen;
+  enc.flags.chosenExitEdgeId = chosen;
+  const aim = severCorridorAim(w.dungeon.edges[chosen], enc.currentRoomId, e.x, e.y);
+  const ang = Math.atan2(aim.y - e.y, aim.x - e.x);
+  applyChaseStep(w, e, dt, ang, e.speed * SEVER.fleeSpeedMult * dt);
+}
+
+// The next centerline waypoint (a couple tiles ahead) along `edge` toward the room OPPOSITE
+// `fromRoom`. edge.path runs a→b, so leaving room a walks the path forward, leaving room b walks
+// it backward; the far end sits at the destination room's center, which pulls the body fully in.
+function severCorridorAim(edge: RoomEdge, fromRoom: number, x: number, y: number): { x: number; y: number } {
+  const path = edge.path;
+  if (path.length === 0) {
+    const door = edge.a === fromRoom ? edge.doorB : edge.doorA;
+    return { x: (door.x + 0.5) * TILE, y: (door.y + 0.5) * TILE };
+  }
+  const dir = edge.a === fromRoom ? 1 : -1;
+  let ni = 0, nd = Infinity;
+  for (let k = 0; k < path.length; k++) {
+    const dx = (path[k].x + 0.5) * TILE - x, dy = (path[k].y + 0.5) * TILE - y;
+    const d = dx * dx + dy * dy;
+    if (d < nd) { nd = d; ni = k; }
+  }
+  const wi = Math.max(0, Math.min(path.length - 1, ni + dir * 2));
+  return { x: (path[wi].x + 0.5) * TILE, y: (path[wi].y + 0.5) * TILE };
+}
+
+function severBeginWorldsplit(e: Enemy, enc: EncounterState | null, ev: SimEvent[]): void {
+  const boss = e.boss!;
+  beginWindup(e, "worldsplit");
+  e.attack.cooldown = SEVER.attackCd[boss.phase] ?? SEVER.attackCd[SEVER.attackCd.length - 1];
+  if (enc !== null) enc.flags.worldsplitPhase = "plant";
+  ev.push({ t: "cue", name: "bossSpawn", x: e.x, y: e.y, rate: 0.7, gain: 0.55, trauma: 0.04 });
 }
 
 function severPlantAnchors(w: WorldState, e: Enemy, ev: SimEvent[]): void {
   const enc = severEnc(w);
-  if (!enc) return;
+  if (enc === null) return;
   const boss = e.boss!;
-  // Clear prior live anchors.
   for (const id of boss.windowAddIds) {
-    const a = w.enemies.find((o) => o.id === id && o.kind === "sever_anchor");
-    if (a) a.dead = true;
+    const prior = w.enemies.find((o) => o.id === id && o.kind === "sever_anchor");
+    if (prior) prior.dead = true;
   }
   boss.windowAddIds.length = 0;
   const room = w.dungeon.rooms.find((r) => r.id === enc.currentRoomId);
-  if (!room) return;
-  const exits = neighbors(w.dungeon, enc.currentRoomId).slice(0, SEVER.anchorsPerCheckpoint);
+  if (room === undefined) return;
+  const exits = neighbors(w.dungeon, enc.currentRoomId).filter((edge) => !edge.locked).slice(0, SEVER.anchorsPerCheckpoint);
   const hp = severAnchorHpForFloor(w.floor);
   for (let i = 0; i < SEVER.anchorsPerCheckpoint; i++) {
     let x = (room.cx + (i === 0 ? -2 : 2)) * TILE + TILE / 2;
-    let y = room.cy * TILE + TILE / 2;
-    if (exits[i]) {
-      const edge = exits[i];
+    let y = (room.cy + 0.5) * TILE;
+    const edge = exits[i];
+    if (edge !== undefined) {
       const door = edge.a === enc.currentRoomId ? edge.doorA : edge.doorB;
       x = door.x * TILE + TILE / 2;
       y = door.y * TILE + TILE / 2;
     }
-    if (!settleSpawnPoint(w, x, y, ENEMY_ARCHETYPES.sever_anchor.radius)) {
-      x = room.cx * TILE + TILE / 2 + (i === 0 ? -40 : 40);
-      y = room.cy * TILE + TILE / 2;
+    if (settleSpawnPoint(w, x, y, ENEMY_ARCHETYPES.sever_anchor.radius)) {
+      x = settlePoint.x; y = settlePoint.y;
+    } else {
+      x = (room.cx + 0.5) * TILE + (i === 0 ? -40 : 40);
+      y = (room.cy + 0.5) * TILE;
     }
     const anchor = createEnemy("sever_anchor", x, y, w.floor, w.rng, w.nextEnemyId++, { isSummoned: true });
     anchor.hp = anchor.maxHp = hp;
@@ -10577,28 +10655,74 @@ function severPlantAnchors(w: WorldState, e: Enemy, ev: SimEvent[]): void {
     boss.windowAddIds.push(anchor.id);
   }
   enc.flags.interceptState = "trap";
-  enc.objectiveProgress = Math.min(1, (enc.checkpoint) / 3);
+  enc.flags.trapAttacks = 0;
+  enc.objectiveProgress = Math.min(1, enc.checkpoint / SEVER.checkpoints);
   ev.push({ t: "cue", name: "bossSpawn", x: e.x, y: e.y, rate: 1.1, gain: 0.45, trauma: 0.03 });
 }
 
 function severAnchorLoop(w: WorldState, e: Enemy, ev: SimEvent[]): void {
   const boss = e.boss!;
   const enc = severEnc(w);
-  if (!enc || boss.windowAddIds.length === 0) return;
+  if (enc === null || String(enc.flags.interceptState) !== "trap") return;
+  if (boss.windowAddIds.length === 0) return;
   if (countLiveIds(w, boss.windowAddIds) === 0) {
     boss.windowAddIds.length = 0;
-    openBossWindow(e, SEVER.interceptWindow, ev);
+    openBossWindow(e, SEVER.interceptWindow, ev); // success: the earned intercept window
     enc.flags.interceptState = "window";
-    const next = Math.min(2, enc.checkpoint + 1);
-    enc.checkpoint = next;
-    enc.objectiveProgress = Math.min(1, (next + 1) / 3);
-    if (next >= 2 && e.hp <= e.maxHp * 0.2) {
-      // Final chamber pressure — completion still via boss death OR full objective.
-      enc.objectiveProgress = 1;
-    }
+    enc.flags.trapAttacks = 0;
+    enc.objectiveProgress = Math.min(1, (enc.checkpoint + 1) / SEVER.checkpoints);
     ev.push({ t: "chargeCrash", x: e.x, y: e.y });
     ev.push({ t: "cue", name: "bossSpawn", x: e.x, y: e.y, rate: 0.6, gain: 0.7, trauma: 0.08 });
   }
+}
+
+// The trap's WORLDSPLIT just resolved. If the anchors are still standing (no intercept), tally
+// the held cast; enough of them tears the Sever free — the failure path.
+function severEndTrapCast(w: WorldState, e: Enemy, enc: EncounterState | null, ev: SimEvent[]): void {
+  if (enc === null || String(enc.flags.interceptState) !== "trap") return;
+  const attacks = (Number(enc.flags.trapAttacks) || 0) + 1;
+  enc.flags.trapAttacks = attacks;
+  if (attacks >= SEVER.trapEscapeAttacks) severEscapeCheckpoint(w, e, enc, ev);
+}
+
+// Failure: the Sever tears loose from a stand the party never intercepted. escapeMeter climbs,
+// the corridor behind is cut (supportsCut), and it advances a checkpoint WITHOUT a window. The
+// run only ever worsens — it is never wiped; the boss stays killable through its HP.
+function severEscapeCheckpoint(w: WorldState, e: Enemy, enc: EncounterState, ev: SimEvent[]): void {
+  const boss = e.boss!;
+  for (const id of boss.windowAddIds) {
+    const anchor = w.enemies.find((o) => o.id === id && o.kind === "sever_anchor");
+    if (anchor) anchor.dead = true;
+  }
+  boss.windowAddIds.length = 0;
+  enc.flags.trapAttacks = 0;
+  const meter = (Number(enc.flags.escapeMeter) || 0) + 1;
+  enc.flags.escapeMeter = meter;
+  enc.failureCount = meter;
+  enc.failed = true;
+  const ei = Number(enc.flags.chosenExitEdgeId);
+  if (ei >= 0 && ei < w.dungeon.edges.length) {
+    w.dungeon.edges[ei].locked = true;
+    enc.flags.supportsCut = (Number(enc.flags.supportsCut) || 0) | (1 << (ei & 31));
+  }
+  enc.checkpoint = Math.min(SEVER.checkpoints - 1, enc.checkpoint + 1);
+  enc.objectiveProgress = Math.min(1, enc.checkpoint / SEVER.checkpoints);
+  enc.flags.interceptState = meter >= SEVER.escapeMeterMax ? "escaped" : "hunt";
+  ev.push({ t: "cue", name: "bossSpawn", x: e.x, y: e.y, rate: 0.9, gain: 0.5, trauma: 0.05 });
+}
+
+// The earned window closed. Advance to the next checkpoint's hunt, or complete the objective
+// when the final checkpoint's window is spent (the exit opens without needing the boss dead).
+function severAfterWindow(e: Enemy, enc: EncounterState, ev: SimEvent[]): void {
+  enc.flags.trapAttacks = 0;
+  if (enc.checkpoint >= SEVER.checkpoints - 1) {
+    completeEncounter(enc);
+    ev.push({ t: "cue", name: "bossSpawn", x: e.x, y: e.y, rate: 0.5, gain: 0.8, trauma: 0.1 });
+    return;
+  }
+  enc.checkpoint = Math.min(SEVER.checkpoints - 1, enc.checkpoint + 1);
+  enc.objectiveProgress = Math.min(1, enc.checkpoint / SEVER.checkpoints);
+  enc.flags.interceptState = "hunt";
 }
 
 function severWorldsplitWindup(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void {
@@ -10617,12 +10741,12 @@ function severWorldsplitWindup(w: WorldState, e: Enemy, dt: number, ev: SimEvent
     }
     a.isAimLocked = true;
   }
-  if (enc) enc.flags.worldsplitPhase = "plant";
+  if (enc !== null) enc.flags.worldsplitPhase = "plant";
   if (a.time >= SEVER.worldsplitPlant) {
     a.phase = "active";
     a.time = 0;
     a.windup = 1;
-    if (enc) enc.flags.worldsplitPhase = "fracture";
+    if (enc !== null) enc.flags.worldsplitPhase = "fracture";
     ev.push({ t: "cue", name: "bossSpawn", x: e.x, y: e.y, rate: 0.5, gain: 0.75, trauma: 0.1 });
   }
 }
@@ -10631,44 +10755,26 @@ function severWorldsplitActive(w: WorldState, e: Enemy, dt: number, ev: SimEvent
   const a = e.attack;
   const enc = severEnc(w);
   a.time += dt;
-  // Moving fracture across two-room sightline — damage band along locked angle.
-  const t = a.time / SEVER.worldsplitFracture;
-  const front = Math.min(1, t) * 320;
-  const fx = e.x + Math.cos(a.lockedAngle) * front;
-  const fy = e.y + Math.sin(a.lockedAngle) * front;
-  // Contact along the fracture front (anti-one-shot: 1 dmg).
+  // Moving fracture across the two-room sightline — a damage band that grows along the locked
+  // angle, so a player who crosses the line before the front reaches them survives untouched.
+  const front = Math.min(1, a.time / SEVER.worldsplitFracture) * 320;
   for (const p of w.players.values()) {
     if (p.isDown || p.hp <= 0 || p.invuln > 0) continue;
-    // Distance to segment e → front tip
     const dx = p.x - e.x, dy = p.y - e.y;
     const proj = dx * Math.cos(a.lockedAngle) + dy * Math.sin(a.lockedAngle);
     if (proj < 0 || proj > front) continue;
     const perp = Math.abs(-dx * Math.sin(a.lockedAngle) + dy * Math.cos(a.lockedAngle));
     if (perp < TILE * 0.85) {
-      // Survival fallback: crossing the line before front arrives is handled by invuln dash;
-      // contact chip only (anti-one-shot).
-      damagePlayer(w, p, 1, ev);
+      damagePlayer(w, p, 1, ev); // anti-one-shot: the fracture only chips on contact
       ev.push({ t: "trauma", amount: 0.12 });
     }
   }
-  void fx; void fy;
   if (a.time >= SEVER.worldsplitFracture) {
-    // Success counter path: if anchors were broken this beat, punish is the exposure window
-    // (already opened via severAnchorLoop). Else reel-back punish phase (exposed blades).
+    // The 3.0s reel-back IS the punish window: surviving a WORLDSPLIT bares the Sever. Breaking
+    // its anchors (severAnchorLoop) opens the same plumbing for the bigger intercept payoff.
     enterRecover(e);
-    if (enc) enc.flags.worldsplitPhase = "punish";
-    if (e.boss && e.boss.exposed <= 0) {
-      // Failure: route/support cut — soft worsen, never wipe.
-      if (enc) {
-        enc.failed = true;
-        const bit = 1 << ((Number(enc.flags.chosenExitEdgeId) || 0) & 31);
-        enc.flags.supportsCut = (Number(enc.flags.supportsCut) || 0) | bit;
-        const ei = Number(enc.flags.chosenExitEdgeId);
-        if (ei >= 0 && ei < w.dungeon.edges.length) w.dungeon.edges[ei].locked = true;
-      }
-    } else {
-      openBossWindow(e, SEVER.worldsplitPunish, ev);
-    }
+    if (enc !== null) enc.flags.worldsplitPhase = "punish";
+    openBossWindow(e, SEVER.worldsplitPunish, ev);
   }
 }
 

@@ -1192,7 +1192,12 @@ export function spawnFloorEnemies(dungeon: Dungeon, seed: number, floor: number,
     // be unfair); every other boss uses the sampled interior point.
     const b = pointInRoom(rng, dungeon, bossRoom);
     const room = dungeon.rooms[bossRoom];
-    const spawn = bossKind === "gorge" ? { x: (room.cx + 0.5) * TILE, y: (room.cy + 0.5) * TILE } : b;
+    // The GORGE anchors dead-center (symmetric ring dodge space); SEVER also centers so its large
+    // body lands cleanly INSIDE its approach room — an interior-sampled point can settle onto a
+    // widened chase corridor, where roomIdAt can't name a room and the hunt loses its start room.
+    const spawn = (bossKind === "gorge" || bossKind === "sever")
+      ? { x: (room.cx + 0.5) * TILE, y: (room.cy + 0.5) * TILE }
+      : b;
     active.push(createEnemy(bossKind, spawn.x, spawn.y, floor, rng, active.length, { players, power }));
     const minions = 2 + Math.floor(floor / BOSS_EVERY);
     for (let i = 0; i < minions; i++) {
