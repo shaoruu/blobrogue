@@ -6048,6 +6048,10 @@ export class Game {
     for (const p of this.particles) {
       const a = p.life / p.maxLife;
       if (a <= 0) continue;
+      // Particles are pure cosmetic dressing (never a fairness cue), so an off-screen one
+      // is skipped outright — a dense boss burst that throws flecks across a big arena
+      // pays only for what the camera can actually see.
+      if (!this.isNearCamera(p.x, p.y, 24)) continue;
       if (p.kind === "gib" || p.kind === "shell") {
         ctx.save();
         ctx.globalAlpha = a > 1 ? 1 : a;
