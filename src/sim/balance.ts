@@ -2202,8 +2202,11 @@ export const CLAIMANT = {
   socketCount: 4,           // claim sockets around the arena (one lights during the Owed cast)
   laneHalfWidth: 46,        // crown-lane half-width; perpendicular dash beyond it = survival
   laneLength: 520,          // elongated crown-lane reach (not circular)
-  tokenHp: 1,
-  socketHp: 1,
+  // The token / sockets are indestructible coordination MARKERS (deposit points, never DPS
+  // sponges): a high pool keeps incidental AoE / stray fire from removing them and soft-locking
+  // the pass loop. They despawn with the Claimant on boss death (endBossDanger).
+  tokenHp: 9999,
+  socketHp: 9999,
   depositRadius: 40,        // carrier proximity to a socket that counts a deposit
   tokenPickupGrace: 1.2,    // seconds before an absent carrier's token becomes a world-pickup
   owedFailDamage: 2,        // soft capped failure hit to the carrier

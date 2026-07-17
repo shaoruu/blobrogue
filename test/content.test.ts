@@ -956,27 +956,30 @@ function rotationTests(): void {
   }
   {
     // F50 is the GORGE GIANT — a FIXED set-piece (the Sump cap), NOT part of the seeded deep
-    // rotation. It is pinned for every seed; the seeded rotation resumes at F70 after Sever F55 /
+    // rotation. It is pinned for every seed; the seeded rotation resumes at F80 after Sever F55 /
     // Choirmaster F60 / Undertow F65 / Pale F75 pins.
     let allGorge = true;
     for (let s = 0; s < 80; s++) if (bossKindForFloor(0x5EED + s * 977, 50) !== "gorge") allGorge = false;
     check("F50 is ALWAYS the gorge giant (a fixed set-piece, out of the seeded rotation)", allGorge);
   }
   {
-    // F55 Sever + F60 Choirmaster + F65 Undertow are FIXED set-pieces (like F50 Gorge / F75 Pale).
-    // Seeded deep rotation resumes at F70. Never picks gorge/sever/choirmaster/undertow/pale.
+    // F55 Sever + F60 Choirmaster + F65 Undertow + F70 Claimant are FIXED set-pieces (like F50
+    // Gorge / F75 Pale). Seeded deep rotation resumes at F80. Never picks a pinned boss.
     let allSever = true;
     let allChoir = true;
     let allUndertow = true;
+    let allClaimant = true;
     for (let s = 0; s < 80; s++) {
       const seed = 0x5EED + s * 977;
       if (bossKindForFloor(seed, 55) !== "sever") allSever = false;
       if (bossKindForFloor(seed, 60) !== "choirmaster") allChoir = false;
       if (bossKindForFloor(seed, 65) !== "undertow") allUndertow = false;
+      if (bossKindForFloor(seed, 70) !== "claimant") allClaimant = false;
     }
     check("F55 is ALWAYS Sever (fixed set-piece)", allSever);
     check("F60 is ALWAYS Choirmaster (fixed set-piece)", allChoir);
     check("F65 is ALWAYS Undertow (fixed set-piece)", allUndertow);
+    check("F70 is ALWAYS Claimant (fixed set-piece)", allClaimant);
 
     const roster: EnemyKind[] = ["marrow", "choir", "weaver", "gilded", "boss", "jet", "tithe", "quorum"];
     const seen = new Set<EnemyKind>();
@@ -985,20 +988,21 @@ function rotationTests(): void {
     let neverPinned = true;
     for (let s = 0; s < 80; s++) {
       const seed = 0x5EED + s * 977;
-      let prev: EnemyKind | null = "undertow"; // F65 pin; F70 must not repeat it
+      let prev: EnemyKind | null = "undertow"; // F65 pin; F80 must not repeat it
       for (let floor = 70; floor <= 95; floor += 5) {
+        if (floor === 70) { prev = "claimant"; continue; } // Claimant pin — don't bridge F65↔F80
         if (floor === 75) { prev = "pale"; continue; } // Pale pin — don't bridge F70↔F80
         const a = bossKindForFloor(seed, floor);
         if (a !== bossKindForFloor(seed, floor)) deterministic = false;
         if (a === null || a === prev) noRepeats = false;
-        if (a === "gorge" || a === "sever" || a === "choirmaster" || a === "undertow" || a === "pale") neverPinned = false;
+        if (a === "gorge" || a === "sever" || a === "choirmaster" || a === "undertow" || a === "claimant" || a === "pale") neverPinned = false;
         if (a !== null) seen.add(a);
         prev = a;
       }
     }
     check("the deep pick is a pure function of (seed, floor)", deterministic);
     check("no boss repeats back-to-back deep (nor against the F65 Undertow pin)", noRepeats);
-    check("seeded rotation never picks gorge/sever/choirmaster/undertow/pale pins", neverPinned);
+    check("seeded rotation never picks gorge/sever/choirmaster/undertow/claimant/pale pins", neverPinned);
     check("every deep-roster boss appears across deep seeds", roster.every((k) => seen.has(k)), [...seen].join(","));
   }
   {

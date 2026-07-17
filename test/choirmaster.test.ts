@@ -46,7 +46,7 @@ function pinGates(): void {
   check("LAST NOTE inhale 1.6", CHOIRMASTER.lastNoteInhale === 1.6);
   check("LAST NOTE span 0.7", CHOIRMASTER.lastNoteSpan === 0.7);
   check("LAST NOTE punish 4.0", CHOIRMASTER.lastNotePunish === 4.0);
-  check("PROTOCOL_VERSION is 41 (Undertow river_comes_back after Choirmaster)", PROTOCOL_VERSION === 41);
+  check("PROTOCOL_VERSION is 42 (Claimant all_things_owed after Undertow)", PROTOCOL_VERSION === 42);
   for (const seed of [0x51a9eb0b, 0xC0FFEE, 42, 0xDEAD]) {
     check(`seed ${seed.toString(16)} F50=gorge`, bossKindForFloor(seed, GORGE_FLOOR) === "gorge");
     check(`seed ${seed.toString(16)} F55=sever`, bossKindForFloor(seed, SEVER_FLOOR) === "sever");

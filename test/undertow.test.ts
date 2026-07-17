@@ -39,7 +39,7 @@ function nearTicks(seconds: number): { lo: number; hi: number; exact: number } {
 }
 
 function pinGates(): void {
-  section("F65 Undertow pin + chain + protocol 41");
+  section("F65 Undertow pin + chain + protocol 42");
   check("UNDERTOW_FLOOR is 65", UNDERTOW_FLOOR === 65);
   check("undertow is a boss kind", isBossKind("undertow"));
   check("warm_pulse is NOT a boss kind", !isBossKind("warm_pulse"));
@@ -48,7 +48,7 @@ function pinGates(): void {
   check("RIVER tell 1.6", UNDERTOW.riverTell === 1.6);
   check("RIVER front 1.2", UNDERTOW.riverFront === 1.2);
   check("RIVER punish 3.5", UNDERTOW.riverPunish === 3.5);
-  check("PROTOCOL_VERSION is 41", PROTOCOL_VERSION === 41);
+  check("PROTOCOL_VERSION is 42", PROTOCOL_VERSION === 42);
   for (const seed of [0x51a9eb0b, 0xC0FFEE, 42, 0xDEAD]) {
     check(`seed ${seed.toString(16)} F50=gorge`, bossKindForFloor(seed, GORGE_FLOOR) === "gorge");
     check(`seed ${seed.toString(16)} F55=sever`, bossKindForFloor(seed, SEVER_FLOOR) === "sever");

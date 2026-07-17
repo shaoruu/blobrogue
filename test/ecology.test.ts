@@ -161,6 +161,12 @@ function twoWaveGates(): void {
     gorge_seam: 50,
     // The SEVER hunt's resin anchor first appears on the F55 giant floor.
     sever_anchor: 55,
+    // The HOLLOW CHOIRMASTER's resonating pillar first appears on the F60 split floor.
+    choir_pillar: 60,
+    // The UNDERTOW steal/escape mechanic bodies first appear on the F65 escape floor.
+    warm_pulse: 65, relief_vent: 65, flood_front: 65,
+    // The CLAIMANT coordination mechanic bodies first appear on the F70 arena floor.
+    claim_token: 70, claim_socket: 70,
     // The PALE THRONE giant's cold tectonic weak-point first appears on the F75 giant floor.
     pale_seam: 75,
   };
