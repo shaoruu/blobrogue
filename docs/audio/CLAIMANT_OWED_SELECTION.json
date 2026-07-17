@@ -1,7 +1,7 @@
 {
-  "batch": "claimant-owed-v1-reselect",
+  "batch": "claimant-owed-v1-reselect-r4",
   "story_name": "ALL THINGS OWED",
-  "rule": "Vale EAR reselect: deposit denser (fal if v1 thin), fail_v2, guard_chip_v3, tell_v1, socket_light_v1, token_pickup_v1; fal-regen lock/overcommit/token_drop; remaster all",
+  "rule": "Vale EAR denser: deposit fal denser (pool v1 sil>70), fail_v2, guard_chip_v3, tell_v1, token_pickup_v1; fal-regen lock_r4_v2+compress / overcommit_r2_v3 / token_drop_r2_v2; remaster ALL I=-14 + alimiter=.89",
   "selected": {
     "claimant.owedEntrance": {
       "ship": "boss/claimant_owed_entrance",
@@ -17,24 +17,15 @@
     },
     "claimant.owedTell": {
       "ship": "boss/claimant_owed_tell",
-      "take": "claimant_owed_tell_v1",
-      "rejected": [
-        "claimant_owed_tell_v2"
-      ]
+      "take": "claimant_owed_tell_v1"
     },
     "claimant.owedLock": {
       "ship": "boss/claimant_owed_lock",
-      "take": "fal_regen_lock_r3_v1",
-      "rejected": [
-        "claimant_owed_lock_pool"
-      ]
+      "take": "fal_regen_lock_r4_v2_compress"
     },
     "claimant.owedDescent": {
       "ship": "boss/claimant_owed_descent",
-      "take": "claimant_owed_descent_v1",
-      "rejected": [
-        "claimant_owed_descent_v2"
-      ]
+      "take": "claimant_owed_descent_v1"
     },
     "claimant.owedPunish": {
       "ship": "boss/claimant_owed_punish",
@@ -46,61 +37,133 @@
     },
     "claimant.owedFail": {
       "ship": "boss/claimant_owed_fail",
-      "take": "claimant_owed_fail_v2",
-      "rejected": [
-        "claimant_owed_fail_v1"
-      ]
+      "take": "claimant_owed_fail_v2"
     },
     "claimant.owedTokenPickup": {
       "ship": "boss/claimant_owed_token_pickup",
-      "take": "claimant_owed_token_pickup_v1",
-      "rejected": [
-        "claimant_owed_token_pickup_v2"
-      ]
+      "take": "claimant_owed_token_pickup_v1"
     },
     "claimant.owedTokenPass": {
       "ship": "boss/claimant_owed_token_pass",
-      "take": "claimant_owed_token_pass_v1",
-      "rejected": [
-        "claimant_owed_token_pass_v2"
-      ]
+      "take": "claimant_owed_token_pass_v1"
     },
     "claimant.owedTokenDrop": {
       "ship": "boss/claimant_owed_token_drop",
-      "take": "fal_regen_token_drop_r2_v2",
-      "rejected": [
-        "claimant_owed_token_drop_pool"
-      ]
+      "take": "fal_regen_token_drop_r2_v2"
     },
     "claimant.owedSocketLight": {
       "ship": "boss/claimant_owed_socket_light",
-      "take": "claimant_owed_socket_light_v1",
-      "rejected": [
-        "claimant_owed_socket_light_v2"
-      ]
+      "take": "claimant_owed_socket_light_v1"
     },
     "claimant.owedDeposit": {
       "ship": "boss/claimant_owed_deposit",
-      "take": "fal_regen_deposit_r3_v4",
-      "rejected": [
-        "claimant_owed_deposit_v2",
-        "claimant_owed_deposit_v1_thin"
-      ]
+      "take": "fal_regen_deposit_r3_v4_compress"
     },
     "claimant.owedGuardChip": {
       "ship": "boss/claimant_owed_guard_chip",
-      "take": "claimant_owed_guard_chip_v3",
-      "rejected": [
-        "claimant_owed_guard_chip_v1",
-        "claimant_owed_guard_chip_v2"
-      ]
+      "take": "claimant_owed_guard_chip_v3"
     },
     "claimant.owedOvercommit": {
       "ship": "boss/claimant_owed_overcommit",
-      "take": "fal_regen_overcommit_r2_v1",
-      "rejected": [
-        "claimant_owed_overcommit_pool"
-      ]
+      "take": "fal_regen_overcommit_r2_v3"
+    }
+  },
+  "metrics": {
+    "death": {
+      "dur": 2.2,
+      "peak": -1.42,
+      "onset": 8.4,
+      "sil": 51.4
+    },
+    "deposit": {
+      "dur": 0.521,
+      "peak": -1.66,
+      "onset": 10.0,
+      "sil": 13.8
+    },
+    "descent": {
+      "dur": 0.597,
+      "peak": -1.3,
+      "onset": 7.6,
+      "sil": 28.8
+    },
+    "entrance": {
+      "dur": 1.4,
+      "peak": -1.81,
+      "onset": 7.5,
+      "sil": 14.7
+    },
+    "fail": {
+      "dur": 0.547,
+      "peak": -1.45,
+      "onset": 10.0,
+      "sil": 27.4
+    },
+    "guard_chip": {
+      "dur": 0.282,
+      "peak": -1.5,
+      "onset": 7.7,
+      "sil": 7.8
+    },
+    "lock": {
+      "dur": 0.34,
+      "peak": -1.36,
+      "onset": 10.0,
+      "sil": 22.7
+    },
+    "overcommit": {
+      "dur": 0.547,
+      "peak": -1.72,
+      "onset": 7.2,
+      "sil": 2.9
+    },
+    "phase": {
+      "dur": 1.2,
+      "peak": -2.52,
+      "onset": 9.4,
+      "sil": 10.7
+    },
+    "punish": {
+      "dur": 0.847,
+      "peak": -1.32,
+      "onset": 7.9,
+      "sil": 59.0
+    },
+    "recover": {
+      "dur": 0.697,
+      "peak": -1.49,
+      "onset": 10.0,
+      "sil": 65.8
+    },
+    "socket_light": {
+      "dur": 0.447,
+      "peak": -1.88,
+      "onset": 9.4,
+      "sil": 67.2
+    },
+    "tell": {
+      "dur": 1.4,
+      "peak": -1.3,
+      "onset": 9.5,
+      "sil": 51.2
+    },
+    "token_drop": {
+      "dur": 0.401,
+      "peak": -3.31,
+      "onset": 7.1,
+      "sil": 13.4
+    },
+    "token_pass": {
+      "dur": 0.422,
+      "peak": -1.11,
+      "onset": 7.1,
+      "sil": 38.2
+    },
+    "token_pickup": {
+      "dur": 0.347,
+      "peak": -1.71,
+      "onset": 8.5,
+      "sil": 9.8
     }
   }
 }
