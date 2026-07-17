@@ -49,11 +49,13 @@ function rawSocket(url: string): Promise<WsClient> {
 interface ErrorFrame { t?: string; code?: string; msg?: string }
 
 async function main(): Promise<void> {
-  check("private and public PVP are disabled in this build",
-    PVP_PRIVATE_ENABLED === false && PVP_PUBLIC_ENABLED === false);
+  check("this build ships private PVP ENABLED and public PVP disabled",
+    PVP_PRIVATE_ENABLED === true && PVP_PUBLIC_ENABLED === false);
 
+  // The defense-in-depth scenarios below drive the flag DARK explicitly (independent of the
+  // shipped default) so the game-server reject path stays covered no matter the rollout state.
   await test("a policy-bound private ticket is rejected while the private flag is dark", async () => {
-    const s = await startTestServer();
+    const s = await startTestServer({ pvpPrivateEnabled: false });
     try {
       const before = s.server.health().counters.joinsRejected;
       const ws = await rawSocket(s.url);
@@ -112,7 +114,7 @@ async function main(): Promise<void> {
   });
 
   await test("a resume frame naming a pvp world is rejected too (the guard precedes resume)", async () => {
-    const s = await startTestServer();
+    const s = await startTestServer({ pvpPrivateEnabled: false });
     try {
       const ws = await rawSocket(s.url);
       let frame: ErrorFrame | null = null;
