@@ -53,7 +53,7 @@ import {
   COPY_INVITE_LABEL, INVITE_COPIED_LABEL, INVITE_SHARED_LABEL, INVITE_COPY_FAILED_LABEL,
   INVITE_OFFLINE_NOTE, INVITE_UNREACHABLE_NOTE, ARENA_LABEL, ARENA_PATCHING_LABEL,
 } from "../src/ui/onlineCopy.js";
-import { PVP_PUBLIC_ENABLED, PVP_DISABLED_MESSAGE } from "../src/net/pvpFlag.js";
+import { PVP_PUBLIC_ENABLED, PVP_PRIVATE_ENABLED } from "../src/net/pvpFlag.js";
 
 let passed = 0, failed = 0;
 const failures: string[] = [];
@@ -1852,21 +1852,23 @@ async function main(): Promise<void> {
     check("JOIN CODE present", buttons.some((b) => b.includes("JOIN CODE")));
     check("no classic co-op on the online home", !/classic/i.test(textOf(overlay)));
     // The match-mode toggle: CO-OP (team dungeon) vs ARENA (pvp deathmatch). CO-OP is always
-    // live; ARENA is behind the TEMP kill switch (client entry guards covered by onlinelobby.test.ts).
+    // live; ARENA follows the rollout flags (the behavioral entry guards live in
+    // onlinelobby.test.ts — create private path, quick-play public block).
     check("CO-OP mode toggle present on the online home", buttons.some((b) => b.trim() === "CO-OP"));
 
-    // TEMP PVP KILL SWITCH: ARENA stays VISIBLE but disabled, with the PATCHING copy, so players
-    // see it is temporary — never silently gone. CO-OP remains selectable and fully functional.
-    check("PVP is disabled in this build (the containment default)", PVP_PUBLIC_ENABLED === false);
+    // PVP ROLLOUT (private ON, public OFF): private room-code arena is LIVE, so the ARENA toggle
+    // is selectable with the plain ARENA label — never the PATCHING copy, which is reserved for
+    // when BOTH flags are off. The public pool stays dark (QUICK PLAY refuses pvp — see
+    // onlinelobby.test.ts / pvpkillswitch.test.ts), never the ARENA toggle.
+    check("this build ships PRIVATE arena ON, PUBLIC pool OFF", PVP_PRIVATE_ENABLED === true && PVP_PUBLIC_ENABLED === false);
     const arenaBtn = collect(overlay, (n) => n.tagName === "BUTTON" && (textOf(n).includes("ARENA") || textOf(n).includes("PATCHING")))[0];
-    check("the ARENA toggle is still shown (not hidden)", arenaBtn !== undefined);
-    check("...with the PATCHING copy, not the plain ARENA label", textOf(arenaBtn ?? {}).trim() === ARENA_PATCHING_LABEL && ARENA_PATCHING_LABEL !== ARENA_LABEL, textOf(arenaBtn ?? {}));
-    check("...and is disabled so it cannot start a pvp flow", arenaBtn?.disabled === true);
-    check("...with a tooltip explaining why", (arenaBtn as { title?: string } | undefined)?.title === PVP_DISABLED_MESSAGE);
-    // The disabled ARENA click handler is a no-op guard: clicking it must never mutate the
-    // selected mode (a stale click can't arm pvp; QUICK PLAY / CREATE still carry co-op).
-    arenaBtn?.onclick?.();
-    check("CO-OP remains present as the selectable mode", buttons.some((b) => b.trim() === "CO-OP"));
+    check("the ARENA toggle is shown", arenaBtn !== undefined);
+    check("...with the plain ARENA label (private works — never the PATCHING copy)",
+      textOf(arenaBtn ?? {}).trim() === ARENA_LABEL && ARENA_LABEL !== ARENA_PATCHING_LABEL, textOf(arenaBtn ?? {}));
+    check("...enabled and selectable (not the PATCHING-disabled state)", arenaBtn?.disabled !== true);
+    check("...with no offline tooltip (arena is live for private play)",
+      (arenaBtn as { title?: string } | undefined)?.title === undefined);
+    check("CO-OP remains present as a selectable mode", buttons.some((b) => b.trim() === "CO-OP"));
   }
 
   section("the one-time name gate: a guest's FIRST online start sets name+color in one place");
