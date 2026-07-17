@@ -607,7 +607,7 @@ export function heldWeaponSrc(id: WeaponId): string | null {
 export const HELD_ART_ANGLE: Partial<Record<WeaponId, number>> = {
   cleaver: -0.382, scrapper: -0.52, skipper: -0.557, arcbolt: -0.621, cryobolt: -0.487,
   firebomb: -0.10, tracker: -0.632, singularity: -0.653, vortex: -0.775,
-  hushiron: -0.620, backtalk: -0.743, lamplighter: -0.518, faultlink: -0.717,
+  hushiron: -0.344, backtalk: 0.069, lamplighter: -0.302, faultlink: 0.126,
 };
 
 export class Sprites {
