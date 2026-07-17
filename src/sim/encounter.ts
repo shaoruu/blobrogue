@@ -136,7 +136,7 @@ export function initHuntEncounter(dungeon: Dungeon): EncounterState {
     flags: {
       escapeMeter: 0,
       supportsCut: 0,
-      interceptState: "hunt", // hunt | trap | window | escaped
+      interceptState: "hunt", // hunt | trap | exposed | escaped
       chosenExitEdgeId: routeEdgeId ?? -1,
       worldsplitPhase: "idle", // idle | plant | fracture | punish
       worldsplitOutcome: "idle", // idle | pending | success | survival | failure

@@ -133,7 +133,9 @@ export const AUDIO_MATERIAL: Readonly<Record<EnemyKind, AudioMaterial>> = {
   // Weaver's lattice mechanic-body rows (chitin, like the Tithe slab) — until the audio director's
   // bespoke giant stems land (half-time footfall + colossal downbeat; see the manifest).
   gorge: "giantAmber", gorge_seam: "giantAmber",
-  sever: "gold", sever_anchor: "chitin",
+  // The Sever borrows the Weaver's lattice bank (chitin) end-to-end — sprite, cues, and so
+  // material — until the audio director's bespoke resin-giant stems land.
+  sever: "chitin", sever_anchor: "chitin",
   // PALE THRONE (F75 giant) — dedicated pale material bank (see F75 audio hooks).
   pale: "pale", pale_seam: "pale",
 
