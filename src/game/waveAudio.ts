@@ -123,6 +123,24 @@ interface DeepEmitterState {
   recentAtMs: number[]; // recent event starts, pruned to the overlap window
 }
 
+
+// Sim cue-channel names from world.ts (dotted) → WAVE_SOUNDS camelCase events.
+// Keeps stem uniqueness in WAVE_SOUNDS while still routing THE LAST PROCESSION beats.
+const WAKE_CUE_ALIASES: Readonly<Record<string, WaveEventId>> = {
+  "wake.activate": "wake.processionEntrance",
+  "wake.procession.plant": "wake.processionBierPulse",
+  "wake.procession.tell": "wake.processionTell",
+  "wake.procession.front": "wake.processionFront",
+  "wake.procession.success": "wake.processionPunish",
+  "wake.procession.miss": "wake.processionFail",
+  "wake.procession.survival": "wake.processionRecover",
+  "wake.procession.threshold": "wake.processionThreshold",
+  "wake.procession.shelter": "wake.processionShelter",
+  "wake.procession.shadow": "wake.processionShadowWarn",
+  "wake.procession.blocker": "wake.processionBlockerHighlight",
+  "wake.procession.break": "wake.processionBlockerBreak",
+};
+
 class WaveAudioDirector {
   private engine: WaveEngine;
   private listener: WaveListener | null = null;
@@ -201,8 +219,9 @@ class WaveAudioDirector {
   // Routes a sim `cue` event whose name is a manifest id; returns false for legacy names
   // so the caller keeps its existing SfxName path byte-identical.
   cueAt(name: string, x: number, y: number, entityId?: number): boolean {
-    if (!isWaveEventId(name)) return false;
-    this.play(name, { x, y, entityId });
+    const resolved = WAKE_CUE_ALIASES[name] ?? name;
+    if (!isWaveEventId(resolved)) return false;
+    this.play(resolved, { x, y, entityId });
     return true;
   }
 

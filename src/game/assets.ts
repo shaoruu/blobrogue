@@ -597,6 +597,19 @@ export function heldWeaponSrc(id: WeaponId): string | null {
   return HELD_SOURCES[id] ?? null;
 }
 
+// Per-weapon correction for guns whose ART is drawn on a diagonal (barrel not along +X).
+// renderHeldWeapon rotates the sprite by (aim - artAngle) so the drawn barrel lands on the
+// true aim — otherwise a 45deg-authored gun shoots ~45deg off its muzzle. Measured from the
+// sprite's long axis; horizontally-authored guns (pistol/shotgun/...) need no entry (0).
+// Wave C hushiron/backtalk/lamplighter/faultlink ship the same diagonal convention as the
+// content-wave guns (cleaver/tracker/…); without these entries their barrels point ~30–40°
+// off the true aim — the same class of bug Ian caught on the first diagonal-gun pass.
+export const HELD_ART_ANGLE: Partial<Record<WeaponId, number>> = {
+  cleaver: -0.382, scrapper: -0.52, skipper: -0.557, arcbolt: -0.621, cryobolt: -0.487,
+  firebomb: -0.10, tracker: -0.632, singularity: -0.653, vortex: -0.775,
+  hushiron: -0.620, backtalk: -0.743, lamplighter: -0.518, faultlink: -0.717,
+};
+
 export class Sprites {
   private images = new Map<SpriteName, HTMLImageElement>();
   private tintCache = new Map<string, HTMLCanvasElement>();
