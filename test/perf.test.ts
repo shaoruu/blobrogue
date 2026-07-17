@@ -15,6 +15,7 @@ import type { WorldState } from "../src/sim/world.js";
 import type { SimEvent } from "../src/sim/events.js";
 import { LIVE_CAPS } from "../src/sim/balance.js";
 import { TILE } from "../src/sim/types.js";
+import type { FloorHazardKind } from "../src/sim/types.js";
 import { readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
@@ -143,6 +144,48 @@ const SCENARIOS: Record<string, Setup> = {
     devSpawnEnemy(w, "boss", c.x + 240, c.y);
     for (let i = 0; i < 16; i++) devSpawnEnemy(w, "slime", c.x + 160 + (i % 8) * 24, c.y - 60 + Math.floor(i / 8) * 30);
     aimAndFire(game, c.x + 240, c.y);
+  },
+  // A deep-floor GIANT set-piece (F50 Gorge: shell body + boss aura + phase-3 core glow +
+  // seam weak-points) fought over a DENSE floor-hazard field (spikes/pools/vents/rifts —
+  // vents and rifts also push per-frame occlusion-shaped lights), with a Wave C full-auto
+  // gun raining luminous bullets and a companion pet trotting along. This is the shape of
+  // the Anson playtest the shallow scenarios above never exercised: deep boss VFX + a
+  // hazard telegraph field + full-auto FX + the client pet render path, all at once.
+  "deep-giant-hazard-field": (game) => {
+    game.devGiveWeapon("faultlink"); // a Wave C full-auto gun (dense luminous projectiles)
+    const w = realWorld(game);
+    const c = spawnCenter(w);
+    devSpawnEnemy(w, "gorge", c.x + 260, c.y);
+    for (let i = 0; i < 18; i++) {
+      devSpawnEnemy(w, i % 2 === 0 ? "slime" : "skeleton", c.x + 120 + (i % 6) * 34, c.y - 90 + Math.floor(i / 6) * 36);
+    }
+    const kinds: FloorHazardKind[] = ["spikes", "toxic_pool", "fire_vent", "void_rift"];
+    const stx = w.dungeon.spawn.x, sty = w.dungeon.spawn.y;
+    let id = 1;
+    for (let gx = -5; gx <= 5; gx++) {
+      for (let gy = -3; gy <= 3; gy++) {
+        w.floorHazards.push({ id: id++, kind: kinds[(gx + gy + 20) % 4], tx: stx + gx, ty: sty + gy, phase: (gx + gy) * 0.2, group: 0 });
+      }
+    }
+    (game as object as { devSetPet(petId: string | null): void }).devSetPet("doggie");
+    aimAndFire(game, c.x + 300, c.y);
+  },
+  // A dense-telegraph swarm: a ring of 40 bodies packed at melee range around the player —
+  // so many are simultaneously in a windup/attack telegraph (tier rings, danger discs, aura
+  // lines, elemental status overlays) — plus a second GIANT (F75 Pale) casting its own
+  // telegraphs, under a held beam. The worst-case for the per-enemy overlay + telegraph
+  // render path the density controller is meant to keep readable.
+  "dense-telegraph-swarm": (game) => {
+    game.devGiveWeapon("beam");
+    const w = realWorld(game);
+    const c = spawnCenter(w);
+    devSpawnEnemy(w, "pale", c.x, c.y - 220);
+    const kinds = ["skeleton", "spitter", "charger", "bat"] as const;
+    for (let i = 0; i < 40; i++) {
+      const a = (i / 40) * Math.PI * 2, r = 70 + (i % 4) * 26;
+      devSpawnEnemy(w, kinds[i % kinds.length], c.x + Math.cos(a) * r, c.y + Math.sin(a) * r);
+    }
+    aimAndFire(game, c.x, c.y - 220);
   },
 };
 
