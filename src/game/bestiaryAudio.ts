@@ -85,6 +85,7 @@ export const AUDIO_BEHAVIOR: Readonly<Record<EnemyKind, AudioBehavior>> = {
   pale: "boss", pale_seam: "decoy", // the F75 giant + its cold planted weak-point (decoy grammar)
   undertow: "boss", warm_pulse: "decoy", relief_vent: "decoy", flood_front: "decoy",
   claimant: "boss", claim_token: "decoy", claim_socket: "decoy",
+  wake: "boss", warm_bier: "decoy", convoy_blocker: "decoy", shadow_front: "decoy",
 };
 
 // ---- body materials ----
@@ -144,6 +145,8 @@ export const AUDIO_MATERIAL: Readonly<Record<EnemyKind, AudioMaterial>> = {
   // UNDERTOW F65 — mist/voice bank placeholder; pulse/vent/flood reuse chitin mechanic rows.
   undertow: "voice", warm_pulse: "chitin", relief_vent: "chitin", flood_front: "mist",
   claimant: "voice", claim_token: "chitin", claim_socket: "chitin",
+  // THE WAKE F80 — dusk/voice bank placeholder; bier/blocker reuse chitin, the dark front reuses mist.
+  wake: "voice", warm_bier: "chitin", convoy_blocker: "chitin", shadow_front: "mist",
   // PALE THRONE (F75 giant) — dedicated pale material bank (see F75 audio hooks).
   pale: "pale", pale_seam: "pale",
 
@@ -351,6 +354,15 @@ export const BESTIARY_CUES: Readonly<Record<EnemyKind, Readonly<Record<string, W
   },
   claim_token: { fuse: "choir.strikeWarn", toll: "choir.swellFire" },
   claim_socket: { fuse: "weaver.latticeWarn", toll: "weaver.latticeFire" },
+  // THE WAKE F80 — PLACEHOLDER (Choir/Weaver bank); display-facing name THE LAST PROCESSION.
+  // Audio stems/events use wake.procession* story pattern (hooks only; no generation this PR).
+  wake: {
+    windup: "choir.swellWarn", lock: "choir.strikeLock", active: "choir.swellFire", impact: "choir.strikeImpact",
+    recover: "choir.recover", entrance: "choir.entrance", phase: "choir.phase", special: "choir.floorDischarge", death: "choir.death",
+  },
+  warm_bier: { fuse: "choir.strikeWarn", toll: "choir.swellFire" },
+  convoy_blocker: { fuse: "weaver.latticeWarn", toll: "weaver.latticeFire" },
+  shadow_front: { fuse: "choir.swellWarn", toll: "choir.swellFire" },
 
   pale: {
     windup: "pale.ringWarn", lock: "pale.ring2Warn", active: "pale.spokeActive", impact: "pale.ringImpact",

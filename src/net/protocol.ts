@@ -355,7 +355,13 @@ export const FIXED_DT = 1 / TICK_HZ; // 50ms authoritative step
 //   tokenSocketId / highlightedSocketId / passesCompleted / passCount / aimLockedAt / lockFrac /
 //   tokenDropped) ride Batch0's existing enc wire (arena kind). Claimant owns PROTOCOL 42.
 //   CROWNFALL retired — never revive.
-export const PROTOCOL_VERSION = 42;
+// v43 (Batch3B Wake F80): the closed AttackMove set grows `last_procession` (display name THE LAST
+//   PROCESSION). Enemy kinds `wake` / `warm_bier` / `convoy_blocker` / `shadow_front` ride via
+//   ENEMY_ARCHETYPES (no new EnemyWire fields). EncounterState flags (convoyEdgeId / convoyProgress /
+//   convoyWarmth / highlightedBlockerId / blockersClearedMask / processionPhase / processionOutcome /
+//   thresholdIndex / manifestCount / shadowBehind / convoyPlanted) ride Batch0's existing enc wire
+//   (escort kind). Wake owns PROTOCOL 43. NIGHTFALL_PROCESSION retired — never revive.
+export const PROTOCOL_VERSION = 43;
 
 
 // How long the server reserves a disconnected player's body (their seat) before the
@@ -929,6 +935,9 @@ const ATTACK_MOVES: Record<AttackMove, true> = {
   // CLAIMANT F70 signature — display name ALL THINGS OWED; wire id all_things_owed.
   // Never crownfall.
   all_things_owed: true,
+  // THE WAKE F80 signature — display name THE LAST PROCESSION; wire id last_procession.
+  // Never nightfall_procession.
+  last_procession: true,
 };
 const ENEMY_TIERS: Record<EnemyTier, true> = { swarm: true, standard: true, brute: true, elite: true };
 const SLUICE_MODES: Record<SluiceMode, true> = { flood: true, drain: true };

@@ -309,6 +309,7 @@ export const BOSS_KINDS = [
   "choirmaster",
   "undertow",
   "claimant",
+  "wake",
 ] as const;
 
 export function isBossKindId(kind: string): boolean {
@@ -2219,6 +2220,62 @@ export const CLAIMANT = {
 
 export function claimantHpForFloor(floor: number): number {
   return anchoredBossHp(CLAIMANT.baseHp, CLAIMANT.baseHpFloor, floor);
+}
+
+// ---- THE WAKE (F80 PROTECT/ADVANCE — THE LAST PROCESSION signature) ----
+// Batch3B OWNER LOCK: ONE cross-room escort/convoy (structureKind 'escort'). Timings LOCKED at
+// 20Hz: 1.5s blackout/flood tell → a dark front follows the convoy to the threshold (moving-front)
+// → 4.0s light-bound manifestation punish (±1 tick). ONE isBossKind wake (the shadow that
+// manifests at thresholds); warm_bier / convoy_blocker / shadow_front = mechanic entities. Verb
+// PROTECT/ADVANCE: an autonomous last-light convoy advances spawn→exit across ≥2 RoomEdges; the
+// team escorts it inside a continuous warmth corridor (the convoy aura) and clears one highlighted
+// blocker before each threshold while the dark front closes from behind. Success = stay in the
+// aura AND clear the blocker before the threshold → the convoy crosses on-beat → the Wake is
+// forced into light → openBossWindow(4.0); crossing the FINAL threshold custom-completes the floor.
+// Survival = step to a side shelter outside the path → the convoy stalls (no window). Failure =
+// bounded warmth/progress loss + a capped hit to players in the dark-front lane; anti-one-shot
+// holds; never a wipe/soft-lock.
+// NIGHTFALL_PROCESSION retired — story name THE LAST PROCESSION everywhere (wire: last_procession).
+// BALANCER_TODO: Quill owns final HP/TTK/bank — provisional calibration only.
+export const WAKE = {
+  baseHp: 740, // BALANCER_TODO
+  baseHpFloor: 80,
+  phaseAt: [0.66, 0.33] as readonly number[],
+  phaseFloor: [0.58, 0.25] as readonly number[],
+  guardMult: 0.24, // BALANCER_TODO — chip through the guard outside the light window (never immunity)
+  windowBankFrac: 0.24, // BALANCER_TODO
+  contactDamage: 2,
+  entranceGrace: 1.5,
+  attackCd: [0, 3.0, 2.7, 2.4] as readonly number[],
+  // THE LAST PROCESSION timings (seconds) — authoritative at TICK_HZ=20; tests allow ±1 tick. The
+  // FRONT is a moving-front (it follows the convoy to the threshold), bounded by frontMaxDuration.
+  processionTell: 1.5,
+  processionLockFrac: 0.6,   // aim locks at 0.6 × 1.5 = 0.90s into the tell (≥0.30s reaction remains)
+  processionPunish: 4.0,
+  frontMaxDuration: 2.0,     // moving-front cap — the dark front reaches the threshold within this
+  // Escort / convoy
+  pressureRadius: 240,
+  thresholdCount: 2,         // thresholds the convoy crosses (≥2 RoomEdges spawn→exit)
+  convoyAdvanceRate: 0.35,   // fraction of the current segment advanced per second (autonomous)
+  convoyHoldFrac: 0.9,       // the convoy waits this far into a segment for the escort (crosses on success)
+  processionTriggerFrac: 0.5,// convoy progress into a segment that baits THE LAST PROCESSION
+  auraRadius: 130,           // continuous warmth-corridor radius around the bier (safe corridor)
+  laneHalfWidth: 48,         // dark-front lane half-width; a side shelter beyond it = survival
+  // The bier / shadow_front are indestructible MARKERS (a high pool keeps incidental AoE from
+  // removing them and soft-locking the convoy). The convoy_blocker is the destructible peel target.
+  bierHp: 9999,
+  shadowFrontHp: 9999,
+  blockerHp: 60,             // BALANCER_TODO — the one highlighted blocker cleared before a threshold
+  processionFailDamage: 2,   // soft capped failure hit to players caught in the dark-front lane
+  processionFailKb: 200,
+  warmthLossOnFailure: 0.2,  // bounded convoy-warmth loss on failure (never zeroes / soft-locks)
+  roarDuration: 1.0,
+  roarDamageReduction: 0.35,
+  roarBulletClearRadius: 72,
+} as const;
+
+export function wakeHpForFloor(floor: number): number {
+  return anchoredBossHp(WAKE.baseHp, WAKE.baseHpFloor, floor);
 }
 
 // ---- PALE THRONE (F75 GIANT #2 — the Pale region cap; the SECOND giant, reusing the AD-LOCKED

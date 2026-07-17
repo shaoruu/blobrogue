@@ -533,6 +533,7 @@ const TELEGRAPH_COLOR: Record<AttackMove, string> = {
   last_note: "#d4c4ff", // Choirmaster THE LAST NOTE: hollow violet sheet tell
   river_comes_back: "#6ec8ff", // Undertow THE RIVER COMES BACK: cold flood tell
   all_things_owed: "#e0b64a", // Claimant ALL THINGS OWED: angular gilded crown-lane tell
+  last_procession: "#6b5a9a", // Wake THE LAST PROCESSION: dusk-violet blackout/dark-front tell
 };
 
 // BOSS TELEGRAPH RENDER CONTRACT (docs/specs/blobrogue_TELEGRAPH_RENDER_CONTRACT.md +

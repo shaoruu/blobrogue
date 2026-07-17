@@ -763,11 +763,16 @@ export function generateDungeon(seed: number, floor: number): Dungeon {
   // - F65 Undertow (Batch2B OWNER LOCK): structureKind 'escape' — steal Warm Pulse in the deep/
   //   final room, then reverse journey SPAWNWARD across ≥2 RoomEdges (width≥3). objectiveRoomIds
   //   = reverse checkpoint rooms (deep → mid → near-spawn); chaseEdgeIds = authored reverse path.
+  // - F80 Wake (Batch3B OWNER LOCK): structureKind 'escort' — an autonomous last-light convoy
+  //   advances FORWARD (near-spawn origin → mid → exit) across ≥2 RoomEdges (width≥3). spawnRoomId
+  //   = convoy origin (not last-arena-only); objectiveRoomIds = forward threshold rooms;
+  //   chaseEdgeIds = the authored forward convoy path.
   let blueprint: EncounterBlueprint | null = null;
   if (bossArena !== null) {
     const isHuntFloor = floor === 55; // SEVER_FLOOR — keep literal to avoid enemies↔dungeon cycle
     const isSplitFloor = floor === 60; // CHOIRMASTER_FLOOR — literal to avoid enemies↔dungeon cycle
     const isEscapeFloor = floor === 65; // UNDERTOW_FLOOR — literal to avoid enemies↔dungeon cycle
+    const isEscortFloor = floor === 80; // WAKE_FLOOR — literal to avoid enemies↔dungeon cycle
     if (isHuntFloor && chain.length >= 4) {
       // Checkpoints: approach mid-band rooms (not spawn, not final exit-only). Prefer last 4 rooms.
       const n = chain.length;
@@ -853,6 +858,40 @@ export function generateDungeon(seed: number, floor: number): Dungeon {
       blueprint = {
         structureKind: "escape",
         spawnRoomId: deep, // steal site = deep/final room
+        objectiveRoomIds,
+        chaseEdgeIds,
+      };
+    } else if (isEscortFloor && chain.length >= 4) {
+      // Forward escort/convoy: an autonomous last-light convoy advances SPAWNWARD → EXIT across
+      // ≥2 RoomEdges (width≥3). objectiveRoomIds author the forward threshold rooms (origin →
+      // mid → exit) and chaseEdgeIds the forward convoy path. spawnRoomId = the convoy ORIGIN (a
+      // near-spawn approach room, not the last-arena-only), where the Wake shadow first trails it.
+      const n = chain.length;
+      const origin = chain[Math.max(1, Math.floor(n / 3))].id;
+      const mid = chain[Math.max(1, n - 2)].id;
+      const exit = last.id;
+      const objectiveRoomIds = [origin, mid, exit];
+      const chaseEdgeIds: number[] = [];
+      const wantPairs = [[origin, mid], [mid, exit]];
+      for (const [a, b] of wantPairs) {
+        let ei = edges.findIndex((e) => !e.isShortcut && ((e.a === a && e.b === b) || (e.a === b && e.b === a)));
+        if (ei < 0) ei = edges.findIndex((e) => (e.a === a && e.b === b) || (e.a === b && e.b === a));
+        if (ei >= 0) {
+          if (edges[ei].width < 3) edges[ei].width = 3;
+          if (chaseEdgeIds.indexOf(ei) < 0) chaseEdgeIds.push(ei);
+        }
+      }
+      if (chaseEdgeIds.length < 2) {
+        for (let i = 0; i < edges.length && chaseEdgeIds.length < 2; i++) {
+          if (!edges[i].isShortcut && chaseEdgeIds.indexOf(i) < 0) {
+            if (edges[i].width < 3) edges[i].width = 3;
+            chaseEdgeIds.push(i);
+          }
+        }
+      }
+      blueprint = {
+        structureKind: "escort",
+        spawnRoomId: origin, // convoy origin = near-spawn approach room
         objectiveRoomIds,
         chaseEdgeIds,
       };

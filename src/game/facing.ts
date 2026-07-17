@@ -105,6 +105,8 @@ export const AIMED_MOVES: Readonly<Record<AttackMove, boolean>> = {
   river_comes_back: false,
   // CLAIMANT F70 ALL THINGS OWED: the crown-lane aims at the claim-token carrier — the body faces its lock.
   all_things_owed: true,
+  // THE WAKE F80 THE LAST PROCESSION: the dark front is geometry that follows the convoy (like WORLDSPLIT) — body keeps travel facing.
+  last_procession: false,
   // PALE F75 THE LAST LIGHT FALLS: meteor/scar sequence — body stays front-facing set-piece.
   last_light: false,
 };
