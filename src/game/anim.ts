@@ -96,3 +96,13 @@ export function frameIndex(frameCount: number, fps: number, clock: number): numb
   if (frameCount <= 1) return 0;
   return Math.floor(clock * fps) % frameCount;
 }
+
+// The frame for a ONE-SHOT clip played once over a 0..1 progress (a pet's attack-emote beat):
+// maps progress across the N frames and CLAMPS on the last frame at the end (never wraps back
+// to frame 0, so the clip plays through exactly once and holds its final pose). Progress is
+// clamped to [0,1] so an over/under-run caller can never index out of range.
+export function oneShotFrameIndex(frameCount: number, progress: number): number {
+  if (frameCount <= 1) return 0;
+  const p = progress < 0 ? 0 : progress > 1 ? 1 : progress;
+  return Math.min(frameCount - 1, Math.floor(p * frameCount));
+}
