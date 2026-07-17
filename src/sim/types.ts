@@ -83,6 +83,12 @@ export type EnemyKind =
   //  - sever_anchor: resin ANCHOR tooth (mechanic body) — destroy 2 per checkpoint room to
   //    trap both exits and open the intercept damage window. Never a boss kind.
   | "sever" | "sever_anchor"
+  // HOLLOW CHOIRMASTER (F60 SPLIT/SILENCE — Batch2A OWNER LOCK): ONE isBossKind conductor in
+  // a multi-lobed super-room (structureKind 'split'). Signature move THE LAST NOTE (wire:
+  // "last_note"). Pillars / sheet fronts are mechanic bodies — never a second boss core.
+  //  - choir_pillar: resonating pillar (mechanic body) in a linked lobe — silence the CURRENT
+  //    live pillar to advance the phrase; wrong/dormant wakes pressure, never a wipe.
+  | "choirmaster" | "choir_pillar"
   // PALE THRONE (F75 GIANT #2 — the Pale region cap): the SECOND giant, inheriting the Gorge
   // shell-peel grammar EXACTLY (a ~192px STATIONARY front-facing set-piece pinned to floor 75,
   // shared giant-encounter core), with the MATERIAL swapped to COLD warmth-drain (a blazing
@@ -147,7 +153,11 @@ export type AttackMove =
   // PALE THRONE F75 signature — THE LAST LIGHT FALLS: 1.8s ceiling/meteor tell → three
   // sequential scar relights (≥0.65s each, one active) → 1.0s redirected fall → 4.0s core
   // punish. Display name THE LAST LIGHT FALLS; wire id is the closed AttackMove.
-  | "last_light";
+  | "last_light"
+  // HOLLOW CHOIRMASTER F60 signature — THE LAST NOTE: 1.6s silent inhale/gesture →
+  // directional pressure sheet advances ~0.7s per linked span → 4.0s voiceless punish.
+  // Display name THE LAST NOTE; wire id is the closed AttackMove.
+  | "last_note";
 
 // Grouped so the whole attack subsystem lives in one cohesive place per enemy
 // (allocated once at spawn, never per frame).
@@ -893,6 +903,8 @@ export type SpriteName =
   | "gorge" | "gorge_shell_chitin" | "gorge_shell_core" | "gorge_seam"
   // SEVER (F55): placeholder art hooks only (reuse Weaver sheets) — no art generation this batch.
   | "sever" | "sever_anchor"
+  // HOLLOW CHOIRMASTER (F60): placeholder art hooks only (reuse Choir sheets) — no art generation.
+  | "choirmaster" | "choir_pillar"
   // PALE THRONE (F75 GIANT #2): the AD-LOCKED committed COLD-material art — three single-frame
   // SHELL states swapped off boss.phase, inheriting the gorge peel-reveal shape. "pale" is the
   // base/idle body (pale_shell_stone, P1: frost-pale petrified dark stone, dormant/cold);

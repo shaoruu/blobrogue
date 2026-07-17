@@ -615,7 +615,7 @@ function lastLightGates(): void {
     && PALE.lastLightScarCount === 3 && PALE.lastLightFall === 1.0 && PALE.lastLightPunish === 4.0);
   check("AttackMove last_light is on Pale moveset",
     ENEMY_MOVESET.pale.includes("last_light"));
-  check("PROTOCOL stays 38 (last_light fits AttackWire/flags)", PROTOCOL_VERSION === 38);
+  check("PROTOCOL is 39 after Choirmaster last_note wire (Pale last_light still fits)", PROTOCOL_VERSION === 39);
   const near = (seconds: number) => {
     const exact = Math.round(seconds * TICK_HZ);
     return { lo: exact - 1, hi: exact + 1, exact };

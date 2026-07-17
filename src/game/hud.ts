@@ -183,7 +183,12 @@ export function encounterObjectiveCopy(enc: HudState["encounter"]): string | nul
   if (enc.kind === "hunt") {
     const pip = enc.carrierId ? " \u25cf" : "";
     return `WORLDSPLIT \u00b7 INTERCEPT ${pct}% \u00b7 CP ${enc.checkpoint}/2${pip}`;
+  }  // Choirmaster F60 split: story name THE LAST NOTE on the objective lane.
+  if (enc.kind === "split") {
+    const pip = enc.carrierId ? " \u25cf" : "";
+    return `THE LAST NOTE \u00b7 SILENCE ${pct}% \u00b7 PHRASE ${enc.checkpoint}${pip}`;
   }
+
   return `OBJECTIVE ${pct}% \u00b7 CP ${enc.checkpoint}`;
 }
 

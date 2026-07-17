@@ -13,6 +13,7 @@ import {
   type EncounterState,
   initArenaEncounter,
   initHuntEncounter,
+  initSplitEncounter,
   isEncounterObjectiveComplete,
   completeEncounter,
   cloneEncounter,
@@ -24,6 +25,7 @@ export {
   createIdleEncounter,
   initArenaEncounter,
   initHuntEncounter,
+  initSplitEncounter,
   initSmokeEncounter,
   isEncounterObjectiveComplete,
   completeEncounter,
@@ -104,7 +106,7 @@ import { LOCAL_ID, IDLE_INPUT } from "./input.js";
 import * as C from "./constants.js";
 import {
   PLAYER, SUSTAIN, SHOP, REVIVE, FANG_PROC_COOLDOWN, BOSS, MARROW, CHOIR, WEAVER, GILDED,
-  JET, TITHE, QUORUM, GORGE, SEVER, PALE, jetSimulCapFor, titheSlabHpForFloor, gorgeSeamHpForFloor, gorgeSeamCountFor, gorgeShellFracFor, severAnchorHpForFloor, paleSeamHpForFloor, paleSeamCountFor, paleShellFracFor, weaponResonanceFamily, RESONANCE_FAMILIES, RESONANCE_TELEGRAPH_COLOR,
+  JET, TITHE, QUORUM, GORGE, SEVER, CHOIRMASTER, PALE, jetSimulCapFor, titheSlabHpForFloor, gorgeSeamHpForFloor, gorgeSeamCountFor, gorgeShellFracFor, severAnchorHpForFloor, choirPillarHpForFloor, paleSeamHpForFloor, paleSeamCountFor, paleShellFracFor, weaponResonanceFamily, RESONANCE_FAMILIES, RESONANCE_TELEGRAPH_COLOR,
   GAUNTLET, gauntletCaptainHp, TIERS, coopBossHpMult, EXPOSE_WINDOW_CAP,
   activeThreatCap, clampPlayers, coopThreatMult, coopHeartRateMult,
   REINFORCE_STAGGER, BIOME_PRESSURE, BRUTE_HEAVY_DAMAGE, ELITE_BRACE, BOSS_VULN_CAP,
@@ -860,7 +862,7 @@ export function spawnPlayerInWorld(
   let sx = w.dungeon.spawn.x * TILE + TILE / 2;
   let sy = w.dungeon.spawn.y * TILE + TILE / 2;
   const enc = w.encounter;
-  if (enc && enc.structureKind === "hunt" && enc.active) {
+  if (enc && (enc.structureKind === "hunt" || enc.structureKind === "split") && enc.active) {
     const cps = w.dungeon.blueprint?.objectiveRoomIds ?? [];
     const cp = Math.max(0, Math.min(cps.length - 1, enc.checkpoint));
     const roomId = cps[cp] ?? enc.currentRoomId;
@@ -1890,6 +1892,8 @@ export function loadFloorIntoWorld(w: WorldState, floor: number, playerCountAtLo
     w.encounter = initArenaEncounter(w.dungeon);
   } else if (w.dungeon.blueprint !== null && w.dungeon.blueprint.structureKind === "hunt") {
     w.encounter = initHuntEncounter(w.dungeon);
+  } else if (w.dungeon.blueprint !== null && w.dungeon.blueprint.structureKind === "split") {
+    w.encounter = initSplitEncounter(w.dungeon);
   } else {
     w.encounter = null;
   }
@@ -3515,6 +3519,11 @@ const BOSS_BEATS: Readonly<Partial<Record<Enemy["kind"], BossBeatDef>>> = {
     damageReduction: SEVER.roarDamageReduction, bulletClearRadius: SEVER.roarBulletClearRadius,
     addCount: 0, isBreakable: false,
   },
+  choirmaster: {
+    phaseAt: CHOIRMASTER.phaseAt, phaseFloor: CHOIRMASTER.phaseFloor, move: "roar",
+    damageReduction: CHOIRMASTER.roarDamageReduction, bulletClearRadius: CHOIRMASTER.roarBulletClearRadius,
+    addCount: 0, isBreakable: false,
+  },
   // PALE THRONE (F75 giant): the same SHELL CRACK-OFF transition as Gorge (roar semantics — a
   // punctuated screen-punch that sloughs the layer, swaps the sprite stone → cracked → core, and
   // drops the cold shell as debris cover via giantShellSlough). No adds.
@@ -3556,6 +3565,7 @@ const EARNED_WINDOWS: Readonly<Partial<Record<Enemy["kind"], EarnedWindowDef>>> 
   // like the Tithe). The ONLY damage path is PEELING (destroy the weak-points → openBossWindow).
   gorge: { guardMult: GORGE.guardMult, bankFrac: GORGE.windowBankFrac },
   sever: { guardMult: SEVER.guardMult, bankFrac: SEVER.windowBankFrac },
+  choirmaster: { guardMult: CHOIRMASTER.guardMult, bankFrac: CHOIRMASTER.windowBankFrac },
   // PALE THRONE (F75 giant): the same hard-gate shell as Gorge (guardMult 0.0), with the region-cap
   // TIGHTER per-window bank (0.20 vs Gorge's 0.22) — the ONLY damage path is peeling the cold seams.
   pale: { guardMult: PALE.guardMult, bankFrac: PALE.windowBankFrac },
@@ -3895,7 +3905,8 @@ function isDecoyKind(kind: Enemy["kind"]): boolean {
     || kind === "jet_echo"
     // The GIANTS' tectonic WEAK-POINTS (Gorge/Pale seams): destroying one is the peel counterplay,
     // never an economy — no loot, no combo (like the Weaver knot / the Tithe slab).
-    || kind === "gorge_seam" || kind === "pale_seam";
+    || kind === "gorge_seam" || kind === "pale_seam"
+    || kind === "sever_anchor" || kind === "choir_pillar";
 }
 
 function isQuorumHusk(kind: Enemy["kind"]): boolean {
@@ -6527,6 +6538,8 @@ function updateEnemyAI(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): voi
     case "gorge_seam": return; // inert: a tectonic weak-point is a peel target, not an actor
     case "sever": updateSever(w, e, dt, ev); return;
     case "sever_anchor": return; // inert: resin anchor tooth is an intercept target, not an actor
+    case "choirmaster": updateChoirmaster(w, e, dt, ev); return;
+    case "choir_pillar": return; // inert: resonating pillar is a silence target, not an actor
     case "pale": updateGiant(w, e, dt, ev, GIANT_SPEC.pale!); return;
     case "pale_seam": return; // inert: a tectonic weak-point is a peel target, not an actor
     default: updateChaser(w, e, dt); return;
@@ -11649,6 +11662,437 @@ function severWorldsplitActive(w: WorldState, e: Enemy, dt: number, ev: SimEvent
       }
     }
     severClearWorldsplitTooth(w, e);
+  }
+}
+
+
+// ---- HOLLOW CHOIRMASTER F60 — THE LAST NOTE (Batch2A OWNER LOCK) ----
+// Timings: 1.6s silent inhale → ~0.7s per linked sheet span → 4.0s voiceless punish.
+// Success = silence FIRST live pillar before sheet reaches it → openBossWindow(4.0).
+// Survival = stand in acoustic shadow behind a previously broken pillar (no window).
+// Failure = sheet continues span-by-span under overlap arbiter; soft escalate; never wipe.
+// ONE multi-lobed super-room (structureKind 'split') — NOT a RoomEdge chase.
+// Cadence: boss.lastAddPick stores centiseconds until next signature.
+// Phrase index → boss.spinCount. Live pillar id → boss.laneKnotId-1.
+// Outcome rides boss.mirrorLastFamily: -1 idle, 0 pending, 1 success, 2 survival, 3 failure.
+
+function choirEnc(w: WorldState) {
+  return w.encounter && w.encounter.structureKind === "split" ? w.encounter : null;
+}
+
+function choirSetOutcome(w: WorldState, e: Enemy, outcome: "idle" | "pending" | "success" | "survival" | "failure"): void {
+  const enc = choirEnc(w);
+  if (enc) enc.flags.lastNoteOutcome = outcome;
+  const map = { idle: -1, pending: 0, success: 1, survival: 2, failure: 3 } as const;
+  e.boss!.mirrorLastFamily = map[outcome];
+}
+
+function choirTryActivate(w: WorldState, e: Enemy, ev: SimEvent[]): boolean {
+  const enc = choirEnc(w);
+  if (!enc) return false;
+  if (enc.active) {
+    // Late activation / reconnect / tests may mark active before pillars exist.
+    if (enc.flags.pillarsPlanted !== true) choirPlantPillars(w, e, ev);
+    return true;
+  }
+  let near = false;
+  for (const p of w.players.values()) {
+    if (p.isDown || p.isAbsent || p.hp <= 0) continue;
+    if (Math.hypot(p.x - e.x, p.y - e.y) <= CHOIRMASTER.pressureRadius) { near = true; break; }
+  }
+  if (!near) {
+    // Also activate when any living player enters the super-room / a lobe room.
+    const lobes = new Set(w.dungeon.blueprint?.objectiveRoomIds ?? [enc.currentRoomId]);
+    for (const p of w.players.values()) {
+      if (p.isDown || p.isAbsent || p.hp <= 0) continue;
+      const rid = roomIdAt(w.dungeon, Math.floor(p.x / TILE), Math.floor(p.y / TILE));
+      if (rid >= 0 && lobes.has(rid)) { near = true; break; }
+    }
+  }
+  if (!near) return false;
+  enc.active = true;
+  enc.currentRoomId = w.dungeon.blueprint?.spawnRoomId ?? enc.currentRoomId;
+  choirPlantPillars(w, e, ev);
+  ev.push({ t: "cue", name: "choirmaster.activate", x: e.x, y: e.y, rate: 0.75, gain: 0.65, trauma: 0.04 });
+  return true;
+}
+
+function choirPlantPillars(w: WorldState, e: Enemy, ev: SimEvent[]): void {
+  const enc = choirEnc(w);
+  if (!enc || enc.flags.pillarsPlanted === true) return;
+  const boss = e.boss!;
+  // Clear any stale pillars.
+  for (const o of w.enemies) if (o.kind === "choir_pillar" && !o.dead) o.dead = true;
+  boss.windowAddIds.length = 0;
+  const lobes = w.dungeon.blueprint?.objectiveRoomIds ?? [];
+  const count = Math.max(3, Math.min(CHOIRMASTER.pillarCount, Math.max(3, lobes.length)));
+  const hp = choirPillarHpForFloor(w.floor);
+  const r = ENEMY_ARCHETYPES.choir_pillar.radius;
+  for (let i = 0; i < count; i++) {
+    const roomId = lobes[i % Math.max(1, lobes.length)] ?? enc.currentRoomId;
+    const room = w.dungeon.rooms.find((rm) => rm.id === roomId) ?? w.dungeon.rooms[w.dungeon.rooms.length - 1];
+    // Place pillars around lobe centers in a ring relative to the conductor so the sheet
+    // route is authored as conductor → lobe spans (directional, not radial).
+    const ang = -Math.PI / 2 + (i / count) * Math.PI * 2;
+    let x = room.cx * TILE + TILE / 2 + Math.cos(ang) * (TILE * 1.5);
+    let y = room.cy * TILE + TILE / 2 + Math.sin(ang) * (TILE * 1.5);
+    if (!settleSpawnPoint(w, x, y, r)) {
+      x = room.cx * TILE + TILE / 2;
+      y = room.cy * TILE + TILE / 2;
+      settleSpawnPoint(w, x, y, r);
+    }
+    const pillar = createEnemy("choir_pillar", settlePoint.x, settlePoint.y, w.floor, w.rng, w.nextEnemyId++, {
+      isSummoned: true, players: w.encounterPlayers,
+    });
+    pillar.hp = pillar.maxHp = hp;
+    pillar.spawnTimer = 0;
+    pillar.seq = e.id + 1;
+    pillar.aux = 0; // 0 dormant, 1 live/resonating, 2 silenced (kept for VFX)
+    w.enemies.push(pillar);
+    boss.windowAddIds.push(pillar.id);
+    ev.push({ t: "enemySpawn", eid: pillar.id, kind: pillar.kind, tier: pillar.tier, x: pillar.x, y: pillar.y });
+  }
+  enc.flags.pillarsPlanted = true;
+  enc.flags.silencedMask = 0;
+  enc.flags.acousticShadowPillarId = -1;
+  choirLightNextPillar(w, e, ev);
+}
+
+function choirPillars(w: WorldState, e: Enemy): Enemy[] {
+  const ids = e.boss!.windowAddIds;
+  const out: Enemy[] = [];
+  for (const id of ids) {
+    const p = w.enemies.find((o) => o.id === id && o.kind === "choir_pillar");
+    if (p) out.push(p);
+  }
+  return out;
+}
+
+function choirLightNextPillar(w: WorldState, e: Enemy, ev: SimEvent[]): void {
+  const enc = choirEnc(w);
+  if (!enc) return;
+  const pillars = choirPillars(w, e);
+  const mask = Number(enc.flags.silencedMask) || 0;
+  // Pick the first non-silenced pillar in authored order as the live target.
+  let live: Enemy | null = null;
+  let liveSlot = -1;
+  for (let i = 0; i < pillars.length; i++) {
+    if ((mask & (1 << i)) !== 0) continue;
+    if (pillars[i].dead || pillars[i].hp <= 0) continue;
+    live = pillars[i];
+    liveSlot = i;
+    break;
+  }
+  for (const p of pillars) p.aux = 0;
+  if (!live) {
+    enc.flags.livePillarId = -1;
+    e.boss!.laneKnotId = 0;
+    return;
+  }
+  live.aux = 1;
+  enc.flags.livePillarId = live.id;
+  enc.flags.phraseIndex = liveSlot;
+  e.boss!.laneKnotId = live.id + 1;
+  e.boss!.mirrorFamily = liveSlot;
+  ev.push({ t: "cue", name: "choirmaster.phraseLight", x: live.x, y: live.y, rate: 1.05, gain: 0.5, trauma: 0.02 });
+}
+
+function choirSilencePillar(w: WorldState, e: Enemy, pillar: Enemy, ev: SimEvent[]): void {
+  const enc = choirEnc(w);
+  if (!enc) return;
+  const pillars = choirPillars(w, e);
+  const slot = pillars.findIndex((p) => p.id === pillar.id);
+  if (slot < 0) return;
+  const mask = Number(enc.flags.silencedMask) || 0;
+  enc.flags.silencedMask = mask | (1 << slot);
+  pillar.aux = 2;
+  pillar.dead = true;
+  // Acoustic shadow = last broken pillar (survival fallback for THE LAST NOTE).
+  enc.flags.acousticShadowPillarId = pillar.id;
+  const silenced = pillars.filter((_, i) => ((Number(enc.flags.silencedMask) || 0) & (1 << i)) !== 0).length;
+  enc.checkpoint = silenced;
+  enc.objectiveProgress = Math.min(1, silenced / Math.max(1, CHOIRMASTER.phrasePillars));
+  ev.push({ t: "cue", name: "choirmaster.silence", x: pillar.x, y: pillar.y, rate: 0.9, gain: 0.55, trauma: 0.03 });
+  // Completing the authored phrase opens a small earned window (bank-capped) outside LAST NOTE.
+  if (silenced > 0 && silenced % CHOIRMASTER.phrasePillars === 0) {
+    openBossWindow(e, 2.0, ev);
+    enc.flags.activePhrase = Number(enc.flags.activePhrase) + 1;
+  }
+  choirLightNextPillar(w, e, ev);
+}
+
+function choirPillarLoop(w: WorldState, e: Enemy, ev: SimEvent[]): void {
+  const enc = choirEnc(w);
+  if (!enc || !enc.active) return;
+  const liveId = Number(enc.flags.livePillarId);
+  if (liveId < 0) return;
+  const live = w.enemies.find((o) => o.id === liveId && o.kind === "choir_pillar");
+  // Wrong/dormant pillar damage: if a non-live pillar was killed, soft-escalate (never wipe).
+  for (const p of choirPillars(w, e)) {
+    if (p.id === liveId) continue;
+    if ((p.dead || p.hp <= 0) && p.aux !== 2) {
+      p.aux = 2;
+      enc.failureCount += 1;
+      enc.failed = true;
+      // Soft pressure ping near conductor — never an unavoidable wipe.
+      for (const pl of w.players.values()) {
+        if (pl.isDown || pl.isAbsent || pl.hp <= 0) continue;
+        if (Math.hypot(pl.x - e.x, pl.y - e.y) < CHOIRMASTER.pressureRadius) {
+          damagePlayer(w, pl, CHOIRMASTER.wrongPillarPressure, ev);
+        }
+      }
+      ev.push({ t: "cue", name: "choirmaster.wrongPillar", x: p.x, y: p.y, rate: 1.2, gain: 0.45, trauma: 0.04 });
+    }
+  }
+  if (live && (live.dead || live.hp <= 0) && live.aux !== 2) {
+    // Silenced during phrase (or during LAST NOTE inhale/sheet — success path handles that).
+    if (e.attack.move === "last_note" && (e.attack.phase === "windup" || e.attack.phase === "active")) {
+      // Handled in last-note step as success.
+      return;
+    }
+    choirSilencePillar(w, e, live, ev);
+  }
+}
+
+function choirInAcousticShadow(w: WorldState, px: number, py: number, e: Enemy): boolean {
+  const enc = choirEnc(w);
+  if (!enc) return false;
+  const shadowId = Number(enc.flags.acousticShadowPillarId);
+  if (shadowId < 0) return false;
+  // Shadow pillar may be dead — use its last position from the enemy record.
+  const shadow = w.enemies.find((o) => o.id === shadowId && o.kind === "choir_pillar");
+  if (!shadow) return false;
+  // Player is in acoustic shadow if the broken pillar lies between them and the conductor
+  // (within a narrow cone behind the pillar relative to the sheet direction).
+  const toPillarX = shadow.x - e.x;
+  const toPillarY = shadow.y - e.y;
+  const toPlayerX = px - e.x;
+  const toPlayerY = py - e.y;
+  const plen = Math.hypot(toPillarX, toPillarY) || 1;
+  const qlen = Math.hypot(toPlayerX, toPlayerY) || 1;
+  // Behind = past the pillar along the same ray, within half-width.
+  const along = (toPlayerX * toPillarX + toPlayerY * toPillarY) / plen;
+  if (along < plen) return false; // not past the pillar
+  const closestX = e.x + (toPillarX / plen) * along;
+  const closestY = e.y + (toPillarY / plen) * along;
+  const lat = Math.hypot(px - closestX, py - closestY);
+  return lat <= CHOIRMASTER.sheetHalfWidth * 1.5 + 12;
+}
+
+function choirSheetHitsPlayer(px: number, py: number, e: Enemy, spanIndex: number, pillars: Enemy[]): boolean {
+  // 2-tile directional sheet along authored pillar route: conductor → pillar[span].
+  if (spanIndex < 0 || spanIndex >= pillars.length) return false;
+  const target = pillars[spanIndex];
+  if (!target) return false;
+  const ax = e.x, ay = e.y;
+  const bx = target.x, by = target.y;
+  const abx = bx - ax, aby = by - ay;
+  const abLen = Math.hypot(abx, aby) || 1;
+  const apx = px - ax, apy = py - ay;
+  const t = Math.max(0, Math.min(1, (apx * abx + apy * aby) / (abLen * abLen)));
+  const cx = ax + abx * t, cy = ay + aby * t;
+  const dist = Math.hypot(px - cx, py - cy);
+  return dist <= CHOIRMASTER.sheetHalfWidth + 10;
+}
+
+function choirMaybeBeginLastNote(w: WorldState, e: Enemy, ev: SimEvent[]): boolean {
+  const boss = e.boss!;
+  if (boss.lastAddPick > 0) return false;
+  if (e.attack.cooldown > 0) return false;
+  const enc = choirEnc(w);
+  if (!enc || !enc.active) return false;
+  const liveId = Number(enc.flags.livePillarId);
+  if (liveId < 0) return false;
+  beginWindup(e, "last_note");
+  e.attack.cooldown = CHOIRMASTER.attackCd[boss.phase] ?? CHOIRMASTER.attackCd[3];
+  boss.lastAddPick = Math.round(4.5 * 100); // cadence between signatures (BALANCER_TODO)
+  boss.spinCount = 0; // sheet span index
+  choirSetOutcome(w, e, "pending");
+  enc.flags.lastNotePhase = "inhale";
+  enc.flags.sheetSpanIndex = 0;
+  // Aim toward the live pillar (directional sheet route).
+  const live = w.enemies.find((o) => o.id === liveId && o.kind === "choir_pillar");
+  if (live) {
+    e.attack.lockedAngle = Math.atan2(live.y - e.y, live.x - e.x);
+    e.attack.markX = live.x;
+    e.attack.markY = live.y;
+  }
+  ev.push({ t: "cue", name: "choirmaster.lastNote.inhale", x: e.x, y: e.y, rate: 0.65, gain: 0.7, trauma: 0.05 });
+  return true;
+}
+
+function choirLastNoteLiveBroken(w: WorldState, e: Enemy): boolean {
+  const enc = choirEnc(w);
+  if (!enc) return false;
+  const liveId = Number(enc.flags.livePillarId);
+  if (liveId < 0) return false;
+  const live = w.enemies.find((o) => o.id === liveId && o.kind === "choir_pillar");
+  return !live || live.dead || live.hp <= 0;
+}
+
+function choirLastNoteStep(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void {
+  const a = e.attack;
+  const boss = e.boss!;
+  const enc = choirEnc(w);
+  const pillars = choirPillars(w, e).filter((p) => p.aux !== 2 && !((Number(enc?.flags.silencedMask) || 0) & (1 << boss.windowAddIds.indexOf(p.id))));
+  // Prefer authored order from windowAddIds for sheet spans.
+  const route = choirPillars(w, e);
+
+  if (a.phase === "windup") {
+    // INHALE 1.6s
+    a.time += dt;
+    a.windup = Math.min(1, a.time / CHOIRMASTER.lastNoteInhale);
+    if (!a.isAimLocked && a.windup >= 0.6) {
+      a.isAimLocked = true;
+    }
+    if (enc) enc.flags.lastNotePhase = "inhale";
+    // Success during inhale: silence FIRST live pillar before sheet starts.
+    if (choirLastNoteLiveBroken(w, e)) {
+      const liveId = Number(enc?.flags.livePillarId ?? -1);
+      const live = w.enemies.find((o) => o.id === liveId && o.kind === "choir_pillar");
+      if (live && enc) choirSilencePillar(w, e, live, ev);
+      choirSetOutcome(w, e, "success");
+      enterRecover(e);
+      a.time = 0;
+      if (enc) enc.flags.lastNotePhase = "punish";
+      openBossWindow(e, CHOIRMASTER.lastNotePunish, ev);
+      ev.push({ t: "chargeCrash", x: e.x, y: e.y });
+      ev.push({ t: "cue", name: "choirmaster.lastNote.punish", x: e.x, y: e.y, rate: 0.55, gain: 0.9, trauma: 0.14 });
+      let best: { id: string; d: number } | null = null;
+      for (const p of w.players.values()) {
+        if (p.isDown || p.isAbsent || p.hp <= 0) continue;
+        const d = Math.hypot(p.x - e.x, p.y - e.y);
+        if (!best || d < best.d) best = { id: p.id, d };
+      }
+      if (best && enc) setEncounterCarrier(enc, best.id);
+      return;
+    }
+    if (a.time >= CHOIRMASTER.lastNoteInhale) {
+      a.phase = "active";
+      a.time = 0;
+      a.windup = 1;
+      boss.spinCount = 0;
+      if (enc) {
+        enc.flags.lastNotePhase = "sheet";
+        enc.flags.sheetSpanIndex = 0;
+      }
+      ev.push({ t: "cue", name: "choirmaster.lastNote.sheet", x: e.x, y: e.y, rate: 0.85, gain: 0.6, trauma: 0.04 });
+    }
+    return;
+  }
+
+  if (a.phase === "active") {
+    // SHEET advances ~0.7s per linked span along pillar route.
+    a.time += dt;
+    if (enc) enc.flags.lastNotePhase = "sheet";
+    const span = boss.spinCount;
+    if (enc) enc.flags.sheetSpanIndex = span;
+
+    // Success during sheet: silence FIRST live pillar before the sheet reaches it.
+    // "Reaches it" = sheet span index has advanced to the live pillar's slot.
+    const liveId = Number(enc?.flags.livePillarId ?? -1);
+    const liveSlot = route.findIndex((p) => p.id === liveId);
+    if (choirLastNoteLiveBroken(w, e) && (liveSlot < 0 || span <= liveSlot)) {
+      const live = w.enemies.find((o) => o.id === liveId && o.kind === "choir_pillar");
+      if (live && enc) choirSilencePillar(w, e, live, ev);
+      choirSetOutcome(w, e, "success");
+      enterRecover(e);
+      a.time = 0;
+      if (enc) enc.flags.lastNotePhase = "punish";
+      openBossWindow(e, CHOIRMASTER.lastNotePunish, ev);
+      ev.push({ t: "chargeCrash", x: e.x, y: e.y });
+      ev.push({ t: "cue", name: "choirmaster.lastNote.punish", x: e.x, y: e.y, rate: 0.55, gain: 0.9, trauma: 0.14 });
+      return;
+    }
+
+    // Soft sheet pressure on players overlapping the current span (never wipe).
+    let anyHit = false;
+    let anyShadow = false;
+    for (const p of w.players.values()) {
+      if (p.isDown || p.isAbsent || p.hp <= 0) continue;
+      if (choirInAcousticShadow(w, p.x, p.y, e)) {
+        anyShadow = true;
+        continue;
+      }
+      if (choirSheetHitsPlayer(p.x, p.y, e, span, route)) {
+        anyHit = true;
+        if (p.invuln <= 0) damagePlayer(w, p, CHOIRMASTER.sheetDamage, ev);
+      }
+    }
+
+    if (a.time >= CHOIRMASTER.lastNoteSpan) {
+      a.time = 0;
+      boss.spinCount = span + 1;
+      if (enc) enc.flags.sheetSpanIndex = boss.spinCount;
+      // Sheet finished all spans without success → resolve survival/failure.
+      if (boss.spinCount >= Math.max(1, route.length)) {
+        enterRecover(e);
+        a.time = 0;
+        if (enc) enc.flags.lastNotePhase = "punish";
+        if (anyShadow && !anyHit) {
+          choirSetOutcome(w, e, "survival");
+          ev.push({ t: "cue", name: "choirmaster.lastNote.survival", x: e.x, y: e.y, rate: 1.1, gain: 0.45, trauma: 0.02 });
+        } else {
+          choirSetOutcome(w, e, "failure");
+          if (enc) {
+            enc.failed = true;
+            enc.failureCount += 1;
+          }
+          ev.push({ t: "cue", name: "choirmaster.lastNote.miss", x: e.x, y: e.y, rate: 0.95, gain: 0.5, trauma: 0.04 });
+        }
+      } else {
+        ev.push({ t: "cue", name: "choirmaster.lastNote.span", x: e.x, y: e.y, rate: 1.0, gain: 0.4, trauma: 0.02 });
+      }
+    }
+    return;
+  }
+
+  if (a.phase === "recover") {
+    // Voiceless punish / post-resolution settle. Success already opened the window;
+    // survival/failure do not. Hold recover for punish duration on success, shorter otherwise.
+    a.time += dt;
+    if (enc) enc.flags.lastNotePhase = "punish";
+    const hold = choirOutcomeIsSuccess(e) ? CHOIRMASTER.lastNotePunish : 0.8;
+    if (a.time >= hold) {
+      a.phase = "none";
+      a.time = 0;
+      a.move = "none";
+      a.windup = 0;
+      a.isAimLocked = false;
+      if (enc) enc.flags.lastNotePhase = "idle";
+    }
+  }
+}
+
+function choirOutcomeIsSuccess(e: Enemy): boolean {
+  return e.boss!.mirrorLastFamily === 1;
+}
+
+function updateChoirmaster(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void {
+  const boss = e.boss!;
+  const enc = choirEnc(w);
+  // Activation + pillar plant may happen during entrance grace (no LAST NOTE / aggro yet).
+  if (!choirTryActivate(w, e, ev)) {
+    // Idle conductor — no global aggro before activation.
+    e.attack.cooldown = Math.max(e.attack.cooldown, 0.5);
+    return;
+  }
+  if (e.spawnTimer > 0) return; // fair entrance grace: pillars may be lit, signature waits
+  // Tick signature cadence.
+  if (boss.lastAddPick > 0) {
+    boss.lastAddPick = Math.max(0, boss.lastAddPick - Math.max(1, Math.round(dt * 100)));
+  }
+  if (e.attack.cooldown > 0) e.attack.cooldown = Math.max(0, e.attack.cooldown - dt);
+
+  choirPillarLoop(w, e, ev);
+
+  if (e.attack.move === "last_note" && e.attack.phase !== "none") {
+    choirLastNoteStep(w, e, dt, ev);
+    return;
+  }
+  // Phase roar transitions use shared boss plumbing; otherwise try THE LAST NOTE.
+  if (e.attack.phase === "none" && boss.exposed <= 0) {
+    choirMaybeBeginLastNote(w, e, ev);
   }
 }
 

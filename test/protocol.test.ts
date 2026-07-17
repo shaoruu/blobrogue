@@ -275,7 +275,7 @@ function serverRoundTripTests(): void {
 // who is actually there (the Sev-0 readout).
 function worldBindingWireTests(): void {
   section("v4: authoritative world id + roster are required, strict, and round-trip");
-  check("protocol version covers Pale Throne after Wave B catalog 2 / Sever worldsplit (v38)", PROTOCOL_VERSION === 38, `v=${PROTOCOL_VERSION}`);
+  check("protocol version covers Choirmaster last_note after Pale/Wave B/Sever (v39)", PROTOCOL_VERSION === 39, `v=${PROTOCOL_VERSION}`);
   check("room code maps to its world id", worldIdForRoomCode(" abcd ") === "room:ABCD");
   check("room world ids pass the shared charset gate", isValidWorldId(worldIdForRoomCode("ZZZZ")) && isValidWorldId("arena-1"));
   check("junk world ids fail the shared charset gate", !isValidWorldId("room:../../etc") && !isValidWorldId(""));
@@ -561,7 +561,7 @@ function eventScopeTests(): void {
 }
 
 function paleAuthorityWireTests(): void {
-  section("v38: Pale telegraph phase and warmth state reconcile authoritatively");
+  section("v39: Pale telegraph phase and warmth state reconcile authoritatively");
   const w = createWorld(0xF75A, 75, { isShared: true, skipLocalPlayer: true });
   const player = spawnPlayerInWorld(w, "pMe");
   player.warmthIdleSec = 1.25;

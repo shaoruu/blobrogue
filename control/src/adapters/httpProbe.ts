@@ -82,7 +82,8 @@ import type {
 // v36: Batch1 Sever F55 closed AttackMove `worldsplit`.
 // v37: Wave B closed WeaponId + catalogVersion 2 (after Sever v36).
 // v38: PALE THRONE F75 giant closed enemy/prop kind sets + telegraph/warmth wire (after Wave B v37 / Sever v36).
-export const SYNTHETIC_JOIN_PROTOCOL = 38;
+// v39: Batch2A Choirmaster F60 closed AttackMove `last_note` + choirmaster/choir_pillar kinds.
+export const SYNTHETIC_JOIN_PROTOCOL = 39;
 export const SYNTHETIC_COOP_TICKET_ENVELOPE = "v1";
 export const SYNTHETIC_PVP_TICKET_ENVELOPE = "v2";
 export const SYNTHETIC_ADMISSION_ENVELOPE = "a2";

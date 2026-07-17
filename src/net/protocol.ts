@@ -333,7 +333,12 @@ export const FIXED_DT = 1 / TICK_HZ; // 50ms authoritative step
 // v38 also includes authoritative giant telegraph phase and local warmth state. AttackWire carries
 // the giant commitment clock/counters used by exact ring2 and dual-sweep tells; SelfWire carries
 // the reconciled warmth timer/path/chill state so reconnect and prediction cannot diverge.
-export const PROTOCOL_VERSION = 38;
+//
+// v39 (Batch2A Choirmaster F60): the closed AttackMove set grows `last_note` (display name
+//   THE LAST NOTE). Enemy kinds `choirmaster` / `choir_pillar` ride via ENEMY_ARCHETYPES (no new
+//   EnemyWire fields). EncounterState flags (lastNotePhase / livePillarId / sheetSpanIndex /
+//   acousticShadowPillarId / silencedMask) ride Batch0's existing enc wire.
+export const PROTOCOL_VERSION = 39;
 
 
 // How long the server reserves a disconnected player's body (their seat) before the
@@ -896,6 +901,8 @@ const ATTACK_MOVES: Record<AttackMove, true> = {
   // PALE F75 signature — display name THE LAST LIGHT FALLS; wire id last_light.
   // Fits existing AttackWire/EncounterState flags — no PROTOCOL_VERSION bump required.
   last_light: true,
+  // HOLLOW CHOIRMASTER F60 signature — display name THE LAST NOTE; wire id last_note.
+  last_note: true,
 };
 const ENEMY_TIERS: Record<EnemyTier, true> = { swarm: true, standard: true, brute: true, elite: true };
 const SLUICE_MODES: Record<SluiceMode, true> = { flood: true, drain: true };

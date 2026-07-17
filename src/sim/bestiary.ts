@@ -72,6 +72,7 @@ export const ENEMY_WAVE: Readonly<Record<EnemyKind, EnemyWave>> = {
   // summon, never in a common deck — like the Weaver's knot).
   gorge: "boss", gorge_seam: "B",
   sever: "boss", sever_anchor: "B",
+  choirmaster: "boss", choir_pillar: "B",
   // PALE THRONE (F75 giant) is boss-grade; its cold tectonic weak-point is a Wave-B mechanic body.
   pale: "boss", pale_seam: "B",
 };
@@ -105,6 +106,7 @@ export const WAVE_B_SYNTHESIS: Readonly<Partial<Record<EnemyKind, readonly Enemy
   jet_echo: ["spitter"],               // the ranged warn/lock/fire verb, turned into your own reflection
   gorge_seam: ["caskbellows"],         // the locked-lane shoot-this-target lesson, made a tectonic weak-point (like the knot/sac)
   sever_anchor: ["caskbellows"],       // shoot-this-target resin tooth (intercept trap)
+  choir_pillar: ["caskbellows"],       // shoot-this-target resonating pillar (silence verb)
   pale_seam: ["caskbellows"],          // the F75 giant's cold weak-point — the same shoot-this-target peel verb as gorge_seam
 };
 
@@ -313,6 +315,9 @@ export const ENEMY_MOVESET: Readonly<Record<EnemyKind, readonly AttackMove[]>> =
   gorge_seam: [],
   sever: ["worldsplit", "roar"],
   sever_anchor: [],
+  // HOLLOW CHOIRMASTER (F60): phrase silence + THE LAST NOTE signature.
+  choirmaster: ["last_note", "roar"],
+  choir_pillar: [],
   // PALE THRONE (F75 giant): shared-grammar patterns + THE LAST LIGHT FALLS signature.
   // "roar" remains the shell crack-off transition. Its weak-point commits nothing.
   pale: ["slam", "spew", "sweep", "roar", "last_light"],
@@ -386,6 +391,8 @@ export const SPRITE_CONTRACT: Readonly<Record<EnemyKind, SpriteContract>> = {
   gorge_seam: "decoy",
   sever: "directional_walk", // placeholder: reuses Weaver walk sheets
   sever_anchor: "decoy",
+  choirmaster: "mass", // placeholder: reuses Choir mass sheets
+  choir_pillar: "decoy",
   // PALE THRONE (F75 giant): the same single front-facing SHELL-per-state "mass" contract as Gorge
   // (no orientations — the client swaps stone/cracked/core off boss.phase); its weak-point is a decoy.
   pale: "mass",
