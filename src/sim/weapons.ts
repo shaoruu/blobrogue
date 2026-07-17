@@ -586,9 +586,10 @@ export const WEAPONS: Record<WeaponId, Weapon> = {
   },
   sidewinder: {
     id: "sidewinder", name: "SIDEWINDER", rarity: "common", fireCd: 0.48, speed: 420, life: 0.55,
-    damage: 1.35, pellets: 1, spread: 0, bulletRadius: 5, color: "#7fd48a", muzzle: 2,
+    damage: 1.35, pellets: 1, spread: 0, bulletRadius: 9, color: "#7fd48a", muzzle: 2,
+    basePierce: 3,
     sidewinder: {
-      arcs: 2, arcDelay: 0.08, arcDamage: 1.35, turn: 3.5, arcLife: 0.55,
+      arcs: 2, arcDelay: 0.08, arcDamage: 1.35, turn: 1.1, arcLife: 0.55,
       flankBonus: 0.25, flankArc: 50 * Math.PI / 180,
     },
     special: "ENCIRCLE / FLANK — a two-arc volley curves in to strike the target's flank.",

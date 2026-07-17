@@ -4414,7 +4414,9 @@ function spawnSidewinderArc(w: WorldState, p: PlayerSim, index: number, aim: num
   const wep = WEAPONS.sidewinder;
   const spec = wep.sidewinder!;
   const sign = index === 0 ? 1 : -1;
-  const launch = aim + sign * 0.30; // bias to the flank side
+  // Launch on the aim line; the two arcs curve to OPPOSITE flanks, so a body dead ahead is
+  // struck early while the sweep still wraps toward its rear (the encircle identity).
+  const launch = aim + sign * 0.12;
   const speed = 420 * p.mods.bulletSpeedMult;
   const dmg = spec.arcDamage * currentDamageMult(p);
   const isCrit = p.mods.critChance > 0 && w.rng.next() < p.mods.critChance;
@@ -4427,9 +4429,9 @@ function spawnSidewinderArc(w: WorldState, p: PlayerSim, index: number, aim: num
     life: spec.arcLife * p.mods.bulletLifeMult,
     friendly: true, owner: p.id,
     damage: isCrit ? dmg * p.mods.critMult : dmg,
-    color: wep.color, pierce: Math.min(4, p.mods.pierce), hitList: null,
+    color: wep.color, pierce: Math.min(4, (wep.basePierce ?? 0) + p.mods.pierce), hitList: null,
     isCrit, enemyHits: 0, critX: isCrit ? p.mods.critMult : 1, bossCoef: 0.55, fx: "sidewinder",
-    sidewinderArc: index, sidewinderTurn: sign * spec.turn, sidewinderAim: aim,
+    sidewinderArc: index, sidewinderTurn: -sign * spec.turn, sidewinderAim: aim,
     bornTick: w.tick, lagRewind: p.rewindTicks,
   };
   applyCrosscurrentStamp(p, b);

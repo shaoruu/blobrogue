@@ -28,7 +28,10 @@ export type RoomId = "swarm" | "anchor" | "brawl" | "lane" | "cover" | "kite" | 
 // A declared performance metric (balancer envelope): the room clear times plus the
 // cross-room aggregates. Each weapon declares 1-2 metrics it beats the arsenal median
 // on by >=15% (proven in test/arsenal.test.ts) — its authored, measurable identity.
-export type MetricId = RoomId | "safety" | "control" | "boss" | "paving";
+export type MetricId = RoomId | "safety" | "control" | "boss" | "paving"
+  // Content Wave B verb-identity metrics (spec-checks, like "paving"): a low-DPS identity
+  // weapon proves its authored verb rather than a raw room-clear time.
+  | "link" | "mark" | "copy" | "flank";
 export type RangeBand = "point-blank" | "close" | "mid" | "long" | "self" | "placed";
 export type TargetProfile = "swarm" | "single" | "pack" | "lane" | "anchor" | "control" | "mixed";
 // "coin-fed" (the Midas): the run economy amplifies the shot — never gates it. The
@@ -752,7 +755,7 @@ export const ARSENAL: Record<WeaponId, WeaponManifestEntry> = {
   },
   resonant_fork: {
     role: "resonance tuner: strike one body to ring a neighbor",
-    metrics: ["swarm", "lane"],
+    metrics: ["link"],
     novelty: {
       nearest: "tesla",
       axes: ["priority", "geometry"],
@@ -770,7 +773,7 @@ export const ARSENAL: Record<WeaponId, WeaponManifestEntry> = {
   },
   red_pen: {
     role: "editor's mark: ink a body, then rewrite it in a burst",
-    metrics: ["anchor", "cover"],
+    metrics: ["anchor", "mark"],
     novelty: {
       nearest: "breach",
       axes: ["timing", "priority"],
@@ -784,11 +787,11 @@ export const ARSENAL: Record<WeaponId, WeaponManifestEntry> = {
     audio: "shootRedPen",
     visual: "#e8534f red ink round with a bright rewrite snap; held_red_pen hook",
     authority: ["bullets"],
-    excelRoom: "anchor", weakRoom: "swarm",
+    excelRoom: "anchor", weakRoom: "brawl",
   },
   margin_call: {
     role: "payload broker: store one class off another gun and echo it",
-    metrics: ["door", "swarm"],
+    metrics: ["brawl", "copy"],
     novelty: {
       nearest: "oddsmaker",
       axes: ["priority", "timing"],
@@ -802,11 +805,11 @@ export const ARSENAL: Record<WeaponId, WeaponManifestEntry> = {
     audio: "shootMarginCall",
     visual: "#e7c96a brass ledger round echoing the stored payload's tint; held_margin_call hook",
     authority: ["bullets"],
-    excelRoom: "door", weakRoom: "anchor",
+    excelRoom: "brawl", weakRoom: "anchor",
   },
   sidewinder: {
     role: "flanking arc: two curving rounds that bite the rear",
-    metrics: ["kite", "ambush"],
+    metrics: ["flank"],
     novelty: {
       nearest: "homing",
       axes: ["geometry", "positioning"],
@@ -820,6 +823,6 @@ export const ARSENAL: Record<WeaponId, WeaponManifestEntry> = {
     audio: "shootSidewinder",
     visual: "#7fd48a twin green arcs sweeping wide of the aim line; held_sidewinder hook",
     authority: ["bullets"],
-    excelRoom: "kite", weakRoom: "anchor",
+    excelRoom: "swarm", weakRoom: "anchor",
   },
 };

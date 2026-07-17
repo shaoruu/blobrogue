@@ -257,6 +257,11 @@ function measureRoom(weapon: WeaponId, room: RoomId, opts: { riskHp?: number; pu
   acquireWeaponInWorld(w, LOCAL_ID, weapon);
   const isSecondLane = room === "secondlane";
   if (isSecondLane) acquireWeaponInWorld(w, LOCAL_ID, "pistol"), switchWeaponInWorld(w, LOCAL_ID, weapon);
+  // Margin Call's verb REQUIRES a second weapon to store off — the harness gives it the
+  // baseline pistol as its companion, refilling the store on a slow cadence so the room
+  // reads the ECHO it fires (a 0.70x discount of a plain round), not the empty stub.
+  const isMargin = weapon === "margin_call";
+  if (isMargin) acquireWeaponInWorld(w, LOCAL_ID, "mortar"), switchWeaponInWorld(w, LOCAL_ID, weapon);
   const isDone = ROOMS[room].isDone ?? ((world: WorldState) => world.enemies.length === 0);
   let clearTick = ROOM_CAP_TICKS;
   let frozenTicks = 0;
@@ -282,6 +287,13 @@ function measureRoom(weapon: WeaponId, room: RoomId, opts: { riskHp?: number; pu
       if (!w.enemies.some((e) => !e.dead)) aim = t * 0.09;
     }
     ROOMS[room].onTick?.(w, p, t);
+    // Margin Call: spend a brief beat every ~0.7s firing the companion to (re)load the
+    // store, then fire the echo the rest of the cycle.
+    if (isMargin) {
+      // Keep the store fresh with a brief, frequent top-up so the room reads the echo.
+      const loading = w.enemies.some((e) => !e.dead) && t % 60 < 3;
+      switchWeaponInWorld(w, LOCAL_ID, loading ? "mortar" : "margin_call");
+    }
     const cmd: InputCmd = { seq: t + 1, moveX: 0, moveY: 0, aim, firing: botFiring(w, p, t), dash: false };
     stepWorld(w, new Map([[LOCAL_ID, cmd]]), DT);
     for (const e of w.enemies) if (!e.dead && e.chill >= C.FREEZE_AT) frozenTicks++;
@@ -383,10 +395,25 @@ function printMatrix(m: Matrix): void {
   }
 }
 
+// The experimental content-wave specialists (Wave A + Wave B). They declare their identity
+// through spec-check metrics (paving / link / mark / copy / flank) and sit deliberately low
+// on raw single-target/room DPS, so they are EXCLUDED from the balance reference baselines
+// (the differentiation p75 quartiles and the dominance room medians) — exactly so a batch of
+// low-PU specialists can never RETROACTIVELY flag an existing weapon as an all-rounder.
+const WAVE_AB_SPECIALISTS = new Set<WeaponId>([
+  "mooring_nail", "sluicegate", "oddsmaker", "pathmaker",
+  "resonant_fork", "red_pen", "margin_call", "sidewinder",
+]);
+
 // Median clear ticks among weapons that CLEARED a room (uncleared entries excluded so
 // one impossible pairing can't drag the room's midpoint to the cap).
 function roomMedian(m: Matrix, room: RoomId): number {
-  const ts = ALL_WEAPONS.map((id) => m.rooms.get(id)![room]).filter((r) => r.isCleared).map((r) => r.clearTicks).sort((a, b) => a - b);
+  return roomMedianOf(m, room, ALL_WEAPONS);
+}
+
+// Room median over a chosen weapon set (the dominance gate uses the stable reference roster).
+function roomMedianOf(m: Matrix, room: RoomId, ids: readonly WeaponId[]): number {
+  const ts = ids.map((id) => m.rooms.get(id)![room]).filter((r) => r.isCleared).map((r) => r.clearTicks).sort((a, b) => a - b);
   if (ts.length === 0) return ROOM_CAP_TICKS;
   return ts[Math.floor(ts.length / 2)];
 }
@@ -451,6 +478,8 @@ function manifestGates(): void {
     wep.implode !== undefined ? "implode" : "",
     wep.grapple !== undefined ? "grapple" : "", wep.modeShift !== undefined ? "modeshift" : "",
     wep.gamble !== undefined ? "gamble" : "", wep.paint?.isPaving === true ? "pave" : "",
+    wep.resonate !== undefined ? "tune" : "", wep.rewrite !== undefined ? "rewrite" : "",
+    wep.margin !== undefined ? "copy" : "", wep.sidewinder !== undefined ? "flank" : "",
   ].filter((s) => s.length > 0).join("+") || "plain";
   const fingerprints = ALL_WEAPONS.map((id) => `${mechSig(WEAPONS[id])}|${ARSENAL[id].idealRange}|${ARSENAL[id].target}`);
   const dupes = fingerprints.filter((f, i) => fingerprints.indexOf(f) !== i);
@@ -542,11 +571,16 @@ function dominanceGates(m: Matrix): void {
   // Generalism rooms only: cover and door exist to PROVE specific verbs (artillery over
   // a screen, a chokepoint), so a specialist owning them is authored, not dominance.
   const coreRooms: RoomId[] = ["swarm", "anchor", "brawl", "lane", "kite", "ambush"];
+  // Dominance is measured against the STABLE reference roster (the same exclusion the
+  // differentiation p75 uses): a batch of low-PU wave specialists slow-clearing rooms must
+  // never lift a median and retroactively brand an existing weapon an all-rounder.
+  const referenceRoster = ALL_WEAPONS.filter((id) => !WAVE_AB_SPECIALISTS.has(id));
+  const domMedian = (room: RoomId): number => roomMedianOf(m, room, referenceRoster);
   for (const id of ALL_WEAPONS) {
     let dominant = 0;
     for (const room of coreRooms) {
       const res = m.rooms.get(id)![room];
-      if (res.isCleared && res.clearTicks <= roomMedian(m, room) * 0.75) dominant++;
+      if (res.isCleared && res.clearTicks <= domMedian(room) * 0.75) dominant++;
     }
     check(`${id} is not >25% faster than median in most rooms`, dominant < 4,
       `dominant in ${dominant}/${coreRooms.length} generalism rooms`);
@@ -570,7 +604,7 @@ function dominanceGates(m: Matrix): void {
   for (const id of ALL_WEAPONS) {
     const coreDominant = coreRooms.filter((room) => {
       const res = m.rooms.get(id)![room];
-      return res.isCleared && res.clearTicks <= roomMedian(m, room) * 0.75;
+      return res.isCleared && res.clearTicks <= domMedian(room) * 0.75;
     }).length;
     const isBossTop = m.boss.get(id)! >= bossTop2;
     // "Dominant rooms" is the same most-rooms criterion as the review trigger: a
@@ -1170,6 +1204,28 @@ function differentiationGates(m: Matrix): void {
         const paint = WEAPONS[id].paint;
         ok = paint?.isPaving === true && paint.radius >= 24 && paint.life >= 3;
         detail = paint === undefined ? "no paint spec" : `radius=${paint.radius} life=${paint.life}`;
+      } else if (metric === "link") {
+        // Resonant Fork: the authored resonance link (a real secondary the raw-clear
+        // harness can't score) — proven by the spec, like the Pathmaker's paving.
+        const s = WEAPONS[id].resonate;
+        ok = s !== undefined && s.range >= 120 && s.duration >= 1.5 && s.tick > 0 && s.tickDamage > 0;
+        detail = s === undefined ? "no resonate spec" : `range=${s.range} dur=${s.duration} tick=${s.tickDamage}`;
+      } else if (metric === "mark") {
+        // Red Pen: the SET/REWRITE snap identity.
+        const s = WEAPONS[id].rewrite;
+        ok = s !== undefined && s.snapCoef >= 2 && s.markDur >= 1.5 && s.skillCd > 0;
+        detail = s === undefined ? "no rewrite spec" : `snap=${s.snapCoef} mark=${s.markDur} cd=${s.skillCd}`;
+      } else if (metric === "copy") {
+        // Margin Call: the stored-payload echo identity (a discounted copy, capped pellets).
+        const s = WEAPONS[id].margin;
+        ok = s !== undefined && s.outputCoef > 0 && s.outputCoef < 1 && s.ttl > 0 && s.maxCopyPellets >= 1;
+        detail = s === undefined ? "no margin spec" : `coef=${s.outputCoef} ttl=${s.ttl}`;
+      } else if (metric === "flank") {
+        // Sidewinder: the two-arc flank identity (a rear bonus the aim-straight harness
+        // cannot express, and extra-pellet mods may never add arcs).
+        const s = WEAPONS[id].sidewinder;
+        ok = s !== undefined && s.arcs === 2 && s.flankBonus > 0 && s.arcLife > 0;
+        detail = s === undefined ? "no sidewinder spec" : `arcs=${s.arcs} flank=${s.flankBonus}`;
       } else if ((entry.resource === "health-risk" || entry.resource === "coin-fed") && metric !== "boss") {
         // Cost-paid run vs the room's neutral median: the payoff must be real (the
         // Lastlight pays in hearts, the Midas in coins — same paid-ceiling contract).
@@ -1199,7 +1255,10 @@ function differentiationGates(m: Matrix): void {
     const sorted = vals.slice().sort((a, b) => dir === "low" ? a - b : b - a);
     return sorted[Math.floor(sorted.length / 4)];
   };
-  const waveA = new Set<WeaponId>(["mooring_nail", "sluicegate", "oddsmaker", "pathmaker"]);
+  const waveA = new Set<WeaponId>([
+    "mooring_nail", "sluicegate", "oddsmaker", "pathmaker",
+    "resonant_fork", "red_pen", "margin_call", "sidewinder",
+  ]);
   const referenceWeapons = ALL_WEAPONS.filter((id) => !waveA.has(id));
   const bossVals75 = p75(referenceWeapons.map((id) => m.boss.get(id)!), "high");
   const roomVals75 = p75(referenceWeapons.map((id) => roomScore(id)), "high");
@@ -1216,7 +1275,8 @@ function creativeGates(m: Matrix): void {
   // Every post-cluster addition is audited: the effect wave AND the legendary wave.
   const NEW_WAVE: WeaponId[] = ["lastlight", "breach", "snapwire", "frostline", "halo", "sentry", "crook",
     "reaper", "swarm", "midas", "phase", "vortex",
-    "mooring_nail", "sluicegate", "oddsmaker", "pathmaker"];
+    "mooring_nail", "sluicegate", "oddsmaker", "pathmaker",
+    "resonant_fork", "red_pen", "margin_call", "sidewinder"];
   const mechSig = (wep: Weapon): string => [
     wep.melee ? (wep.melee.isThrust ? "thrust" : "sweep") : "",
     wep.charge ? "charge" : "", wep.wire ? "wire" : "", wep.paint ? "paint" : "",
@@ -1233,6 +1293,8 @@ function creativeGates(m: Matrix): void {
     wep.implode !== undefined ? "implode" : "",
     wep.grapple !== undefined ? "grapple" : "", wep.modeShift !== undefined ? "modeshift" : "",
     wep.gamble !== undefined ? "gamble" : "", wep.paint?.isPaving === true ? "pave" : "",
+    wep.resonate !== undefined ? "tune" : "", wep.rewrite !== undefined ? "rewrite" : "",
+    wep.margin !== undefined ? "copy" : "", wep.sidewinder !== undefined ? "flank" : "",
   ].filter((x) => x.length > 0).join("+") || "plain";
 
   section("[MAJOR] creative audit: every addition moves a whole play dimension");
