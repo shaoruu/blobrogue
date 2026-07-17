@@ -2179,15 +2179,16 @@ export function undertowVentHpForFloor(floor: number): number {
 // dashes perpendicular out of the crown-lane (keeps token, no window). Failure = capped hit+KB
 // to the carrier; anti-one-shot holds; run remains winnable.
 // CROWNFALL retired — story name ALL THINGS OWED everywhere (wire: all_things_owed).
-// BALANCER_TODO: Quill owns final HP/TTK/bank — provisional calibration only.
+// Calibrated on EXPOSED time (pass/deposit-gated like deep roster): deep-boss band between Undertow F65 and
+// Pale F75 — earned ALL THINGS OWED windows are the pacing, not chip or sponge HP (Quill FINAL).
 export const CLAIMANT = {
-  baseHp: 700, // BALANCER_TODO
+  baseHp: 1020,
   baseHpFloor: 70,
   phaseAt: [0.66, 0.33] as readonly number[],
   phaseFloor: [0.58, 0.25] as readonly number[],
-  guardMult: 0.26, // BALANCER_TODO — non-carrier chip through the guard (reduction, never immunity)
-  carrierGuardMult: 0.08, // BALANCER_TODO — carrier fire CANNOT break guard (still a chip, never immune)
-  windowBankFrac: 0.26, // BALANCER_TODO
+  guardMult: 0.20,        // pass/deposit-gated chip band (matches Choir / Choirmaster / Undertow deep earned-window gate)
+  carrierGuardMult: 0.08, // PASS-THE-CLAIM identity: carrier fire stays strongly below guardMult (chip, never immune)
+  windowBankFrac: 0.22,   // ≥2 successful Owed deposits per phase (matches deep roster Choir / Jet band)
   contactDamage: 2,
   entranceGrace: 1.4,
   attackCd: [0, 3.0, 2.7, 2.4] as readonly number[],
