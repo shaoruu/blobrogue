@@ -665,7 +665,7 @@ export const WEAPONS: Record<WeaponId, Weapon> = {
       returnWindow: 3.0, returnCoef: 1.15, returnMin: 1.5, returnMax: 6, returnSpeed: 500,
       returnLife: 0.90, missLock: 0.10,
     },
-    special: "PARRY / RETURN — a frontal window catches an enemy shot and throws it back.",
+    special: "PARRY / RETURN — a frontal catch takes an enemy shot and throws it back.",
   },
   lamplighter: {
     id: "lamplighter", name: "LAMPLIGHTER", rarity: "common", fireCd: 0.40, speed: 500, life: 1.0,
