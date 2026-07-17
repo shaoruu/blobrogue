@@ -2237,14 +2237,15 @@ export function claimantHpForFloor(floor: number): number {
 // bounded warmth/progress loss + a capped hit to players in the dark-front lane; anti-one-shot
 // holds; never a wipe/soft-lock.
 // NIGHTFALL_PROCESSION retired — story name THE LAST PROCESSION everywhere (wire: last_procession).
-// BALANCER_TODO: Quill owns final HP/TTK/bank — provisional calibration only.
+// Calibrated on EXPOSED time (procession-gated like deep roster): Claimant F70 FINAL 1020 + F70→F80 step —
+// earned THE LAST PROCESSION windows are the pacing, not chip or sponge HP (Quill FINAL).
 export const WAKE = {
-  baseHp: 740, // BALANCER_TODO
+  baseHp: 1140,
   baseHpFloor: 80,
   phaseAt: [0.66, 0.33] as readonly number[],
   phaseFloor: [0.58, 0.25] as readonly number[],
-  guardMult: 0.24, // BALANCER_TODO — chip through the guard outside the light window (never immunity)
-  windowBankFrac: 0.24, // BALANCER_TODO
+  guardMult: 0.20,        // procession-gated chip band (matches Choir / Undertow / Claimant deep earned-window gate)
+  windowBankFrac: 0.22,   // ≥2 light windows per phase (matches deep roster Choir / Jet band)
   contactDamage: 2,
   entranceGrace: 1.5,
   attackCd: [0, 3.0, 2.7, 2.4] as readonly number[],
@@ -2266,7 +2267,7 @@ export const WAKE = {
   // removing them and soft-locking the convoy). The convoy_blocker is the destructible peel target.
   bierHp: 9999,
   shadowFrontHp: 9999,
-  blockerHp: 60,             // BALANCER_TODO — the one highlighted blocker cleared before a threshold
+  blockerHp: 72,             // short burst peel at threshold, not free
   processionFailDamage: 2,   // soft capped failure hit to players caught in the dark-front lane
   processionFailKb: 200,
   warmthLossOnFailure: 0.2,  // bounded convoy-warmth loss on failure (never zeroes / soft-locks)
