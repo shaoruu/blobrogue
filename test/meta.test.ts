@@ -20,6 +20,10 @@ import {
   CAT_NODE_ID, CAT_PET_ID, CAT_RESCUE_FLOOR,
   DRAGON_NODE_ID, DRAGON_PET_ID, DRAGON_RESCUE_FLOOR,
   SLIME_NODE_ID, SLIME_PET_ID, SLIME_RESCUE_FLOOR,
+  EMBERFOX_NODE_ID, EMBERFOX_PET_ID, EMBERFOX_RESCUE_FLOOR,
+  OWLET_NODE_ID, OWLET_PET_ID, OWLET_RESCUE_FLOOR,
+  MOTHLING_NODE_ID, MOTHLING_PET_ID, MOTHLING_RESCUE_FLOOR,
+  ROLLY_NODE_ID, ROLLY_PET_ID, ROLLY_RESCUE_FLOOR,
 } from "../src/sim/camp_nodes.js";
 import { petSpriteFor } from "../src/game/pets.js";
 import { createWorld, spawnPlayerInWorld, stepWorld } from "../src/sim/world.js";
@@ -177,27 +181,80 @@ function multiPetTests(): void {
     rescueNodesForRun(CAT_RESCUE_FLOOR).includes(CAT_NODE_ID)
     && rescueNodesForRun(CAT_RESCUE_FLOOR).includes(DOGGIE_NODE_ID)
     && !rescueNodesForRun(CAT_RESCUE_FLOOR).includes(DRAGON_NODE_ID));
-  check("reaching the dragon's floor earns doggie+cat+dragon, not yet the slime",
-    rescueNodesForRun(DRAGON_RESCUE_FLOOR).sort().join(",")
-      === [DOGGIE_NODE_ID, CAT_NODE_ID, DRAGON_NODE_ID].sort().join(",")
+  check("reaching the dragon's floor earns doggie+cat+dragon (and any shallower pack pet), not yet the slime",
+    rescueNodesForRun(DRAGON_RESCUE_FLOOR).includes(DOGGIE_NODE_ID)
+    && rescueNodesForRun(DRAGON_RESCUE_FLOOR).includes(CAT_NODE_ID)
+    && rescueNodesForRun(DRAGON_RESCUE_FLOOR).includes(DRAGON_NODE_ID)
     && !rescueNodesForRun(DRAGON_RESCUE_FLOOR).includes(SLIME_NODE_ID));
-  check("reaching the slime's floor (the deepest) earns all four companions",
-    rescueNodesForRun(SLIME_RESCUE_FLOOR).sort().join(",")
-      === [DOGGIE_NODE_ID, CAT_NODE_ID, DRAGON_NODE_ID, SLIME_NODE_ID].sort().join(","));
   check("a run below the shallowest rescue floor earns nothing",
     rescueNodesForRun(DOGGIE_RESCUE_FLOOR - 1).length === 0);
   check("isDoggieRescuedByRun still agrees with the generalized grant for the pup",
     isDoggieRescuedByRun(DOGGIE_RESCUE_FLOOR) && rescueNodesForRun(DOGGIE_RESCUE_FLOOR).includes(DOGGIE_NODE_ID));
+
+  // The robust, addition-proof contract for EVERY rescue node (original pack + pack #2 + any
+  // future companion): a pet is granted at exactly its rescueFloor, never one floor before, and
+  // the grant is monotone in depth (a deeper run is a superset of a shallower one).
+  section("every rescue node appears at exactly its floor, never before, monotone in depth");
+  const rescueNodes = CAMP_NODES.filter((n) => n.rescue && n.rescueFloor !== undefined);
+  check("appears AT its rescue floor",
+    rescueNodes.every((n) => rescueNodesForRun(n.rescueFloor!).includes(n.id)),
+    rescueNodes.filter((n) => !rescueNodesForRun(n.rescueFloor!).includes(n.id)).map((n) => n.id).join(","));
+  check("does NOT appear one floor before its rescue floor",
+    rescueNodes.every((n) => !rescueNodesForRun(n.rescueFloor! - 1).includes(n.id)),
+    rescueNodes.filter((n) => rescueNodesForRun(n.rescueFloor! - 1).includes(n.id)).map((n) => n.id).join(","));
+  let monotone = true;
+  for (let f = 0; f <= ROLLY_RESCUE_FLOOR + 2; f++) {
+    const shallow = new Set(rescueNodesForRun(f));
+    for (const id of shallow) if (!rescueNodesForRun(f + 1).includes(id)) monotone = false;
+  }
+  check("a deeper run is a superset of the shallower run (monotone grant)", monotone);
+  check("the deepest pack-#2 floor earns ALL eight companions together",
+    rescueNodesForRun(ROLLY_RESCUE_FLOOR).sort().join(",")
+      === [DOGGIE_NODE_ID, CAT_NODE_ID, DRAGON_NODE_ID, SLIME_NODE_ID,
+        EMBERFOX_NODE_ID, OWLET_NODE_ID, MOTHLING_NODE_ID, ROLLY_NODE_ID].sort().join(","));
 
   section("petSpriteFor maps every known pet to its render sprite, unknown ids to null");
   check("doggie -> doggie", petSpriteFor(DOGGIE_PET_ID) === "doggie");
   check("cat -> cat", petSpriteFor(CAT_PET_ID) === "cat");
   check("dragon -> dragon", petSpriteFor(DRAGON_PET_ID) === "dragon");
   check("slime -> slime_pet (distinct from the slime ENEMY sprite)", petSpriteFor(SLIME_PET_ID) === "slime_pet");
+  check("emberfox -> emberfox", petSpriteFor(EMBERFOX_PET_ID) === "emberfox");
+  check("owlet -> owlet", petSpriteFor(OWLET_PET_ID) === "owlet");
+  check("mothling -> mothling", petSpriteFor(MOTHLING_PET_ID) === "mothling");
+  check("rolly -> rolly", petSpriteFor(ROLLY_PET_ID) === "rolly");
   check("an unknown pet id renders nothing (graceful null, never a crash)",
     petSpriteFor("griffin") === null && petSpriteFor("") === null);
   check("every companion node's pet id has a render sprite (no dangling pet)",
     CAMP_NODES.filter((n) => n.category === "companion").every((n) => n.pet !== undefined && petSpriteFor(n.pet) !== null));
+}
+
+// Pack #2 — the four NEW rescued companions (emberfox/owlet/mothling/rolly). Same hard contract
+// as the original pack: companion + rescue (never buyable), grants its pet once its node is
+// owned, interleaved rescue floors, and Amber can never buy any of them.
+function packTwoTests(): void {
+  section("pack #2: emberfox/owlet/mothling/rolly are RESCUED companions (never bought)");
+  const pack = [
+    { node: EMBERFOX_NODE_ID, pet: EMBERFOX_PET_ID, floor: EMBERFOX_RESCUE_FLOOR },
+    { node: OWLET_NODE_ID, pet: OWLET_PET_ID, floor: OWLET_RESCUE_FLOOR },
+    { node: MOTHLING_NODE_ID, pet: MOTHLING_PET_ID, floor: MOTHLING_RESCUE_FLOOR },
+    { node: ROLLY_NODE_ID, pet: ROLLY_PET_ID, floor: ROLLY_RESCUE_FLOOR },
+  ];
+  for (const p of pack) {
+    const def = campNodeById(p.node);
+    check(`${p.node} is a companion RESCUE (cost 0, rescue flag, grants ${p.pet})`,
+      def?.category === "companion" && def?.rescue === true && def?.cost === 0
+      && def?.pet === p.pet && def?.rescueFloor === p.floor);
+    const buy = canBuyNode(p.node, 9999, [CAMP_SHELL_ID]);
+    check(`Amber can NEVER buy ${p.node} (refused as a rescue)`, !buy.ok && buy.reason === "rescue");
+    check(`${p.pet} is owned only once ${p.node} is rescued`,
+      !isPetOwned(p.pet, [CAMP_SHELL_ID]) && isPetOwned(p.pet, [CAMP_SHELL_ID, p.node]));
+  }
+  check("the four provisional ids are the stable lowercase tokens Ian specified",
+    EMBERFOX_PET_ID === "emberfox" && OWLET_PET_ID === "owlet"
+    && MOTHLING_PET_ID === "mothling" && ROLLY_PET_ID === "rolly");
+  check("the provisional rescue floors are 5 / 10 / 15 / 22",
+    EMBERFOX_RESCUE_FLOOR === 5 && OWLET_RESCUE_FLOOR === 10
+    && MOTHLING_RESCUE_FLOOR === 15 && ROLLY_RESCUE_FLOOR === 22);
 }
 
 // The pet is a CLIENT-SIDE cosmetic companion — it rides the identity/wire like hat/face and
@@ -252,6 +309,7 @@ function main(): void {
   amberEarnTests();
   campSpendTests();
   multiPetTests();
+  packTwoTests();
   petOutOfSimTests();
   process.stdout.write(`\n${passed} checks passed, ${failed} failed\n`);
   if (failed > 0) { process.stdout.write(`FAILURES:\n${failures.map((f) => "  - " + f).join("\n")}\n`); process.exit(1); }

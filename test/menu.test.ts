@@ -694,9 +694,10 @@ async function main(): Promise<void> {
       textOf(overlay).includes("CHOOSE YOUR PET")
       && byClass(overlay, "loadout-confirm").length === 0
       && byClass(overlay, "loadout-review-next")[0]?.disabled === true);
-    check("PET options are registry-derived: No Pet plus four companions and one hidden reserve",
-      byClass(overlay, "pet-option").filter((card) => card.tagName === "BUTTON").length === 5
-      && byClass(overlay, "pet-option").some((card) => (card.className ?? "").includes("reserved")));
+    check("PET options are registry-derived: No Pet + every rescue companion, grid completes evenly",
+      byClass(overlay, "pet-option").filter((card) => card.tagName === "BUTTON").length === 9
+      && byClass(overlay, "pet-option").filter((card) => card.tagName === "BUTTON").length % 3 === 0
+      && byClass(overlay, "pet-option").filter((card) => (card.className ?? "").includes("reserved")).length === 0);
     check("locked rescue copy uses the CAMP_NODES floor and progress",
       byClass(overlay, "pet-option").some((card) => textOf(card).includes("DOGGIE")
         && textOf(card).includes("REACH FLOOR 3 TO RESCUE · 0/3")));
@@ -715,7 +716,7 @@ async function main(): Promise<void> {
       && textOf(overlay).includes("Travel alone · no gameplay change."));
     const petThumbs = byClass(overlay, "pet-card-thumb");
     check("every registry pet card has a fixed 56px shared-render thumbnail",
-      petThumbs.filter((thumb) => thumb.tagName === "CANVAS").length === 4
+      petThumbs.filter((thumb) => thumb.tagName === "CANVAS").length === 8
       && petThumbs.filter((thumb) => thumb.tagName === "CANVAS")
         .every((thumb) => thumb.width === 56 && thumb.height === 56));
     const loadoutPreview = byClass(overlay, "loadout-preview-canvas")[0];
@@ -2413,13 +2414,13 @@ async function main(): Promise<void> {
     await menu.showCamp();
     check("camp screen mounts", byClass(overlay, "camp-screen").length === 1);
     const kennel = byClass(overlay, "camp-kennel")[0];
-    check("kennel lists all four companions",
+    check("kennel lists all eight companions (original pack + pack #2)",
       kennel !== undefined
-      && ["Doggie", "Cat", "Baby Dragon", "Baby Slime"].every((name) =>
+      && ["Doggie", "Cat", "Baby Dragon", "Baby Slime", "Ember Fox", "Hollow Owlet", "Glow Mothling", "Rolly"].every((name) =>
         byClass(kennel, "camp-card").some((card) => textOf(card).includes(name))));
     const thumbs = byClass(overlay, "camp-card-thumb").filter((thumb) => thumb.tagName === "CANVAS");
     check("every Kennel pet card has a shared-render thumbnail canvas",
-      thumbs.length === 4
+      thumbs.length === 8
       && thumbs.every((thumb) => thumb.width === 48 && thumb.height === 48));
     check("owned following doggie shows following chip",
       byClass(overlay, "camp-card").some((card) => textOf(card).includes("Doggie")
