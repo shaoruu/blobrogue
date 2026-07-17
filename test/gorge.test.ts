@@ -99,7 +99,7 @@ function pinGates(): void {
     // never repeat back-to-back (nor pick the pinned bosses, which are out of the pool).
     let prev: EnemyKind | null = "choirmaster";
     for (let floor = 65; floor <= 95; floor += 5) {
-      if (floor === 75) continue; // Pale Throne pin
+      if (floor === 75) { prev = "pale"; continue; } // Pale Throne pin — don't bridge F70↔F80
       const a = bossKindForFloor(seed, floor);
       if (a !== bossKindForFloor(seed, floor)) deterministic = false;
       if (a === null || a === prev) noRepeat = false;
