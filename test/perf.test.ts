@@ -14,6 +14,7 @@ import { createWorld, stepWorldPhase, devSpawnEnemy, devSpawnProp } from "../src
 import type { WorldState } from "../src/sim/world.js";
 import type { SimEvent } from "../src/sim/events.js";
 import { LIVE_CAPS } from "../src/sim/balance.js";
+import { WAKE_FLOOR, CLAIMANT_FLOOR, UNDERTOW_FLOOR } from "../src/sim/enemies.js";
 import { TILE } from "../src/sim/types.js";
 import type { FloorHazardKind } from "../src/sim/types.js";
 import { readFileSync, writeFileSync } from "node:fs";
@@ -95,6 +96,50 @@ async function measureScenario(setup: Setup): Promise<Stat> {
   game.stop();
   return stat(times);
 }
+
+// The deep-boss ULTIMATE arenas (Helix TD hunches): load the REAL boss floor, activate the
+// encounter, camera-lock on the boss, equip a pet, and force the boss to keep casting so the
+// timed window sits mid-ultimate — the actual lit boss room with its telegraph layer
+// (river_comes_back / all_things_owed / last_procession), boss aura/earned-window FX, a Wave C
+// full-auto gun, and the client pet path all stacked in the same frames the lighting grade runs.
+// Solo (the harness has no co-op transport), so it under-counts a true 4p room by the extra
+// hero glows + teammate pets — still the closest reproducible boss-room-local worst case.
+type EncounterWorld = WorldState & { encounter: { active: boolean } | null };
+async function measureBossArena(floor: number): Promise<Stat> {
+  const { game } = await bootGame(VIEW_W, VIEW_H);
+  game.devStartSandbox();
+  loadDeterministicFloor(game, SEED, floor);
+  const w = realWorld(game);
+  w.isGodMode = true;
+  game.devGiveWeapon("faultlink");
+  (game as object as { devSetPet(petId: string | null): void }).devSetPet("doggie");
+  const enc = (w as EncounterWorld).encounter;
+  if (enc) enc.active = true;
+  const boss = w.enemies.find((e) => e.boss);
+  if (boss) { boss.spawnTimer = 0; boss.attack.cooldown = 0; }
+  const focus = boss ? { x: boss.x, y: boss.y } : spawnCenter(w);
+  settleAt(game, focus.x, focus.y, VIEW_W, VIEW_H);
+  aimAndFire(game, focus.x, focus.y);
+  // Never let the boss rest for long, so most frames carry a live telegraph/ultimate.
+  const drive = (): void => { if (boss && boss.attack.cooldown > 1.5) boss.attack.cooldown = 0.2; };
+  for (let i = 0; i < WARMUP; i++) { drive(); game.tick(1 / 60); game.render(); }
+  const times: number[] = [];
+  for (let i = 0; i < FRAMES; i++) {
+    drive();
+    const t0 = performance.now();
+    game.tick(1 / 60);
+    game.render();
+    times.push(performance.now() - t0);
+  }
+  game.stop();
+  return stat(times);
+}
+
+const BOSS_ARENAS: Record<string, number> = {
+  "boss-arena-wake": WAKE_FLOOR,
+  "boss-arena-claimant": CLAIMANT_FLOOR,
+  "boss-arena-undertow": UNDERTOW_FLOOR,
+};
 
 // Worst-case scenarios. Each builds a heavy live world around the settled player.
 const SCENARIOS: Record<string, Setup> = {
@@ -226,6 +271,11 @@ async function main(): Promise<void> {
     scenarios[name] = s;
     process.stdout.write(`    ${name}: median ${s.median.toFixed(2)}ms, p95 ${s.p95.toFixed(2)}ms\n`);
   }
+  for (const [name, floor] of Object.entries(BOSS_ARENAS)) {
+    const s = await measureBossArena(floor);
+    scenarios[name] = s;
+    process.stdout.write(`    ${name} (F${floor}): median ${s.median.toFixed(2)}ms, p95 ${s.p95.toFixed(2)}ms\n`);
+  }
 
   if (isWrite) {
     const baseline: Baseline = {
@@ -251,7 +301,7 @@ async function main(): Promise<void> {
     `${sim.median.toFixed(3)} <= ${limit(baseline.sim.median, SIM_FLOOR).toFixed(3)}`);
   check("sim stepWorldPhase p95 within budget", sim.p95 <= limit(baseline.sim.p95, SIM_FLOOR),
     `${sim.p95.toFixed(3)} <= ${limit(baseline.sim.p95, SIM_FLOOR).toFixed(3)}`);
-  for (const name of Object.keys(SCENARIOS)) {
+  for (const name of Object.keys(scenarios)) {
     const base = baseline.scenarios[name];
     const cur = scenarios[name];
     if (!base) { check(`${name} has a committed baseline`, false); continue; }

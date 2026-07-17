@@ -1,38 +1,50 @@
 {
   "note": "Perf baseline for test/perf.test.ts. tick()+render() (client scenarios) and stepWorldPhase (sim) frame times in ms. `calib` normalizes for hardware. Regenerate: npm run perf:baseline",
-  "calib": 11.038823000000008,
+  "calib": 10.97505000000001,
   "sim": {
-    "median": 0.03505700000002321,
-    "p95": 0.07889299999999366
+    "median": 0.03383999999999787,
+    "p95": 0.07551599999999326
   },
   "scenarios": {
     "thumper-into-barrels": {
-      "median": 30.273553999999876,
-      "p95": 32.874565000000075
+      "median": 30.43350499999997,
+      "p95": 33.151251
     },
     "swarm-max-enemies": {
-      "median": 26.47365400000035,
-      "p95": 27.465170999999827
+      "median": 26.488314000000173,
+      "p95": 27.330378999999994
     },
     "full-auto-beam": {
-      "median": 26.257277000000613,
-      "p95": 27.11030799999935
+      "median": 26.294882000000143,
+      "p95": 26.829650000001493
     },
     "full-auto-flamer": {
-      "median": 26.73109199999999,
-      "p95": 27.742138999999952
+      "median": 26.75126199999977,
+      "p95": 27.304850000000442
     },
     "boss-plus-fx": {
-      "median": 24.477114999999685,
-      "p95": 25.145187000000078
+      "median": 24.508574999999837,
+      "p95": 25.33726099999876
     },
     "deep-giant-hazard-field": {
-      "median": 25.45136900000216,
-      "p95": 26.457108999999036
+      "median": 25.46789600000011,
+      "p95": 26.564515999998548
     },
     "dense-telegraph-swarm": {
-      "median": 27.398589000000356,
-      "p95": 28.3444559999989
+      "median": 27.446270000000368,
+      "p95": 28.201655999997456
+    },
+    "boss-arena-wake": {
+      "median": 41.81893599999967,
+      "p95": 42.51973200000066
+    },
+    "boss-arena-claimant": {
+      "median": 36.697878000002675,
+      "p95": 37.1405479999994
+    },
+    "boss-arena-undertow": {
+      "median": 36.17183300000033,
+      "p95": 37.17142700000113
     }
   }
 }
