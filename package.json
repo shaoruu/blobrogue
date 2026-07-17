@@ -61,6 +61,8 @@
     "test:gorge": "tsx test/gorge.test.ts",
     "test:encounterArch": "tsx test/encounterArch.test.ts",
     "test:pale": "tsx test/pale.test.ts",
+    "test:pale.gd": "tsx test/pale.gd.test.ts",
+    "test:pale.golden": "tsx test/pale.golden.test.ts",
     "test:palegd": "tsx test/pale.gd.test.ts",
     "test:palegolden": "tsx test/pale.golden.test.ts",
     "test:fairsurprise": "tsx test/fairsurprise.test.ts",

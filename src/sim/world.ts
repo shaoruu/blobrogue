@@ -3513,6 +3513,8 @@ const BOSS_BEATS: Readonly<Partial<Record<Enemy["kind"], BossBeatDef>>> = {
   sever: {
     phaseAt: SEVER.phaseAt, phaseFloor: SEVER.phaseFloor, move: "roar",
     damageReduction: SEVER.roarDamageReduction, bulletClearRadius: SEVER.roarBulletClearRadius,
+    addCount: 0, isBreakable: false,
+  },
   // PALE THRONE (F75 giant): the same SHELL CRACK-OFF transition as Gorge (roar semantics — a
   // punctuated screen-punch that sloughs the layer, swaps the sprite stone → cracked → core, and
   // drops the cold shell as debris cover via giantShellSlough). No adds.
