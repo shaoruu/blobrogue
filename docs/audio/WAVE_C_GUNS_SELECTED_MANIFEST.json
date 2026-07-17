@@ -1,0 +1,88 @@
+{
+  "batch": "wave-c-guns-v1",
+  "model": "fal-ai/elevenlabs/sound-effects/v2",
+  "prompt_influence": 0.35,
+  "naming": "Wave A weapon pattern: selected take ships as {stem}_v1.ogg/.mp3; waveSpec takes: [\"sfx/{stem}_v1\"]",
+  "selected": [
+    {
+      "stem": "hushiron_fire",
+      "selected_raw_take": "hushiron_fire_take_01",
+      "ship_stem": "sfx/hushiron_fire_v1",
+      "ship_files": [
+        "hushiron_fire_v1.ogg",
+        "hushiron_fire_v1.mp3"
+      ],
+      "note": "planted suppressed crack; early onset + low body"
+    },
+    {
+      "stem": "backtalk_fire",
+      "selected_raw_take": "backtalk_fire_take_03",
+      "ship_stem": "sfx/backtalk_fire_v1",
+      "ship_files": [
+        "backtalk_fire_v1.ogg",
+        "backtalk_fire_v1.mp3"
+      ],
+      "note": "thin stub; brighter/lighter than return"
+    },
+    {
+      "stem": "backtalk_parry",
+      "selected_raw_take": "backtalk_parry_take_01",
+      "ship_stem": "sfx/backtalk_parry_v1",
+      "ship_files": [
+        "backtalk_parry_v1.ogg",
+        "backtalk_parry_v1.mp3"
+      ],
+      "note": "short glass-metal latch; not a heavy body"
+    },
+    {
+      "stem": "backtalk_return",
+      "selected_raw_take": "backtalk_return_take_03",
+      "ship_stem": "sfx/backtalk_return_v1",
+      "ship_files": [
+        "backtalk_return_v1.ogg",
+        "backtalk_return_v1.mp3"
+      ],
+      "note": "heavy return punch; blind-ID heavier than stub"
+    },
+    {
+      "stem": "lamplighter_fire",
+      "selected_raw_take": "lamplighter_fire_take_02",
+      "ship_stem": "sfx/lamplighter_fire_v1",
+      "ship_files": [
+        "lamplighter_fire_v1.ogg",
+        "lamplighter_fire_v1.mp3"
+      ],
+      "note": "soft crystalline tick; rejected take3 sustained drone"
+    },
+    {
+      "stem": "lamplighter_patch",
+      "selected_raw_take": "lamplighter_patch_take_01",
+      "ship_stem": "sfx/lamplighter_patch_v1",
+      "ship_files": [
+        "lamplighter_patch_v1.ogg",
+        "lamplighter_patch_v1.mp3"
+      ],
+      "note": "warm soft bloom / light plant"
+    },
+    {
+      "stem": "faultlink_fire",
+      "selected_raw_take": "faultlink_fire_take_02",
+      "ship_stem": "sfx/faultlink_fire_v1",
+      "ship_files": [
+        "faultlink_fire_v1.ogg",
+        "faultlink_fire_v1.mp3"
+      ],
+      "note": "brittle conductive crack; early transient"
+    },
+    {
+      "stem": "faultlink_link",
+      "selected_raw_take": "faultlink_link_take_02",
+      "ship_stem": "sfx/faultlink_link_v1",
+      "ship_files": [
+        "faultlink_link_v1.ogg",
+        "faultlink_link_v1.mp3"
+      ],
+      "note": "taut wire latch ping; earliest available onset"
+    }
+  ]
+}
