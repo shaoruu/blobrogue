@@ -82,7 +82,9 @@ function encounterFlagsAndReconnect(): void {
     && "supportsCut" in w.encounter.flags
     && "interceptState" in w.encounter.flags
     && "chosenExitEdgeId" in w.encounter.flags
-    && "worldsplitPhase" in w.encounter.flags);
+    && "worldsplitPhase" in w.encounter.flags
+    && "worldsplitToothId" in w.encounter.flags
+    && "worldsplitOutcome" in w.encounter.flags);
   const boss = w.enemies.find((e) => e.kind === "sever");
   check("Sever body spawned (ONE isBossKind)", !!boss);
   check("no second boss kind on floor", w.enemies.filter((e) => isBossKind(e.kind)).length === 1);
@@ -272,11 +274,141 @@ function noPreActivationAggro(): void {
   check("body did not flee while inactive", Math.hypot(boss.x - x0, boss.y - y0) < 8);
 }
 
+
+function worldsplitToothSuccess(): void {
+  section("WORLDSPLIT success requires dedicated tooth break (not intercept exposed)");
+  const w = createWorld(0x7017, 55, {});
+  w.isGodMode = true;
+  loadFloorIntoWorld(w, 55);
+  const boss = w.enemies.find((e) => e.kind === "sever");
+  if (!boss || !w.encounter || !boss.boss) { check("sever for tooth success", false); return; }
+  w.encounter.active = true;
+  w.encounter.flags.interceptState = "hunt";
+  // Keep intercept anchors out of the success path — kill them but do NOT leave exposed.
+  boss.boss.windowAddIds.length = 0;
+  for (const a of w.enemies) if (a.kind === "sever_anchor") a.dead = true;
+  boss.boss.exposed = 0;
+  boss.boss.windowBank = 0;
+  boss.spawnTimer = 0;
+  boss.attack.cooldown = 0;
+  const p = w.players.get(LOCAL_ID)!;
+  p.x = boss.x + 80; p.y = boss.y; p.invuln = 999;
+
+  // Drive until WORLDSPLIT plant starts and tooth is live.
+  let tooth: ReturnType<typeof w.enemies.find> = undefined;
+  for (let i = 0; i < 80; i++) {
+    step(w, 1);
+    if (boss.attack.move === "worldsplit" && boss.attack.phase === "windup") {
+      const tid = Number(w.encounter.flags.worldsplitToothId);
+      tooth = w.enemies.find((e) => e.id === tid && e.kind === "sever_anchor" && !e.dead);
+      if (tooth) break;
+    }
+  }
+  check("WORLDSPLIT plant spawns dedicated tooth", !!tooth, `toothId=${w.encounter.flags.worldsplitToothId}`);
+  check("tooth is distinct from intercept windowAddIds",
+    !!tooth && boss.boss.windowAddIds.indexOf(tooth!.id) < 0);
+  check("tooth highlighted via aux", !!tooth && tooth!.aux === 1);
+
+  // Break the WORLDSPLIT tooth during plant/fracture.
+  if (tooth) { tooth.hp = 0; tooth.dead = true; }
+  // Ensure intercept did not sneak an exposure in.
+  const exposedBefore = boss.boss.exposed;
+  for (let i = 0; i < 120; i++) {
+    step(w, 1);
+    if (w.encounter.flags.worldsplitOutcome === "success") break;
+    if (boss.attack.move === "worldsplit" && boss.attack.phase === "recover") break;
+  }
+  check("outcome is success after tooth break", w.encounter.flags.worldsplitOutcome === "success",
+    `outcome=${w.encounter.flags.worldsplitOutcome}`);
+  check("blades jam → openBossWindow(worldsplitPunish)", (boss.boss.exposed ?? 0) > 0,
+    `exposed=${boss.boss.exposed} before=${exposedBefore}`);
+  // Punish window should be ~3.0s (may be slightly less if a tick already drained).
+  check("punish window armed near 3.0s", (boss.boss.exposed ?? 0) >= SEVER.worldsplitPunish - FIXED_DT * 2,
+    `exposed=${boss.boss.exposed}`);
+}
+
+function worldsplitSurvivalOnly(): void {
+  section("WORLDSPLIT survival-only path: cross band, NO window");
+  const w = createWorld(0x5017, 55, {});
+  w.isGodMode = true;
+  loadFloorIntoWorld(w, 55);
+  const boss = w.enemies.find((e) => e.kind === "sever");
+  if (!boss || !w.encounter || !boss.boss) { check("sever for survival", false); return; }
+  w.encounter.active = true;
+  w.encounter.flags.interceptState = "hunt";
+  boss.boss.windowAddIds.length = 0;
+  for (const a of w.enemies) if (a.kind === "sever_anchor") a.dead = true;
+  boss.boss.exposed = 0;
+  boss.boss.windowBank = 0;
+  boss.spawnTimer = 0;
+  boss.attack.cooldown = 0;
+  const p = w.players.get(LOCAL_ID)!;
+  p.x = boss.x + 80; p.y = boss.y; p.invuln = 999; // dash/iframe crossing
+
+  for (let i = 0; i < 200; i++) {
+    // Keep player on the fracture band while invuln so survival fires; leave tooth alive.
+    step(w, 1);
+    if (boss.attack.move === "worldsplit" && boss.attack.phase === "active") {
+      // Sit on the locked ray so the band check sees an invuln cross.
+      p.x = boss.x + Math.cos(boss.attack.lockedAngle) * 40;
+      p.y = boss.y + Math.sin(boss.attack.lockedAngle) * 40;
+      p.invuln = 999;
+    }
+    if (w.encounter.flags.worldsplitOutcome === "survival"
+      || w.encounter.flags.worldsplitOutcome === "failure"
+      || w.encounter.flags.worldsplitOutcome === "success") break;
+  }
+  check("survival (or soft failure) without tooth break — not success",
+    w.encounter.flags.worldsplitOutcome === "survival"
+    || w.encounter.flags.worldsplitOutcome === "failure",
+    `outcome=${w.encounter.flags.worldsplitOutcome}`);
+  check("survival-only does NOT open WORLDSPLIT window",
+    w.encounter.flags.worldsplitOutcome !== "success" && (boss.boss.exposed ?? 0) === 0,
+    `exposed=${boss.boss.exposed} outcome=${w.encounter.flags.worldsplitOutcome}`);
+  check("tooth left unbroken (or cleared without success credit)",
+    w.encounter.flags.worldsplitToothBroken !== true
+    || w.encounter.flags.worldsplitOutcome !== "success");
+}
+
+function interceptIndependentOfWorldsplit(): void {
+  section("Intercept 2-anchor trap opens window independently of WORLDSPLIT");
+  const w = createWorld(0xA17C, 55, {});
+  loadFloorIntoWorld(w, 55);
+  const boss = w.enemies.find((e) => e.kind === "sever");
+  if (!boss || !w.encounter || !boss.boss) { check("sever for intercept independence", false); return; }
+  // Suppress WORLDSPLIT so intercept is the only verb under test.
+  boss.spawnTimer = 0;
+  boss.attack.cooldown = 999;
+  const p = w.players.get(LOCAL_ID)!;
+  p.x = boss.x + 40; p.y = boss.y; p.invuln = 999;
+  step(w, 3);
+  check("encounter active for intercept", w.encounter.active === true);
+  const trapAnchors = w.enemies.filter((e) =>
+    e.kind === "sever_anchor" && !e.dead && boss.boss!.windowAddIds.indexOf(e.id) >= 0);
+  check("intercept planted exactly 2 trap anchors", trapAnchors.length === 2, `n=${trapAnchors.length}`);
+  // Fabricate a stale exposed=0 and ensure WORLDSPLIT tooth flag is idle.
+  w.encounter.flags.worldsplitOutcome = "idle";
+  w.encounter.flags.worldsplitToothBroken = false;
+  for (const a of trapAnchors) { a.hp = 0; a.dead = true; }
+  step(w, 2);
+  check("intercept opens window without WORLDSPLIT success",
+    w.encounter.flags.interceptState === "window" && (boss.boss.exposed ?? 0) > 0);
+  check("WORLDSPLIT outcome untouched by intercept",
+    w.encounter.flags.worldsplitOutcome === "idle"
+    || w.encounter.flags.worldsplitOutcome === "pending");
+  check("WORLDSPLIT tooth-broken flag not set by intercept",
+    w.encounter.flags.worldsplitToothBroken !== true);
+}
+
+
 pinGates();
 huntBlueprint();
 encounterFlagsAndReconnect();
 worldsplitTimings();
 worldsplitLive();
+worldsplitToothSuccess();
+worldsplitSurvivalOnly();
+interceptIndependentOfWorldsplit();
 fleeAcrossEdges();
 anchorsAndWindow();
 lateJoinCheckpoint();

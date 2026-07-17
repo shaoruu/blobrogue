@@ -132,6 +132,9 @@ export function initHuntEncounter(dungeon: Dungeon): EncounterState {
       interceptState: "hunt", // hunt | trap | window | escaped
       chosenExitEdgeId: routeEdgeId ?? -1,
       worldsplitPhase: "idle", // idle | plant | fracture | punish
+      worldsplitOutcome: "idle", // idle | pending | success | survival | failure
+      worldsplitToothId: -1, // dedicated WORLDSPLIT tooth (≠ intercept windowAddIds)
+      worldsplitToothBroken: false, // tooth died during plant/fracture
       anchorsPlantedCp: -1, // last checkpoint that received resin anchors
     },
   };
