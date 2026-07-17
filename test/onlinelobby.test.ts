@@ -14,13 +14,13 @@ import type { ConvexClient } from "convex/browser";
 
 import { OnlineLobby } from "../src/net/onlineLobby.js";
 import { Session } from "../src/net/session.js";
-import { worldIdForRoomCode } from "../src/net/protocol.js";
+import { worldIdForRoomCode, pvpWorldIdForRoomCode } from "../src/net/protocol.js";
 import {
   PvpDisabledError,
   PVP_DISABLED_MESSAGE,
-  PVP_PRIVATE_DISABLED_CODE,
   PVP_PUBLIC_DISABLED_CODE,
   PVP_PUBLIC_ENABLED,
+  PVP_PRIVATE_ENABLED,
 } from "../src/net/pvpFlag.js";
 import type { RunLoadout } from "../src/net/kitSelection.js";
 
@@ -251,26 +251,27 @@ async function main(): Promise<void> {
     lobby.leave();
   }
 
-  section("TEMP PVP KILL SWITCH: every client pvp entry path throws the typed pvp_disabled error, never touching the backend; co-op is untouched");
+  section("PVP ROLLOUT (private ON, public OFF): private room-code arena is LIVE end-to-end; the public pool stays dark; co-op is untouched");
   {
-    // The switch is OFF in this build — the whole section asserts the disabled behavior. (If it
-    // is ever re-enabled, this guard makes the intent explicit rather than silently passing.)
-    check("PVP is disabled in this build (the containment default)", PVP_PUBLIC_ENABLED === false);
+    check("this build ships PRIVATE arena ON, PUBLIC pool OFF", PVP_PRIVATE_ENABLED === true && PVP_PUBLIC_ENABLED === false);
 
-    // CREATE: a pvp room is refused BEFORE any backend call — no rooms:create, no identity flush.
+    // CREATE: a PRIVATE pvp room is created — the client private guard passes and the backend is
+    // reached with mode "pvp" (Convex selects the signed policy; the client only sends the mode).
     const calls: Call[] = [];
     const client = fakeConvex(calls);
     const lobby = new OnlineLobby(client, new Session(client));
-    let createErr: unknown = null;
-    try { await lobby.create("pvp", LOADOUT); } catch (e) { createErr = e; }
-    check("create('pvp') throws the typed PvpDisabledError", createErr instanceof PvpDisabledError);
-    check("...carrying the private_disabled code",
-      createErr instanceof PvpDisabledError && createErr.code === PVP_PRIVATE_DISABLED_CODE);
-    check("...and the clean player-facing copy", createErr instanceof Error && createErr.message === PVP_DISABLED_MESSAGE, PVP_DISABLED_MESSAGE);
-    check("no rooms:create reached the backend for a pvp room", calls.every((c) => c.fn !== "rooms:create"), callNames(calls).join(" -> "));
+    await lobby.create("pvp", LOADOUT);
+    const createCall = calls.find((c) => c.fn === "rooms:create");
+    check("create('pvp') reaches the backend (no client-side refusal)", createCall !== undefined);
+    check("...sending mode 'pvp' and never a client-authored policy",
+      createCall?.args.mode === "pvp" && !("pvpPolicy" in (createCall?.args ?? {})), JSON.stringify(createCall?.args));
+    check("...and the lobby adopts pvp with the generation-bound pvp world id",
+      lobby.mode === "pvp" && lobby.expectedWorldId() === pvpWorldIdForRoomCode("ABCD", 1)
+      && lobby.expectedWorldId() === "pvp:room:ABCD:g1", lobby.expectedWorldId());
     lobby.leave();
 
-    // QUICK PLAY: the pvp public pool is refused up front too — no rooms:quickPlay.
+    // QUICK PLAY: the PUBLIC pool is still dark, so a pvp quick play is refused UP FRONT with the
+    // typed public_disabled error — the public matchmaking mutation is never reached.
     const qcalls: Call[] = [];
     const qclient = fakeConvex(qcalls);
     const qlobby = new OnlineLobby(qclient, new Session(qclient));
@@ -278,20 +279,19 @@ async function main(): Promise<void> {
     try { await qlobby.quickPlay("pvp", LOADOUT); } catch (e) { quickErr = e; }
     check("quickPlay('pvp') throws the public-disabled PvpDisabledError",
       quickErr instanceof PvpDisabledError && quickErr.code === PVP_PUBLIC_DISABLED_CODE);
+    check("...carrying the clean player-facing copy", quickErr instanceof Error && quickErr.message === PVP_DISABLED_MESSAGE, PVP_DISABLED_MESSAGE);
     check("no rooms:quickPlay reached the backend for a pvp room", qcalls.every((c) => c.fn !== "rooms:quickPlay"), callNames(qcalls).join(" -> "));
     qlobby.leave();
 
-    // JOIN: even if the backend (a stale cache) resolved a pvp room, the client refuses to
-    // adopt it — the mode is server-decided, so this guards the stale-cache race. NEVER a
-    // silent fallback to co-op.
+    // JOIN CODE: joining an existing PRIVATE pvp room succeeds — the client private guard passes
+    // and the joiner ADOPTS the room's server-decided pvp mode (never a silent co-op fallback).
     const jcalls: Call[] = [];
     const jclient = fakeConvex(jcalls, { joinMode: "pvp" });
     const jlobby = new OnlineLobby(jclient, new Session(jclient));
-    let joinErr: unknown = null;
-    try { await jlobby.join("ABCD", LOADOUT); } catch (e) { joinErr = e; }
-    check("join() of a pvp room throws the private-disabled PvpDisabledError (no co-op fallback)",
-      joinErr instanceof PvpDisabledError && joinErr.code === PVP_PRIVATE_DISABLED_CODE);
-    check("the lobby never adopted the pvp room (mode stays the co-op default)", jlobby.mode === "coop");
+    await jlobby.join("ABCD", LOADOUT);
+    check("join() of a private pvp room reaches the backend", jcalls.some((c) => c.fn === "rooms:join"));
+    check("...and the joiner adopts the room's pvp mode with the pvp world id",
+      jlobby.mode === "pvp" && jlobby.expectedWorldId() === "pvp:room:ABCD:g1", jlobby.expectedWorldId());
     jlobby.leave();
 
     // CO-OP is fully unchanged: create resolves, binds the co-op world id, hits the backend.

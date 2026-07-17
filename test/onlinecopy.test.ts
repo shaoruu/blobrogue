@@ -12,6 +12,7 @@ import {
   COPY_INVITE_LABEL, INVITE_COPIED_LABEL, INVITE_SHARED_LABEL, INVITE_COPY_FAILED_LABEL,
   INVITE_SHARE_HINT, INVITE_OFFLINE_NOTE, INVITE_INVALID_NOTE, INVITE_UNREACHABLE_NOTE,
   INVITE_TRY_AGAIN_LABEL, inviteJoiningNote, inviteFailState,
+  ARENA_LABEL, ARENA_PATCHING_LABEL, ARENA_PUBLIC_OFFLINE_NOTE,
 } from "../src/ui/onlineCopy.js";
 import type { ReconnectInfo } from "../src/client/wsTransport.js";
 
@@ -106,6 +107,12 @@ function main(): void {
     inviteFailState("that code is a classic co-op room").note === "THIS INVITE ISN'T AN ONLINE ROOM" && !inviteFailState("that code is a classic co-op room").isRetryable);
   check("anything unrecognized -> COULDN'T REACH THE SERVER, the one RETRYABLE state",
     inviteFailState("ConvexError: [Request ID x] weird").note === INVITE_UNREACHABLE_NOTE && inviteFailState("weird").isRetryable);
+
+  section("ARENA mode-toggle rollout copy: plain label live, PATCHING reserved, public-offline steers to CREATE ROOM");
+  check("the live label is the plain ARENA (shown whenever either rollout flag is on)", ARENA_LABEL === "ARENA");
+  check("the PATCHING label is reserved for when BOTH flags are off", ARENA_PATCHING_LABEL === "ARENA \u00b7 PATCHING" && ARENA_PATCHING_LABEL !== ARENA_LABEL);
+  check("the public-offline note steers a private-only arena to CREATE ROOM (never implies public is live)",
+    ARENA_PUBLIC_OFFLINE_NOTE === "public arena is offline \u2014 create a room to play");
 
   section("neutral prompts only: controller glyphs wait for real controller support");
   {
