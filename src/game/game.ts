@@ -20,7 +20,7 @@ import {
   createPetFollow, stepPetFollow, PET_REST_OFFSET, PET_REST_DROP, PET_MAX_SPEED,
 } from "./petFollow.js";
 import type { PetFollow } from "./petFollow.js";
-import { DOGGIE_PET_ID, CAT_PET_ID, DRAGON_PET_ID, SLIME_PET_ID } from "../sim/camp_nodes.js";
+import { DOGGIE_PET_ID, CAT_PET_ID, DRAGON_PET_ID, SLIME_PET_ID, WICK_PET_ID, PEBBLE_PET_ID, CLATTER_PET_ID, NULLFIN_PET_ID } from "../sim/camp_nodes.js";
 import type { EnemyTier, EliteAffix, ResonanceFamily } from "../sim/balance.js";
 import {
   shopViewerOf,
@@ -217,6 +217,10 @@ const PET_VOICES: Record<string, { move: string; settle: string; trot?: WaveEven
   [CAT_PET_ID]: { move: "cat.move", settle: "cat.settle" },
   [DRAGON_PET_ID]: { move: "dragon.move", settle: "dragon.settle" },
   [SLIME_PET_ID]: { move: "slimepet.move", settle: "slimepet.settle" },
+  [WICK_PET_ID]: { move: "wick.move", settle: "wick.settle" },
+  [PEBBLE_PET_ID]: { move: "pebble.move", settle: "pebble.settle" },
+  [CLATTER_PET_ID]: { move: "clatter.move", settle: "clatter.settle" },
+  [NULLFIN_PET_ID]: { move: "nullfin.move", settle: "nullfin.settle" },
 };
 // A short-lived floating text in world space (e.g. the name of a just-dropped weapon).
 interface WorldLabel { x: number; y: number; vy: number; life: number; maxLife: number; text: string; color: string; }

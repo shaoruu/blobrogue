@@ -69,19 +69,19 @@ export const SLIME_RESCUE_FLOOR = 18;
 // reaches its floor. Their rescue floors INTERLEAVE with the original pack (the grant is
 // data-driven off rescueFloor, never per-pet), so a deep run brings several companions home at
 // once.
-// #5 — Wick, found in the shallow depths.
+// #5 — Wick, a tiny resin moth with one warm pinprick of light.
 export const WICK_NODE_ID = "pet_wick";
 export const WICK_PET_ID = "wick";
 export const WICK_RESCUE_FLOOR = 5;
-// #6 — Pebble, roosting deeper down.
+// #6 — Pebble, an amber toad with a chipped stone back.
 export const PEBBLE_NODE_ID = "pet_pebble";
 export const PEBBLE_PET_ID = "pebble";
 export const PEBBLE_RESCUE_FLOOR = 9;
-// #7 — Clatter, from the deeper dark.
+// #7 — Clatter, a hermit-crab in a bottlecap shell.
 export const CLATTER_NODE_ID = "pet_clatter";
 export const CLATTER_PET_ID = "clatter";
 export const CLATTER_RESCUE_FLOOR = 14;
-// #8 — Nullfin, from the deepest dark of this pack.
+// #8 — Nullfin, a pale cave-koi that floats beside you.
 export const NULLFIN_NODE_ID = "pet_nullfin";
 export const NULLFIN_PET_ID = "nullfin";
 export const NULLFIN_RESCUE_FLOOR = 20;
@@ -129,22 +129,22 @@ export const CAMP_NODES: readonly CampNodeDef[] = [
   },
   {
     id: WICK_NODE_ID, name: "Wick", category: "companion", cost: 0, prereqs: [],
-    desc: "A little companion warming itself in the shallows — carry it home and it trots at your heels, flickering like a coal.",
+    desc: "A tiny resin moth with one warm pinprick of light — carry it home and it flickers along at your side.",
     pet: WICK_PET_ID, rescue: true, rescueFloor: WICK_RESCUE_FLOOR,
   },
   {
     id: PEBBLE_NODE_ID, name: "Pebble", category: "companion", cost: 0, prereqs: [],
-    desc: "A small, steadfast companion from the deeper dark — bring it back and it bobs along at your side through the gloom.",
+    desc: "An amber toad with a chipped stone back — bring it home and it hops along at your heels.",
     pet: PEBBLE_PET_ID, rescue: true, rescueFloor: PEBBLE_RESCUE_FLOOR,
   },
   {
     id: CLATTER_NODE_ID, name: "Clatter", category: "companion", cost: 0, prereqs: [],
-    desc: "A rattling little companion from the deeper dark — carry it home and it skitters after you, chattering as it goes.",
+    desc: "A hermit-crab in a bottlecap shell — carry it home and it scuttles along beside you.",
     pet: CLATTER_PET_ID, rescue: true, rescueFloor: CLATTER_RESCUE_FLOOR,
   },
   {
     id: NULLFIN_NODE_ID, name: "Nullfin", category: "companion", cost: 0, prereqs: [],
-    desc: "A quiet drifting companion from the deepest dark of the pack — carry it home and it glides along beside you.",
+    desc: "A pale cave-koi that floats beside you — bring it home and it glides along in your wake.",
     pet: NULLFIN_PET_ID, rescue: true, rescueFloor: NULLFIN_RESCUE_FLOOR,
   },
   {
