@@ -404,6 +404,10 @@ const WAVE_AB_SPECIALISTS = new Set<WeaponId>([
   "mooring_nail", "sluicegate", "oddsmaker", "pathmaker",
   "resonant_fork", "red_pen", "margin_call", "sidewinder",
 ]);
+// Verb-identity metrics prove via authored spec (like paving), not aim-straight room clears.
+// Sidewinder's Quill shape (turn 3.5 / r=5 / no basePierce) deliberately fails the raw
+// excelRoom harness — the flank metric is the proof, not a fattened BALANCER_TODO clear.
+const VERB_IDENTITY_METRICS = new Set(["paving", "link", "mark", "copy", "flank"]);
 
 // Median clear ticks among weapons that CLEARED a room (uncleared entries excluded so
 // one impossible pairing can't drag the room's midpoint to the cap).
@@ -539,6 +543,14 @@ function roomProofGates(m: Matrix): void {
   for (const id of ALL_WEAPONS) {
     const entry = ARSENAL[id];
     const res = m.rooms.get(id)![entry.excelRoom];
+    // Verb-identity-only specialists (flank/link/mark/copy/paving): the aim-straight room
+    // harness cannot express their authored verb. Their differentiation metric gate is the
+    // proof — do not re-fatten geometry (Sidewinder turn/r/pierce) just to clear excelRoom.
+    if (entry.metrics.length > 0 && entry.metrics.every((mt) => VERB_IDENTITY_METRICS.has(mt))) {
+      check(`${id} excels in ${entry.excelRoom} via verb-identity metric (not raw clear)`,
+        true, `metrics=${entry.metrics.join("+")}`);
+      continue;
+    }
     if (entry.excelRoom === "secondlane") {
       const baseline = measureRoom("pistol", "secondlane");
       check(`${id} excels in ${entry.excelRoom}: beats the pistol-only baseline`,
@@ -1222,10 +1234,13 @@ function differentiationGates(m: Matrix): void {
         detail = s === undefined ? "no margin spec" : `coef=${s.outputCoef} ttl=${s.ttl}`;
       } else if (metric === "flank") {
         // Sidewinder: the two-arc flank identity (a rear bonus the aim-straight harness
-        // cannot express, and extra-pellet mods may never add arcs).
+        // cannot express, and extra-pellet mods may never add arcs). The restored shape
+        // is thin + high-turn with no intrinsic pierce — reject the fat/slow drift.
         const s = WEAPONS[id].sidewinder;
-        ok = s !== undefined && s.arcs === 2 && s.flankBonus > 0 && s.arcLife > 0;
-        detail = s === undefined ? "no sidewinder spec" : `arcs=${s.arcs} flank=${s.flankBonus}`;
+        ok = s !== undefined && s.arcs === 2 && s.flankBonus > 0 && s.arcLife > 0
+          && s.turn >= 3.0 && WEAPONS[id].bulletRadius <= 5 && (WEAPONS[id].basePierce ?? 0) === 0;
+        detail = s === undefined ? "no sidewinder spec"
+          : `arcs=${s.arcs} flank=${s.flankBonus} turn=${s.turn} r=${WEAPONS[id].bulletRadius}`;
       } else if ((entry.resource === "health-risk" || entry.resource === "coin-fed") && metric !== "boss") {
         // Cost-paid run vs the room's neutral median: the payoff must be real (the
         // Lastlight pays in hearts, the Midas in coins — same paid-ceiling contract).

@@ -823,6 +823,6 @@ export const ARSENAL: Record<WeaponId, WeaponManifestEntry> = {
     audio: "shootSidewinder",
     visual: "#7fd48a twin green arcs sweeping wide of the aim line; held_sidewinder hook",
     authority: ["bullets"],
-    excelRoom: "swarm", weakRoom: "anchor",
+    excelRoom: "kite", weakRoom: "anchor",
   },
 };
