@@ -2393,6 +2393,26 @@ async function main(): Promise<void> {
     check("opening clears the unread cue on the title dest in place",
       byClass(byClass(click.overlay, "nav-whatsnew")[0] ?? {}, "wn-dot").length === 0);
     check("...and marks the build seen", localStorage.getItem(SEEN_KEY) === latest);
+
+    // Visual patch notes: entries the media map matched (tools/changelogMedia.mjs) render a
+    // wrapped .cl-media strip of pixel-art .cl-thumb sprites. Additive — text-only entries
+    // are untouched, so the .cl-section count assertion above still holds.
+    const totalThumbs = CHANGELOG.reduce(
+      (n, s) => n + s.entries.reduce((m, e) => m + (e.media?.length ?? 0), 0), 0);
+    const entriesWithMedia = CHANGELOG.reduce(
+      (n, s) => n + s.entries.filter((e) => (e.media?.length ?? 0) > 0).length, 0);
+    check("matched entries render one .cl-media strip each, all thumbs present",
+      totalThumbs > 0
+      && byClass(click.overlay, "cl-thumb").length === totalThumbs
+      && byClass(click.overlay, "cl-media").length === entriesWithMedia,
+      `thumbs=${byClass(click.overlay, "cl-thumb").length}/${totalThumbs} strips=${byClass(click.overlay, "cl-media").length}/${entriesWithMedia}`);
+    check("the newest (in-progress) pets entry ships thumbnail art",
+      (CHANGELOG[0]?.entries[0]?.media?.length ?? 0) > 0
+      && (CHANGELOG[0]?.entries[0]?.media ?? []).some((p) => p.startsWith("/sprites/pets/")));
+    check("the panel header deep-links to the standalone /changelog site",
+      collect(click.overlay, (n) => n.tagName === "A"
+        && typeof n.className === "string" && n.className.includes("cl-site-link")).length === 1);
+
     fireWindowEvent("keydown", { key: "Escape" });
     check("Escape closes the panel", byClass(click.overlay, "changelog-scrim").length === 0);
     localStorage.removeItem(SEEN_KEY);
