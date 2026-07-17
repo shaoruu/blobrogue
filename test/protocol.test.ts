@@ -561,7 +561,7 @@ function eventScopeTests(): void {
 }
 
 function paleAuthorityWireTests(): void {
-  section("v35: Pale telegraph phase and warmth state reconcile authoritatively");
+  section("v36: Pale telegraph phase and warmth state reconcile authoritatively");
   const w = createWorld(0xF75A, 75, { isShared: true, skipLocalPlayer: true });
   const player = spawnPlayerInWorld(w, "pMe");
   player.warmthIdleSec = 1.25;

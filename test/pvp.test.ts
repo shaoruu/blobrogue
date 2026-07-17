@@ -1495,7 +1495,7 @@ section("DETERMINISM EDGE-CASES: self-immune, same-tick order-stable, no shoot-f
 }
 
 // ---------------------------------------------------------------------------------------------
-section("P2 WIRE: protocol v35, match block + spawn protection + reliable events");
+section("P2 WIRE: protocol v36, match block + spawn protection + reliable events");
 {
   check("PROTOCOL_VERSION bumped to 38", PROTOCOL_VERSION === 38);
 
