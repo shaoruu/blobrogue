@@ -49,7 +49,7 @@ import { isBossFloor } from "./enemies.js";
 import { WEAPONS, rollWeaponRarity, rollMysteryTwist } from "./weapons.js";
 import { MAX_OWNED_WEAPONS } from "./constants.js";
 import {
-  ITEMS, MAX_ITEM_LEVEL, itemLevelsOf, itemMaxLevel, itemById, normalItemsForCatalog,
+  ITEMS, itemLevelsOf, itemMaxLevel, itemById, normalItemsForCatalog,
   rollItemChoicesWith, CORE_ITEM_IDS,
 } from "./items.js";
 import { rollWeaponOfferWithHistory } from "./weaponBag.js";
@@ -908,7 +908,8 @@ export function shopSlotStatusFor(shop: ShopState, slot: ShopSlot, viewer: ShopV
     case "blessing": {
       if (slot.buyers.includes(viewer.pid)) return "sold";
       if (slot.itemId === null) return "exhausted";
-      if (slot.itemId !== null && (itemLevelsOf(viewer.ownedItemIds).get(slot.itemId) ?? 0) >= MAX_ITEM_LEVEL) return "maxLevel";
+      const def = itemById(slot.itemId);
+      if (def && (itemLevelsOf(viewer.ownedItemIds).get(def.id) ?? 0) >= itemMaxLevel(def)) return "maxLevel";
       break;
     }
     case "heart": {
@@ -937,7 +938,8 @@ export function shopSlotStatusFor(shop: ShopState, slot: ShopSlot, viewer: ShopV
     case "rare_blessing": {
       if (slot.buyers.includes(viewer.pid)) return "sold";
       if (slot.itemId === null) return "exhausted";
-      if (slot.itemId !== null && (itemLevelsOf(viewer.ownedItemIds).get(slot.itemId) ?? 0) >= MAX_ITEM_LEVEL) return "maxLevel";
+      const def = itemById(slot.itemId);
+      if (def && (itemLevelsOf(viewer.ownedItemIds).get(def.id) ?? 0) >= itemMaxLevel(def)) return "maxLevel";
       if (hasSpentPremiumLock(shop, viewer)) return "locked";
       break;
     }

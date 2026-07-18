@@ -80,7 +80,7 @@ function gate1OverdriveCeiling(): void {
       ...mods,
       fireRateMult: Math.min(mods.fireRateMult * OVERDRIVE.fireFactor, OVERDRIVE.expressiveFireCeiling),
     };
-    const overdriveDps = practicalBossDps(weapon, overdriveMods);
+    const overdriveDps = practicalBossDps(weapon, overdriveMods, owned);
     peaks.push(overdriveDps);
     const mult = overdriveDps / baseline;
     if (mult > maxMult) { maxMult = mult; maxBuild = `${weapon} + [${owned.join(",")}]`; }
@@ -314,7 +314,7 @@ function medianConventionalBuild(): { weapon: WeaponId; owned: string[]; dps: nu
   const builds: Array<{ dps: number; weapon: WeaponId; owned: string[] }> = [];
   forEachLegalBuild(({ weapon, owned, mods }) => {
     if (!CORE_GUNS.has(weapon)) return;
-    builds.push({ dps: practicalBossDps(weapon, mods), weapon, owned });
+    builds.push({ dps: practicalBossDps(weapon, mods, owned), weapon, owned });
   });
   builds.sort((a, b) => a.dps - b.dps);
   const m = builds[Math.floor(builds.length / 2)];

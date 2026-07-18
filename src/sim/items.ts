@@ -216,9 +216,9 @@ export const ITEMS: readonly ItemDef[] = [
   {
     id: "side_channel", name: "Side Channel",
     descs: [
-      "After a dash or hard aim flick, your next shot also fires along your previous aim at 55% damage.",
-      "After a dash or hard aim flick, your next shot also fires along your previous aim at 55% damage.",
-      "After a dash or hard aim flick, your next shot also fires along your previous aim at 55% damage.",
+      "After a dash or hard aim flick, your next shot also fires along your previous aim at 55% damage. 1.2s cooldown.",
+      "After a dash or hard aim flick, your next shot also fires along your previous aim at 55% damage. 1.2s cooldown.",
+      "After a dash or hard aim flick, your next shot also fires along your previous aim at 55% damage. 1.2s cooldown.",
     ],
     glyph: "/", tint: "#5ab6ff", rarity: "uncommon", maxLevel: 1,
     apply: () => {},

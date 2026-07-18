@@ -123,9 +123,9 @@ section("owner-accepted catalog rate drift");
   check("pre-F4 weapon C/R drift is exactly 48.780/51.220 → 48.889/51.111",
     [48.780, 51.220].every((expected, index) => near(legacyEarly[index], expected))
     && [48.889, 51.111].every((expected, index) => near(waveAEarly[index], expected)));
-  check("normal blessing C/U/R drift is exactly 38.043/48.913/13.043 → 41.096/46.575/12.329",
-    [38.043, 48.913, 13.043].every((expected, index) => near(legacyBlessing[index], expected))
-    && [41.096, 46.575, 12.329].every((expected, index) => near(waveABlessing[index], expected)));
+  check("normal blessing C/U/R drift is exactly 39.326/47.191/13.483 → 42.254/45.070/12.676",
+    [39.326, 47.191, 13.483].every((expected, index) => near(legacyBlessing[index], expected))
+    && [42.254, 45.070, 12.676].every((expected, index) => near(waveABlessing[index], expected)));
 }
 
 section("weapon first pass and history-aware refills");

@@ -55,7 +55,7 @@ const BUILDS: Readonly<Record<string, Loadout>> = {
 function dpsOf(build: Loadout): number {
   const mods = createMods();
   recomputeMods(mods, build.picks);
-  return expectedBossDps(build.weapon, mods);
+  return expectedBossDps(build.weapon, mods, build.picks);
 }
 
 function idle(seq: number): InputCmd {

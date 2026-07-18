@@ -9,10 +9,11 @@
 import { WEAPONS, MAX_ORBIT_BLADES } from "./weapons.js";
 import type { Weapon } from "./weapons.js";
 import type { WeaponId, WeaponRarity } from "./types.js";
+import { canonicalItemId } from "./items.js";
 import type { PlayerMods } from "./items.js";
 import {
   CAPS, POWER, BOSS_VULN_CAP, BOSS_NATIVE_PELLET_COEF, BOSS_EXTRA_PELLET_COEF,
-  WEAPON_BOSS_COEF,
+  SIDE_CHANNEL, WEAPON_BOSS_COEF,
 } from "./balance.js";
 import { MIN_MULTI_SPREAD, FIRE_KNOCKBACK } from "./constants.js";
 import { MOMENTUM, OVERHEAT } from "./kits.js";
@@ -276,7 +277,11 @@ function mechanicsOf(w: Weapon, mods: PlayerMods): WeaponMechanic[] {
 // boss-grade bodies; burn counts its flat bounded DoT), times the balancer's 0.72
 // practical factor (the 12s-moving-target model behind the DPS ceilings). Pure and
 // deterministic over (weapon, mods): the pull's R sample derives from exactly this.
-export function expectedBossDps(id: WeaponId, mods: PlayerMods): number {
+export function expectedBossDps(
+  id: WeaponId,
+  mods: PlayerMods,
+  ownedItemIds: readonly string[] = [],
+): number {
   const w = WEAPONS[id];
   const isMelee = w.melee !== undefined;
   const pellets = isMelee ? 1 : w.pellets + mods.extraPellets;
@@ -288,7 +293,13 @@ export function expectedBossDps(id: WeaponId, mods: PlayerMods): number {
   const vuln = (1 - mods.critChance) + mods.critChance * Math.min(BOSS_VULN_CAP, mods.critMult);
   const rate = (1 / w.fireCd) * mods.fireRateMult;
   const burnDot = mods.burnChance > 0 ? 3 : 0;
-  return w.damage * mods.damageMult * effPellets * wepCoef * rate * vuln * POWER.practicalFactor + burnDot;
+  const perProjectile = w.damage * mods.damageMult * wepCoef * vuln;
+  const primaryDps = perProjectile * effPellets * rate * POWER.practicalFactor;
+  const hasSideChannel = !isMelee
+    && ownedItemIds.some((itemId) => canonicalItemId(itemId) === "side_channel");
+  const ghostRate = hasSideChannel ? Math.min(rate, 1 / SIDE_CHANNEL.icd) : 0;
+  const ghostDps = perProjectile * SIDE_CHANNEL.damageMult * ghostRate * POWER.practicalFactor;
+  return primaryDps + ghostDps + burnDot;
 }
 
 export function weaponDisplayStats(id: WeaponId, mods: PlayerMods, lowHp: number): WeaponDisplayStats {

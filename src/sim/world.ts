@@ -2341,7 +2341,9 @@ export function setPlayerAbsence(w: WorldState, id: PlayerId, isAbsent: boolean)
 // guard rails (weak-player floor, solo gear cap, [1, 6] clamp).
 function sampleEncounterPower(w: WorldState): number {
   const contributions: number[] = [];
-  for (const p of w.players.values()) contributions.push(expectedBossDps(p.weapon, p.mods));
+  for (const p of w.players.values()) {
+    contributions.push(expectedBossDps(p.weapon, p.mods, p.ownedItemIds));
+  }
   return powerRatioFor(contributions, w.floor);
 }
 
@@ -5222,8 +5224,13 @@ function trackSideChannelAim(p: PlayerSim, aim: number, dt: number): void {
     resetSideChannelState(p, aim);
     return;
   }
+  const wasCoolingDown = p.sideChannelIcdT > 0;
   p.sideChannelIcdT = Math.max(0, p.sideChannelIcdT - dt);
   p.sideChannelAimClock += dt;
+  if (wasCoolingDown) {
+    p.sideChannelAimSamples = [{ aim, time: p.sideChannelAimClock }];
+    return;
+  }
   const cutoff = p.sideChannelAimClock - SIDE_CHANNEL.aimWindow;
   while (p.sideChannelAimSamples[0]?.time < cutoff) p.sideChannelAimSamples.shift();
   if (p.sideChannelArmedAim === null && p.sideChannelIcdT === 0) {

@@ -1269,7 +1269,7 @@ function measureGodBuild(catalogVersion: ContentCatalogVersion): GodBuildMeasure
   let maxBuild = "";
   const top: Array<{ dps: number; build: string }> = [];
   forEachLegalBuild(({ weapon, owned, mods }) => {
-    const dps = practicalBossDps(weapon, mods);
+    const dps = practicalBossDps(weapon, mods, owned);
     if (dps > maxDps) { maxDps = dps; maxBuild = `${weapon} + [${owned.join(",")}]`; }
     if (top.length < 100 || dps > top[top.length - 1].dps) {
       top.push({ dps, build: `${weapon} + [${owned.slice().sort().join(",")}]` });

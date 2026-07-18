@@ -15,10 +15,10 @@ import type { InputCmd, PlayerId } from "../src/sim/input.js";
 import { LOCAL_ID } from "../src/sim/input.js";
 import type { Bullet, EnemyKind, WeaponId } from "../src/sim/types.js";
 import {
-  BOSS_EXTRA_PELLET_COEF, BOSS_NATIVE_PELLET_COEF, WEAPON_BOSS_COEF, BOSS_VULN_CAP,
+  BOSS_EXTRA_PELLET_COEF, BOSS_NATIVE_PELLET_COEF, SIDE_CHANNEL, WEAPON_BOSS_COEF, BOSS_VULN_CAP,
 } from "../src/sim/balance.js";
 import {
-  itemById, createMods, recomputeMods, normalItemsForCatalog, rollItemChoicesWith,
+  canonicalItemId, itemById, createMods, recomputeMods, normalItemsForCatalog, rollItemChoicesWith,
 } from "../src/sim/items.js";
 import type { PlayerMods } from "../src/sim/items.js";
 import { WEAPONS } from "../src/sim/weapons.js";
@@ -229,7 +229,11 @@ export function practicalAccuracy(id: WeaponId, spreadTotal: number, speed: numb
   return base * spreadPenalty * speedPenalty;
 }
 
-export function practicalBossDps(id: WeaponId, mods: PlayerMods): number {
+export function practicalBossDps(
+  id: WeaponId,
+  mods: PlayerMods,
+  ownedItemIds: readonly string[] = [],
+): number {
   const wep = WEAPONS[id];
   const isMelee = wep.melee !== undefined;
   const pellets = isMelee ? 1 : wep.pellets + mods.extraPellets;
@@ -247,8 +251,14 @@ export function practicalBossDps(id: WeaponId, mods: PlayerMods): number {
   // The Midas models its FED damage: a stocked purse is no brake inside a boss window, so the
   // estimator assumes every shot eats a coin (the honest worst case).
   const coinFed = wep.coinBoost ?? 1;
-  return wep.damage * coinFed * mods.damageMult * effPellets * wepCoef * rate * vuln
-    * practicalAccuracy(id, spreadTotal, isMelee ? 0 : wep.speed * mods.bulletSpeedMult) + burnDot;
+  const accuracy = practicalAccuracy(id, spreadTotal, isMelee ? 0 : wep.speed * mods.bulletSpeedMult);
+  const perProjectile = wep.damage * coinFed * mods.damageMult * wepCoef * vuln;
+  const primaryDps = perProjectile * effPellets * rate * accuracy;
+  const hasSideChannel = !isMelee
+    && ownedItemIds.some((itemId) => canonicalItemId(itemId) === "side_channel");
+  const ghostRate = hasSideChannel ? Math.min(rate, 1 / SIDE_CHANNEL.icd) : 0;
+  const ghostDps = perProjectile * SIDE_CHANNEL.damageMult * ghostRate * accuracy;
+  return primaryDps + ghostDps + burnDot;
 }
 
 // ---- the deterministic 100k legal-build set ----

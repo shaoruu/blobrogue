@@ -337,6 +337,15 @@ function buyCommandTests(): void {
     check("your bought pedestal reads 'sold' for you (one buy per player per shop)",
       buyAt(w, p, blessing) === "sold" && (itemLevelsOf(p.ownedItemIds).get(itemId) ?? 0) === 1);
   }
+  {
+    const w = createWorld(0xDEA1, 3);
+    const p = w.players.get(LOCAL_ID)!;
+    const blessing = slotOf(w, "blessing");
+    const sideChannelSlot: ShopSlot = { ...blessing, itemId: "side_channel" };
+    p.ownedItemIds.push("side_channel");
+    check("a max-one Side Channel pedestal reads 'maxLevel' after one pick",
+      shopSlotStatusFor(w.shop!, sideChannelSlot, shopViewerOf(p)) === "maxLevel");
+  }
 
   section("buy: liveness + proximity gates (a tampered client cannot remote-buy)");
   {
