@@ -254,11 +254,10 @@ SHEETS["gorge.attack"] = { src: "/sprites/gorge_shell_rind.png", fps: 2 };
 SHEETS["gorge_shell_chitin.idle"] = { src: "/sprites/gorge_shell_chitin.png", fps: 2 };
 SHEETS["gorge_shell_core.idle"] = { src: "/sprites/gorge_shell_core.png", fps: 2 };
 SHEETS["gorge_seam.idle"] = { src: "/sprites/gorge_shell_core.png", fps: 2 };
-// SEVER F55 — placeholder Weaver art (no generation this batch). The roaming core reuses the
-// Weaver's directional walk triplet (its declared directional_walk contract); the resin anchor
-// is a decoy idle loop. Both hold on the loaded weaver2_px strip until bespoke sheets land.
-registerDirectionalSet("sever", { walkFps: 6, fileBase: "weaver2_px" });
-SHEETS["sever_anchor.idle"] = { src: "/sprites/weaver2_px.png", fps: 2 };
+// SEVER F55 — bespoke fal flux→birefnet→pixelize body + resin-tooth anchor (black-resin palette).
+// Directional walks derived from ONE base via gen-walk profile. Not weaver2_px.
+registerDirectionalSet("sever", { walkFps: 6 });  // bespoke fal Sever body (was weaver2_px placeholder)
+SHEETS["sever_anchor.idle"] = { src: "/sprites/sever_anchor.png", fps: 2 };
 SHEETS["choirmaster.idle"] = { src: "/sprites/choir_idle.png", fps: 6 };
 SHEETS["choirmaster.attack"] = { src: "/sprites/choir_attack.png", fps: 10 };
 SHEETS["choir_pillar.idle"] = { src: "/sprites/choir.png", fps: 2 };
@@ -436,8 +435,8 @@ const SOURCES: Record<SpriteName, string> = {
   gorge_shell_chitin: "/sprites/gorge_shell_chitin.png",
   gorge_shell_core: "/sprites/gorge_shell_core.png",
   gorge_seam: "/sprites/gorge_shell_core.png",
-  sever: "/sprites/weaver2_px.png",
-  sever_anchor: "/sprites/weaver2_px.png",
+  sever: "/sprites/sever.png",
+  sever_anchor: "/sprites/sever_anchor.png",
   choirmaster: "/sprites/choir.png",
   choir_pillar: "/sprites/choir.png",
   undertow: "/sprites/weaver2_px.png",
