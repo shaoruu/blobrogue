@@ -359,8 +359,10 @@ export interface PlayerSim {
   disabledBlessing: DisabledBlessing | null; // remember_me: the blessing muted by a save
   lightSoloDashIcd: number;          // carry_the_light: solo dash-restore cooldown
   staggerPulseIcdT: number;
+  staggerPulseAppliedTick: number;
   bladeWardT: number;
   bladeWardAbsorb: number;
+  bladeWardAppliedTick: number;
   isMomentumArmed: boolean;
   momentumIcdT: number;
   momentumMoveSamples: Array<{ at: number; distance: number }>;
@@ -855,7 +857,8 @@ export function createPlayer(id: PlayerId, x: number, y: number): PlayerSim {
     forkLink: null, penMarks: new Map(), penSkillCd: 0, penInputLock: 0,
     marginStore: null, sidewinderArcT: 0, sidewinderArcAim: 0,
     revealIcdT: 0, rememberMeArmed: true, disabledBlessing: null, lightSoloDashIcd: 0,
-    staggerPulseIcdT: 0, bladeWardT: 0, bladeWardAbsorb: 0,
+    staggerPulseIcdT: 0, staggerPulseAppliedTick: -1,
+    bladeWardT: 0, bladeWardAbsorb: 0, bladeWardAppliedTick: -1,
     isMomentumArmed: false, momentumIcdT: 0, momentumMoveSamples: [],
     hushStacks: 0, hushStillT: 0, hushStackT: 0, hushVentT: 0,
     backtalkHoldT: 0, backtalkWindowT: 0, backtalkCd: 0, backtalkReturnT: 0,
@@ -2458,8 +2461,10 @@ export function loadFloorIntoWorld(w: WorldState, floor: number, playerCountAtLo
     p.revealIcdT = 0;
     p.lightSoloDashIcd = 0;
     p.staggerPulseIcdT = 0;
+    p.staggerPulseAppliedTick = -1;
     p.bladeWardT = 0;
     p.bladeWardAbsorb = 0;
+    p.bladeWardAppliedTick = -1;
     p.isMomentumArmed = false;
     p.momentumIcdT = 0;
     p.momentumMoveSamples = [];
@@ -2617,8 +2622,10 @@ export function resetRunInWorld(w: WorldState, seed: number): void {
     p.disabledBlessing = null;
     p.lightSoloDashIcd = 0;
     p.staggerPulseIcdT = 0;
+    p.staggerPulseAppliedTick = -1;
     p.bladeWardT = 0;
     p.bladeWardAbsorb = 0;
+    p.bladeWardAppliedTick = -1;
     p.isMomentumArmed = false;
     p.momentumIcdT = 0;
     p.momentumMoveSamples = [];
@@ -4070,9 +4077,10 @@ function applyChill(e: Enemy, secs: number, ev: SimEvent[]): void {
   e.chill = Math.min(C.CHILL_MAX, e.chill + secs);
   if (!wasFrozen && isFrozen(e)) ev.push({ t: "frozeSolid", eid: e.id, x: e.x, y: e.y });
 }
-function applyMeleeSlow(e: Enemy, moveMult: number, secs: number): void {
+function applyMeleeSlow(e: Enemy, moveMult: number, secs: number, tick: number): void {
   e.meleeSlowMult = e.meleeSlowT > 0 ? Math.min(e.meleeSlowMult, moveMult) : moveMult;
   e.meleeSlowT = Math.max(e.meleeSlowT, secs);
+  e.meleeSlowAppliedTick = tick;
 }
 function applyShock(e: Enemy, secs: number, ev: SimEvent[]): void {
   if (e.shock === 0 && secs > 0) ev.push({ t: "statusApplied", eid: e.id, x: e.x, y: e.y, kind: "shock" });
@@ -4091,7 +4099,7 @@ function applyHitStatuses(w: WorldState, p: PlayerSim | null, e: Enemy, src: Str
 }
 
 function tickStatuses(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void {
-  if (e.meleeSlowT > 0) {
+  if (e.meleeSlowT > 0 && e.meleeSlowAppliedTick !== w.tick) {
     e.meleeSlowT = e.meleeSlowT > dt ? e.meleeSlowT - dt : 0;
     if (e.meleeSlowT === 0) e.meleeSlowMult = 1;
   }
@@ -4603,6 +4611,7 @@ function pulseMeleeStagger(
 ): void {
   if (hit.meleeSource === "halo" || p.mods.staggerPulseRadius <= 0 || p.staggerPulseIcdT > 0) return;
   p.staggerPulseIcdT = STAGGER_PULSE_ICD;
+  p.staggerPulseAppliedTick = w.tick;
   const radius = hit.isThrust === true ? PIKE_STAGGER_RADIUS : p.mods.staggerPulseRadius;
   const targets = w.enemies
     .filter((enemy) =>
@@ -4627,7 +4636,7 @@ function pulseMeleeStagger(
       dirX === 0 && dirY === 0 ? hit.kbDirY : dirY,
       STAGGER_PULSE_KB_SCALE,
     );
-    applyMeleeSlow(target, p.mods.staggerPulseSlowMult, STAGGER_PULSE_SLOW_SECONDS);
+    applyMeleeSlow(target, p.mods.staggerPulseSlowMult, STAGGER_PULSE_SLOW_SECONDS, w.tick);
   }
   ev.push({
     t: "blessingProc",
@@ -4639,10 +4648,11 @@ function pulseMeleeStagger(
   });
 }
 
-function refreshBladeWard(p: PlayerSim, hit: StrikeInfo, ev: SimEvent[]): void {
+function refreshBladeWard(w: WorldState, p: PlayerSim, hit: StrikeInfo, ev: SimEvent[]): void {
   if (hit.meleeSource === "halo" || p.mods.bladeWardAbsorb <= 0) return;
   p.bladeWardAbsorb = p.mods.bladeWardAbsorb;
   p.bladeWardT = p.mods.bladeWardWindow;
+  p.bladeWardAppliedTick = w.tick;
   ev.push({
     t: "blessingProc",
     pid: p.id,
@@ -4730,7 +4740,7 @@ function strikeEnemy(w: WorldState, p: PlayerSim | null, e: Enemy, hit: StrikeIn
   applyHitStatuses(w, p, e, hit, ev);
   if (p !== null && hit.isMelee) {
     pulseMeleeStagger(w, p, e, hit, ev);
-    refreshBladeWard(p, hit, ev);
+    refreshBladeWard(w, p, hit, ev);
   }
   const closeShotgun = !hit.isMelee && p !== null && p.weapon === "shotgun" && Math.hypot(p.x - e.x, p.y - e.y) < C.SHOTGUN_FREEZE_RANGE;
   const killed = e.hp <= 0 && !e.dead;
@@ -16960,7 +16970,8 @@ function resetPvpLifeTransient(p: PlayerSim): void {
   p.combo = 0; p.comboTimer = 0; p.fangCd = 0;
   p.overdriveT = 0; p.overheatT = 0; p.phaseSpeed = 0; p.ultInvuln = 0;
   p.passiveState = 0; p.overshield = 0; p.overshieldRegenT = 0;
-  p.staggerPulseIcdT = 0; p.bladeWardT = 0; p.bladeWardAbsorb = 0;
+  p.staggerPulseIcdT = 0; p.staggerPulseAppliedTick = -1;
+  p.bladeWardT = 0; p.bladeWardAbsorb = 0; p.bladeWardAppliedTick = -1;
   p.isMomentumArmed = false; p.momentumIcdT = 0; p.momentumMoveSamples = [];
   p.isUltRequested = false; p.isPulseRequested = false;
   // Contested-hearth: Favor + armed ember_edge NEVER survive a death or carry across a (re)spawn
@@ -18219,10 +18230,10 @@ export function stepWorldPhase(w: WorldState, dt: number, ev: SimEvent[]): void 
       player.isMomentumArmed = false;
       player.momentumMoveSamples = [];
     }
-    if (player.staggerPulseIcdT > 0) {
+    if (player.staggerPulseIcdT > 0 && player.staggerPulseAppliedTick !== w.tick) {
       player.staggerPulseIcdT = player.staggerPulseIcdT > dt ? player.staggerPulseIcdT - dt : 0;
     }
-    if (player.bladeWardT > 0) {
+    if (player.bladeWardT > 0 && player.bladeWardAppliedTick !== w.tick) {
       player.bladeWardT = player.bladeWardT > dt ? player.bladeWardT - dt : 0;
       if (player.bladeWardT === 0) player.bladeWardAbsorb = 0;
     }

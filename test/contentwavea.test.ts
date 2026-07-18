@@ -50,7 +50,6 @@ import {
   WAVE_A_CONTENT_CATALOG_VERSION,
   WAVE_B_CONTENT_CATALOG_VERSION,
   WAVE_C_CONTENT_CATALOG_VERSION,
-  MELEE_BLESSING_CONTENT_CATALOG_VERSION,
   contentCatalogFor,
 } from "../src/sim/contentCatalog.js";
 import { readFileSync } from "node:fs";
@@ -218,8 +217,8 @@ section("canonical roadmap and additive catalog migration");
     && legacyWorld.weaponBag.catalogVersion === LEGACY_CONTENT_CATALOG_VERSION
     && legacyWorld.weaponBag.order.join(",") !== legacyBagOrder
     && legacyWorld.weaponBag.order.every((id) => !WAVE_A_WEAPONS.includes(id)));
-  check("genuinely fresh production worlds select the melee blessing catalog",
-    createWorld(0xCA7108, 1).catalogVersion === MELEE_BLESSING_CONTENT_CATALOG_VERSION);
+  check("genuinely fresh production worlds select Wave C without a browser field",
+    createWorld(0xCA7108, 1).catalogVersion === WAVE_C_CONTENT_CATALOG_VERSION);
 
   const snap = buildSnapshot(createWorld(0xCA7109, 1, {
     catalogVersion: WAVE_A_CONTENT_CATALOG_VERSION,
@@ -231,7 +230,7 @@ section("canonical roadmap and additive catalog migration");
   delete oldWire.cat;
   check("old snapshots missing catalog decode legacy, never current", validateSnap(oldWire).cat === 0);
   let isUnknownRejected = false;
-  try { validateSnap({ ...snap, cat: 5 }); } catch { isUnknownRejected = true; }
+  try { validateSnap({ ...snap, cat: 4 }); } catch { isUnknownRejected = true; }
   check("unsupported future catalog versions fail closed", isUnknownRejected);
 
   let isForgedClientFieldRejected = false;

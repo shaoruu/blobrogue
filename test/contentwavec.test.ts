@@ -27,7 +27,6 @@ import {
   WAVE_A_CONTENT_CATALOG_VERSION,
   WAVE_B_CONTENT_CATALOG_VERSION,
   WAVE_C_CONTENT_CATALOG_VERSION,
-  MELEE_BLESSING_CONTENT_CATALOG_VERSION,
   CURRENT_CONTENT_CATALOG_VERSION,
   contentCatalogFor,
 } from "../src/sim/contentCatalog.js";
@@ -126,13 +125,14 @@ section("catalog v3, typed hooks, and additive migration");
   check("Hushiron and Backtalk are rare; Faultlink is legendary (1C / 2R / 1L)",
     WEAPONS.hushiron.rarity === "rare" && WEAPONS.backtalk.rarity === "rare"
     && WEAPONS.faultlink.rarity === "legendary");
-  check("Wave C pickups remain additive (+4 guns)",
-    CURRENT_CONTENT_CATALOG_VERSION === MELEE_BLESSING_CONTENT_CATALOG_VERSION
+  check("Wave C is the current catalog and pickups remain additive (+4 guns)",
+    CURRENT_CONTENT_CATALOG_VERSION === WAVE_C_CONTENT_CATALOG_VERSION
     && PICKUP_WEAPONS.length === 49);
-  check("Wave C adds NO new blessings (guns-only): catalog 3 blessing pool equals catalog 2",
-    JSON.stringify(contentCatalogFor(WAVE_C_CONTENT_CATALOG_VERSION).normalBlessingIds)
-      === JSON.stringify(contentCatalogFor(WAVE_B_CONTENT_CATALOG_VERSION).normalBlessingIds)
-    && contentCatalogFor(WAVE_C_CONTENT_CATALOG_VERSION).normalBlessingIds.length === 40
+  check("Wave C adds the five melee-native blessings to the prior pool",
+    contentCatalogFor(WAVE_C_CONTENT_CATALOG_VERSION).normalBlessingIds.length === 45
+    && contentCatalogFor(WAVE_B_CONTENT_CATALOG_VERSION).normalBlessingIds.length === 40
+    && ["stagger_pulse", "blade_ward", "cleave_crit", "momentum_charge", "finisher"]
+      .every((id) => contentCatalogFor(WAVE_C_CONTENT_CATALOG_VERSION).normalBlessingIds.includes(id))
     && ITEMS.filter((i) => i.isPremiumOnly !== true && i.isPvpOnly !== true).length === 45);
   check("catalog 2 (Wave B) arrays are never mutated by Wave C",
     contentCatalogFor(WAVE_B_CONTENT_CATALOG_VERSION).pickupWeapons.length === 45
@@ -146,18 +146,16 @@ section("catalog v3, typed hooks, and additive migration");
     && replay.catalogVersion === WAVE_C_CONTENT_CATALOG_VERSION
     && drawWeaponFromBag(replay, new Set()) === drawWeaponFromBag(bag, new Set()));
 
-  check("genuinely fresh production worlds select the melee blessing catalog",
-    createWorld(0xCC01, 1).catalogVersion === MELEE_BLESSING_CONTENT_CATALOG_VERSION);
-  const snap = buildSnapshot(createWorld(0xCC02, 1, {
-    catalogVersion: WAVE_C_CONTENT_CATALOG_VERSION,
-  }), LOCAL_ID, 0, [], 0, false, { worldId: "catalog-v3" });
+  check("genuinely fresh production worlds select Wave C",
+    createWorld(0xCC01, 1).catalogVersion === WAVE_C_CONTENT_CATALOG_VERSION);
+  const snap = buildSnapshot(createWorld(0xCC02, 1), LOCAL_ID, 0, [], 0, false, { worldId: "catalog-v3" });
   check("catalog version 3 rides the authoritative snapshot", snap.cat === 3);
   const oldWire = JSON.parse(JSON.stringify(snap)) as ReturnType<typeof buildSnapshot> & { cat?: number };
   delete oldWire.cat;
   check("old snapshots missing catalog still decode legacy", validateSnap(oldWire).cat === 0);
   let isUnknownRejected = false;
-  try { validateSnap({ ...snap, cat: 5 }); } catch { isUnknownRejected = true; }
-  check("unsupported future catalog versions (5+) still fail closed", isUnknownRejected);
+  try { validateSnap({ ...snap, cat: 4 }); } catch { isUnknownRejected = true; }
+  check("unsupported future catalog versions (4+) still fail closed", isUnknownRejected);
   let isForged = false;
   try {
     jsonCodec.decodeClient(JSON.stringify({
@@ -339,8 +337,8 @@ section("PvP fail-closed policy + boss reward leads");
     WAVE_C_WEAPONS.every((id) => !fighter.ownedWeapons.includes(id))
     && WAVE_C_WEAPONS.every((id) => !isPvpWeaponSupported(id))
     && WAVE_C_WEAPONS.every((id) => pvpUnsupportedWeaponIds.includes(id)));
-  check("Wave C added no blessings, so nothing new enters the PvP draft pool",
-    !isPvpBlessingId("faultlink"));
+  check("melee-native blessings do not enter the curated PvP pool by default",
+    ["stagger_pulse", "cleave_crit", "momentum_charge"].every((id) => !isPvpBlessingId(id)));
 
   check("boss-clear reward leads route the Wave C table (Quorum -> Faultlink)",
     bossChestWeaponFor(0xB055, 45, "quorum") === "faultlink"

@@ -14,7 +14,7 @@ import { createMods, itemById, ITEMS, recomputeMods } from "../src/sim/items.js"
 import { WEAPONS } from "../src/sim/weapons.js";
 import {
   CURRENT_CONTENT_CATALOG_VERSION,
-  MELEE_BLESSING_CONTENT_CATALOG_VERSION,
+  WAVE_B_CONTENT_CATALOG_VERSION,
   WAVE_C_CONTENT_CATALOG_VERSION,
   contentCatalogFor,
 } from "../src/sim/contentCatalog.js";
@@ -127,11 +127,11 @@ function hostileHit(world: WorldState, player: PlayerSim, damage: number): void 
 section("catalog, copy, categories, and private draft");
 {
   const ids = ["stagger_pulse", "blade_ward", "cleave_crit", "momentum_charge", "finisher"];
-  const catalog = contentCatalogFor(MELEE_BLESSING_CONTENT_CATALOG_VERSION);
-  check("melee blessings are the current additive catalog",
-    CURRENT_CONTENT_CATALOG_VERSION === MELEE_BLESSING_CONTENT_CATALOG_VERSION
+  const catalog = contentCatalogFor(WAVE_C_CONTENT_CATALOG_VERSION);
+  check("melee blessings are in the current additive catalog",
+    CURRENT_CONTENT_CATALOG_VERSION === WAVE_C_CONTENT_CATALOG_VERSION
     && ids.every((id) => catalog.normalBlessingIds.includes(id))
-    && contentCatalogFor(WAVE_C_CONTENT_CATALOG_VERSION).normalBlessingIds.length === 40);
+    && contentCatalogFor(WAVE_B_CONTENT_CATALOG_VERSION).normalBlessingIds.length === 40);
   check("all five have locked rarities",
     itemById("stagger_pulse")?.rarity === "uncommon"
     && ids.slice(1).every((id) => itemById(id)?.rarity === "rare"));
@@ -203,8 +203,8 @@ section("Stagger Pulse");
     nearby.every((enemy, index) => enemy.hp === hpBefore[index]));
   check("pulse controls at most four targets", slowed.length === 4, `slowed=${slowed.length}`);
   check("rank 1 applies 0.72 move for 0.4s and 0.8s owner ICD",
-    slowed.every((enemy) => enemy.meleeSlowMult === 0.72 && enemy.meleeSlowT <= 0.4)
-    && player.staggerPulseIcdT > 0.78);
+    slowed.every((enemy) => enemy.meleeSlowMult === 0.72 && enemy.meleeSlowT === 0.4)
+    && player.staggerPulseIcdT === 0.8);
   check("one melee hit emits one coalesced pulse read",
     firstEvents.filter((event) => event.t === "blessingProc"
       && event.item === "stagger_pulse"
@@ -361,6 +361,10 @@ section("Crooked Chain eligibility");
     sweepEvents.some((event) => event.t === "blessingProc" && event.item === "stagger_pulse")
     && sweepEvents.some((event) => event.t === "blessingProc" && event.item === "blade_ward")
     && player.bladeWardAbsorb === 4);
+  check("Crook procs retain their full authored timers",
+    player.staggerPulseIcdT === 0.8
+    && player.bladeWardT === 1.5
+    && world.enemies.some((enemy) => enemy.meleeSlowT === 0.4));
   check("Crook sweep does not consume Momentum Charge", player.isMomentumArmed);
   check("Crook has no swing arc for Cleave Crit", player.meleeSwing === null);
 }

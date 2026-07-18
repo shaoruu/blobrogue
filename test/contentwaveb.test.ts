@@ -32,7 +32,6 @@ import {
   WAVE_A_CONTENT_CATALOG_VERSION,
   WAVE_B_CONTENT_CATALOG_VERSION,
   WAVE_C_CONTENT_CATALOG_VERSION,
-  MELEE_BLESSING_CONTENT_CATALOG_VERSION,
   CURRENT_CONTENT_CATALOG_VERSION,
   contentCatalogFor,
 } from "../src/sim/contentCatalog.js";
@@ -131,7 +130,7 @@ section("catalog v2, typed hooks, and additive migration");
       item !== undefined && item.isPremiumOnly !== true && item.descs.length === 3);
   }
   check("Wave B remains a valid additive catalog",
-    CURRENT_CONTENT_CATALOG_VERSION === MELEE_BLESSING_CONTENT_CATALOG_VERSION
+    CURRENT_CONTENT_CATALOG_VERSION === WAVE_C_CONTENT_CATALOG_VERSION
     && contentCatalogFor(WAVE_B_CONTENT_CATALOG_VERSION).pickupWeapons.length === 45
     && contentCatalogFor(WAVE_B_CONTENT_CATALOG_VERSION).normalBlessingIds.length === 40);
   check("catalog 1 (Wave A) arrays are never mutated by Wave B",
@@ -146,8 +145,8 @@ section("catalog v2, typed hooks, and additive migration");
     && replay.catalogVersion === WAVE_B_CONTENT_CATALOG_VERSION
     && drawWeaponFromBag(replay, new Set()) === drawWeaponFromBag(bag, new Set()));
 
-  check("genuinely fresh production worlds select the melee blessing catalog",
-    createWorld(0xCB01, 1).catalogVersion === MELEE_BLESSING_CONTENT_CATALOG_VERSION);
+  check("genuinely fresh production worlds select Wave C without a browser field",
+    createWorld(0xCB01, 1).catalogVersion === WAVE_C_CONTENT_CATALOG_VERSION);
   const snap = buildSnapshot(createWorld(0xCB02, 1, {
     catalogVersion: WAVE_B_CONTENT_CATALOG_VERSION,
   }), LOCAL_ID, 0, [], 0, false, { worldId: "catalog-v2" });
@@ -156,7 +155,7 @@ section("catalog v2, typed hooks, and additive migration");
   delete oldWire.cat;
   check("old snapshots missing catalog still decode legacy", validateSnap(oldWire).cat === 0);
   let isUnknownRejected = false;
-  try { validateSnap({ ...snap, cat: 5 }); } catch { isUnknownRejected = true; }
+  try { validateSnap({ ...snap, cat: 4 }); } catch { isUnknownRejected = true; }
   check("unsupported future catalog versions still fail closed", isUnknownRejected);
   let isForged = false;
   try {
