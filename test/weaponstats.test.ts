@@ -188,8 +188,9 @@ function cardTests(): void {
     && card("longsword").impact.band === "CRUSHING");
   // CADENCE: SLOW <1.8/s, STEADY <5, FAST <10, RAPID >=10
   check("cadence SLOW under 1.8/s", card("railgun").cadence.band === "SLOW" && card("sawnoff").cadence.band === "SLOW");
-  check("cadence STEADY under 5/s", card("shotgun").cadence.band === "STEADY" && card("sword").cadence.band === "STEADY");
-  check("cadence FAST under 10/s", card("pistol").cadence.band === "FAST" && card("nailer").cadence.band === "FAST");
+  check("cadence STEADY under 5/s", card("shotgun").cadence.band === "STEADY" && card("longsword").cadence.band === "STEADY");
+  check("cadence FAST under 10/s", card("pistol").cadence.band === "FAST" && card("nailer").cadence.band === "FAST"
+    && card("sword").cadence.band === "FAST");
   check("cadence RAPID at 10+/s", card("smg").cadence.band === "RAPID" && card("beam").cadence.band === "RAPID");
   // REACH: CLOSE <180, MID <520, LONG <950, EXTREME >=950 — internal px, one scale for all
   check("reach CLOSE under 180", card("shotgun").reach.band === "CLOSE" && card("sawnoff").reach.band === "CLOSE");
