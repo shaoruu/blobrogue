@@ -88,7 +88,7 @@ function snapOf(w: WorldState, selfPid: string): Extract<ServerMsg, { t: "snap" 
 section("hearth geometry + kill-switch invariants");
 {
   const w = pvpWorld(1, ["p1", "p2"]);
-  check("PROTOCOL_VERSION is 48 (ring weather director)", PROTOCOL_VERSION === 48);
+  check("PROTOCOL_VERSION is 49 (ring weather director)", PROTOCOL_VERSION === 49);
   check("the public PVP kill-switch stays OFF (C4)", PVP_PUBLIC_ENABLED === false);
   // C5: the center tile (9,9) is walkable floor — never a wall/pit, so no body-block on the hearth.
   const c = hearthCenter(w);

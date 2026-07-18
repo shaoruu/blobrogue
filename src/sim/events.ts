@@ -126,6 +126,12 @@ export type SimEvent =
   // player's own authoritative state (reconciled via SelfWire), so the event carries the AoE
   // (x,y,radius) + the window lengths for the shared cast FX rather than a player-id array.
   | { t: "ultPhase"; pid: PlayerId; x: number; y: number; radius: number; invulnTicks: number; speedTicks: number }
+  // PVP WAVE 3 ARENA ULTS: the ONE cast event for all four arena ults. `kind` selects the ult
+  // (salvo/triage/shove/slip); `aim` is the committed cast direction; `tellTicks` is the >=0.40s
+  // tell before the effect lands (the client delays the effect VFX by it). The effects themselves
+  // (salvo hits, triage heal, shove KB, slip blink/i-frame) resolve server-side + ride
+  // playerHurt/state; this event is the telegraph + cast juice. Arena-only (behind isPvp).
+  | { t: "ultArena"; pid: PlayerId; kind: string; x: number; y: number; aim: number; tellTicks: number }
   // enemies / boss
   | { t: "spitMuzzle"; x: number; y: number }
   | { t: "lungeTrail"; x: number; y: number }

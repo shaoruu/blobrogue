@@ -94,7 +94,7 @@ function snapOf(w: WorldState, selfPid: string): Extract<ServerMsg, { t: "snap" 
 // ---------------------------------------------------------------------------------------------
 section("kill-switch + version invariants");
 {
-  check("PROTOCOL_VERSION is 48 (ring weather after the contested hearth)", PROTOCOL_VERSION === 48);
+  check("PROTOCOL_VERSION is 49 (ring weather after the contested hearth)", PROTOCOL_VERSION === 49);
   check("the public PVP kill-switch stays OFF (H4)", PVP_PUBLIC_ENABLED === false);
   check("the rotation ships tar_bloom first (B2)", PVP_WEATHER_ORDER[0] === "tar");
   check("one-at-a-time rotation is exactly the three kinds", PVP_WEATHER_ORDER.join(",") === "tar,gust,spark");
@@ -366,7 +366,7 @@ section("determinism: same seed -> identical weather placement + direction");
 }
 
 // ---------------------------------------------------------------------------------------------
-section("wire: MatchWire director projection + tar/spark hzds round-trip (v48)");
+section("wire: MatchWire director projection + tar/spark hzds round-trip (v49)");
 {
   const w = pvpWorld(606, ["p1", "p2"]);
   advanceToLive(w);

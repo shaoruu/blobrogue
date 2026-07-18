@@ -30,6 +30,7 @@ import { LOCAL_ID } from "../sim/input.js";
 import type { PlayerId } from "../sim/input.js";
 import type { KitId } from "../sim/kits.js";
 import { isKitId } from "../sim/kits.js";
+import type { ArenaUltKit } from "../sim/pvp.js";
 import type { MatchPhase, MatchState, PvpDraftTrigger } from "../sim/pvp.js";
 import { projectPlayer, applyPlayerSnapshot, modsFromWire } from "./playerSnapshot.js";
 import type { AuthoritativePlayerSnapshot } from "./playerSnapshot.js";
@@ -397,7 +398,16 @@ export const FIXED_DT = 1 / TICK_HZ; // 50ms authoritative step
 //   cinder_gust wind is director-only (no hazard entity). All sit at idle defaults ("" / "idle" /
 //   0 / 0) in co-op and on the public path, and the whole director is behind isPvp. The bump lets
 //   a v47 client cleanly reject the widened hazard closed set + the new director fields.
-export const PROTOCOL_VERSION = 48;
+// v49 (PVP Wave 3 — Arena ults on frag DM): SelfWire grows `auk` (the CLAIMED arena ult kit —
+//   ult skin only; the claim rides the input frame's new `ak` field, and the server accepts it
+//   only outside the live phase). ONE new reliable event `ultArena` (kind = salvo/triage/shove/
+//   slip) carries each arena ult's cast moment (position, aim, tell ticks) for the tell + VFX.
+//   The meter itself reuses the existing SelfWire.uc/ura (charge + cast lockout) and the input
+//   `ult` bit (F still casts). The co-op ults (Overdrive/Sanctuary/Aegis/Phase) stay HARD-banned
+//   in the arena (PVP.ultsEnabled false; they never select behind isPvp). `auk` is "gunner" +
+//   byte-neutral in co-op; `ak` defaults "" (no claim). The bump lets a v48 client cleanly reject
+//   the new self field + input field + the widened event closed set.
+export const PROTOCOL_VERSION = 49;
 
 
 // How long the server reserves a disconnected player's body (their seat) before the
@@ -500,6 +510,9 @@ export interface SelfWire {
   // pip = floor(hf / favorTickTicks)); `he` remaining ember_edge window (0 = no charge). 0 in co-op.
   hf: number;
   he: number;
+  // ARENA ULTS (v49): the CLAIMED arena ult kit (ult skin only). Server-owned + reconciled so the
+  // HUD shows which arena ult is claimed; "gunner" default + byte-neutral in co-op.
+  auk: ArenaUltKit;
 }
 
 // Another player as seen by this client (rendered via interpolation, never predicted).
@@ -744,7 +757,7 @@ export type ClientMsg =
   // `ackSnap` (v24): the highest snapshot sseq this client has applied + retained as its delta
   // baseline. The server deltas the next snapshot against exactly that baseline (or sends a
   // full keyframe if it can no longer honor it), so a missed baseline can never be applied.
-  | { t: "input"; seq: number; mx: number; my: number; aim: number; fire: boolean; dash: boolean; act: boolean; ult: boolean; pulse: boolean; pet: boolean; ackEv: number; ackSnap: number }
+  | { t: "input"; seq: number; mx: number; my: number; aim: number; fire: boolean; dash: boolean; act: boolean; ult: boolean; pulse: boolean; pet: boolean; ak: string; ackEv: number; ackSnap: number }
   | { t: "pong"; id: number }
   // Spectate intent: which teammate a DOWNED player's camera follows. Pure view preference —
   // the server uses it only to center that client's interest view (and positional events)
@@ -958,6 +971,13 @@ function kitOf(o: Record<string, unknown>, k: string): KitId {
   if (!isKitId(v)) throw new ProtocolError(`bad ${k}`);
   return v;
 }
+// An arena ult kit (v49): a REAL kit only (never the neutral "none"), so the claimed ult skin is
+// always one of the four. Distinct from kitOf, which admits "none" for the co-op kit slot.
+function arenaUltKitOf(o: Record<string, unknown>, k: string): ArenaUltKit {
+  const v = o[k];
+  if (v === "gunner" || v === "mender" || v === "bulwark" || v === "phantom") return v;
+  throw new ProtocolError(`bad ${k}`);
+}
 const PROP_KINDS: Record<PropKind, true> = {
   crate: true, pot: true, barrel: true, barrel_explosive: true, brazier: true,
   root_wall: true, silt_mound: true, clinker_brick: true, // worker constructions (ecology gate)
@@ -1100,6 +1120,9 @@ const EVENT_SPECS: Record<SimEvent["t"], EventSpec> = {
   ultSanctuary: { scope: "pos", fields: { pid: "str", x: "num", y: "num", radius: "num", lifetimeTicks: "num" } },
   ultAegis: { scope: "pos", fields: { pid: "str", x: "num", y: "num", radius: "num", hpBudget: "num", lifetimeTicks: "num" } },
   ultPhase: { scope: "pos", fields: { pid: "str", x: "num", y: "num", radius: "num", invulnTicks: "num", speedTicks: "num" } },
+  // ARENA ULTS (v49): one positional cast event for all four; `kind` selects the ult. The effects
+  // resolve server-side + ride state (playerHurt/hp/pos); this is the tell + cast juice.
+  ultArena: { scope: "pos", fields: { pid: "str", kind: "str", x: "num", y: "num", aim: "num", tellTicks: "num" } },
   statusApplied: { scope: "pos", fields: { eid: "num", x: "num", y: "num", kind: "str" } },
   frozeSolid: { scope: "pos", fields: { eid: "num", x: "num", y: "num" } },
   freezeBroke: { scope: "pos", fields: { eid: "num", x: "num", y: "num" } },
@@ -1222,7 +1245,7 @@ function decodeClientMsg(raw: string): ClientMsg {
     case "input": {
       // seq + ackEv: non-negative safe integers. NO dt — inputs are intent samples; the server
       // tick owns simulation time, and exactKeys rejects a smuggled dt outright.
-      exactKeys(o, ["t", "seq", "mx", "my", "aim", "fire", "dash", "act", "ult", "pulse", "pet", "ackEv", "ackSnap"]);
+      exactKeys(o, ["t", "seq", "mx", "my", "aim", "fire", "dash", "act", "ult", "pulse", "pet", "ak", "ackEv", "ackSnap"]);
       return {
         t: "input",
         seq: intOf(o, "seq", 0, Number.MAX_SAFE_INTEGER),
@@ -1235,6 +1258,9 @@ function decodeClientMsg(raw: string): ClientMsg {
         ult: boolOf(o, "ult"),
         pulse: boolOf(o, "pulse"),
         pet: boolOf(o, "pet"),
+        // The arena ult kit CLAIM (v49): "" = no claim this frame; otherwise a real kit id the
+        // server accepts only outside the live phase. Bounded like every short id on the wire.
+        ak: o.ak === "" ? "" : shortStr(o, "ak", 16),
         ackEv: intOf(o, "ackEv", 0, Number.MAX_SAFE_INTEGER),
         ackSnap: intOf(o, "ackSnap", 0, Number.MAX_SAFE_INTEGER),
       };
@@ -1393,6 +1419,7 @@ function validateSelfWire(v: unknown): SelfWire {
     pnl: num(o, "pnl", 0, 1e4),
     hf: intOf(o, "hf", 0, 1e6),
     he: intOf(o, "he", 0, 1e6),
+    auk: arenaUltKitOf(o, "auk"),
   };
 }
 
@@ -1899,6 +1926,7 @@ export function selfWireFromSnapshot(s: AuthoritativePlayerSnapshot): SelfWire {
     pnl: s.petNullT,
     hf: s.hearthFavorT,
     he: s.hearthEmberT,
+    auk: s.arenaUltKit,
   };
 }
 
@@ -1936,6 +1964,7 @@ export function snapshotFromSelfWire(w: SelfWire): AuthoritativePlayerSnapshot {
     petNullT: w.pnl,
     hearthFavorT: w.hf,
     hearthEmberT: w.he,
+    arenaUltKit: w.auk,
   };
 }
 

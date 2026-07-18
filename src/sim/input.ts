@@ -30,6 +30,10 @@ export interface InputCmd {
   // so a live client always sends this false; it survives only as an optional DEBUG force-cast the
   // authoritative sim honors under the same rails as auto-cast. Inert without an ability pet.
   petAbility?: boolean;
+  // PVP WAVE 3 arena ult kit CLAIM (Q-menu). "" / absent = no claim this frame; otherwise a real
+  // kit id. The authoritative sim accepts it only in the pvp arena, outside the live phase (the
+  // claim is an ult SKIN — never a co-op kit). Inert in co-op.
+  arenaUltKit?: string;
 }
 
 export const IDLE_INPUT: InputCmd = { seq: 0, moveX: 0, moveY: 0, aim: 0, firing: false, dash: false };

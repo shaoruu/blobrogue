@@ -84,7 +84,7 @@ function clientRoundTripTests(): void {
   section("client messages round-trip losslessly through the strict decoder");
   const msgs: ClientMsg[] = [
     { t: "join", ticket: "v1.abc.def", protocol: PROTOCOL_VERSION },
-    { t: "input", seq: 41, mx: -1, my: 0.5, aim: 2.25, fire: true, dash: false, act: true, ult: true, pulse: true, pet: true, ackEv: 17, ackSnap: 12 },
+    { t: "input", seq: 41, mx: -1, my: 0.5, aim: 2.25, fire: true, dash: false, act: true, ult: true, pulse: true, pet: true, ak: "gunner", ackEv: 17, ackSnap: 12 },
     { t: "pong", id: 3 },
     { t: "equip", weapon: "shotgun", cseq: 5 },
     { t: "reorder", from: 0, to: 3, cseq: 6 },
@@ -291,7 +291,7 @@ function serverRoundTripTests(): void {
 // who is actually there (the Sev-0 readout).
 function worldBindingWireTests(): void {
   section("v4: authoritative world id + roster are required, strict, and round-trip");
-  check("protocol version covers the PVP Wave 2 ring weather (v48)", PROTOCOL_VERSION === 48, `v=${PROTOCOL_VERSION}`);
+  check("protocol version covers the PVP Wave 2 ring weather (v49)", PROTOCOL_VERSION === 49, `v=${PROTOCOL_VERSION}`);
   check("room code maps to its world id", worldIdForRoomCode(" abcd ") === "room:ABCD");
   check("room world ids pass the shared charset gate", isValidWorldId(worldIdForRoomCode("ZZZZ")) && isValidWorldId("arena-1"));
   check("junk world ids fail the shared charset gate", !isValidWorldId("room:../../etc") && !isValidWorldId(""));

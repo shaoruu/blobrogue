@@ -106,6 +106,10 @@ import {
   pvpWeatherStartCursor, pvpWeatherGustCardinal, pvpWeatherTarSpots, pvpWeatherSparkCandidates,
   KIT_COUNTERS, PVP_COUNTER_BRACE, PVP_COUNTER_SIGHT, PVP_COUNTER_RIP,
   pvpBraceRechargeTicks, pvpSightPulseIcdTicks, pvpRipIcdTicks,
+  ARENA_ULT, ARENA_SALVO, ARENA_TRIAGE, ARENA_SHOVE, ARENA_SLIP,
+  arenaUltKindForKit, arenaUltPassiveChargePerTick, arenaUltChargeFromDamage,
+  clampArenaUltCharge, canCastArenaUlt, arenaUltCastSpacingTicks, arenaUltTellTicks,
+  arenaSalvoShotSpacingSec,
 } from "./pvp.js";
 import type {
   WorldMode,
@@ -114,6 +118,8 @@ import type {
   PvpRespawnSelectionMode,
   PvpRespawnTelemetry,
   PvpDraftTrigger,
+  ArenaUltKit,
+  ArenaUltKind,
 } from "./pvp.js";
 import { lowHpFrac, liveDamageMult, liveFireRateMult, gunnerDamageMult, gunnerFireRateMult, expectedBossDps } from "./weaponStats.js";
 import type { PlayerMods, ItemDef } from "./items.js";
@@ -581,6 +587,46 @@ export interface PlayerSim {
   pvpSightIcdT: number;
   // rip_post: ticks until the post is armed again (0 = armed; the next reload/dash rips it).
   pvpRipIcdT: number;
+  // ---- PVP WAVE 3: ARENA ULTS (PROTOCOL 49) ----
+  // The CLAIMED arena ult kit (ult skin ONLY — never applies a co-op stat lean / passive / co-op
+  // ult; kitId stays "none" in the arena so all co-op kit logic is inert). Server-owned + wired
+  // (SelfWire.auk) so the HUD shows the claimed ult; defaults gunner (arena_salvo). Meaningless in
+  // co-op (never read behind isPvp), where it stays at its "gunner" default and is byte-neutral.
+  arenaUltKit: ArenaUltKit;
+  // The arena ult's per-cast TRANSIENT state (tell / active windows). Server-owned transient
+  // combat state: never wired (all sub-1s, rebuilt from live inputs after a resume), cleared on
+  // death (resetPvpLifeTransient), and inert in co-op / outside a live match.
+  arenaUlt: ArenaUltState;
+}
+
+// PVP WAVE 3 arena ult per-cast transient windows (all seconds unless noted). The meter itself
+// reuses ultCharge/ultReadyAtTick; this holds only the short-lived tell/active state.
+export interface ArenaUltState {
+  // Tell countdown; > 0 telegraphs the pending `kind` before it lands (the >= 0.40s tell).
+  tellT: number;
+  // The ult telegraphing / active this cast (null = idle).
+  kind: ArenaUltKind | null;
+  // Aim (rad) captured at cast: the salvo aim-lock direction, the shove frontal facing, the blink.
+  aim: number;
+  // arena_salvo: remaining volley shots and the countdown to the next one.
+  salvoShotsLeft: number;
+  salvoShotT: number;
+  // arena_salvo GLASS: caster takes +25% incoming while > 0 (whole tell + active window).
+  glassT: number;
+  // arena_bulwark_shove: remaining frontal-wall life (blocks one foe shot then shatters).
+  shoveT: number;
+  shoveAim: number;
+  // arena_slip: the visible end-lag recovery (NO i-frame — the i-frame rides ultInvuln).
+  endlagT: number;
+  // arena_triage: brief tar/move-slow immunity (positional slows are re-derived every tick).
+  slowImmuneT: number;
+}
+function freshArenaUltState(): ArenaUltState {
+  return {
+    tellT: 0, kind: null, aim: 0,
+    salvoShotsLeft: 0, salvoShotT: 0, glassT: 0,
+    shoveT: 0, shoveAim: 0, endlagT: 0, slowImmuneT: 0,
+  };
 }
 
 // Extra AI target points fed in by the client from co-op presence (Stage A keeps co-op on
@@ -881,6 +927,8 @@ export function createPlayer(id: PlayerId, x: number, y: number): PlayerSim {
     pvpBraceRegenT: 0,
     pvpSightIcdT: 0,
     pvpRipIcdT: 0,
+    arenaUltKit: "gunner",
+    arenaUlt: freshArenaUltState(),
   };
 }
 
@@ -2103,6 +2151,10 @@ function isEncounterLive(w: WorldState): boolean {
 // sets the lockout (spec §3). A refused request (not charged / on cooldown) simply does nothing.
 function resolveUlt(w: WorldState, p: PlayerSim, ev: SimEvent[]): void {
   p.isUltRequested = false;
+  // HARD-ASSERT (PVP WAVE 3 U1): the co-op ults (Overdrive/Sanctuary/Aegis/Phase) NEVER fire in
+  // the arena. Arena casts route through resolveArenaUltRequest (kitId stays "none" there anyway,
+  // so the switch below is already a no-op); this guard makes the invariant explicit + testable.
+  if (isPvp(w)) return;
   if (!isRealKit(p.kitId)) return;
   if (!canCastUlt(p.ultCharge, w.tick, p.ultReadyAtTick)) return;
   p.ultCharge = 0;
@@ -4771,7 +4823,10 @@ function updatePlayer(w: WorldState, p: PlayerSim, input: InputCmd, dt: number, 
   // 1 (a no-op) whenever no warmth-drain giant is live, so every other floor is byte-identical.
   const isMoveIntentActive = input.moveX * input.moveX + input.moveY * input.moveY > 0.01;
   const warmthMult = warmthDrainMult(w, p, isMoveIntentActive, dt, ev);
-  const speed = PLAYER.moveSpeed * p.mods.moveSpeedMult * hazardMoveSlowMult(w, p.x, p.y) * chargeSlow * phaseSurge * warmthMult;
+  // PVP WAVE 3 arena_triage cleanse: a brief slow-immunity window drops the positional tar/move
+  // slow (which is re-derived every tick, so the cleanse is an immunity window, never a lasting buff).
+  const slowMult = p.arenaUlt.slowImmuneT > 0 ? 1 : hazardMoveSlowMult(w, p.x, p.y);
+  const speed = PLAYER.moveSpeed * p.mods.moveSpeedMult * slowMult * chargeSlow * phaseSurge * warmthMult;
   // Snap accumulated float dust to zero so a cooldown that is an exact multiple of the
   // tick (Second Wind Lv3: 0.35s at 60Hz) recovers on its true tick, not one late.
   p.dashCd = Math.max(0, p.dashCd - dt);
@@ -16049,6 +16104,10 @@ interface PvpHitContext {
   // spark_mine's micro shove (PVP WAVE 2 · Pillar B). Undefined everywhere else, so weapon KB is
   // unchanged. Still clamped by kbMaxPerHit and nulled while protected, like every pvp knockback.
   kbDistance?: number;
+  // PVP WAVE 3: a FLAT arena-ult hit whose `amount` is already the final PVP damage (e.g. the
+  // arena_salvo per-shot 10). It skips the draft output-scale (arena ults are flat, never
+  // draft-multiplied), but still honors the glass window + the per-tick anti-one-shot cap.
+  isFlat?: boolean;
 }
 
 // The ONE player-damage funnel. `by` is the attacking player for kill attribution (bullet.owner
@@ -16358,7 +16417,9 @@ function damagePlayerPvp(
   if (p.respawnT > 0 || p.hp <= 0) return; // already dead, awaiting respawn
   if (isProtected(p)) return;
   if (amount <= 0) return;
-  if (pvpHit !== null) amount *= pvpDraftOutputScale(w, by, pvpHit.weapon);
+  // Arena ults are FLAT (their `amount` is already the final PVP damage); every other pvp hit is
+  // scaled by the draft output cap. isFlat skips the cap but still honors glass + the per-tick cap.
+  if (pvpHit !== null && pvpHit.isFlat !== true) amount *= pvpDraftOutputScale(w, by, pvpHit.weapon);
   // Contested-hearth ember_edge: a live charge on the ATTACKER adds a flat chip to this one gun
   // hit — post output-scale (a flat +8, never multiplied by drafts) and pre-cap (the anti-one-shot
   // clamp still bounds it). Only the direct gun-hit site sets isEmber, so splash/chain/melee are
@@ -16366,6 +16427,9 @@ function damagePlayerPvp(
   const attacker = by !== null && by !== p.id ? w.players.get(by) : undefined;
   const isEmberHit = pvpHit?.isEmber === true && attacker !== undefined && attacker.hearthEmberT > 0;
   if (isEmberHit) amount += HEARTH.emberBonusDamage;
+  // PVP WAVE 3 arena_salvo GLASS: the caster runs +25% incoming for the whole tell+active window.
+  // Read on the VICTIM (the casting gunner is more fragile while volleying), before the per-tick cap.
+  if (p.arenaUlt.glassT > 0) amount *= ARENA_SALVO.glassIncomingMult;
   // Per-victim, per-tick cumulative clamp: no single tick (one trigger / pellet stack / crit)
   // may remove more than perHitCap HP. This is the hard anti-one-shot backstop that holds even
   // after per-weapon tuning.
@@ -16392,6 +16456,12 @@ function damagePlayerPvp(
     );
   }
   p.hp -= amount;
+  // PVP WAVE 3 arena ult charge: the ATTACKER banks +0.35 meter points per 1 PVP damage DEALT
+  // (fixed-point hundredths, clamped to the arena meter max). The neutral kitId is untouched — this
+  // is a separate arena meter reusing the ultCharge field, never the co-op accrual path.
+  if (attacker !== undefined) {
+    attacker.ultCharge = clampArenaUltCharge(attacker.ultCharge + arenaUltChargeFromDamage(amount));
+  }
   if (by !== null && by !== p.id) {
     w.pvpTelemetryEvents.push({
       t: "pvpDamage",
@@ -16673,6 +16743,11 @@ function resetPvpLifeTransient(p: PlayerSim): void {
   // Draft kit counters: no charge or armed post carries across a life. A respawned body re-earns
   // its brace charge (0), and its sight/rip come back ARMED (icd 0) — an equal-footing restart.
   p.pvpBraceCharge = 0; p.pvpBraceRegenT = 0; p.pvpSightIcdT = 0; p.pvpRipIcdT = 0;
+  // PVP WAVE 3 arena ult: DEATH dumps the meter to 0 and clears the cast lockout + every in-flight
+  // tell/active window (Quill FINAL — "Death: charge -> 0"). The CLAIMED kit (arenaUltKit) persists
+  // across lives (it is the loadout choice, not a per-life transient).
+  p.ultCharge = 0; p.ultReadyAtTick = 0;
+  p.arenaUlt = freshArenaUltState();
 }
 
 // Wipe every PLAYER-OWNED transient object from the arena — in-flight bullets and every deployed
@@ -17267,6 +17342,204 @@ function stepPvpKits(w: WorldState, ev: SimEvent[]): void {
   }
 }
 
+// ---- PVP WAVE 3: ARENA ULTS (PROTOCOL 49) -------------------------------------------------
+// The arena-only ult loop: a shared charge/cast meter (reusing ultCharge/ultReadyAtTick) drives
+// ONE of four arena ult ids off the CLAIMED kit skin. Co-op ults never fire here (kitId stays
+// "none" + resolveUlt's isPvp guard). Runs only during a LIVE match, behind isPvp — co-op is inert.
+
+// A cast is in flight while telegraphing (tell), mid-volley (salvo), recovering (slip end-lag), or
+// holding a frontal wall (shove). One cast at a time.
+function isArenaUltBusy(p: PlayerSim): boolean {
+  const a = p.arenaUlt;
+  return a.tellT > 0 || a.salvoShotsLeft > 0 || a.endlagT > 0 || a.shoveT > 0;
+}
+
+function stepArenaUlts(w: WorldState, dt: number, ev: SimEvent[]): void {
+  const m = w.match;
+  if (m === null || m.phase !== "live") return;
+  for (const id of [...w.players.keys()].sort()) {
+    const p = w.players.get(id);
+    if (p === undefined) continue;
+    stepArenaUlt(w, p, dt, ev);
+  }
+}
+
+function stepArenaUlt(w: WorldState, p: PlayerSim, dt: number, ev: SimEvent[]): void {
+  // Dead / respawning / absent bodies never accrue, telegraph, or cast (their windows were already
+  // dumped by resetPvpLifeTransient on death). A live grace pause is handled by the phase gate above.
+  if (p.isDown || p.isAbsent || p.hp <= 0 || p.respawnT > 0) return;
+  const a = p.arenaUlt;
+  // Active-window decay (seconds; deterministic fixed step).
+  if (a.glassT > 0) a.glassT = a.glassT > dt ? a.glassT - dt : 0;
+  if (a.slowImmuneT > 0) a.slowImmuneT = a.slowImmuneT > dt ? a.slowImmuneT - dt : 0;
+  if (a.endlagT > 0) a.endlagT = a.endlagT > dt ? a.endlagT - dt : 0;
+  // arena_bulwark_shove: the frontal wall lives for its window; its BLOCK scan runs earlier in the
+  // tick (stepArenaShoveWalls, before resolvePvpHits) so it eats a foe shot before it can land. Here
+  // we only age the wall — silent expiry when it runs out without blocking.
+  if (a.shoveT > 0) a.shoveT = a.shoveT > dt ? a.shoveT - dt : 0;
+  // Tell -> effect: the >= 0.40s telegraph elapses, then the ult lands (U3: tell honored). Fire on
+  // CROSSING zero (never an exact-equality float compare) so the tell length is robust to fp dust.
+  if (a.tellT > 0) {
+    a.tellT -= dt;
+    if (a.tellT <= 0) {
+      a.tellT = 0;
+      if (a.kind !== null) fireArenaUlt(w, p, ev);
+    }
+  }
+  // arena_salvo cadence: 5 shots evenly over the volley window (the first fires the tick the tell
+  // ends). `+= spacing` carries the sub-tick remainder so the cadence never drifts.
+  if (a.salvoShotsLeft > 0) {
+    a.salvoShotT -= dt;
+    if (a.salvoShotT <= 0) {
+      fireArenaSalvoShot(w, p, ev);
+      a.salvoShotsLeft -= 1;
+      a.salvoShotT += arenaSalvoShotSpacingSec();
+    }
+  }
+  // Passive time charge (+1.0 pts/s), clamped to the arena meter max. HOLD/BREAK sources are idle
+  // on frag DM (no Brazier objective) — the wire path exists for siege, but never ticks here.
+  p.ultCharge = clampArenaUltCharge(p.ultCharge + arenaUltPassiveChargePerTick());
+  // A fresh request opens a cast when the meter is full, the 8s spacing has elapsed, and no cast
+  // is already in flight. The client only REQUESTS (input.ult); the server validates + resolves.
+  if (p.isUltRequested) resolveArenaUltRequest(w, p, ev);
+}
+
+function resolveArenaUltRequest(w: WorldState, p: PlayerSim, ev: SimEvent[]): void {
+  const a = p.arenaUlt;
+  if (isArenaUltBusy(p)) return;
+  if (!canCastArenaUlt(p.ultCharge, w.tick, p.ultReadyAtTick)) return;
+  const kind = arenaUltKindForKit(p.arenaUltKit);
+  p.ultCharge = 0;
+  p.ultReadyAtTick = w.tick + arenaUltCastSpacingTicks(); // the 8s min cast spacing (U3)
+  a.kind = kind;
+  a.aim = p.aimAngle;
+  a.tellT = ARENA_ULT.tellSec;
+  // arena_salvo GLASS opens with the tell and runs through the whole active window (0.95s total).
+  if (kind === "salvo") a.glassT = ARENA_SALVO.glassSec;
+  ev.push({ t: "ultArena", pid: p.id, kind, x: p.x, y: p.y, aim: p.aimAngle, tellTicks: arenaUltTellTicks() });
+}
+
+// The tell elapsed — apply the claimed ult's effect (U4: each matches the Quill finals).
+function fireArenaUlt(w: WorldState, p: PlayerSim, ev: SimEvent[]): void {
+  const a = p.arenaUlt;
+  switch (a.kind) {
+    case "salvo":
+      // 5 shots over 0.55s; the cadence block fires the first this same tick (salvoShotT 0).
+      a.salvoShotsLeft = ARENA_SALVO.shots;
+      a.salvoShotT = 0;
+      break;
+    case "triage":
+      // +18 HP instant self, never past maxHp; cleanse the tar/move slow (brief slow-immunity).
+      // Never grounds a HoT, heals an ally, or converts to shield.
+      p.hp = Math.min(p.maxHp, p.hp + ARENA_TRIAGE.healSelf);
+      a.slowImmuneT = ARENA_TRIAGE.cleanseSec;
+      ev.push({ t: "heal", pid: p.id, x: p.x, y: p.y });
+      a.kind = null;
+      break;
+    case "shove":
+      // Raise the 0.75s frontal wall (blocks one foe shot then shatters + shoves).
+      a.shoveT = ARENA_SHOVE.wallLifeSec;
+      a.shoveAim = a.aim;
+      break;
+    case "slip": {
+      // ~90px blink along aim with a 0.40s i-frame (rides ultInvuln — the damage funnel honors it),
+      // then a visible 0.35s end-lag with NO i-frame (offense locked; the counter-window).
+      const dx = Math.cos(a.aim) * ARENA_SLIP.blinkPx;
+      const dy = Math.sin(a.aim) * ARENA_SLIP.blinkPx;
+      [p.x, p.y] = moveCircle(w, p.x, p.y, p.pr, dx, 0);
+      [p.x, p.y] = moveCircle(w, p.x, p.y, p.pr, 0, dy);
+      p.ultInvuln = Math.max(p.ultInvuln, ARENA_SLIP.iframeSec);
+      a.endlagT = ARENA_SLIP.endlagSec;
+      applyActiveWeaponFireLock(p, ARENA_SLIP.endlagSec);
+      a.kind = null;
+      break;
+    }
+    case null:
+      break;
+  }
+}
+
+// One arena_salvo hitscan shot along the locked aim: a flat 10 PVP dmg to up to (1 + bonusPierce)
+// nearest foes on the ray (pierce is volley-only). Flat (skips draft scale), still capped + glassed.
+function fireArenaSalvoShot(w: WorldState, p: PlayerSim, ev: SimEvent[]): void {
+  const a = p.arenaUlt;
+  const dirX = Math.cos(a.aim), dirY = Math.sin(a.aim);
+  const maxTargets = 1 + ARENA_SALVO.bonusPierce;
+  const hits: { v: PlayerSim; forward: number }[] = [];
+  for (const vid of [...w.players.keys()].sort()) {
+    const v = w.players.get(vid);
+    if (v === undefined || !canDamagePlayer(w, p.id, v)) continue;
+    const rx = v.x - p.x, ry = v.y - p.y;
+    const forward = rx * dirX + ry * dirY;
+    if (forward <= 0 || forward > ARENA_SALVO.rangePx) continue;
+    const perp = Math.abs(rx * dirY - ry * dirX);
+    if (perp > v.pr + ARENA_SALVO.shotRadiusPx) continue;
+    hits.push({ v, forward });
+  }
+  hits.sort((h1, h2) => h1.forward - h2.forward || (h1.v.id < h2.v.id ? -1 : h1.v.id > h2.v.id ? 1 : 0));
+  for (let i = 0; i < hits.length && i < maxTargets; i++) {
+    damagePlayer(w, hits[i].v, ARENA_SALVO.perShotDamage, ev, p.id, {
+      weapon: p.weapon, dirX, dirY, isFlat: true,
+    });
+  }
+}
+
+// The frontal-wall block pass: runs BEFORE resolvePvpHits (right after updateBullets) so an active
+// wall eats a foe shot before it can damage its owner. Live match, behind isPvp — co-op is inert.
+function stepArenaShoveWalls(w: WorldState, ev: SimEvent[]): void {
+  const m = w.match;
+  if (m === null || m.phase !== "live") return;
+  for (const id of [...w.players.keys()].sort()) {
+    const p = w.players.get(id);
+    if (p === undefined || p.arenaUlt.shoveT <= 0) continue;
+    stepArenaShoveWall(w, p, ev);
+  }
+}
+
+// The shove wall's per-tick scan: block the FIRST foe shot crossing the frontal arc within reach,
+// then shatter (shove frontal foes). Absorbs exactly one shot per wall (Quill FINAL).
+function stepArenaShoveWall(w: WorldState, p: PlayerSim, ev: SimEvent[]): void {
+  const a = p.arenaUlt;
+  const half = (ARENA_SHOVE.arcDeg * Math.PI / 180) / 2;
+  const reach = ARENA_SHOVE.reachPx;
+  for (const b of w.bullets) {
+    if (!b.friendly || b.life <= 0 || b.owner === null || b.owner === p.id) continue;
+    const shooter = w.players.get(b.owner);
+    if (shooter === undefined || shooter.isAbsent) continue;
+    if (!arePvpFoes({ team: p.team, id: p.id }, { team: shooter.team, id: shooter.id })) continue;
+    const rx = b.x - p.x, ry = b.y - p.y;
+    if (Math.hypot(rx, ry) > reach + b.radius) continue;
+    const ang = Math.abs(Math.atan2(Math.sin(Math.atan2(ry, rx) - a.shoveAim), Math.cos(Math.atan2(ry, rx) - a.shoveAim)));
+    if (ang > half) continue;
+    b.life = 0;
+    ev.push({ t: "bulletBlocked", kind: "shielder", x: b.x, y: b.y, aim: Math.atan2(b.vy, b.vx) });
+    shatterArenaShove(w, p, ev);
+    return;
+  }
+}
+
+function shatterArenaShove(w: WorldState, p: PlayerSim, ev: SimEvent[]): void {
+  const a = p.arenaUlt;
+  const half = (ARENA_SHOVE.arcDeg * Math.PI / 180) / 2;
+  const reach = ARENA_SHOVE.reachPx;
+  a.shoveT = 0;
+  for (const vid of [...w.players.keys()].sort()) {
+    const v = w.players.get(vid);
+    if (v === undefined || v.id === p.id) continue;
+    if (!arePvpFoes({ team: p.team, id: p.id }, { team: v.team, id: v.id })) continue;
+    if (v.isAbsent || v.isDown || v.hp <= 0 || v.respawnT > 0) continue;
+    const rx = v.x - p.x, ry = v.y - p.y;
+    if (Math.hypot(rx, ry) > reach + v.pr) continue;
+    const ang = Math.abs(Math.atan2(Math.sin(Math.atan2(ry, rx) - a.shoveAim), Math.cos(Math.atan2(ry, rx) - a.shoveAim)));
+    if (ang > half) continue;
+    // KB frontal (brace can half it inside applyPvpKnockback); a shove into a pit rings out (credit
+    // to the shover, riding the same env-kill path as every other pvp knockback ring-out).
+    applyPvpKnockback(w, v, { weapon: p.weapon, dirX: rx, dirY: ry, kbDistance: ARENA_SHOVE.shatterKb }, ev);
+    if (isPlayerCenterInPvpPit(w, v)) eliminatePvpPlayer(w, v, p.id, "ringOut", ev);
+  }
+  ev.push({ t: "puff", x: p.x, y: p.y, n: 6, color: "#cfe6ff" });
+}
+
 // The frag-limit RESPAWN deathmatch state machine (lobby -> countdown -> live -> over). Pure sim,
 // counted in TICKS off w.tick — no rounds, no last-standing, no wipe. A death respawns after a
 // delay; the match ends when a player reaches the frag limit OR the time cap expires (highest
@@ -17667,6 +17940,15 @@ export function stepPlayerPhase(w: WorldState, p: PlayerSim, input: InputCmd, dt
   p.isUltRequested = input.ult === true && !p.isDown && p.hp > 0 && !isSpawnAttackSuppressed;
   // The MENDER heal-pulse intent — same contract as the ult request (resolved in updateUlts).
   p.isPulseRequested = input.pulse === true && !p.isDown && p.hp > 0 && !isSpawnAttackSuppressed;
+  // PVP WAVE 3 arena ult kit CLAIM: an ult SKIN only (never a co-op kit — kitId stays "none" in the
+  // arena). Accepted only in the pvp arena and only OUTSIDE the live phase (lobby / countdown / over
+  // — the claim locks at the whistle), so it never swaps mid-fight. Inert in co-op.
+  if (isPvp(w) && (w.match === null || w.match.phase !== "live")) {
+    const claim = input.arenaUltKit;
+    if (claim === "gunner" || claim === "mender" || claim === "bulwark" || claim === "phantom") {
+      p.arenaUltKit = claim;
+    }
+  }
   // The PET ABILITY intent. Production pets AUTO-cast (no bind), so a live client never sets this;
   // it survives only as a debug FORCE-cast the authoritative updatePetAbilities honors under the
   // same rails as auto-cast. Utility is OFF while downed, so a downed owner can never force it.
@@ -17720,6 +18002,7 @@ export function stepWorldPhase(w: WorldState, dt: number, ev: SimEvent[]): void 
   // AFTER updateProps so breakable cover consumes a round before it can reach a player behind it
   // (real LOS cover), and after recordHistory (fire-time rewind samples ready).
   if (pvp) {
+    stepArenaShoveWalls(w, ev); // PVP WAVE 3: a live frontal wall eats a foe shot before it lands
     resolvePvpHits(w, ev);
     resolvePvpPits(w, ev);
   }
@@ -17739,6 +18022,7 @@ export function stepWorldPhase(w: WorldState, dt: number, ev: SimEvent[]): void 
     stepPvpMatch(w, ev);
     stepPvpWeather(w);
     stepPvpKits(w, ev);
+    stepArenaUlts(w, dt, ev); // PVP WAVE 3: arena-only ult charge/tell/cast (behind isPvp, live only)
   } else {
     updateUlts(w, ev);
     updateRevives(w, dt, ev);

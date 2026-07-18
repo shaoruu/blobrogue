@@ -13,6 +13,7 @@ import type { WeaponId } from "../sim/types.js";
 import type { WeaponCycles } from "../sim/weapons.js";
 import type { WeaponFireCooldowns } from "../sim/weapons.js";
 import type { KitId } from "../sim/kits.js";
+import type { ArenaUltKit } from "../sim/pvp.js";
 import type { PlayerId } from "../sim/input.js";
 
 // The authoritative (server-owned) slice of a player: everything the server simulates and the
@@ -92,6 +93,10 @@ export interface AuthoritativePlayerSnapshot {
   // + reconciled so the HUD Favor/ember readout is reconnect-safe; both 0 in co-op.
   hearthFavorT: number;
   hearthEmberT: number;
+  // PVP WAVE 3 arena ults (PROTOCOL 49): the CLAIMED arena ult kit (ult skin only). Server-owned
+  // + reconciled so the HUD shows which arena ult is claimed; "gunner" default + byte-neutral in
+  // co-op (never read behind isPvp).
+  arenaUltKit: ArenaUltKit;
 }
 
 type ServerOwnedField = keyof AuthoritativePlayerSnapshot;
@@ -211,6 +216,9 @@ type ServerOnlyField =
   | "pvpBraceRegenT"
   | "pvpSightIcdT"
   | "pvpRipIcdT"
+  // PVP WAVE 3 arena ult per-cast transient windows (tell / salvo / glass / shove / slip / triage).
+  // All sub-1s transient, rebuilt from live inputs after a resume — never wired (like the counters).
+  | "arenaUlt"
   | "weaponOfferHistory"
   | "blessingOfferHistory"
   | "blessingOfferOrdinal"
@@ -294,6 +302,7 @@ export function projectPlayer(p: PlayerSim): AuthoritativePlayerSnapshot {
     isSpawnOffenseLatched: p.isSpawnOffenseLatched,
     hearthFavorT: p.hearthFavorT,
     hearthEmberT: p.hearthEmberT,
+    arenaUltKit: p.arenaUltKit,
   };
 }
 
@@ -365,6 +374,7 @@ export function applyPlayerSnapshot(p: PlayerSim, s: AuthoritativePlayerSnapshot
   p.isSpawnOffenseLatched = s.isSpawnOffenseLatched;
   p.hearthFavorT = s.hearthFavorT;
   p.hearthEmberT = s.hearthEmberT;
+  p.arenaUltKit = s.arenaUltKit;
 }
 
 // Reconstruct a full PlayerMods from a received mods value (a JSON-parse boundary: the input is
