@@ -2474,7 +2474,7 @@ export function gauntletCaptainHp(round: GauntletRound): number {
 //      multiplicative behavior (Deadeye Lv3 crits at 3.0×, statuses amplify).
 //   2. Pellet boss coefficient: a big body soaking every stacked pellet was the
 //      single-target exploit. Native pellets beyond the first count at 75% against
-//      boss-grade bodies; ADDED pellets (Split Shot / Scattergun) count 0 — they stay
+//      boss-grade bodies; ADDED pellets count 0 — they stay
 //      full-power room tools. Rooms always take full pellet damage.
 //   3. Per-family boss coefficients for the measured offenders (full-arsenal god-stack
 //      sweep): the point-blank hoses (flamer, sawnoff), the sustained pin (beam), the
@@ -2531,6 +2531,13 @@ export const PHASE_NO_LOS_DAMAGE_MULT = 0.4;
 export const BOSS_VULN_CAP = 1.35;           // the crit channel's cap vs boss-grade bodies
 export const BOSS_NATIVE_PELLET_COEF = 0.75; // native pellets beyond the first
 export const BOSS_EXTRA_PELLET_COEF = 0;     // added pellets: room tools, zero vs bosses
+export const SIDE_CHANNEL = {
+  damageMult: 0.55,
+  icd: 1.2,
+  aimWindow: 0.40,
+  aimDelta: Math.PI / 2,
+  meaningfulAimDelta: 0.01,
+} as const;
 export const WEAPON_BOSS_COEF: Readonly<Partial<Record<WeaponId, number>>> = {
   beam: 0.78,     // sustained pin: 100% uptime on an arena-sized body (envelope: 0.86 PU)
   sawnoff: 0.5,   // point-blank full-fan burst

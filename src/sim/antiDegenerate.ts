@@ -31,6 +31,7 @@ export const STACK_CATEGORY: Readonly<Record<string, string>> = {
   second_breath_muddy: "dash_refund",
   on_the_beat: "cadence",
   shared_rope: "revive",
+  side_channel: "off_angle",
   // Wave B weapons
   resonant_fork: "link",
   red_pen: "mark_detonate",

@@ -439,7 +439,7 @@ section("10k deterministic offer seeds");
   check("Echo Step is legal and capped at Lv1",
     isPvpBlessingId(echo.id) && itemMaxLevel(echo) === 1);
 
-  const upgradeId = "split_shot";
+  const upgradeId = "full_metal";
   let upgradeHits = 0;
   let newHits = 0;
   for (let seed = 0; seed < 10_000; seed++) {

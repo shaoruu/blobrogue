@@ -75,6 +75,7 @@ import {
   isPvpBlessingId,
   normalItemsForCatalog,
   rollItemChoicesWith,
+  canonicalItemId,
 } from "./items.js";
 import {
   ULT, OVERDRIVE, SANCTUARY, LIFEBLOOM, AEGIS, PHASE, MOMENTUM, OVERHEAT, HARDENED, OVERSHIELD,
@@ -138,7 +139,7 @@ import {
   phaseTimerFor,
   ELITE_COMMANDER, ELITE_BULWARK, ELITE_VOLATILE, ELITE_ECHOED, MARSHAL, TOLL,
   ROLL_AFFIX, BOSS_AFFIX,
-  WEAPON_BOSS_COEF, WIPE_HOLD_SECONDS, PU_DPS, PERSISTENT_BOSS_DPS_FRAC,
+  WEAPON_BOSS_COEF, SIDE_CHANNEL, WIPE_HOLD_SECONDS, PU_DPS, PERSISTENT_BOSS_DPS_FRAC,
   LIVE_CAPS, activeMoverCapFor, pedestalWeaponRolls, bossWeaponChoices, KING_REWARD_TABLE,
   MYSTERY, LEGENDARY_MIN_FLOOR,
   PREMIUM, CAPS, PHASE_NO_LOS_DAMAGE_MULT, coinChanceTaper, coopCoinGainMult, premiumMysteryLegendaryWeight,
@@ -309,6 +310,11 @@ interface StrikeInfo {
 export interface UltSourceCharge { dmg: number; kill: number; taken: number; heal: number; dash: number }
 function freshUltSources(): UltSourceCharge { return { dmg: 0, kill: 0, taken: 0, heal: 0, dash: 0 }; }
 
+interface SideChannelAimSample {
+  aim: number;
+  time: number;
+}
+
 export interface PlayerSim {
   id: PlayerId;
   offerIdentity: string;
@@ -366,6 +372,10 @@ export interface PlayerSim {
   isMomentumArmed: boolean;
   momentumIcdT: number;
   momentumMoveSamples: Array<{ at: number; distance: number }>;
+  sideChannelAimClock: number;
+  sideChannelAimSamples: SideChannelAimSample[];
+  sideChannelArmedAim: number | null;
+  sideChannelIcdT: number;
   // ---- Content Wave C server-owned transient combat state (never on the reconcile wire;
   // all sub-10s, rebuilt from live inputs after a resume) ----
   hushStacks: number;        // hushiron: current stance stacks (0..maxStacks)
@@ -860,6 +870,7 @@ export function createPlayer(id: PlayerId, x: number, y: number): PlayerSim {
     staggerPulseIcdT: 0, staggerPulseAppliedTick: -1,
     bladeWardT: 0, bladeWardAbsorb: 0, bladeWardAppliedTick: -1,
     isMomentumArmed: false, momentumIcdT: 0, momentumMoveSamples: [],
+    sideChannelAimClock: 0, sideChannelAimSamples: [], sideChannelArmedAim: null, sideChannelIcdT: 0,
     hushStacks: 0, hushStillT: 0, hushStackT: 0, hushVentT: 0,
     backtalkHoldT: 0, backtalkWindowT: 0, backtalkCd: 0, backtalkReturnT: 0,
     backtalkCaughtDmg: 0, backtalkLock: 0, lampPatches: [],
@@ -2468,6 +2479,7 @@ export function loadFloorIntoWorld(w: WorldState, floor: number, playerCountAtLo
     p.isMomentumArmed = false;
     p.momentumIcdT = 0;
     p.momentumMoveSamples = [];
+    resetSideChannelState(p);
     p.rememberMeArmed = true;
     p.disabledBlessing = null;
     resetWaveCState(p);
@@ -2629,6 +2641,7 @@ export function resetRunInWorld(w: WorldState, seed: number): void {
     p.isMomentumArmed = false;
     p.momentumIcdT = 0;
     p.momentumMoveSamples = [];
+    resetSideChannelState(p);
     p.petCdReadyAtTick = 0;
     p.petTellT = 0;
     p.petLightT = 0;
@@ -4983,7 +4996,14 @@ function makePickup(w: WorldState, kind: "heart" | "coin", x: number, y: number,
 
 // ---- per-tick systems ----
 
-function updatePlayer(w: WorldState, p: PlayerSim, input: InputCmd, dt: number, ev: SimEvent[]): void {
+function updatePlayer(
+  w: WorldState,
+  p: PlayerSim,
+  input: InputCmd,
+  dt: number,
+  ev: SimEvent[],
+  previousAim: number,
+): void {
   let ix = input.moveX;
   let iy = input.moveY;
   const len = Math.hypot(ix, iy) || 1;
@@ -5023,6 +5043,7 @@ function updatePlayer(w: WorldState, p: PlayerSim, input: InputCmd, dt: number, 
   if (input.dash && p.dashCd <= dashBankHeadroom && p.dashTime <= 0 && (ix || iy)) {
     const dashCdAdded = dashCooldown(p) * dashProfile.cdMult;
     p.dashTime = PLAYER.dashActive * dashProfile.activeMult; p.dashCd += dashCdAdded; p.dashDx = ix; p.dashDy = iy;
+    armSideChannelFromDash(p, previousAim);
     p.isMuddyRefundSpent = false;
     // The dash iframe is its own window (0.18s, covering the 0.16s active dash + tail):
     // SET, never max'd against post-hit protection, so the two can neither refresh nor
@@ -5184,6 +5205,90 @@ function normalizeAngle(a: number): number {
   return a;
 }
 
+function hasActiveSideChannel(p: PlayerSim): boolean {
+  if (canonicalItemId(p.disabledBlessing?.id ?? "") === "side_channel") return false;
+  return p.ownedItemIds.some((id) => canonicalItemId(id) === "side_channel");
+}
+
+function resetSideChannelState(p: PlayerSim, aim?: number): void {
+  p.sideChannelAimClock = 0;
+  p.sideChannelAimSamples = aim === undefined ? [] : [{ aim, time: 0 }];
+  p.sideChannelArmedAim = null;
+  p.sideChannelIcdT = 0;
+}
+
+function trackSideChannelAim(p: PlayerSim, aim: number, dt: number): void {
+  if (!hasActiveSideChannel(p)) {
+    resetSideChannelState(p, aim);
+    return;
+  }
+  p.sideChannelIcdT = Math.max(0, p.sideChannelIcdT - dt);
+  p.sideChannelAimClock += dt;
+  const cutoff = p.sideChannelAimClock - SIDE_CHANNEL.aimWindow;
+  while (p.sideChannelAimSamples[0]?.time < cutoff) p.sideChannelAimSamples.shift();
+  if (p.sideChannelArmedAim === null && p.sideChannelIcdT === 0) {
+    const prior = p.sideChannelAimSamples.find((sample) =>
+      Math.abs(normalizeAngle(aim - sample.aim)) >= SIDE_CHANNEL.aimDelta);
+    if (prior !== undefined) p.sideChannelArmedAim = prior.aim;
+  }
+  const last = p.sideChannelAimSamples.at(-1);
+  if (last === undefined
+    || Math.abs(normalizeAngle(aim - last.aim)) > SIDE_CHANNEL.meaningfulAimDelta) {
+    p.sideChannelAimSamples.push({ aim, time: p.sideChannelAimClock });
+    if (p.sideChannelAimSamples.length > 64) p.sideChannelAimSamples.shift();
+  } else {
+    last.time = p.sideChannelAimClock;
+  }
+}
+
+function armSideChannelFromDash(p: PlayerSim, previousAim: number): void {
+  if (!hasActiveSideChannel(p) || p.sideChannelArmedAim !== null || p.sideChannelIcdT > 0) return;
+  const aimDelta = Math.abs(normalizeAngle(p.aimAngle - previousAim));
+  p.sideChannelArmedAim = aimDelta > SIDE_CHANNEL.meaningfulAimDelta
+    ? previousAim
+    : Math.atan2(-p.dashDy, -p.dashDx);
+}
+
+function spawnSideChannelGhost(
+  w: WorldState,
+  p: PlayerSim,
+  parent: Bullet | undefined,
+  bossCoef: number,
+  ev: SimEvent[],
+): void {
+  const aim = p.sideChannelArmedAim;
+  if (parent === undefined || aim === null || p.sideChannelIcdT > 0 || !hasActiveSideChannel(p)) return;
+  const speed = Math.hypot(parent.vx, parent.vy);
+  const x = p.x + Math.cos(aim) * 18;
+  const y = p.y + Math.sin(aim) * 18;
+  const ghost: Bullet = {
+    ...parent,
+    x,
+    y,
+    vx: Math.cos(aim) * speed,
+    vy: Math.sin(aim) * speed,
+    damage: parent.damage * SIDE_CHANNEL.damageMult,
+    bossCoef,
+    hitList: null,
+    enemyHits: 0,
+    isSideChannelGhost: true,
+    bornTick: w.tick,
+    lagRewind: p.rewindTicks,
+    prevX: undefined,
+    prevY: undefined,
+    hitPids: undefined,
+  };
+  if (ghost.isPhase === true) {
+    ghost.phaseFireX = x;
+    ghost.phaseFireY = y;
+  }
+  if (ghost.sidewinderArc !== undefined) ghost.sidewinderAim = aim;
+  w.bullets.push(ghost);
+  p.sideChannelArmedAim = null;
+  p.sideChannelIcdT = SIDE_CHANNEL.icd;
+  ev.push({ t: "blessingProc", pid: p.id, item: "side_channel", phase: "ghost", x, y });
+}
+
 function isBossGradeKind(e: Enemy): boolean {
   return isBossKind(e.kind) || e.captainPhase !== undefined || isMinibossKind(e.kind);
 }
@@ -5305,12 +5410,15 @@ function fireRedPen(w: WorldState, p: PlayerSim, wep: Weapon, ev: SimEvent[]): v
   const shot = resolveShot(w, p, "red_pen");
   const muzzleX = p.x + Math.cos(p.aimAngle) * 18;
   const muzzleY = p.y + Math.sin(p.aimAngle) * 18;
+  let parent: Bullet | undefined;
   for (const b of fire(shot, muzzleX, muzzleY, p.aimAngle, w.rng, p.id)) {
     b.isPenInk = true;
     b.bornTick = w.tick;
     b.lagRewind = p.rewindTicks;
     w.bullets.push(b);
+    parent ??= b;
   }
+  spawnSideChannelGhost(w, p, parent, WEAPON_BOSS_COEF.red_pen ?? 1, ev);
   captureMarginStore(p, wep, shot);
   setActiveWeaponFireCooldown(p, wep.fireCd / currentFireRate(p));
   p.shotSeq++;
@@ -5327,8 +5435,9 @@ function fireMarginCall(w: WorldState, p: PlayerSim, wep: Weapon, ev: SimEvent[]
   const muzzleX = p.x + Math.cos(p.aimAngle) * 18;
   const muzzleY = p.y + Math.sin(p.aimAngle) * 18;
   const store = p.marginStore;
+  let parent: Bullet | undefined;
   if (store !== null && store.life > 0) {
-    spawnMarginCopies(w, p, spec, store, muzzleX, muzzleY);
+    parent = spawnMarginCopies(w, p, spec, store, muzzleX, muzzleY);
     setActiveWeaponFireCooldown(p, spec.loadedFireCd / currentFireRate(p));
   } else {
     const shot = resolveShot(w, p, "margin_call"); // base damage 1.2 == stub damage
@@ -5336,9 +5445,11 @@ function fireMarginCall(w: WorldState, p: PlayerSim, wep: Weapon, ev: SimEvent[]
       b.bornTick = w.tick;
       b.lagRewind = p.rewindTicks;
       w.bullets.push(b);
+      parent ??= b;
     }
     setActiveWeaponFireCooldown(p, spec.stubFireCd / currentFireRate(p));
   }
+  spawnSideChannelGhost(w, p, parent, parent?.bossCoef ?? WEAPON_BOSS_COEF.margin_call ?? 1, ev);
   p.shotSeq++;
   ev.push({
     t: "shot", pid: p.id, weapon: "margin_call", x: muzzleX, y: muzzleY, aim: p.aimAngle,
@@ -5350,7 +5461,7 @@ function fireMarginCall(w: WorldState, p: PlayerSim, wep: Weapon, ev: SimEvent[]
 function spawnMarginCopies(
   w: WorldState, p: PlayerSim, spec: NonNullable<Weapon["margin"]>,
   store: MarginStore, muzzleX: number, muzzleY: number,
-): void {
+): Bullet | undefined {
   const pellets = store.category === "spread"
     ? Math.min(spec.maxCopyPellets, Math.min(3, store.pellets))
     : Math.min(spec.maxCopyPellets, store.pellets);
@@ -5360,6 +5471,7 @@ function spawnMarginCopies(
   const homing = store.category === "seeker" ? store.homing * 0.60 : undefined;
   const statusMult = store.category === "status" ? 0.70 : 0;
   const dmg = store.damage * spec.outputCoef;
+  let parent: Bullet | undefined;
   for (let i = 0; i < Math.max(1, pellets); i++) {
     const t = pellets <= 1 ? 0 : (i / (pellets - 1)) - 0.5;
     const a = p.aimAngle + t * spread;
@@ -5383,7 +5495,9 @@ function spawnMarginCopies(
     };
     applyCrosscurrentStamp(p, b);
     w.bullets.push(b);
+    parent ??= b;
   }
+  return parent;
 }
 
 // Store exactly one payload CLASS off a committed shot from another owned weapon.
@@ -5423,7 +5537,8 @@ function marginCategoryOf(wep: Weapon, spec: ShotSpec): MarginCategory | null {
 
 // Sidewinder — ENCIRCLE / FLANK. A fixed two-arc volley; extra-pellet mods never add arcs.
 function fireSidewinder(w: WorldState, p: PlayerSim, wep: Weapon, ev: SimEvent[]): void {
-  spawnSidewinderArc(w, p, 0, p.aimAngle);
+  const parent = spawnSidewinderArc(w, p, 0, p.aimAngle);
+  spawnSideChannelGhost(w, p, parent, WEAPON_BOSS_COEF.sidewinder ?? 1, ev);
   p.sidewinderArcT = wep.sidewinder!.arcDelay;
   p.sidewinderArcAim = p.aimAngle;
   setActiveWeaponFireCooldown(p, wep.fireCd / currentFireRate(p));
@@ -5436,7 +5551,7 @@ function fireSidewinder(w: WorldState, p: PlayerSim, wep: Weapon, ev: SimEvent[]
   applyWeaponKick(w, p, ev);
 }
 
-function spawnSidewinderArc(w: WorldState, p: PlayerSim, index: number, aim: number): void {
+function spawnSidewinderArc(w: WorldState, p: PlayerSim, index: number, aim: number): Bullet {
   const wep = WEAPONS.sidewinder;
   const spec = wep.sidewinder!;
   const sign = index === 0 ? 1 : -1;
@@ -5460,6 +5575,7 @@ function spawnSidewinderArc(w: WorldState, p: PlayerSim, index: number, aim: num
   };
   applyCrosscurrentStamp(p, b);
   w.bullets.push(b);
+  return b;
 }
 
 // Crosscurrent rides the custom-fire Wave B rounds too (it stamps every round the player
@@ -5701,6 +5817,7 @@ function fireBacktalk(w: WorldState, p: PlayerSim, wep: Weapon, ev: SimEvent[]):
   if (p.backtalkLock > 0) return;
   const muzzleX = p.x + Math.cos(p.aimAngle) * 18;
   const muzzleY = p.y + Math.sin(p.aimAngle) * 18;
+  let parent: Bullet | undefined;
   if (p.backtalkReturnT > 0 && p.backtalkCaughtDmg > 0) {
     const dmg = Math.min(spec.returnMax, Math.max(spec.returnMin, p.backtalkCaughtDmg * spec.returnCoef));
     const b: Bullet = {
@@ -5715,6 +5832,7 @@ function fireBacktalk(w: WorldState, p: PlayerSim, wep: Weapon, ev: SimEvent[]):
       bornTick: w.tick, lagRewind: p.rewindTicks,
     };
     w.bullets.push(b);
+    parent = b;
     p.backtalkReturnT = 0;
     p.backtalkCaughtDmg = 0;
     ev.push({ t: "cue", name: "backtalk.return", x: muzzleX, y: muzzleY, rate: 1, gain: 0.7, trauma: 0.02 });
@@ -5724,9 +5842,11 @@ function fireBacktalk(w: WorldState, p: PlayerSim, wep: Weapon, ev: SimEvent[]):
       b.bornTick = w.tick;
       b.lagRewind = p.rewindTicks;
       w.bullets.push(b);
+      parent ??= b;
     }
     captureMarginStore(p, wep, shot);
   }
+  spawnSideChannelGhost(w, p, parent, parent?.bossCoef ?? WEAPON_BOSS_COEF.backtalk ?? 1, ev);
   setActiveWeaponFireCooldown(p, wep.fireCd / currentFireRate(p));
   p.shotSeq++;
   ev.push({
@@ -5915,6 +6035,7 @@ function updateShooting(w: WorldState, p: PlayerSim, input: InputCmd, dt: number
       b.lagRewind = p.rewindTicks;
       w.bullets.push(b);
     }
+    spawnSideChannelGhost(w, p, fired[0], WEAPON_BOSS_COEF[p.weapon] ?? 1, ev);
     // Margin Call stores exactly one payload class off ANY other weapon's committed shot.
     captureMarginStore(p, wep, spec);
     setActiveWeaponFireCooldown(p, wep.fireCd / currentFireRate(p));
@@ -5961,13 +6082,15 @@ function updateChargeShooting(w: WorldState, p: PlayerSim, wep: Weapon, input: I
   shot.life = dist / shot.speed;
   const muzzleX = p.x + Math.cos(p.aimAngle) * 18;
   const muzzleY = p.y + Math.sin(p.aimAngle) * 18;
-  for (const b of fire(shot, muzzleX, muzzleY, p.aimAngle, w.rng, p.id)) {
+  const fired = fire(shot, muzzleX, muzzleY, p.aimAngle, w.rng, p.id);
+  for (const b of fired) {
     b.isLob = true;
     b.lobT = t;
     b.bornTick = w.tick;
     b.lagRewind = p.rewindTicks;
     w.bullets.push(b);
   }
+  spawnSideChannelGhost(w, p, fired[0], WEAPON_BOSS_COEF[p.weapon] ?? 1, ev);
   setActiveWeaponFireCooldown(p, wep.fireCd / currentFireRate(p));
   p.shotSeq++;
   advanceWeaponCycle(p, p.weapon);
@@ -18141,6 +18264,7 @@ export function stepPlayerPhase(w: WorldState, p: PlayerSim, input: InputCmd, dt
     p.isInteracting = false;
     return;
   }
+  const previousAim = p.aimAngle;
   const telemetry = p.pvpRespawnTelemetry;
   if (isPvp(w)
     && w.match?.phase === "live"
@@ -18207,8 +18331,11 @@ export function stepPlayerPhase(w: WorldState, p: PlayerSim, input: InputCmd, dt
   // (the server owns the freeze; the client mirrors it via reconciliation to the authoritative pose).
   const isPvpFrozen = isPvp(w) && w.isShared && (w.match === null || w.match.phase !== "live");
   if (!p.isDown && p.respawnT === 0 && !isPvpFrozen) {
-    updatePlayer(w, p, input, dt, ev);
+    trackSideChannelAim(p, p.aimAngle, dt);
+    updatePlayer(w, p, input, dt, ev, previousAim);
     updateShooting(w, p, input, dt, ev);
+  } else {
+    resetSideChannelState(p, p.aimAngle);
   }
   if (p.meleeSwing) {
     p.meleeSwing.timer -= dt;

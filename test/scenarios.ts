@@ -322,7 +322,7 @@ const items: Scenario = {
   ticks: 500,
   commands: (() => {
     const cmds: Command[] = [];
-    const grants = ["split_shot", "scattergun", "full_metal", "big_iron", "deadeye", "swift_boots", "hair_trigger"];
+    const grants = ["side_channel", "full_metal", "big_iron", "deadeye", "swift_boots", "hair_trigger"];
     grants.forEach((itemId, i) => cmds.push({ t: "item", tick: 4 + i * 8, itemId }));
     cmds.push({ t: "weapon", tick: 80, weapon: "ricochet" });
     for (let tick = 60; tick < 500; tick += 20) {

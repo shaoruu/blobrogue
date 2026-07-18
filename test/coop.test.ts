@@ -363,7 +363,7 @@ async function headlessClientSpectateTests(): Promise<void> {
   sock.deliver({
     t: "offer",
     id: 1,
-    choices: ["glass_cannon", "hair_trigger", "split_shot"],
+    choices: ["glass_cannon", "hair_trigger", "side_channel"],
     k: "blessing",
     tr: "none",
     isComeback: false,

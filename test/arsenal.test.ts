@@ -497,7 +497,8 @@ function manifestGates(): void {
 function tooltipParityGates(): void {
   section("[MAJOR] tooltips consume the ONE shared stats model (no duplicate copy)");
   const mods = createMods();
-  recomputeMods(mods, ["glass_cannon", "hair_trigger", "hair_trigger", "split_shot", "big_iron"]);
+  recomputeMods(mods, ["glass_cannon", "hair_trigger", "hair_trigger", "big_iron"]);
+  mods.extraPellets = 1;
 
   // The effect wave flows through the SAME weaponDisplayStats model #46 built — POWER and
   // REACH are the exact live sim numbers, proven against an authoritative fired bullet.

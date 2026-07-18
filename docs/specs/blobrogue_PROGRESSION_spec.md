@@ -25,7 +25,7 @@ This prevents "numbers soup" while still letting a build feel outrageous.
 - Every non-boss descent: **1-of-3 blessing** (current flow already does this).
 - Boss defeat: **1-of-3 Rare/Boss blessing** + weapon choice; no normal blessing that floor.
 - By floor 5: ~4 picks → 2.25–3×. By floor 10: ~8–9 picks → 4–6× with synergy.
-- Duplicate common blessings allowed max 2 copies; uncommon max 2; rare unique. This keeps stacking legible and prevents Hair Trigger / Split Shot spam from breaking caps.
+- Duplicate common blessings allowed max 2 copies; uncommon max 2; rare unique. This keeps stacking legible and prevents repeated stat picks from breaking caps.
 
 ## Pick cadence (open-world mode)
 There is no run end, so define an **Expedition Attunement** without adding a new currency or meter:
@@ -36,7 +36,8 @@ There is no run end, so define an **Expedition Attunement** without adding a new
 
 ## Current blessing tuning roles (`items.ts`)
 Keep each pick in one of four readable buckets (tag ItemDef; used by draft weighting):
-- **Output:** Hair Trigger, Big Iron, Deadeye, Split/Scatter, Full Metal, elemental coatings.
+- **Output:** Hair Trigger, Big Iron, Deadeye, Full Metal, elemental coatings.
+- **Positioning:** Side Channel rewards a dash or hard aim flick with one 55%-damage ghost round along the previous aim.
 - **Survival/mobility:** Vitality, Swift Boots, Second Wind, Fang.
 - **Economy:** Greed, Coin Magnet (never offered in boss reward).
 - **Risk/identity:** Glass Cannon, Berserk, Adrenaline, Elementalist.
@@ -233,8 +234,7 @@ Replace `ownedItems: ItemDef[]` with `itemLevels: Map<ItemId,1|2|3>` (HUD/summar
 ### Exact level effects (cumulative result at Lv1 / Lv2 / Lv3)
 - Glass Cannon: damage +60%/-2HP · +90%/-3HP · +110%/-3HP.
 - Hair Trigger: fire rate +35% · +55% · +70%.
-- Split Shot: +1 pellet/+0.10 spread · +2/+0.18 · +3/+0.24.
-- Scattergun: +2 pellets/+0.22 spread/-10%dmg · +3/+0.30/-10% · +4/+0.36/-10%.
+- Side Channel: after a dash or a 90-degree aim change within 0.40s, the next ranged shot also fires one 55%-damage ghost round along the previous aim; 1.2s internal cooldown.
 - Full Metal: pierce +1 · +2 · +3.
 - Swift Boots: move +20% · +30% · +35%.
 - Big Iron: bullet size +80%/dmg+50%/speed-22%/rate-12% · size+115%/dmg+75%/speed-30%/rate-16% · size+140%/dmg+90%/speed-35%/rate-20%.

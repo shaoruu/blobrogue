@@ -129,8 +129,7 @@ export const PVP = {
   // sustain, low-HP, economy, dash-cooldown, and flat-EHP blessing stay out.
   blessingBlacklist: pvpBlessingBlacklist,
   blessingPool: [
-    "split_shot",
-    "scattergun",
+    "side_channel",
     "full_metal",
     "big_iron",
     "deadeye",

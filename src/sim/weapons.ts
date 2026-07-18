@@ -754,9 +754,7 @@ export function rollMysteryTwist(rand: () => number): MysteryTwist {
   return "plain";
 }
 
-// Hard caps on authored entity counts the pellet mods can raise (Split Shot/Scattergun
-// map onto "more authored entities" for the effect weapons — bounded so the wire and the
-// frame stay bounded too).
+// Hard caps on authored entity counts that pellet modifiers can raise.
 export const MAX_WIRES = 5;
 // Party-wide trap budget (balancer envelope): the WORLD holds at most this many armed
 // wires regardless of who planted them — the globally oldest gives way. Traps hold
@@ -768,8 +766,8 @@ export const MAX_ORBIT_BLADES = 6;
 // once per trigger-pull in the game core so fire() stays a pure geometry helper.
 export interface ShotSpec {
   pellets: number;
-  // The weapon's NATIVE pellet count (before Split Shot / Scattergun additions): added
-  // pellets hit boss-grade bodies at a reduced coefficient (balancer remediation).
+  // The weapon's NATIVE pellet count before added modifiers. Added pellets hit boss-grade
+  // bodies at a reduced coefficient.
   basePellets: number;
   spread: number;
   speed: number;
@@ -827,7 +825,7 @@ export function fire(spec: ShotSpec, x: number, y: number, aim: number, rng: Rng
   const shots: Bullet[] = [];
   // Boss-facing shot coefficient, baked per bullet (rooms always take full damage):
   // native pellets beyond the first count at BOSS_NATIVE_PELLET_COEF, ADDED pellets
-  // (Split Shot / Scattergun) at BOSS_EXTRA_PELLET_COEF, and a few weapons carry their
+  // at BOSS_EXTRA_PELLET_COEF, and a few weapons carry their
   // own coefficient (WEAPON_BOSS_COEF). Spread uniformly over the volley so bullet
   // order never matters (deterministic, replay-safe).
   const extra = Math.max(0, spec.pellets - spec.basePellets);

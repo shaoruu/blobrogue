@@ -49,7 +49,7 @@ const BUILDS: Readonly<Record<string, Loadout>> = {
   naked: { weapon: "pistol", picks: [] },
   median: { weapon: "pistol", picks: [...L3("hair_trigger"), "glass_cannon", "glass_cannon"] },
   highRoll: { weapon: "smg", picks: [...L3("deadeye"), "glass_cannon", "glass_cannon"] },
-  god: { weapon: "smg", picks: [...L3("glass_cannon"), ...L3("hair_trigger"), ...L3("deadeye"), ...L3("split_shot")] },
+  god: { weapon: "smg", picks: [...L3("glass_cannon"), ...L3("hair_trigger"), ...L3("deadeye"), ...L3("full_metal")] },
 };
 
 function dpsOf(build: Loadout): number {
