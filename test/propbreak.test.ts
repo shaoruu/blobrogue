@@ -91,7 +91,7 @@ function crookCase(): void {
   acquireWeaponInWorld(w, LOCAL_ID, "crook");
   const p = w.players.get(LOCAL_ID)!;
   devSpawnEnemy(w, "slime", p.x + 120, p.y); // in tether range with a clear line to latch
-  const barrel = devSpawnProp(w, "barrel", p.x + 60, p.y); // inside the sweep reach (90)
+  const barrel = devSpawnProp(w, "barrel", p.x + 60, p.y); // inside the sweep reach (105)
   let broke = false;
   for (let t = 0; t < 120 && !broke; t++) {
     stepWorld(w, inputs(0, true), DT); // hold: latch, then sweep on the next unlock

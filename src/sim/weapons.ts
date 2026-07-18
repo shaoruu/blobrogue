@@ -382,19 +382,19 @@ export const WEAPONS: Record<WeaponId, Weapon> = {
     special: "A sustained lance that punches one body deep.",
   },
     sword: {
-    id: "sword", name: "Cutlass", rarity: "common", fireCd: 0.22, speed: 0, life: 0, damage: 3.5,
+    id: "sword", name: "Cutlass", rarity: "common", fireCd: 0.18, speed: 0, life: 0, damage: 5,
     pellets: 1, spread: 0, bulletRadius: 0, color: "#c8e0ff", muzzle: 0,
-    melee: { arc: 1.25, reach: 48, swingDur: 0.2 },
+    melee: { arc: 1.35, reach: 54, swingDur: 0.18 },
   },
   longsword: {
-    id: "longsword", name: "Claymore", rarity: "rare", fireCd: 0.38, speed: 0, life: 0, damage: 6.2,
+    id: "longsword", name: "Claymore", rarity: "rare", fireCd: 0.34, speed: 0, life: 0, damage: 8.5,
     pellets: 1, spread: 0, bulletRadius: 0, color: "#d8dce8", muzzle: 0,
-    melee: { arc: 1.85, reach: 58, swingDur: 0.25 },
+    melee: { arc: 2, reach: 66, swingDur: 0.22 },
   },
   spear: {
-    id: "spear", name: "Pike", rarity: "rare", fireCd: 0.28, speed: 0, life: 0, damage: 4.8,
+    id: "spear", name: "Pike", rarity: "rare", fireCd: 0.24, speed: 0, life: 0, damage: 6.5,
     pellets: 1, spread: 0, bulletRadius: 0, color: "#9ee8c8", muzzle: 0,
-    melee: { arc: 0.32, reach: 74, isThrust: true, swingDur: 0.18 },
+    melee: { arc: 0.36, reach: 82, isThrust: true, swingDur: 0.16 },
   },
   // ---- the effect wave: seven distinct room verbs on four shared primitives ----
   // TRADE SAFETY FOR A KILL WINDOW: an ordinary slug at full health, a monster at one
@@ -462,9 +462,9 @@ export const WEAPONS: Record<WeaponId, Weapon> = {
   // REPOSITION THE THREAT: latch the chain and reel the target to your feet — then fire
   // again to sweep it (and everything beside you). A brute or boss reels YOU in instead.
   crook: {
-    id: "crook", name: "Crooked Chain", rarity: "rare", fireCd: 0.9, speed: 0, life: 0,
-    damage: 5, pellets: 1, spread: 0, bulletRadius: 0, color: "#c9b06a", muzzle: 0,
-    tether: { range: 210, width: 30, pullSpeed: 560, holdDist: 64, hold: 1.2, reach: 90, playerPullTime: 0.35 },
+    id: "crook", name: "Crooked Chain", rarity: "rare", fireCd: 0.75, speed: 0, life: 0,
+    damage: 7, pellets: 1, spread: 0, bulletRadius: 0, color: "#c9b06a", muzzle: 0,
+    tether: { range: 230, width: 34, pullSpeed: 640, holdDist: 58, hold: 1, reach: 105, playerPullTime: 0.35 },
     special: "Latches and reels an enemy to you; fire again to sweep it. Brutes and bosses drag YOU in instead.",
   },
   // ---- LEGENDARIES — one signature mechanic each, never bigger numbers ----

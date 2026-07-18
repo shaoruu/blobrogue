@@ -2541,9 +2541,9 @@ export const WEAPON_BOSS_COEF: Readonly<Partial<Record<WeaponId, number>>> = {
                   // room and safety top quartiles at once at 0.75)
   cannon: 0.95,
   railgun: 0.9,
-  sword: 0.7,     // the melee loop parks on the body with zero travel/spread loss
-  longsword: 0.7,
-  spear: 0.7,     // same parked-uptime pricing as the other blades (arsenal QA gap fix)
+  sword: 0.55,    // the melee loop parks on the body with zero travel/spread loss
+  longsword: 0.55,
+  spear: 0.55,    // same parked-uptime pricing as the other blades
   // Effect wave. Lastlight's low-HP curve can be held at max indefinitely by a careful
   // player, so its boss coefficient prices the uptime; the parked/planted families
   // (sentry bolts, wire snaps, orbit contact) hit boss-grade bodies at room-tool rates.
@@ -2553,7 +2553,7 @@ export const WEAPON_BOSS_COEF: Readonly<Partial<Record<WeaponId, number>>> = {
   frostline: 0.6,
   halo: 0.48,
   sentry: 0.6,
-  crook: 0.75,
+  crook: 0.6,
   // Legendaries stay inside the envelope: the Midas' coin-fed hits would otherwise ride a
   // full x2 into the boss window (its coin drain is no brake on a stocked purse — the
   // envelope bands it FED, like the Lastlight is banded at risk), and the Umbra's
