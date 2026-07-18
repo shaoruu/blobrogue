@@ -3576,6 +3576,15 @@ export class Game {
     this.equipSlot((cur + dir + owned.length) % owned.length);
   }
 
+  // A weapon pickup the local player already owns: the sim never collects or swaps it in
+  // (it stays physical for an ally — the WEAPONS/PROGRESSION duplicate rule), so it can
+  // only ever wear the OWNED affordance, never be claimed. Boss/mystery pickups keep their
+  // own claim rules (an owned boss choice still rerolls), so they are never owned-dupes.
+  private isOwnedDuplicateWeapon(p: Pickup): boolean {
+    return p.kind === "weapon" && !!p.weapon && !p.isMystery && !p.isBossChoice
+      && this.p.ownedWeapons.includes(p.weapon);
+  }
+
   // ---- the full-hotbar swap prompt ----
 
   // The blocked weapon pickup underfoot: the nearest live weapon pickup within collect
@@ -5992,6 +6001,17 @@ export class Game {
       } else {
         ctx.fillStyle = p.kind === "heart" ? "#ff6a6a" : "#ffd27a";
         ctx.beginPath(); ctx.arc(sx, sy, 10, 0, 6.28); ctx.fill();
+      }
+      // Duplicate-weapon feedback (WEAPONS/PROGRESSION spec: an owned weapon is never
+      // collected/swapped — it stays physical for an ally — so a walk-over with free
+      // slots would otherwise be a silent no-op). Surface the proximity OWNED label the
+      // moment the local player stands on a weapon they already carry, so "I have space
+      // but nothing happens" reads as a rule, not a bug.
+      if (
+        this.isOwnedDuplicateWeapon(p) && !this.isDown && this.hp > 0
+        && Math.hypot(this.px - p.x, this.py - p.y) < this.p.pr + p.radius
+      ) {
+        this.drawShopText("OWNED", sx, sy - 22, "#aeb9c4");
       }
     }
   }
