@@ -397,11 +397,7 @@ export const FIXED_DT = 1 / TICK_HZ; // 50ms authoritative step
 //   cinder_gust wind is director-only (no hazard entity). All sit at idle defaults ("" / "idle" /
 //   0 / 0) in co-op and on the public path, and the whole director is behind isPvp. The bump lets
 //   a v47 client cleanly reject the widened hazard closed set + the new director fields.
-// v49 (Razor Halo visual progression): an orbit effect carries its authoritative angular speed
-// in EffectWire.y2, the slot that remains the span endpoint for wire effects. This is presentation
-// state only; it lets online clients grade Halo energy/trails from the equipped speed modifier
-// without inferring local build state. The bump fences the changed per-kind slot meaning.
-export const PROTOCOL_VERSION = 49;
+export const PROTOCOL_VERSION = 48;
 
 
 // How long the server reserves a disconnected player's body (their seat) before the
@@ -661,7 +657,7 @@ export interface EffectWire {
   o: string;              // owner player id ("" = departed owner)
   fx: WeaponId;           // authoring weapon (render recipe)
   x: number; y: number;
-  x2: number; y2: number; // wire span end; orbit uses x2=blade radius, y2=angular speed
+  x2: number; y2: number; // wire span end (wires only)
   r: number;              // zone radius / orbit ring / sentry body / tether sweep reach
   n: number;              // orbit blade count
   a: number;              // orbit blade phase (rad)
@@ -2182,7 +2178,7 @@ export function toEffectWire(e: Effect): EffectWire {
       break;
     case "orbit":
       base.r = e.ring; base.n = e.blades; base.a = e.angle; base.fl = e.flare;
-      base.x2 = e.bladeRadius; base.y2 = e.speed;
+      base.x2 = e.bladeRadius; // blade contact radius rides the spare span slot
       break;
     case "sentry":
       base.r = e.radius; base.hp = e.hp; base.mhp = e.maxHp;
@@ -2213,7 +2209,7 @@ export function effectFromWire(w: EffectWire): Effect {
     case "orbit":
       return {
         ...base, kind: "orbit", angle: w.a, ring: w.r, blades: w.n, bladeRadius: w.x2,
-        speed: w.y2, flare: w.fl, damage: 0, rehit: new Map(),
+        speed: 0, flare: w.fl, damage: 0, rehit: new Map(),
       };
     case "sentry":
       return {

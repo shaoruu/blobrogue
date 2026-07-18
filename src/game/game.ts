@@ -1,6 +1,6 @@
 import type { Dungeon, Room } from "../sim/dungeon.js";
 import { TILE } from "../sim/types.js";
-import type { Enemy, EnemyKind, Bullet, Particle, DmgNumber, Pickup, WeaponId, AttackMove, Prop, PropKind, Chest, Hazard, RemotePlayer, FloorHazard, FloorHazardKind, Effect } from "../sim/types.js";
+import type { Enemy, EnemyKind, Bullet, Particle, DmgNumber, Pickup, WeaponId, AttackMove, Prop, PropKind, Chest, Hazard, RemotePlayer, FloorHazard, FloorHazardKind, Effect, OrbitEffect } from "../sim/types.js";
 import { floorHazardPhaseAt, floorHazardPhaseFrac, RIFT_PULL_RADIUS } from "../sim/hazards.js";
 import type { FloorHazardPhase } from "../sim/hazards.js";
 import { Rng, randomSeed } from "../sim/rng.js";
@@ -90,7 +90,7 @@ import type { MatchPhase } from "../sim/pvp.js";
 import { ShockwaveField, ScreenFlash, AmbienceField } from "./vfx.js";
 import { LightingRenderer } from "./lighting.js";
 import type { StaticLightSpec } from "./lighting.js";
-import { haloVisualStrength, haloVisualTier } from "./haloVisual.js";
+import { HALO_VISUAL_BASE, haloVisualStrength, haloVisualTier } from "./haloVisual.js";
 import { settings } from "./settings.js";
 import { InputController } from "./input.js";
 import type { GameAction, InputContext } from "./input.js";
@@ -7232,8 +7232,9 @@ export class Game {
           }
           continue;
         }
-        const strength = haloVisualStrength(e.blades, e.bladeRadius, e.speed);
-        const tier = haloVisualTier(e.blades, e.bladeRadius, e.speed);
+        const visualSpeed = this.haloVisualSpeed(e);
+        const strength = haloVisualStrength(e.blades, e.bladeRadius, visualSpeed);
+        const tier = haloVisualTier(e.blades, e.bladeRadius, visualSpeed);
         const flare = Math.min(1, e.flare / 0.45);
         const pulse = settings.isReducedMotion
           ? 0.5
@@ -7358,9 +7359,16 @@ export class Game {
       const distanceSq = (ex - x) ** 2 + (ey - y) ** 2;
       if (distanceSq > nearestDistanceSq) continue;
       nearestDistanceSq = distanceSq;
-      strength = haloVisualStrength(effect.blades, effect.bladeRadius, effect.speed);
+      const visualSpeed = this.haloVisualSpeed(effect);
+      strength = haloVisualStrength(effect.blades, effect.bladeRadius, visualSpeed);
     }
     return strength;
+  }
+
+  private haloVisualSpeed(effect: OrbitEffect): number {
+    if (effect.speed > 0) return effect.speed;
+    if (effect.owner === LOCAL_ID) return HALO_VISUAL_BASE.speed * this.p.mods.bulletSpeedMult;
+    return 0;
   }
 
   // A sentryShot fired at (x,y): match it to the nearest live sentry (turrets are static and

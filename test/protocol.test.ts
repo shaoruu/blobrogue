@@ -222,12 +222,6 @@ function serverRoundTripTests(): void {
     const wire = decoded.effs.find((e) => e.k === "wire")!;
     const rebuilt = effectFromWire(wire);
     check("wire geometry survives the trip", rebuilt.kind === "wire" && rebuilt.x2 === 170 && rebuilt.arm === 0.4);
-    const orbit = decoded.effs.find((e) => e.k === "orbit")!;
-    const rebuiltOrbit = effectFromWire(orbit);
-    check(
-      "orbit speed survives the trip for authoritative Halo presentation",
-      orbit.y2 === 3.6 && rebuiltOrbit.kind === "orbit" && rebuiltOrbit.speed === 3.6,
-    );
     const sentry = decoded.effs.find((e) => e.k === "sentry")!;
     check("sentry durability survives the trip (the client draws real pips)", sentry.hp === 7 && sentry.mhp === 12);
   }
