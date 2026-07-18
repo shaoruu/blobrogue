@@ -2663,8 +2663,8 @@ export class Game {
           ? this.replayMeleeImpact(e.eid, e.puffX, e.puffY, e.crit)
           : null;
         if (e.crit) {
-          if (meleeWeapon === null) sfx("crit", { gain: 0.6 });
-          else waveAudio.play("melee.crit", { x: e.puffX, y: e.puffY });
+          if (e.melee) waveAudio.play("melee.crit", { x: e.puffX, y: e.puffY });
+          else sfx("crit", { gain: 0.6 });
           this.spawnSparkFlash(e.puffX, e.puffY, "#fff3c4");
           if (e.melee) this.burstFreeze = Math.max(this.burstFreeze, 0.03);
           else this.addFreeze(0.03); // a hair of impact-frame so a crit lands harder
