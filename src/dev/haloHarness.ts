@@ -88,7 +88,7 @@ export function bootHaloHarness(
       canvas.dispatchEvent(new MouseEvent("mousedown", { button: 0 }));
       window.setTimeout(() => window.dispatchEvent(new MouseEvent("mouseup", { button: 0 })), 120);
     };
-    window.setTimeout(fire, 250);
+    window.setTimeout(fire, 1500);
     window.setInterval(fire, 750);
   }
 

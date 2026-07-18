@@ -23,6 +23,7 @@ function startDevServer() {
     const processHandle = spawn("npm", ["run", "dev", "--", "--host", "127.0.0.1"], {
       cwd: ROOT,
       env: process.env,
+      detached: process.platform !== "win32",
     });
     let isSettled = false;
     const onData = (buffer) => {
@@ -85,7 +86,13 @@ async function main() {
     }
   } finally {
     await browser.close();
-    if (devProcess !== null) devProcess.kill("SIGTERM");
+    if (devProcess !== null) {
+      if (process.platform === "win32" || devProcess.pid === undefined) {
+        devProcess.kill("SIGTERM");
+      } else {
+        process.kill(-devProcess.pid, "SIGTERM");
+      }
+    }
   }
 }
 
