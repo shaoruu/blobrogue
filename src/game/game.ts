@@ -1,6 +1,6 @@
 import type { Dungeon, Room } from "../sim/dungeon.js";
 import { TILE } from "../sim/types.js";
-import type { Enemy, EnemyKind, Bullet, Particle, DmgNumber, Pickup, WeaponId, AttackMove, Prop, PropKind, Chest, Hazard, RemotePlayer, FloorHazard, FloorHazardKind, Effect } from "../sim/types.js";
+import type { Enemy, EnemyKind, Bullet, Particle, DmgNumber, Pickup, WeaponId, AttackMove, Prop, PropKind, Chest, Hazard, RemotePlayer, FloorHazard, FloorHazardKind, Effect, OrbitEffect } from "../sim/types.js";
 import { floorHazardPhaseAt, floorHazardPhaseFrac, RIFT_PULL_RADIUS } from "../sim/hazards.js";
 import type { FloorHazardPhase } from "../sim/hazards.js";
 import { Rng, randomSeed } from "../sim/rng.js";
@@ -90,6 +90,7 @@ import type { MatchPhase } from "../sim/pvp.js";
 import { ShockwaveField, ScreenFlash, AmbienceField } from "./vfx.js";
 import { LightingRenderer } from "./lighting.js";
 import type { StaticLightSpec } from "./lighting.js";
+import { HALO_VISUAL_BASE, haloVisualStrength, haloVisualTier } from "./haloVisual.js";
 import { settings } from "./settings.js";
 import { InputController } from "./input.js";
 import type { GameAction, InputContext } from "./input.js";
@@ -2932,7 +2933,18 @@ export class Game {
       }
       case "haloFlare":
         if (!waveAudio.cueAt("haloFlare", e.x, e.y)) this.sfxAt("meleeSwing", e.x, e.y, { rate: 1.3, gain: 0.7 });
-        this.shockwaves.spawn(e.x, e.y, 12, e.r, 0.3, "#d8f0e8", 3);
+        {
+          const strength = this.haloStrengthAt(e.x, e.y);
+          this.shockwaves.spawn(
+            e.x,
+            e.y,
+            12 - strength * 4,
+            e.r,
+            0.3 + strength * 0.1,
+            "#d8f0e8",
+            3 + strength * 2,
+          );
+        }
         break;
       case "sentryPlaced":
         if (!waveAudio.cueAt("sentryPlace", e.x, e.y)) this.sfxAt("chest", e.x, e.y, { rate: 1.4, gain: 0.5 });
@@ -7220,12 +7232,59 @@ export class Game {
           }
           continue;
         }
+        const visualSpeed = this.haloVisualSpeed(e);
+        const strength = haloVisualStrength(e.blades, e.bladeRadius, visualSpeed);
+        const tier = haloVisualTier(e.blades, e.bladeRadius, visualSpeed);
+        const flare = Math.min(1, e.flare / 0.45);
+        const pulse = settings.isReducedMotion
+          ? 0.5
+          : 0.5 + Math.sin(this.animClock * (3 + strength * 2) + e.id) * 0.5;
+        const glow = this.sprites.fxTinted("glow_round", "#d8f0e8");
+        ctx.save();
+        ctx.globalCompositeOperation = "lighter";
+        if (glow) {
+          const coreRadius = 10 + strength * 8 + flare * 4;
+          ctx.globalAlpha = 0.06 + strength * 0.1 + pulse * 0.03 + flare * 0.08;
+          ctx.drawImage(glow, cx - coreRadius, cy - coreRadius, coreRadius * 2, coreRadius * 2);
+        }
+        ctx.strokeStyle = "#d8f0e8";
+        ctx.lineCap = "round";
+        const trailArc = 0.09 + strength * 0.26 + flare * 0.08;
+        for (let layer = 0; layer <= tier; layer++) {
+          ctx.globalAlpha = (0.07 + strength * 0.17 + flare * 0.08) * (1 - layer * 0.24);
+          ctx.lineWidth = Math.max(1, 1 + strength * 1.4 - layer * 0.18);
+          ctx.beginPath();
+          for (let i = 0; i < e.blades; i++) {
+            const a = e.angle + (i / Math.max(1, e.blades)) * Math.PI * 2;
+            const radius = Math.max(1, e.ring - layer * 1.5);
+            const start = a - trailArc * (1 - layer * 0.16);
+            ctx.moveTo(cx + Math.cos(start) * radius, cy + Math.sin(start) * radius);
+            ctx.arc(cx, cy, radius, start, a - 0.035);
+          }
+          ctx.stroke();
+        }
+        ctx.globalAlpha = 0.1 + strength * 0.16 + flare * (0.12 + strength * 0.12);
+        ctx.lineWidth = 1 + strength * 1.5 + flare;
+        ctx.beginPath(); ctx.arc(cx, cy, e.ring, 0, 6.28); ctx.stroke();
+
         const blade = this.sprites.fxTinted("halo_blade", "#d8f0e8");
         for (let i = 0; i < e.blades; i++) {
           const a = e.angle + (i / Math.max(1, e.blades)) * Math.PI * 2;
           const bx = cx + Math.cos(a) * e.ring;
           const by = cy + Math.sin(a) * e.ring;
-          ctx.globalAlpha = 0.95;
+          if (glow) {
+            const bladeGlowRadius = e.bladeRadius * (0.72 + strength * 0.16 + flare * 0.08);
+            ctx.globalAlpha = 0.12 + strength * 0.2 + pulse * 0.05 + flare * 0.16;
+            ctx.drawImage(
+              glow,
+              bx - bladeGlowRadius,
+              by - bladeGlowRadius,
+              bladeGlowRadius * 2,
+              bladeGlowRadius * 2,
+            );
+          }
+          ctx.globalCompositeOperation = "source-over";
+          ctx.globalAlpha = 0.92 + strength * 0.06;
           if (blade) {
             ctx.save();
             ctx.translate(bx, by);
@@ -7246,11 +7305,9 @@ export class Game {
             ctx.fill();
             ctx.restore();
           }
+          ctx.globalCompositeOperation = "lighter";
         }
-        ctx.globalAlpha = e.flare > 0 ? 0.3 : 0.12;
-        ctx.strokeStyle = "#d8f0e8";
-        ctx.lineWidth = 1;
-        ctx.beginPath(); ctx.arc(cx, cy, e.ring, 0, 6.28); ctx.stroke();
+        ctx.restore();
       } else {
         // Tether: a sagging chain from the owner to the latched body.
         const target = this.enemies.find((en) => en.id === e.eid);
@@ -7292,6 +7349,28 @@ export class Game {
   private effectOwnerPos(e: Effect): [number, number] {
     if (e.owner === LOCAL_ID) return [this.px, this.py];
     return [e.x, e.y];
+  }
+
+  private haloStrengthAt(x: number, y: number): number {
+    let nearestDistanceSq = 48 * 48;
+    let strength = 0;
+    for (const effect of this.effects) {
+      if (effect.kind !== "orbit") continue;
+      const ex = effect.owner === LOCAL_ID ? this.px : effect.x;
+      const ey = effect.owner === LOCAL_ID ? this.py : effect.y;
+      const distanceSq = (ex - x) ** 2 + (ey - y) ** 2;
+      if (distanceSq > nearestDistanceSq) continue;
+      nearestDistanceSq = distanceSq;
+      const visualSpeed = this.haloVisualSpeed(effect);
+      strength = haloVisualStrength(effect.blades, effect.bladeRadius, visualSpeed);
+    }
+    return strength;
+  }
+
+  private haloVisualSpeed(effect: OrbitEffect): number {
+    if (effect.speed > 0) return effect.speed;
+    if (effect.owner === LOCAL_ID) return HALO_VISUAL_BASE.speed * this.p.mods.bulletSpeedMult;
+    return 0;
   }
 
   // A sentryShot fired at (x,y): match it to the nearest live sentry (turrets are static and
