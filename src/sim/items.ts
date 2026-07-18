@@ -422,7 +422,7 @@ export const ITEMS: readonly ItemDef[] = [
   },
   {
     id: "shared_rope", name: "SHARED ROPE",
-    descs: ["Revive from 12px farther away and channel 15% faster.", "Revive from 20px farther away and channel 25% faster.", "Revive from 28px farther away and channel 35% faster."],
+    descs: ["Revive from a short step farther away and channel 15% faster.", "Revive from a bit farther away and channel 25% faster.", "Revive from about half a tile farther away and channel 35% faster."],
     glyph: "&", tint: "#a8d7a0", rarity: "common",
     apply: (m, l) => {
       m.reviveRadiusBonus = Math.max(m.reviveRadiusBonus, lv([12, 20, 28], l));
@@ -433,9 +433,9 @@ export const ITEMS: readonly ItemDef[] = [
   {
     id: "crosscurrent", name: "CROSSCURRENT",
     descs: [
-      "Your rounds chain to +1 more body at 55% damage (jump 140px).",
-      "Your rounds chain +1 and pierce +1 at 60% damage (jump 160px).",
-      "Your rounds chain +2 and pierce +1 at 65% damage (jump 180px), preferring a new target.",
+      "Your rounds chain to +1 more body at 55% damage, jumping to a nearby target.",
+      "Your rounds chain +1 and pierce +1 at 60% damage, with a farther jump.",
+      "Your rounds chain +2 and pierce +1 at 65% damage with a longer jump reach, preferring a new target.",
     ],
     glyph: "~", tint: "#5fb6d6", rarity: "rare",
     apply: (m, l) => {
@@ -459,9 +459,9 @@ export const ITEMS: readonly ItemDef[] = [
   {
     id: "known_by_touch", name: "KNOWN BY TOUCH",
     descs: [
-      "Dash end or a melee/skill hit reveals hidden bodies for 1.6s (90px).",
-      "Dash end or a melee/skill hit reveals hidden bodies for 2.2s (120px).",
-      "Dash end or a melee/skill hit reveals hidden bodies for 3.0s (150px).",
+      "Dash end or a melee/skill hit reveals nearby hidden bodies for 1.6s.",
+      "Dash end or a melee/skill hit reveals hidden bodies in a wider area for 2.2s.",
+      "Dash end or a melee/skill hit reveals hidden bodies in a wide area for 3.0s.",
     ],
     glyph: "o", tint: "#d8d0b0", rarity: "common",
     apply: (m, l) => {
@@ -487,9 +487,9 @@ export const ITEMS: readonly ItemDef[] = [
   {
     id: "carry_the_light", name: "CARRY THE LIGHT",
     descs: [
-      "Revive +10px & +12% faster; ally revive cuts 10% of your fire cooldown. Light 70px.",
-      "Revive +18px & +20% faster; ally revive cuts 18% of your fire cooldown. Light 100px.",
-      "Revive +26px & +30% faster; ally revive cuts 25% and readies your weapon. Light 130px.",
+      "Revive from a bit farther & 12% faster; ally revive cuts 10% of your fire cooldown. A bit more light around you.",
+      "Revive from farther & 20% faster; ally revive cuts 18% of your fire cooldown. A wider glow.",
+      "Revive from much farther & 30% faster; ally revive cuts 25% and readies your weapon. The widest glow.",
     ],
     glyph: "*", tint: "#ffe08a", rarity: "uncommon",
     apply: (m, l) => {
