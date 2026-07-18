@@ -135,9 +135,13 @@ export function petCooldownTicks(verb: PetVerb): number {
 // stays in one file. A read with no useful context returns false and the CD is never burned (the
 // same fail-soft rail the retired manual bind had).
 export const PET_AUTOCAST = {
-  // PEBBLEBRACE braces when the owner is hurt: any HP missing, or a hit landed within this window.
-  // A pure tick comparison (deterministic, no wall-clock) keeps the AI reconnect-safe.
+  // PEBBLEBRACE braces on a HIGH-SIGNAL hurt read only (GD rail: smart != greedy — never full-HP
+  // idle): a hit landed within this window, OR the owner sits in the low-HP band below. A near-full
+  // owner with no fresh hit is left alone. A pure tick comparison (no wall-clock) keeps it
+  // deterministic + reconnect-safe.
   recentDamageTicks: secToTicks(2.0),
+  // The low-HP band that alone justifies a proactive brace (<= half HP = genuine danger, not a chip).
+  braceLowHpFrac: 0.5,
   // SLIMETRAIL drops a slow patch when at least one NON-boss enemy stands within this reach of the
   // owner — close enough that the patch under the owner will actually be crossed.
   slimeEnemyRadius: 100,

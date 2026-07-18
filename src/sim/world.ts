@@ -1760,7 +1760,7 @@ function tryStartPetAbility(w: WorldState, p: PlayerSim): void {
 //   STALK       — an eligible mark (elite, or anyone mid-tell) is in reach (defers to findPetTarget)
 //   EMBERPUFF   — a cinder pool overlaps the owner's reach (there is fire to shorten)
 //   SLIMETRAIL  — a non-boss enemy stands close enough to cross a patch dropped under the owner
-//   PEBBLEBRACE — the owner is hurt (HP missing or hit recently): brace, never at full-HP idle
+//   PEBBLEBRACE — a high-signal hurt read (hit within ~2s, OR in the low-HP band): never idle chip
 //   RATTLE      — an interruptible trash wind-up is in reach (defers to findPetTarget)
 //   NULLWAKE    — the owner is taking / about to take floor-hazard damage (cinder, or a live/arming tile)
 function shouldPetAutoCast(w: WorldState, p: PlayerSim, verb: PetVerb): boolean {
@@ -1770,7 +1770,7 @@ function shouldPetAutoCast(w: WorldState, p: PlayerSim, verb: PetVerb): boolean 
     case "stalk": return findPetTarget(w, p, "stalk") !== null;
     case "emberpuff": return cinderOverlapsReach(w, p, PET_ABILITY.emberpuff.radius);
     case "slimetrail": return hasSlowableEnemyNear(w, p);
-    case "pebblebrace": return p.hp < p.maxHp || wasOwnerRecentlyDamaged(w, p);
+    case "pebblebrace": return wasOwnerRecentlyDamaged(w, p) || p.hp <= p.maxHp * PET_AUTOCAST.braceLowHpFrac;
     case "rattle": return findPetTarget(w, p, "rattle") !== null;
     case "nullwake": return isOwnerInFloorHazardDanger(w, p);
   }

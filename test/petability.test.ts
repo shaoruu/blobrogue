@@ -17,7 +17,7 @@ import type { WorldState, PlayerSim } from "../src/sim/world.js";
 import type { InputCmd } from "../src/sim/input.js";
 import type { Pickup, Hazard, Enemy, EnemyTier } from "../src/sim/types.js";
 import {
-  PET_ABILITY, petVerbFor, petCooldownTicks, petVerbNeedsTarget, slimeSlowMul, isFetchablePickup,
+  PET_ABILITY, PET_AUTOCAST, petVerbFor, petCooldownTicks, petVerbNeedsTarget, slimeSlowMul, isFetchablePickup,
 } from "../src/sim/petAbilities.js";
 import {
   DOGGIE_PET_ID, WICK_PET_ID, CAT_PET_ID, DRAGON_PET_ID, SLIME_PET_ID,
@@ -468,13 +468,13 @@ function autoCastFiresTests(): void {
     check("SLIMETRAIL auto-drops a patch near a non-boss enemy", w.hazards.some((h) => h.kind === "slime"));
   }
 
-  // PEBBLEBRACE: a hurt owner auto-braces (never at full HP — see the idle suite).
+  // PEBBLEBRACE: an owner in the low-HP band auto-braces (never at full HP — see the idle suite).
   {
     const w = coopWorld();
     const p = addPet(w, "a", PEBBLE_PET_ID);
-    p.hp = p.maxHp - 1;
+    p.hp = Math.floor(p.maxHp * PET_AUTOCAST.braceLowHpFrac); // in the low-HP band
     idle(w, "a", 12);
-    check("PEBBLEBRACE auto-braces a hurt owner", p.petShieldT > 0);
+    check("PEBBLEBRACE auto-braces an owner in the low-HP band", p.petShieldT > 0);
   }
 
   // RATTLE: a trash wind-up in reach is auto-interrupted.
@@ -563,10 +563,36 @@ function autoCastRailsTests(): void {
   }
 }
 
+function pebbleBraceHighSignalTests(): void {
+  section("PEBBLEBRACE smart != greedy: braces on a hit / low-HP band, NOT at near-full idle");
+
+  // Near-full and untouched: a single missing pip above the band is NOT worth a brace.
+  {
+    const w = coopWorld();
+    const p = addPet(w, "a", PEBBLE_PET_ID);
+    w.enemies.length = 0;
+    p.hp = p.maxHp - 1; // above the low-HP band, no recent hit
+    idle(w, "a", 20);
+    check("no brace at near-full idle (one pip missing, no hit)", p.petShieldT === 0 && p.petCdReadyAtTick === 0);
+  }
+
+  // A recent hit is high-signal even at high HP: brace reactively.
+  {
+    const w = coopWorld();
+    const p = addPet(w, "a", PEBBLE_PET_ID);
+    w.enemies.length = 0;
+    p.hp = p.maxHp - 1;
+    p.lastDamagedTick = w.tick; // just took a hit this tick
+    idle(w, "a", 12);
+    check("braces on a recent hit even at high HP", p.petShieldT > 0);
+  }
+}
+
 pureContractTests();
 autoCastFiresTests();
 autoCastIdleNoFireTests();
 autoCastRailsTests();
+pebbleBraceHighSignalTests();
 tellAndServerAuthorityTests();
 cooldownTests();
 downedTests();
