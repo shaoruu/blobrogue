@@ -400,7 +400,7 @@ section("10k deterministic offer seeds");
   let slots = 0;
   let isClean = true;
   const seen = new Set<string>();
-  for (let seed = 0; seed < 50_000; seed++) {
+  for (let seed = 0; seed < 10_000; seed++) {
     const normalRng = new Rng(pvpDraftSeed(seed, "p1", 900, 1));
     const comebackRng = new Rng(pvpDraftSeed(seed, "p1", 900, 1));
     const normal = rollPvpDraftChoicesWith(3, () => normalRng.next(), [], { tierBump: 0 });
@@ -442,7 +442,7 @@ section("10k deterministic offer seeds");
   const upgradeId = "full_metal";
   let upgradeHits = 0;
   let newHits = 0;
-  for (let seed = 0; seed < 10_000; seed++) {
+  for (let seed = 0; seed < 50_000; seed++) {
     const rng = new Rng(seed ^ 0x61a9);
     const picks = rollPvpDraftChoicesWith(1, () => rng.next(), [upgradeId]);
     for (const pick of picks) {
