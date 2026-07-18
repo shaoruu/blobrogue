@@ -98,6 +98,8 @@ import {
   pvpRespawnWaitSafeIntervalTicks, pvpRespawnWaitSafeMaxTicks,
   isPvpRespawnCandidateSafe, isPvpRespawnCandidateThreatened, pvpRespawnThreatFlags,
   isPvpWeaponSupported,
+  HEARTH, isWithinHearth, pvpHearthArmTicks, pvpHearthEmptyDecayTicks,
+  pvpHearthArmedHoldTicks, pvpHearthEmberWindowTicks,
 } from "./pvp.js";
 import type {
   WorldMode,
@@ -549,6 +551,19 @@ export interface PlayerSim {
   pvpDraftOfferElapsedTicks: number;
   isPvpDraftDeathDelayReported: boolean;
   isPvpDraftAbsenceDelayReported: boolean;
+  // ---- PVP WAVE 2 · CONTESTED HEARTH (Pillar A) ----
+  // Accrued UNCONTESTED standing on the center hearth, in ticks (0..armTicks). A full stand
+  // (armTicks) arms one ember_edge charge and resets this to 0. Server-owned + reconciled so the
+  // HUD Favor pip is reconnect-safe. Always 0 in co-op / outside a live pvp match.
+  hearthFavorT: number;
+  // Remaining ember_edge active window in ticks (0 = no charge armed). Set to the ember window on
+  // arm; decrements each world tick; force-cleared 1.5s after leaving the radius, on the next gun
+  // hit (spent), and on death. Server-owned + reconciled (HUD ember pip). Always 0 in co-op.
+  hearthEmberT: number;
+  // Ticks since this player was last standing in the hearth radius (0 while inside). Drives the
+  // 0.40s unarmed-progress clear and the 1.5s armed-charge hold. Server-only bookkeeping (never
+  // wired — the client renders only the Favor/ember readouts above). Always 0 in co-op.
+  hearthAwayT: number;
 }
 
 // Extra AI target points fed in by the client from co-op presence (Stage A keeps co-op on
@@ -842,6 +857,9 @@ export function createPlayer(id: PlayerId, x: number, y: number): PlayerSim {
     pvpDraftOfferElapsedTicks: 0,
     isPvpDraftDeathDelayReported: false,
     isPvpDraftAbsenceDelayReported: false,
+    hearthFavorT: 0,
+    hearthEmberT: 0,
+    hearthAwayT: 0,
   };
 }
 
@@ -2290,7 +2308,7 @@ export function loadFloorIntoWorld(w: WorldState, floor: number, playerCountAtLo
     // where a clean slate is exactly right.
     const arena = buildPvpArena();
     w.dungeon = arena.dungeon;
-    w.match = createMatchState(arena.spawns, arena.pits);
+    w.match = createMatchState(arena.spawns, arena.pits, arena.centerPickup);
     pvpCover = arena.cover;
     for (const p of w.players.values()) p.pvpRecentSpawnIndices = [];
   } else {
@@ -15988,6 +16006,10 @@ interface PvpHitContext {
   weapon: WeaponId;
   dirX: number;
   dirY: number;
+  // Set ONLY at the direct gun-hit site when the attacker holds a live ember_edge charge. The
+  // funnel adds the flat chip + the KB scalar and spends the charge (once). Undefined everywhere
+  // else (splash / chain / melee / co-op), so ember never leaks past "the next 1 gun hit".
+  isEmber?: boolean;
 }
 
 // The ONE player-damage funnel. `by` is the attacking player for kill attribution (bullet.owner
@@ -16165,12 +16187,12 @@ function pvpDraftOutputScale(w: WorldState, by: PlayerId | null, weapon: WeaponI
   return outputPerSec > outputCap ? outputCap / outputPerSec : 1;
 }
 
-function applyPvpKnockback(w: WorldState, p: PlayerSim, hit: PvpHitContext | null): number {
+function applyPvpKnockback(w: WorldState, p: PlayerSim, hit: PvpHitContext | null, emberScalar = 1): number {
   if (hit === null) return 0;
   const protectionScale = isProtected(p) ? PVP.kbSelfDuringIframe : 1;
   const distance = Math.min(
     PVP.kbMaxPerHit,
-    Math.max(0, C.WEAPON_KB[hit.weapon] * PVP.kbScalar * protectionScale),
+    Math.max(0, C.WEAPON_KB[hit.weapon] * PVP.kbScalar * emberScalar * protectionScale),
   );
   if (distance <= 0) return 0;
   const magnitude = Math.hypot(hit.dirX, hit.dirY) || 1;
@@ -16282,6 +16304,13 @@ function damagePlayerPvp(
   if (isProtected(p)) return;
   if (amount <= 0) return;
   if (pvpHit !== null) amount *= pvpDraftOutputScale(w, by, pvpHit.weapon);
+  // Contested-hearth ember_edge: a live charge on the ATTACKER adds a flat chip to this one gun
+  // hit — post output-scale (a flat +8, never multiplied by drafts) and pre-cap (the anti-one-shot
+  // clamp still bounds it). Only the direct gun-hit site sets isEmber, so splash/chain/melee are
+  // never "the next gun hit".
+  const attacker = by !== null && by !== p.id ? w.players.get(by) : undefined;
+  const isEmberHit = pvpHit?.isEmber === true && attacker !== undefined && attacker.hearthEmberT > 0;
+  if (isEmberHit) amount += HEARTH.emberBonusDamage;
   // Per-victim, per-tick cumulative clamp: no single tick (one trigger / pellet stack / crit)
   // may remove more than perHitCap HP. This is the hard anti-one-shot backstop that holds even
   // after per-weapon tuning.
@@ -16289,10 +16318,13 @@ function damagePlayerPvp(
   const already = m.dmgThisTick.get(p.id) ?? 0;
   amount = Math.min(amount, Math.max(0, cap - already));
   if (amount <= 0) return;
+  // The charge is SPENT the instant its gun hit lands damage (never twice — a multi-pellet volley
+  // or pierce chain reads hearthEmberT === 0 for every later hit this tick).
+  if (isEmberHit && attacker !== undefined) attacker.hearthEmberT = 0;
   m.dmgThisTick.set(p.id, already + amount);
   if (by !== null) {
-    const attacker = w.players.get(by);
-    if (attacker !== undefined) breakPvpSpawnShield(w, attacker, ev);
+    const shieldBreaker = w.players.get(by);
+    if (shieldBreaker !== undefined) breakPvpSpawnShield(w, shieldBreaker, ev);
   }
   if (by !== null && by !== p.id) {
     p.lastPvpHitBy = by;
@@ -16315,7 +16347,7 @@ function damagePlayerPvp(
       victimHp: Math.max(0, p.hp),
     });
   }
-  const knockback = applyPvpKnockback(w, p, pvpHit);
+  const knockback = applyPvpKnockback(w, p, pvpHit, isEmberHit ? HEARTH.emberKbScalar : 1);
   if (knockback > 0 && by !== null && by !== p.id) {
     p.lastPvpKnockbackBy = by;
     p.lastPvpKnockbackTick = w.tick;
@@ -16442,10 +16474,14 @@ function resolvePvpHits(w: WorldState, ev: SimEvent[]): void {
       // own radius and takes exactly one splash), exactly as the enemy resolve treats them.
       if (b.blast !== undefined) { detonateBullet(w, b, sweptHit.x, sweptHit.y, ev); break; }
       if (b.implode !== undefined) { implodeBullet(w, b, sweptHit.x, sweptHit.y, ev); break; }
+      // A direct bullet is "the next 1 gun hit" ember_edge spends on: flag it when the shooter
+      // holds a live charge (the funnel adds the flat chip + KB scalar and consumes the charge).
+      const shooter = w.players.get(owner);
       damagePlayer(w, victim, pvpHitDamage(b.fx ?? PVP.startWeapon, b.damage), ev, owner, {
         weapon: b.fx ?? PVP.startWeapon,
         dirX: b.vx,
         dirY: b.vy,
+        isEmber: shooter !== undefined && shooter.hearthEmberT > 0,
       });
       // Reaper: a KILLING round bursts the foe into seeking shards (the cascade twin).
       if (victim.hp <= 0 && b.killShards !== undefined && b.killShards > 0) spawnKillShards(w, b, victim.x, victim.y, shardSpawns);
@@ -16574,6 +16610,9 @@ function resetPvpLifeTransient(p: PlayerSim): void {
   p.overdriveT = 0; p.overheatT = 0; p.phaseSpeed = 0; p.ultInvuln = 0;
   p.passiveState = 0; p.overshield = 0; p.overshieldRegenT = 0;
   p.isUltRequested = false; p.isPulseRequested = false;
+  // Contested-hearth: Favor + armed ember_edge NEVER survive a death or carry across a (re)spawn
+  // (Quill FINAL — "Death: Favor + charge cleared"; "no carry across death").
+  p.hearthFavorT = 0; p.hearthEmberT = 0; p.hearthAwayT = 0;
 }
 
 // Wipe every PLAYER-OWNED transient object from the arena — in-flight bullets and every deployed
@@ -16775,6 +16814,81 @@ function firePvpSuddenDeath(w: WorldState, leader: PlayerId | null, ev: SimEvent
   if (!isMatchPoint && !isFinalClock) return;
   m.isSuddenDeath = true;
   ev.push({ t: "pvpSuddenDeath", leader });
+}
+
+// A living, PRESENT, un-downed, non-respawning body — the "living player" unit the hearth
+// occupancy scan (and the contested read) counts. Spawn protection gates combat, not presence,
+// so a protected body still occupies the hearth.
+function isPvpHearthBody(p: PlayerSim | undefined): p is PlayerSim {
+  return p !== undefined && !p.isAbsent && !p.isDown && p.hp > 0 && p.respawnT === 0;
+}
+
+// Is the center hearth CONTESTED right now (>= 2 living bodies in the ring)? A pure read the wire
+// projects for the HUD's contested VFX; the authoritative accrual re-derives occupancy itself.
+export function isPvpHearthContested(w: WorldState): boolean {
+  const m = w.match;
+  if (m === null || m.phase !== "live") return false;
+  let occupancy = 0;
+  for (const p of w.players.values()) {
+    if (!isPvpHearthBody(p)) continue;
+    if (isWithinHearth(p, m.hearthCenter) && ++occupancy >= 2) return true;
+  }
+  return false;
+}
+
+// PVP WAVE 2 · CONTESTED HEARTH (Pillar A — HOLD_THE_HEARTH). One lone body standing UNCONTESTED
+// on the center hearth accrues Favor; a full stand (armTicks) arms one ember_edge charge (a flat
+// next-gun-hit chip resolved in the damage funnel). Contested (>= 2 in radius) PAUSES Favor;
+// leaving decays unarmed progress after 0.40s and drops an armed charge 1.5s after leaving. The
+// ember window also counts down 4.0s from arm regardless. Runs only in a LIVE, non-grace-paused
+// match — the same gate the respawn clock uses, so a paused match freezes the hearth too. Pure
+// server logic (authoritative-only, never predicted): the timers ride SelfWire, reconciled.
+function stepPvpHearth(w: WorldState): void {
+  const m = w.match;
+  if (m === null || m.phase !== "live") return;
+  if (pvpPresentPlayers(w).length < PVP.minPlayers) return; // grace pause freezes the hearth
+  const armTicks = pvpHearthArmTicks();
+  const emptyDecayTicks = pvpHearthEmptyDecayTicks();
+  const armedHoldTicks = pvpHearthArmedHoldTicks();
+  const emberWindowTicks = pvpHearthEmberWindowTicks();
+  const ids = [...w.players.keys()].sort();
+  const inHearth = new Map<PlayerId, boolean>();
+  let occupancy = 0;
+  for (const id of ids) {
+    const p = w.players.get(id);
+    const isIn = isPvpHearthBody(p) && isWithinHearth(p, m.hearthCenter);
+    inHearth.set(id, isIn);
+    if (isIn) occupancy++;
+  }
+  for (const id of ids) {
+    const p = w.players.get(id);
+    if (p === undefined) continue;
+    const isIn = inHearth.get(id) === true;
+    let isJustArmed = false;
+    if (isIn && occupancy === 1) {
+      // Uncontested: accrue Favor; a full stand arms (or refreshes) one ember_edge charge.
+      p.hearthAwayT = 0;
+      p.hearthFavorT++;
+      if (p.hearthFavorT >= armTicks) {
+        p.hearthFavorT = 0;
+        p.hearthEmberT = emberWindowTicks; // max 1; a refresh replaces
+        isJustArmed = true;
+      }
+    } else if (isIn) {
+      // Contested (>= 2 bodies in radius): Favor PAUSES — held, neither accrues nor decays.
+      p.hearthAwayT = 0;
+    } else {
+      // Out of the radius: unarmed progress clears after emptyDecay; armed charge drops after
+      // armedHold (the ember window countdown below still applies, so the effective drop is the
+      // earlier of the two).
+      p.hearthAwayT++;
+      if (p.hearthFavorT > 0 && p.hearthAwayT >= emptyDecayTicks) p.hearthFavorT = 0;
+      if (p.hearthEmberT > 0 && p.hearthAwayT >= armedHoldTicks) p.hearthEmberT = 0;
+    }
+    // A live charge always burns down its 4.0s window (a camped charge still expires) — but never
+    // on the very tick it armed, so a fresh charge gets its full window.
+    if (!isJustArmed && p.hearthEmberT > 0) p.hearthEmberT--;
+  }
 }
 
 // The frag-limit RESPAWN deathmatch state machine (lobby -> countdown -> live -> over). Pure sim,
@@ -17244,6 +17358,7 @@ export function stepWorldPhase(w: WorldState, dt: number, ev: SimEvent[]): void 
     // no-snowball), NO revives, NO all-down wipe, and NO floor descend. PvP's free draft reuses
     // only the shared offer timeout/apply plumbing.
     tickPendingBlessings(w, dt, ev);
+    stepPvpHearth(w);
     stepPvpMatch(w, ev);
   } else {
     updateUlts(w, ev);

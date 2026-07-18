@@ -90,7 +90,8 @@ import type {
 // v44: Content Wave C catalog `3` guns-only closed WeaponId (hushiron/backtalk/lamplighter/faultlink) + `cat` version 3.
 // v45: Pet abilities framework — client `input` gains a `petAbility` bit + SelfWire gains the owner-bound CD/tell/light/fetch readout.
 // v46: Pet abilities roster — SelfWire gains the PEBBLEBRACE/NULLWAKE windows, EnemyWire gains the STALK info-pip, a new `slime` HazardKind rides `hzds`.
-export const SYNTHETIC_JOIN_PROTOCOL = 46;
+// v47: PVP Wave 2 Contested Hearth — SelfWire gains the hearth Favor/ember timers (hf/he), MatchWire gains the contested bool (hc).
+export const SYNTHETIC_JOIN_PROTOCOL = 47;
 export const SYNTHETIC_COOP_TICKET_ENVELOPE = "v1";
 export const SYNTHETIC_PVP_TICKET_ENVELOPE = "v2";
 export const SYNTHETIC_ADMISSION_ENVELOPE = "a2";

@@ -1,6 +1,6 @@
 import { FIXED_DT, type MatchWire } from "../net/protocol.js";
 import type { PlayerId } from "../sim/input.js";
-import { pvpSpawnHardGraceTicks, pvpSpawnShieldTicks } from "../sim/pvp.js";
+import { HEARTH, pvpSpawnHardGraceTicks, pvpSpawnShieldTicks, pvpHearthFavorPips } from "../sim/pvp.js";
 import type { MatchPhase } from "../sim/pvp.js";
 
 export interface ArenaScoreRow {
@@ -22,6 +22,14 @@ export interface ArenaMatchHudState {
   spawnProtection: "grace" | "shield" | null;
   spawnProtectionFill: number;
   isSpawnProtectionFinalPulse: boolean;
+  // CONTESTED HEARTH (Pillar A) readouts, all derived from authoritative wire state (arena only):
+  // the local Favor pip progress (0..favorMax), the armed ember_edge state + its remaining
+  // seconds, and whether the hearth is contested right now.
+  hearthFavorPips: number;
+  hearthFavorMax: number;
+  isEmberArmed: boolean;
+  emberSeconds: number;
+  isHearthContested: boolean;
 }
 
 export interface ArenaMatchHudSource {
@@ -32,6 +40,9 @@ export interface ArenaMatchHudSource {
   spawnProtectionStartedTick: number;
   spawnHardGraceEndsAtTick: number;
   spawnShieldEndsAtTick: number;
+  // CONTESTED HEARTH: the local player's authoritative hearth timers (SelfWire hf/he, ticks).
+  hearthFavorTicks: number;
+  hearthEmberTicks: number;
   nameOf: (id: PlayerId, isSelf: boolean) => string;
 }
 
@@ -130,6 +141,11 @@ export function buildArenaMatchHud(source: ArenaMatchHudSource): ArenaMatchHudSt
         ? Math.max(0, Math.min(1, protectionTicks / pvpSpawnShieldTicks()))
         : 0,
     isSpawnProtectionFinalPulse: spawnProtection !== null && protectionTicks <= Math.round(0.5 / FIXED_DT),
+    hearthFavorPips: source.match.ph === "live" ? pvpHearthFavorPips(source.hearthFavorTicks) : 0,
+    hearthFavorMax: HEARTH.favorTicksToArm,
+    isEmberArmed: source.match.ph === "live" && source.hearthEmberTicks > 0,
+    emberSeconds: source.match.ph === "live" ? Math.max(0, Math.ceil(source.hearthEmberTicks * FIXED_DT)) : 0,
+    isHearthContested: source.match.ph === "live" && source.match.hc === true,
   };
 }
 
@@ -144,7 +160,19 @@ export function arenaLaneCopy(match: ArenaMatchHudState | null): string {
   if (match.phase === "countdown") return "ARENA \u00b7 MATCH STARTING";
   if (match.phase === "over") return "ARENA \u00b7 MATCH OVER";
   const fragLabel = match.selfFrags === 1 ? "FRAG" : "FRAGS";
-  return `ARENA \u00b7 ${formatArenaClock(match.secondsLeft)} \u00b7 ${match.selfFrags} ${fragLabel}`;
+  return `ARENA \u00b7 ${formatArenaClock(match.secondsLeft)} \u00b7 ${match.selfFrags} ${fragLabel}${arenaHearthCopy(match)}`;
+}
+
+// The compact contested-hearth readout appended to the live arena lane (arena only). Empty
+// unless something is live, so the default lane copy — and its golden — is unchanged. An armed
+// ember_edge takes priority over Favor progress; a contested hearth annotates the pause.
+export function arenaHearthCopy(match: ArenaMatchHudState): string {
+  if (match.phase !== "live") return "";
+  if (match.isEmberArmed) return ` \u00b7 EMBER ${match.emberSeconds}s`;
+  const pips = "\u25c6".repeat(match.hearthFavorPips) + "\u25c7".repeat(Math.max(0, match.hearthFavorMax - match.hearthFavorPips));
+  if (match.isHearthContested) return ` \u00b7 HEARTH CONTESTED`;
+  if (match.hearthFavorPips > 0) return ` \u00b7 HEARTH ${pips}`;
+  return "";
 }
 
 export function arenaCenterCopy(match: ArenaMatchHudState | null): ArenaCenterCopy | null {
