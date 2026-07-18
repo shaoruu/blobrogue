@@ -5,7 +5,6 @@
 //   npm run screens:halo -- [outDir] [baseUrl]
 
 import { chromium } from "playwright-core";
-import { spawn } from "node:child_process";
 import { mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -18,40 +17,28 @@ const CHROME = "/usr/bin/google-chrome";
 
 mkdirSync(OUT_DIR, { recursive: true });
 
-function startDevServer() {
-  return new Promise((resolve, reject) => {
-    const processHandle = spawn("npm", ["run", "dev", "--", "--host", "127.0.0.1"], {
-      cwd: ROOT,
-      env: process.env,
-      detached: process.platform !== "win32",
-    });
-    let isSettled = false;
-    const onData = (buffer) => {
-      const text = buffer.toString();
-      process.stdout.write(`[vite] ${text}`);
-      const match = text.match(/Local:\s+(http:\/\/[^\s]+)/);
-      if (match !== null && !isSettled) {
-        isSettled = true;
-        resolve({ processHandle, url: match[1].replace(/\/$/, "") });
-      }
-    };
-    processHandle.stdout.on("data", onData);
-    processHandle.stderr.on("data", (buffer) => process.stderr.write(`[vite:err] ${buffer}`));
-    processHandle.on("exit", (code) => {
-      if (!isSettled) reject(new Error(`vite exited before ready (code ${code})`));
-    });
-    setTimeout(() => {
-      if (!isSettled) reject(new Error("vite did not report a Local URL in time"));
-    }, 60000);
+async function startDevServer() {
+  const { createServer } = await import("vite");
+  const server = await createServer({
+    root: ROOT,
+    logLevel: "warn",
+    server: { host: "127.0.0.1", port: 0 },
   });
+  await server.listen();
+  const url = server.resolvedUrls?.local[0];
+  if (url === undefined) {
+    await server.close();
+    throw new Error("Vite did not expose a local capture URL");
+  }
+  return { server, url: url.replace(/\/$/, "") };
 }
 
 async function main() {
-  let devProcess = null;
+  let devServer = null;
   let url = EXTERNAL_URL;
   if (url === null) {
     const started = await startDevServer();
-    devProcess = started.processHandle;
+    devServer = started.server;
     url = started.url;
   }
 
@@ -86,16 +73,7 @@ async function main() {
     }
   } finally {
     await browser.close();
-    if (devProcess !== null) {
-      if (process.platform === "win32" || devProcess.pid === undefined) {
-        devProcess.kill("SIGTERM");
-      } else {
-        process.kill(-devProcess.pid, "SIGTERM");
-      }
-      devProcess.stdout.destroy();
-      devProcess.stderr.destroy();
-      devProcess.unref();
-    }
+    if (devServer !== null) await devServer.close();
   }
 }
 
