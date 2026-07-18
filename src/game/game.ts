@@ -8476,6 +8476,10 @@ export class Game {
     const { ctx, renderCam: cam } = this;
     for (const b of this.bullets) {
       const bx = b.x - cam.x, by = b.y - cam.y;
+      // Off-screen rounds draw nothing visible; skip their (multi-layer) FX entirely so a
+      // spray weapon's rounds flying past the view cost nothing. Margin covers the glow/streak
+      // reach so a round about to enter frame is never clipped early.
+      if (!this.isNearCamera(b.x, b.y, 48)) continue;
       if (b.friendly) {
         // Layered additive sprite FX per weapon; falls back to the plain circle if the
         // recipe's core sprite hasn't loaded yet, so a bullet always renders.
