@@ -3345,7 +3345,7 @@ export class Game {
     const localHits = this.meleeSwing?.hitList;
     if (this.animClock <= this.meleeImpactUntil && localHits) {
       for (const enemy of localHits) {
-        if (enemy.id === eid) {
+        if (typeof enemy !== "number" && enemy.id === eid) {
           isLocalBladeHit = true;
           break;
         }
