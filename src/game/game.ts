@@ -665,6 +665,14 @@ const TIER_RING_COLOR: Partial<Record<EnemyTier, string>> = {
 
 const AIM_SOLID: number[] = [];
 
+// SEVER (F55) shares the Weaver placeholder sheet, so until bespoke art lands the client recolors
+// its body to a cold WORLDSPLIT teal (distinct from the Weaver's violet) and dresses it with a
+// teal setpiece aura + rim — so the two never read as the same creature. Purely a client dress on
+// the shared placeholder; a dedicated sever sheet drops in with zero further change.
+const SEVER_BODY_TINT = "#3fd8c4";
+const SEVER_AURA_GUARD = "#2fd9c0";
+const SEVER_AURA_EXPOSE = "#7fb8b0";
+
 // Animated prop frame tables (indexed by frameIndex), hoisted so the tile loop never allocates.
 const TORCH_FRAMES: TileName[] = ["torch_f0", "torch_f1", "torch_f2"];
 
@@ -6490,7 +6498,7 @@ export class Game {
       // "setpiece" at a glance and DOUBLES as the guard/expose read (saturated + swelling
       // while GUARDED, drained + desaturated while EXPOSED). State = the authoritative aux
       // flag off the wire, never authored client-side.
-      if (e.kind === "jet" || e.kind === "tithe" || e.kind === "quorum" || isGiantKind(e.kind)) this.renderBossAura(e, sx, sy, drawSize);
+      if (e.kind === "jet" || e.kind === "tithe" || e.kind === "quorum" || e.kind === "sever" || isGiantKind(e.kind)) this.renderBossAura(e, sx, sy, drawSize);
       // The reworked boss attacks' authoritative footprints (reusable parametric primitives),
       // drawn on the ground plane UNDER the body during their windup + active beats.
       if (this.isBossTelegraphMove(e) && (isWindup || a.phase === "active")) this.renderBossTelegraph(e, sx, sy);
@@ -6558,10 +6566,15 @@ export class Game {
         xf.sy -= a.windup * 0.18;
         xf.oy -= Math.sin(a.windup * Math.PI) * 10;
       }
+      // SEVER borrows the Weaver placeholder sheet — recolor its body to the cold WORLDSPLIT
+      // teal and run it a touch larger so it never reads as the violet Weaver (temporary dress
+      // until dedicated art; drops out the moment a real sever sheet ships).
+      const bodyTint = e.kind === "sever" ? SEVER_BODY_TINT : null;
+      if (e.kind === "sever") extra *= 1.12;
       // A white pulse on the sprite intensifies as the windup nears release.
       const pulse = 0.55 + 0.45 * Math.sin(anim.clock * 13);
       const telegraphFlash = isWindup ? a.windup * pulse * 0.85 : 0;
-      this.drawChar(spriteName, choice.clip, sx, sy, drawSize, facing, xf, extra, alpha, Math.max(anim.flash, telegraphFlash), anim.clock, null, choice.isHoldFirstFrame);
+      this.drawChar(spriteName, choice.clip, sx, sy, drawSize, facing, xf, extra, alpha, Math.max(anim.flash, telegraphFlash), anim.clock, bodyTint, choice.isHoldFirstFrame);
 
       // JET's EXPOSE overlay: one reusable crack+desaturate layer composited over whatever
       // phase body just drew, the instant the guard drops (hard swap — no tween, so the short
@@ -6670,6 +6683,9 @@ export class Game {
       if (e.kind === "fragment" && e.aux > 0) this.renderFragmentTether(e);
       // The Warden's plate: a gold sheen while closed, a cracked-open core glow while EXPOSED.
       if (e.kind === "gilded") this.renderGildedPlate(e, sx, sy, drawSize);
+      // SEVER's teal rim (silhouette separation from the Weaver) + its earned-window read: a hot
+      // core blaze the instant an intercept/WORLDSPLIT window opens (the same "unload now" voice).
+      if (e.kind === "sever") this.renderSever(e, sx, sy, drawSize, anim.clock);
 
       // Shimmer flecks while a ghost is materializing.
       if (e.kind === "ghost" && a.windup > 0.05 && a.windup < 0.98) this.renderGhostShimmer(e, sx, sy);
@@ -7652,6 +7668,7 @@ export class Game {
   // while EXPOSED. The state is the authoritative aux flag (exposed remainder > 0).
   private renderBossAura(e: Enemy, sx: number, sy: number, size: number) {
     const hue = e.kind === "jet" ? { guard: "#5b63c8", expose: "#6b7088" }
+      : e.kind === "sever" ? { guard: SEVER_AURA_GUARD, expose: SEVER_AURA_EXPOSE }
       : e.kind === "tithe" ? { guard: "#e0902f", expose: "#8a5a22" }
       // GIANTS: a dim ground-ring (the sealed shell), draining as the peel window opens. Gorge is a
       // warm slag ring; Pale is a cold-blue one (the warmth-drain material).
@@ -7672,6 +7689,29 @@ export class Game {
     ctx.ellipse(sx, gy, size * 0.6, size * 0.28, 0, 0, 6.28);
     ctx.stroke();
     ctx.restore();
+  }
+
+  // SEVER's body dress (temporary, until bespoke art): a cold WORLDSPLIT-teal rim that separates
+  // its silhouette from the violet Weaver at a glance, plus the earned-window read — a hot core
+  // blaze the instant an intercept / WORLDSPLIT window opens (its ground aura draws under the body
+  // via renderBossAura). The guard/expose state is the authoritative boss.exposed flag off the wire.
+  private renderSever(e: Enemy, sx: number, sy: number, size: number, clock: number) {
+    const { ctx } = this;
+    const exposed = this.isEnemyExposed(e);
+    const pulse = 0.5 + 0.5 * Math.sin(clock * (exposed ? 3 : 5));
+    ctx.save();
+    ctx.globalAlpha = (exposed ? 0.35 : 0.6) + 0.2 * pulse;
+    ctx.strokeStyle = exposed ? SEVER_AURA_EXPOSE : SEVER_AURA_GUARD;
+    ctx.lineWidth = exposed ? 2 : 3;
+    ctx.beginPath();
+    ctx.arc(sx, sy, size * 0.46, 0, 6.28);
+    ctx.stroke();
+    ctx.restore();
+    if (exposed) {
+      const hot = 0.6 + 0.4 * Math.sin(clock * 9);
+      this.fxLayer("glow_round", "#ffd27a", sx, sy, size * 1.05 * hot, size * 1.05 * hot, 0.5, 0);
+      this.fxLayer("core_dot", "#fff3c4", sx, sy, size * 0.4, size * 0.4, 0.75 * hot, 0);
+    }
   }
 
   // SEVER's resin ANCHOR / WORLDSPLIT tooth read (both share the Weaver placeholder sprite,
