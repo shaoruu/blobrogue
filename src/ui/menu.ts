@@ -34,13 +34,20 @@ import { inviteUrlFor, shareInviteUrl, stripInviteFromLocation } from "../net/in
 import { PVP_PUBLIC_ENABLED, PVP_PRIVATE_ENABLED, PVP_DISABLED_MESSAGE, isPvpDisabledCode } from "../net/pvpFlag.js";
 import { normalizeOnlineError } from "../net/onlineError.js";
 import type { NormalizedOnlineError } from "../net/onlineError.js";
-import { CHANGELOG, LATEST_VERSION } from "../generated/changelog.js";
+import { LATEST_VERSION } from "../generated/changelog.js";
 
 // The build's changelog version key: the vite `define` (__BUILD_VERSION__) at build time,
 // else the newest changelog section (tests/dev run outside a vite build). localStorage
 // remembers the last-seen key so a new build lights the unread cue exactly once.
 const CHANGELOG_VERSION = typeof __BUILD_VERSION__ !== "undefined" ? __BUILD_VERSION__ : LATEST_VERSION;
 const CHANGELOG_SEEN_KEY = "blobrogue.changelogSeen";
+
+// WHAT'S NEW navigates to the standalone visual patch-notes site (shipped in #185) rather
+// than opening an in-game panel. A same-tab assign keeps the game feel; the single seam
+// keeps it testable (the DOM shim records the assign instead of navigating).
+export function openChangelogSite(): void {
+  window.location.assign("/changelog");
+}
 
 // ONE multiplayer product path: authoritative PLAY ONLINE. The legacy peer-synced classic
 // co-op ran a separate simulation per client (different enemies/drops while players believed
@@ -2196,11 +2203,11 @@ export class Menu {
 
   // ---- WHAT'S NEW / CHANGELOG ---------------------------------------------------------
   //
-  // The changelog is single-sourced from CHANGELOG.md (parsed at build into
-  // src/generated/changelog.ts). The menu shows a compact hero-corner button; localStorage
-  // "blobrogue.changelogSeen" holds the last-seen version key. Opening the panel marks the
-  // build seen (clears the unread cue). A returning player on a NEW build gets ONE auto-
-  // popup at the menu; a brand-new player is silently caught up (no popup, no nag).
+  // The changelog lives on the standalone /changelog site (shipped in #185). The menu shows
+  // a uniform nav destination; localStorage "blobrogue.changelogSeen" holds the last-seen
+  // version key. Clicking WHAT'S NEW marks the build seen (clears the unread cue) and
+  // navigates to /changelog. A brand-new player is silently caught up (no NEW cue); a
+  // returning player on a NEW build keeps the NEW cue until they click through.
 
   private readChangelogSeen(): string | null {
     try { return localStorage.getItem(CHANGELOG_SEEN_KEY); } catch { return null; }
@@ -2228,6 +2235,14 @@ export class Menu {
     return btn;
   }
 
+  // Clicking WHAT'S NEW catches the player up (marks the build seen, clears the title cue in
+  // place) and hands off to the standalone /changelog site — no in-game panel.
+  private openChangelog(): void {
+    this.markChangelogSeen();
+    if (this.whatsNewBtn) this.renderWhatsNew(this.whatsNewBtn);
+    openChangelogSite();
+  }
+
   // (Re)build the WHAT'S NEW dest's content from the current unread state — called on build
   // and again when opening the panel clears the cue, so the title button updates in place.
   private renderWhatsNew(btn: HTMLButtonElement): void {
@@ -2246,97 +2261,11 @@ export class Menu {
   }
 
   // On boot at the menu only (never mid-run, never on an invite deep-join — main.ts calls
-  // this on the plain title path). A returning player on a new build gets ONE popup scrolled
-  // to the newest section; a brand-new player is caught up silently.
-  maybeShowChangelogPopup(): void {
-    const seen = this.readChangelogSeen();
-    if (seen === null) { this.markChangelogSeen(); return; } // brand-new: silent, no popup
-    if (seen !== CHANGELOG_VERSION) this.openChangelog({ isUpdatePopup: true });
-  }
-
-  // The panel: the .menu panel family + the global pixel scrollbar. Header (WHAT'S NEW, or
-  // UPDATED · WHAT'S NEW as a returning-player popup) + close; a scrolling body of version
-  // sections (Unreleased renders as IN PROGRESS, muted), newest at top, 2px dun-3 dividers.
-  // Opening marks the build seen and clears the button's unread cue in place.
-  private openChangelog(opts: { isUpdatePopup?: boolean } = {}): void {
-    const scrim = el("div", "changelog-scrim");
-    const pop = el("div", "menu changelog-pop");
-    const scope = new FocusScope();
-    let isClosed = false;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") { e.preventDefault(); close(); }
-    };
-    const close = () => {
-      if (isClosed) return;
-      isClosed = true;
-      window.removeEventListener("keydown", onKey);
-      this.overlay.removeChild(scrim);
-      scope.close();
-    };
-
-    const head = el("div", "cl-head");
-    const title = el("div", "cl-title");
-    if (opts.isUpdatePopup) title.appendChild(el("span", "cl-flag", "UPDATED \u00b7 "));
-    title.appendChild(document.createTextNode("WHAT'S NEW"));
-    // A subtle deep link to the standalone visual patch-notes site (new tab; opt-in).
-    const siteLink = el("a", "cl-site-link", "full site \u2197");
-    siteLink.href = "/changelog";
-    siteLink.target = "_blank";
-    siteLink.rel = "noopener";
-    const closeBtn = this.closeButton(close);
-    head.append(title, siteLink, closeBtn);
-    pop.appendChild(head);
-
-    const body = el("div", "cl-body");
-    for (const section of CHANGELOG) {
-      const sec = el("div", "cl-section");
-      const isUnreleased = section.version === "unreleased";
-      const date = el("div", `cl-date${isUnreleased ? " progress" : ""}`, isUnreleased ? "IN PROGRESS" : section.date);
-      sec.appendChild(date);
-      for (const entry of section.entries) {
-        const row = el("div", "cl-entry");
-        const text = el("span", "cl-entry-text");
-        if (entry.title) text.appendChild(el("span", "cl-entry-title", entry.title + (entry.body ? " \u2014 " : "")));
-        if (entry.body) text.appendChild(el("span", "cl-entry-body", entry.body));
-        row.appendChild(text);
-        // Real shipped sprite art for the matched entries — a wrapped strip of pixel thumbs
-        // (see tools/changelogMedia.mjs). Purely additive; text-only entries are unchanged.
-        if (entry.media && entry.media.length) {
-          const media = el("div", "cl-media");
-          for (const src of entry.media) {
-            const thumb = el("img", "cl-thumb");
-            thumb.src = src;
-            thumb.alt = "";
-            thumb.loading = "lazy";
-            thumb.width = 40;
-            thumb.height = 40;
-            media.appendChild(thumb);
-          }
-          row.appendChild(media);
-        }
-        sec.appendChild(row);
-      }
-      body.appendChild(sec);
-    }
-    pop.appendChild(body);
-
-    if (opts.isUpdatePopup) {
-      const foot = el("div", "cl-foot");
-      const gotIt = el("button", "cl-got-it", "GOT IT");
-      gotIt.type = "button";
-      gotIt.onclick = close;
-      foot.appendChild(gotIt);
-      pop.appendChild(foot);
-    }
-
-    scrim.appendChild(pop);
-    // The popup opens at the top (newest section first), so it lands on the newest already.
-    this.overlay.appendChild(scrim);
-    window.addEventListener("keydown", onKey);
-    // Opening catches the player up: mark seen + clear the title button's unread cue live.
-    this.markChangelogSeen();
-    if (this.whatsNewBtn) this.renderWhatsNew(this.whatsNewBtn);
-    scope.open(opts.isUpdatePopup ? (pop.querySelector<HTMLButtonElement>(".cl-got-it") ?? closeBtn) : closeBtn, currentFocus());
+  // this on the plain title path). Brand-new players are silently caught up so a build they
+  // never had a chance to see doesn't nag them; returning players keep the NEW cue until they
+  // click WHAT'S NEW. We never auto-navigate anyone away from the title screen.
+  catchUpChangelog(): void {
+    if (this.readChangelogSeen() === null) this.markChangelogSeen();
   }
 
   // ---- SETTINGS -----------------------------------------------------------------------
