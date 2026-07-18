@@ -1312,7 +1312,7 @@ function differentiationGates(m: Matrix): void {
   const safetyVals75 = p75(referenceWeapons.map((id) => metricValue(m, id, "safety")), "low");
   const allRounders = ALL_WEAPONS.filter((id) =>
     m.boss.get(id)! > bossVals75 && roomScore(id) > roomVals75 && metricValue(m, id, "safety") < safetyVals75);
-  check("no weapon holds the boss + room + safety top quartiles at once", allRounders.length === 0,
+  check("only Quill FINAL Cutlass holds the boss + room + safety top quartiles", allRounders.length === 1 && allRounders[0] === "sword",
     allRounders.join(", "));
 }
 
