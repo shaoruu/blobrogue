@@ -2065,6 +2065,10 @@ export const SEVER = {
   pressureRadius: 220,
   fleeSpeedMult: 1.35,
   escapeMeterMax: 3,          // escapes before route worsens (soft fail, never wipe)
+  // Sev-0 fail-safe: the hunt can NEVER softlock a run. If the encounter stays active with ZERO
+  // progress (no boss damage, no checkpoint, no open window) for this long, Sever slips away and
+  // the floor opens (soft escape, no boss reward). Generous — only a genuinely stuck party hits it.
+  stallFailoverSec: 75,
   anchorsPerCheckpoint: 2,    // trap both exits of a checkpoint room
   anchorHp: 28,
   interceptWindow: 3.0,       // earned damage window after both anchors break

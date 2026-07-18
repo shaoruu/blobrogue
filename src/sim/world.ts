@@ -11786,6 +11786,11 @@ function updateSever(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void 
     return;
   }
 
+  // Sev-0 fail-safe FIRST: the hunt can never softlock a run. Once it has resolved to a soft
+  // escape (escape meter maxed, or a stall watchdog), the exit is already open and Sever
+  // disengages — the party can descend even if they never found a single anchor.
+  if (severFailsafe(w, e, dt, ev)) { if (a.phase !== "none") enterIdle(e); return; }
+
   // Anchor intercept loop (parallel): both anchors dead → open window + advance checkpoint.
   severAnchorLoop(w, e, ev);
 
@@ -11988,6 +11993,39 @@ function severPlantAnchors(w: WorldState, e: Enemy, ev: SimEvent[]): void {
   enc.flags.anchorsPlantedCp = enc.checkpoint;
   enc.objectiveProgress = Math.min(1, (enc.checkpoint) / 3);
   ev.push({ t: "cue", name: "bossSpawn", x: e.x, y: e.y, rate: 1.1, gain: 0.45, trauma: 0.03 });
+}
+
+// Sev-0 fail-safe (the hunt can NEVER softlock a run). Two independent catches funnel into ONE
+// soft-escape completion that opens the exit WITHOUT the boss reward: (1) the escape meter
+// reaching its max (the documented "route worsened" loss), and (2) a stall watchdog — the
+// encounter stays active with ZERO progress (no boss damage, no checkpoint, no open window) for
+// SEVER.stallFailoverSec. Returns whether the hunt has resolved (so Sever disengages).
+function severFailsafe(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): boolean {
+  const enc = severEnc(w);
+  if (!enc) return false;
+  if (enc.completed) return true;
+  if (Number(enc.flags.escapeMeter) >= SEVER.escapeMeterMax) { severSoftEscapeComplete(w, e, ev); return true; }
+  const prevHp = enc.flags.stallHp == null ? e.hp : Number(enc.flags.stallHp);
+  const prevCp = enc.flags.stallCp == null ? enc.checkpoint : Number(enc.flags.stallCp);
+  const isProgress = e.hp < prevHp - 0.5 || enc.checkpoint > prevCp || enc.flags.interceptState === "exposed";
+  const stall = isProgress ? 0 : Number(enc.flags.stallSec ?? 0) + dt;
+  enc.flags.stallSec = stall;
+  enc.flags.stallHp = e.hp;
+  enc.flags.stallCp = enc.checkpoint;
+  if (stall >= SEVER.stallFailoverSec) { severSoftEscapeComplete(w, e, ev); return true; }
+  return false;
+}
+
+// The hunt slips away: open the exit (soft escape) so the party can descend. No premium reward
+// (they lost the hunt), and the WORLDSPLIT tooth is cleared so nothing dangles.
+function severSoftEscapeComplete(w: WorldState, e: Enemy, ev: SimEvent[]): void {
+  const enc = severEnc(w);
+  if (!enc || enc.completed) return;
+  severClearWorldsplitTooth(w, e);
+  enc.failed = true;
+  enc.flags.interceptState = "escaped";
+  completeEncounter(enc);
+  ev.push({ t: "cue", name: "bossSpawn", x: e.x, y: e.y, rate: 0.5, gain: 0.55, trauma: 0.05 });
 }
 
 function severAnchorLoop(w: WorldState, e: Enemy, ev: SimEvent[]): void {
