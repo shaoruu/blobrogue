@@ -1,0 +1,101 @@
+// Headless capture of the REAL running arena client (vite dev server + Chrome) for the PVP
+// Wave 2 visuals. Drives ?dev=arena, which boots the shipping online client against an in-page
+// scripted socket replaying authoritative snapshots (see src/dev/arenaHarness.ts). The public
+// kill switch is never touched — arena presentation selects off the authoritative pvp: world id.
+//
+// Usage:
+//   node tools/arenaCap.mjs [outDir] [baseUrl]
+//     outDir  — where PNGs land (default /workspace/arena-shots)
+//     baseUrl — an already-running dev server; omit to have this script start `npm run dev`.
+
+import { chromium } from "playwright-core";
+import { spawn } from "node:child_process";
+import { mkdirSync } from "node:fs";
+import { join } from "node:path";
+
+const OUT_DIR = process.argv[2] ?? "/workspace/arena-shots";
+const EXTERNAL_URL = process.argv[3] ?? null;
+const SCENES = ["live-hearth", "live-contested", "live-tar", "live-gust", "live-spark"];
+const CHROME = "/usr/local/bin/google-chrome";
+
+mkdirSync(OUT_DIR, { recursive: true });
+
+function startDevServer() {
+  return new Promise((resolve, reject) => {
+    const proc = spawn("npm", ["run", "dev", "--", "--host", "127.0.0.1"], {
+      cwd: "/workspace",
+      env: process.env,
+    });
+    let settled = false;
+    const onData = (buf) => {
+      const text = buf.toString();
+      process.stdout.write(`[vite] ${text}`);
+      const match = text.match(/Local:\s+(http:\/\/[^\s]+)/);
+      if (match && !settled) {
+        settled = true;
+        resolve({ proc, url: match[1].replace(/\/$/, "") });
+      }
+    };
+    proc.stdout.on("data", onData);
+    proc.stderr.on("data", (buf) => process.stderr.write(`[vite:err] ${buf}`));
+    proc.on("exit", (code) => {
+      if (!settled) reject(new Error(`vite exited before ready (code ${code})`));
+    });
+    setTimeout(() => {
+      if (!settled) reject(new Error("vite did not report a Local URL in time"));
+    }, 60000);
+  });
+}
+
+async function main() {
+  let devProc = null;
+  let url = EXTERNAL_URL;
+  if (url === null) {
+    const started = await startDevServer();
+    devProc = started.proc;
+    url = started.url;
+    console.log(`dev server ready at ${url}`);
+  }
+
+  const browser = await chromium.launch({
+    executablePath: CHROME,
+    headless: true,
+    args: ["--no-sandbox", "--disable-dev-shm-usage"],
+  });
+
+  const captured = [];
+  try {
+    for (const scene of SCENES) {
+      const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
+      const errors = [];
+      page.on("pageerror", (err) => errors.push(String(err)));
+      await page.goto(`${url}/?dev=arena&scene=${scene}`, { waitUntil: "load" });
+      await page.waitForFunction(
+        () => window.__arena !== undefined && window.__arena.isReady(),
+        null,
+        { timeout: 30000 },
+      );
+      // Sprites, the reveal veil lifting, and the first animated frames settling.
+      await page.waitForTimeout(2600);
+      const active = await page.evaluate(() => window.__arena.currentScene());
+      if (active !== scene) throw new Error(`scene mismatch: asked ${scene}, got ${active}`);
+      const path = join(OUT_DIR, `wave2-${scene}.png`);
+      await page.screenshot({ path });
+      captured.push(path);
+      if (errors.length > 0) console.warn(`  [${scene}] page errors: ${errors.join(" | ")}`);
+      console.log(`  captured ${path}`);
+      await page.close();
+    }
+  } finally {
+    await browser.close();
+    if (devProc !== null) devProc.kill("SIGTERM");
+  }
+
+  console.log(`\ncaptured ${captured.length} Wave 2 arena screenshots:`);
+  for (const path of captured) console.log(`  ${path}`);
+}
+
+main().catch((err) => {
+  console.error(err);
+  process.exit(1);
+});
