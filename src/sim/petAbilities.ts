@@ -51,7 +51,7 @@ export function petVerbFor(petId: string | null): PetVerb | null {
 const secToTicks = (sec: number): number => Math.round(sec * TICKS_PER_SECOND);
 
 // ---- Quill FINAL tuning (design HOLD lifted; ship) ----
-// Each verb owns its own active-bind cooldown (all >= the 6s rail). Windows the resolver reasons
+// Each verb owns its own auto-cast cooldown (all >= the 6s rail). Windows the resolver reasons
 // about in integer TICKS are pre-quantized here; felt effect durations stay in seconds (the sim's
 // own effect timers decay in seconds, like the ult buffs). The tell is one shared cadence.
 export const PET_ABILITY = {
@@ -123,10 +123,25 @@ export const PET_ABILITY = {
   },
 } as const;
 
-// The active-bind cooldown (ticks) a verb burns on a successful cast.
+// The auto-cast cooldown (ticks) a verb burns on a successful cast.
 export function petCooldownTicks(verb: PetVerb): number {
   return PET_ABILITY[verb].cooldownTicks;
 }
+
+// ---- AUTO-CAST (smart AI) tuning ----
+// Pets fire their OWN verb — no player bind. Each verb's "should I cast now?" read is a
+// deterministic function of the current world (evaluated in world.ts, which owns the geometry);
+// the two numbers those reads need that no effect window already defines live here so the tuning
+// stays in one file. A read with no useful context returns false and the CD is never burned (the
+// same fail-soft rail the retired manual bind had).
+export const PET_AUTOCAST = {
+  // PEBBLEBRACE braces when the owner is hurt: any HP missing, or a hit landed within this window.
+  // A pure tick comparison (deterministic, no wall-clock) keeps the AI reconnect-safe.
+  recentDamageTicks: secToTicks(2.0),
+  // SLIMETRAIL drops a slow patch when at least one NON-boss enemy stands within this reach of the
+  // owner — close enough that the patch under the owner will actually be crossed.
+  slimeEnemyRadius: 100,
+} as const;
 
 // The SLIMETRAIL enemy-slow decision (the tuning lives here; the sim supplies the geometry of
 // which bodies stand on a patch): a BOSS is immune (1.0×), an ELITE takes half the slow, and every
@@ -136,7 +151,7 @@ export function slimeSlowMul(isBoss: boolean, isElite: boolean): number {
   return isElite ? PET_ABILITY.slimetrail.eliteSlowMul : PET_ABILITY.slimetrail.enemySlowMul;
 }
 
-// STALK and RATTLE need a live target: pressing the bind with nothing in reach is a fail-soft
+// STALK and RATTLE need a live target: auto-casting with nothing in reach is a fail-soft
 // no-op that burns NO cooldown (checked at cast). Every other verb always commits its CD.
 export function petVerbNeedsTarget(verb: PetVerb): boolean {
   return verb === "stalk" || verb === "rattle";

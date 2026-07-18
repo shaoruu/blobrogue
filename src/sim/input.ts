@@ -26,9 +26,9 @@ export interface InputCmd {
   // reads as released. Like `ult`, the client can only REQUEST — the authoritative sim validates
   // the pulse cooldown + resolves the directed heal. Inert for every non-Mender kit.
   pulse?: boolean;
-  // The PET ABILITY intent (PROTOCOL 45). Optional so pre-existing callers stay valid; absent
-  // reads as released. Like `ult`/`pulse`, the client can only REQUEST — the authoritative sim
-  // validates mode/downed/cooldown and resolves the verb. Inert without an ability pet equipped.
+  // The PET ABILITY force-cast intent. Pets AUTO-cast (server-owned smart AI) with no player bind,
+  // so a live client always sends this false; it survives only as an optional DEBUG force-cast the
+  // authoritative sim honors under the same rails as auto-cast. Inert without an ability pet.
   petAbility?: boolean;
 }
 

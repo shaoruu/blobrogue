@@ -1,7 +1,12 @@
-// Pet ability framework + FETCH/PINPRICK pilot gates (PROTOCOL 45). Pins the RAILS the design
-// locked: server-authoritative resolution (a client can only request), utility-only ZERO-dps
-// verbs, the shared cooldown, the 0.30s tell, party throttle / soft-cap, PVP hard-off, the FETCH
-// coin-only deny-list, PINPRICK owner-only light, and reconnect-safe wire projection.
+// Pet ability gates. Pets now fire AUTONOMOUSLY (smart AI, no player bind): each verb self-casts
+// when its deterministic smart trigger reads a useful context, entirely server-authoritative. This
+// suite pins BOTH halves:
+//   - AUTO-CAST: every verb fires on its trigger with ZERO player input, stays quiet in an empty
+//     context (no CD burned on empty air), and still honors the CD / party / downed / PVP rails.
+//   - The retained rails: utility-only ZERO-dps verbs, the shared cooldown, the 0.30s tell, party
+//     throttle / soft-cap, PVP hard-off, the FETCH coin-only deny-list, and reconnect-safe wire.
+// The (production-unbound) request bit survives only as a DEBUG force-cast; `press(true)` exercises
+// it to drive the deterministic rail checks below — a live client never sets it.
 //
 // Run: npx tsx test/petability.test.ts
 
@@ -30,6 +35,8 @@ function check(name: string, cond: boolean, detail = ""): void {
 }
 function section(n: string): void { process.stdout.write(`\n[${n}]\n`); }
 
+// The petAbility bit is the DEBUG force-cast (production pets have no bind): press(true) forces a
+// cast under the same rails as auto-cast, press(false) is the pure-idle production input.
 function press(petAbility: boolean, seq = 1): InputCmd {
   return { seq, moveX: 0, moveY: 0, aim: 0, firing: false, dash: false, interact: false, ult: false, pulse: false, petAbility };
 }
@@ -403,7 +410,163 @@ function noPetIsInertTests(): void {
   check("a cosmetic-only pet never opens an ability", cosmetic.petTellT === 0 && cosmetic.petCdReadyAtTick === 0);
 }
 
+// Drive N ticks of PURE IDLE input (no bind) — the production path. Auto-cast must act entirely on
+// its own here; the client sends nothing that could trigger a verb.
+function idle(w: WorldState, id: string, ticks: number): void {
+  for (let i = 0; i < ticks; i++) tick1(w, id, press(false));
+}
+
+function autoCastFiresTests(): void {
+  section("AUTO-CAST: every verb fires on its smart trigger with ZERO player input");
+
+  // FETCH: a coin in the pull radius auto-yanks (no press).
+  {
+    const w = coopWorld();
+    const p = addPet(w, "a", DOGGIE_PET_ID);
+    const coin = makeCoin(w, p.x + 100, p.y);
+    idle(w, "a", 12);
+    check("FETCH auto-fires on a coin in reach", p.petCdReadyAtTick > 0);
+    check("the auto-pull actually moved the coin (collected or in flight)", !w.pickups.includes(coin) || coin.x < p.x + 100);
+  }
+
+  // PINPRICK: an enemy at the doorstep (owner in combat) auto-lights the owner.
+  {
+    const w = coopWorld();
+    const p = addPet(w, "a", WICK_PET_ID);
+    makeEnemy(w, p.x + 120, p.y, { tier: "standard" });
+    idle(w, "a", 12);
+    check("PINPRICK auto-fires while the owner is in combat", p.petLightT > 0);
+  }
+
+  // STALK: an elite in reach is auto-marked.
+  {
+    const w = coopWorld();
+    const p = addPet(w, "a", CAT_PET_ID);
+    const elite = makeEnemy(w, p.x + 120, p.y, { tier: "elite" });
+    const hp0 = elite.hp;
+    idle(w, "a", 12);
+    check("STALK auto-marks an elite in reach", elite.petMarkT > 0);
+    check("the auto-mark deals no damage (info only)", elite.hp === hp0);
+  }
+
+  // EMBERPUFF: a cinder overlapping the reach is auto-shortened.
+  {
+    const w = coopWorld();
+    const p = addPet(w, "a", DRAGON_PET_ID);
+    const near: Hazard = { id: w.nextHazardId++, kind: "cinder", x: p.x + 90, y: p.y, radius: 40, life: 100, maxLife: 100 };
+    w.hazards.push(near);
+    idle(w, "a", 12);
+    check("EMBERPUFF auto-fires on a cinder in reach (life scaled down)", near.life < near.maxLife * 0.6);
+  }
+
+  // SLIMETRAIL: a non-boss enemy within reach auto-drops a slow patch under the owner.
+  {
+    const w = coopWorld();
+    const p = addPet(w, "a", SLIME_PET_ID);
+    makeEnemy(w, p.x + 80, p.y, { tier: "standard" });
+    idle(w, "a", 12);
+    check("SLIMETRAIL auto-drops a patch near a non-boss enemy", w.hazards.some((h) => h.kind === "slime"));
+  }
+
+  // PEBBLEBRACE: a hurt owner auto-braces (never at full HP — see the idle suite).
+  {
+    const w = coopWorld();
+    const p = addPet(w, "a", PEBBLE_PET_ID);
+    p.hp = p.maxHp - 1;
+    idle(w, "a", 12);
+    check("PEBBLEBRACE auto-braces a hurt owner", p.petShieldT > 0);
+  }
+
+  // RATTLE: a trash wind-up in reach is auto-interrupted.
+  {
+    const w = coopWorld();
+    const p = addPet(w, "a", CLATTER_PET_ID);
+    const trash = makeEnemy(w, p.x + 90, p.y, { tier: "standard", kind: "skeleton" });
+    idle(w, "a", 12);
+    check("RATTLE auto-fires on a trash wind-up", p.petCdReadyAtTick > 0);
+    check("the auto-interrupt drove the trash into recover", trash.attack.phase === "recover");
+  }
+
+  // NULLWAKE: an owner standing in a cinder auto-opens the null window.
+  {
+    const w = coopWorld();
+    const p = addPet(w, "a", NULLFIN_PET_ID);
+    w.hazards.push({ id: w.nextHazardId++, kind: "cinder", x: p.x, y: p.y, radius: 40, life: 100, maxLife: 100 });
+    idle(w, "a", 8);
+    check("NULLWAKE auto-fires when the owner stands in a cinder", p.petCdReadyAtTick > 0);
+  }
+}
+
+function autoCastIdleNoFireTests(): void {
+  section("AUTO-CAST: NO fire in an empty context — no tell, no CD burned (idle stays quiet)");
+  const roster: Array<[string, string]> = [
+    ["FETCH", DOGGIE_PET_ID], ["PINPRICK", WICK_PET_ID], ["STALK", CAT_PET_ID], ["EMBERPUFF", DRAGON_PET_ID],
+    ["SLIMETRAIL", SLIME_PET_ID], ["PEBBLEBRACE", PEBBLE_PET_ID], ["RATTLE", CLATTER_PET_ID], ["NULLWAKE", NULLFIN_PET_ID],
+  ];
+  for (const [verb, petId] of roster) {
+    const w = coopWorld();
+    const p = addPet(w, "a", petId);
+    // Strip every trigger source: no loot, no enemies, no hazards, and the owner at full HP.
+    w.enemies.length = 0; w.hazards.length = 0; w.floorHazards.length = 0; w.pickups.length = 0;
+    p.hp = p.maxHp;
+    idle(w, "a", 24);
+    check(`${verb} never auto-fires with no context (no tell, no CD burn)`, p.petTellT === 0 && p.petCdReadyAtTick === 0);
+  }
+}
+
+function autoCastRailsTests(): void {
+  section("AUTO-CAST honors the rails with NO input (cooldown / downed / party / PVP)");
+
+  // Cooldown: after an auto-fire the verb waits out the FULL cooldown before it can auto-fire again.
+  {
+    const w = coopWorld();
+    const p = addPet(w, "a", WICK_PET_ID);
+    makeEnemy(w, p.x + 120, p.y, { tier: "standard" }); // holds the owner in combat the whole time
+    idle(w, "a", 12);
+    check("auto-cast burned the CD on the first fire", p.petCdReadyAtTick > w.tick);
+    const cdAt = p.petCdReadyAtTick;
+    idle(w, "a", 6);
+    check("no second auto-cast opens while on cooldown (no free retries)", p.petCdReadyAtTick === cdAt);
+  }
+
+  // Downed: a downed owner never auto-casts even with a perfect trigger present.
+  {
+    const w = coopWorld();
+    const p = addPet(w, "a", DOGGIE_PET_ID);
+    makeCoin(w, p.x + 80, p.y);
+    p.isDown = true;
+    idle(w, "a", 16);
+    check("a downed owner never auto-casts", p.petTellT === 0 && p.petCdReadyAtTick === 0 && p.petFetchT === 0);
+  }
+
+  // Party throttle: two doggies each with a coin still open at most ONE shared pull.
+  {
+    const w = coopWorld();
+    const a = addPet(w, "a", DOGGIE_PET_ID);
+    const b = addPet(w, "b", DOGGIE_PET_ID);
+    makeCoin(w, a.x + 80, a.y);
+    makeCoin(w, b.x + 80, b.y);
+    const idleBoth = new Map([["a", press(false)], ["b", press(false)]]);
+    for (let i = 0; i < 12; i++) stepWorld(w, idleBoth, DT);
+    const opened = (a.petFetchT > 0 ? 1 : 0) + (b.petFetchT > 0 ? 1 : 0);
+    check("auto-cast honors the FETCH party throttle (exactly one pull)", opened === 1, `opened=${opened}`);
+  }
+
+  // PVP: auto-cast is hard-off in the arena even with a perfect trigger and no input.
+  {
+    const w = createWorld(0x2222, 1, { mode: "pvp", isShared: true, skipLocalPlayer: true });
+    const a = spawnPlayerInWorld(w, "a");
+    setPlayerPet(w, "a", DOGGIE_PET_ID);
+    makeCoin(w, a.x + 80, a.y);
+    idle(w, "a", 12);
+    check("auto-cast is OFF in a pvp arena (no fire on context)", a.petTellT === 0 && a.petCdReadyAtTick === 0 && a.petFetchT === 0);
+  }
+}
+
 pureContractTests();
+autoCastFiresTests();
+autoCastIdleNoFireTests();
+autoCastRailsTests();
 tellAndServerAuthorityTests();
 cooldownTests();
 downedTests();

@@ -1912,7 +1912,9 @@ export class Game {
       }
       this.isChargeCancelPending = false;
     }
-    return { seq: ++this.inputSeq, moveX: s.moveX, moveY: s.moveY, aim, firing: s.firing, dash: s.dash, interact: s.interact, ult: s.ult || devUlt, pulse: s.pulse, petAbility: s.petAbility };
+    // Pets auto-cast (server-owned smart AI); there is no player bind, so the request bit is
+    // always false on the wire (it survives only as a debug force-cast the sim can honor).
+    return { seq: ++this.inputSeq, moveX: s.moveX, moveY: s.moveY, aim, firing: s.firing, dash: s.dash, interact: s.interact, ult: s.ult || devUlt, pulse: s.pulse, petAbility: false };
   }
 
   // Co-op teammate positions fed to the sim as extra enemy-aggro targets (Stage A keeps
