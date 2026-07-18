@@ -17373,24 +17373,27 @@ function stepArenaUlt(w: WorldState, p: PlayerSim, dt: number, ev: SimEvent[]): 
   if (a.glassT > 0) a.glassT = a.glassT > dt ? a.glassT - dt : 0;
   if (a.slowImmuneT > 0) a.slowImmuneT = a.slowImmuneT > dt ? a.slowImmuneT - dt : 0;
   if (a.endlagT > 0) a.endlagT = a.endlagT > dt ? a.endlagT - dt : 0;
-  // arena_bulwark_shove: the frontal wall lives for its window, blocking the first foe shot (then
-  // it shatters + shoves inside stepArenaShoveWall). Silent expiry otherwise.
-  if (a.shoveT > 0) {
-    a.shoveT = a.shoveT > dt ? a.shoveT - dt : 0;
-    if (a.shoveT > 0) stepArenaShoveWall(w, p, ev);
-  }
-  // Tell -> effect: the >= 0.40s telegraph elapses, then the ult lands (U3: tell honored).
+  // arena_bulwark_shove: the frontal wall lives for its window; its BLOCK scan runs earlier in the
+  // tick (stepArenaShoveWalls, before resolvePvpHits) so it eats a foe shot before it can land. Here
+  // we only age the wall — silent expiry when it runs out without blocking.
+  if (a.shoveT > 0) a.shoveT = a.shoveT > dt ? a.shoveT - dt : 0;
+  // Tell -> effect: the >= 0.40s telegraph elapses, then the ult lands (U3: tell honored). Fire on
+  // CROSSING zero (never an exact-equality float compare) so the tell length is robust to fp dust.
   if (a.tellT > 0) {
-    a.tellT = a.tellT > dt ? a.tellT - dt : 0;
-    if (a.tellT === 0 && a.kind !== null) fireArenaUlt(w, p, ev);
+    a.tellT -= dt;
+    if (a.tellT <= 0) {
+      a.tellT = 0;
+      if (a.kind !== null) fireArenaUlt(w, p, ev);
+    }
   }
-  // arena_salvo cadence: 5 shots evenly over the volley window (the first fires the tick the tell ends).
+  // arena_salvo cadence: 5 shots evenly over the volley window (the first fires the tick the tell
+  // ends). `+= spacing` carries the sub-tick remainder so the cadence never drifts.
   if (a.salvoShotsLeft > 0) {
-    a.salvoShotT = a.salvoShotT > dt ? a.salvoShotT - dt : 0;
-    if (a.salvoShotT === 0) {
+    a.salvoShotT -= dt;
+    if (a.salvoShotT <= 0) {
       fireArenaSalvoShot(w, p, ev);
       a.salvoShotsLeft -= 1;
-      if (a.salvoShotsLeft > 0) a.salvoShotT = arenaSalvoShotSpacingSec();
+      a.salvoShotT += arenaSalvoShotSpacingSec();
     }
   }
   // Passive time charge (+1.0 pts/s), clamped to the arena meter max. HOLD/BREAK sources are idle
@@ -17478,6 +17481,18 @@ function fireArenaSalvoShot(w: WorldState, p: PlayerSim, ev: SimEvent[]): void {
     damagePlayer(w, hits[i].v, ARENA_SALVO.perShotDamage, ev, p.id, {
       weapon: p.weapon, dirX, dirY, isFlat: true,
     });
+  }
+}
+
+// The frontal-wall block pass: runs BEFORE resolvePvpHits (right after updateBullets) so an active
+// wall eats a foe shot before it can damage its owner. Live match, behind isPvp — co-op is inert.
+function stepArenaShoveWalls(w: WorldState, ev: SimEvent[]): void {
+  const m = w.match;
+  if (m === null || m.phase !== "live") return;
+  for (const id of [...w.players.keys()].sort()) {
+    const p = w.players.get(id);
+    if (p === undefined || p.arenaUlt.shoveT <= 0) continue;
+    stepArenaShoveWall(w, p, ev);
   }
 }
 
@@ -17987,6 +18002,7 @@ export function stepWorldPhase(w: WorldState, dt: number, ev: SimEvent[]): void 
   // AFTER updateProps so breakable cover consumes a round before it can reach a player behind it
   // (real LOS cover), and after recordHistory (fire-time rewind samples ready).
   if (pvp) {
+    stepArenaShoveWalls(w, ev); // PVP WAVE 3: a live frontal wall eats a foe shot before it lands
     resolvePvpHits(w, ev);
     resolvePvpPits(w, ev);
   }
