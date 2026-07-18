@@ -1004,7 +1004,7 @@
 []
 ["wavecue halo.pass 169.97 882.23"]
 ["puff 360.99 1030.36 6 #ff5a7a","sfx shootRapid 0.55 0.7"]
-["decal 207.88 917.14 #caa27e 18 splat","decal 207.88 917.14 #ffd27a 15 ring","dmg 207.88 902.14 5 0 ","freeze 0.04","gibs 207.88 917.14 10 #caa27e","particles 207.88 917.14 8 #caa27e","puff 207.88 917.14 10 #caa27e","puff 207.88 917.14 5 #ffd27a","puff 223.32 895.19 5 #caa27e","sparkfx 223.32 895.19 #fff3c4","sparks 223.32 895.19 6","trauma 0.34","wavecue mob.death 207.88 917.14"]
+["decal 207.88 917.14 #caa27e 18 splat","decal 207.88 917.14 #ffd27a 15 ring","dmg 207.88 902.14 5 0 ","freeze 0.04","gibs 207.88 917.14 10 #caa27e","particles 207.88 917.14 8 #caa27e","puff 207.88 917.14 10 #caa27e","puff 207.88 917.14 5 #ffd27a","puff 223.32 895.19 5 #caa27e","sparkfx 223.32 895.19 #9ee8c8","sparks 223.32 895.19 6","trauma 0.27","wavecue mob.death 207.88 917.14"]
 ["sfx dash 1.4 0.5"]
 []
 []
