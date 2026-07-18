@@ -16,7 +16,7 @@ ITEMS table: {id:{name,rarity,tags,unique?,apply(mods),onKill?,onHit?,active?{ke
 ## 16 items (rarity → drop weight)
 COMMON(w60): Quick Powder fireRate×1.15 | Heavy Rounds dmg×1.20/bulletSpd×0.90 | Running Shoes move×1.12 |
 Tin Heart maxHp+2 | Long Barrel bulletSpd×1.3/life×1.3 | Lucky Spurs coinDrop×1.6/pickupR×1.5 | Worn Grip dashCd×0.8.
-UNCOMMON(w30): Side Channel: dash or hard aim flick arms a 55%-damage shot along the previous aim | Hollow Points pierce+1 | Ricochet bounce+1 |
+UNCOMMON(w30): Side Channel: dash or hard aim flick arms a plain shot along the previous aim at 55% damage, or 30% against bosses | Hollow Points pierce+1 | Ricochet bounce+1 |
 Glass Cannon dmg×1.5/maxHp−2(unique) | Vampiric Fang 10% on-kill heal1 | Adrenaline @HP≤2 move+fireRate×1.25.
 RARE(w10): Boomstick explosive r55/60% AoE | Crit Charm crit.25/×2.5 | [ACTIVE] Blink Engine (Space cd6s: tp180px+0.6s ifr).
 Optional: Turret Totem (active), Twin Hearts (1 revive/run + shortens co-op bleed-out).

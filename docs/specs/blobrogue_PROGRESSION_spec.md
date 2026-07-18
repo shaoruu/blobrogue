@@ -37,7 +37,7 @@ There is no run end, so define an **Expedition Attunement** without adding a new
 ## Current blessing tuning roles (`items.ts`)
 Keep each pick in one of four readable buckets (tag ItemDef; used by draft weighting):
 - **Output:** Hair Trigger, Big Iron, Deadeye, Full Metal, elemental coatings.
-- **Positioning:** Side Channel rewards a dash or hard aim flick with one 55%-damage ghost round along the previous aim.
+- **Positioning:** Side Channel rewards a dash or hard aim flick with one plain ghost round along the previous aim at 55% damage, or 30% against bosses.
 - **Survival/mobility:** Vitality, Swift Boots, Second Wind, Fang.
 - **Economy:** Greed, Coin Magnet (never offered in boss reward).
 - **Risk/identity:** Glass Cannon, Berserk, Adrenaline, Elementalist.
@@ -234,7 +234,7 @@ Replace `ownedItems: ItemDef[]` with `itemLevels: Map<ItemId,1|2|3>` (HUD/summar
 ### Exact level effects (cumulative result at Lv1 / Lv2 / Lv3)
 - Glass Cannon: damage +60%/-2HP · +90%/-3HP · +110%/-3HP.
 - Hair Trigger: fire rate +35% · +55% · +70%.
-- Side Channel: after a dash or a 90-degree aim change within 0.40s, the next ranged shot also fires one 55%-damage ghost round along the previous aim; 1.2s internal cooldown.
+- Side Channel: after a dash or a 90-degree aim change within 0.40s, the next projectile shot fires one plain ghost round along the previous aim at 55% damage, or 30% against bosses; 1.2s internal cooldown.
 - Full Metal: pierce +1 · +2 · +3.
 - Swift Boots: move +20% · +30% · +35%.
 - Big Iron: bullet size +80%/dmg+50%/speed-22%/rate-12% · size+115%/dmg+75%/speed-30%/rate-16% · size+140%/dmg+90%/speed-35%/rate-20%.

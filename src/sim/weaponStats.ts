@@ -6,7 +6,7 @@
 //
 // Purity: sim-only imports (this module is part of the isomorphic core).
 
-import { WEAPONS, MAX_ORBIT_BLADES } from "./weapons.js";
+import { WEAPONS, MAX_ORBIT_BLADES, isSideChannelProjectileWeapon } from "./weapons.js";
 import type { Weapon } from "./weapons.js";
 import type { WeaponId, WeaponRarity } from "./types.js";
 import { canonicalItemId } from "./items.js";
@@ -295,10 +295,11 @@ export function expectedBossDps(
   const burnDot = mods.burnChance > 0 ? 3 : 0;
   const perProjectile = w.damage * mods.damageMult * wepCoef * vuln;
   const primaryDps = perProjectile * effPellets * rate * POWER.practicalFactor;
-  const hasSideChannel = !isMelee
+  const hasSideChannel = isSideChannelProjectileWeapon(id)
     && ownedItemIds.some((itemId) => canonicalItemId(itemId) === "side_channel");
   const ghostRate = hasSideChannel ? Math.min(rate, 1 / SIDE_CHANNEL.icd) : 0;
-  const ghostDps = perProjectile * SIDE_CHANNEL.damageMult * ghostRate * POWER.practicalFactor;
+  const ghostDps = w.damage * mods.damageMult * wepCoef
+    * SIDE_CHANNEL.bossDamageMult * ghostRate * POWER.practicalFactor;
   return primaryDps + ghostDps + burnDot;
 }
 

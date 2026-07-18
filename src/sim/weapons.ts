@@ -684,6 +684,19 @@ export const WEAPONS: Record<WeaponId, Weapon> = {
 
 export const DEFAULT_WEAPON: WeaponId = "pistol";
 
+export function isSideChannelProjectileWeapon(id: WeaponId): boolean {
+  const weapon = WEAPONS[id];
+  return weapon.melee === undefined
+    && weapon.wire === undefined
+    && weapon.orbit === undefined
+    && weapon.sentry === undefined
+    && weapon.tether === undefined;
+}
+
+export function isSideChannelEligibleLoadout(ownedWeapons: readonly WeaponId[]): boolean {
+  return ownedWeapons.some(isSideChannelProjectileWeapon);
+}
+
 // Weapons that can appear as floor pickups (the pistol is the always-owned default).
 export const PICKUP_WEAPONS: readonly WeaponId[] =
   contentCatalogFor(CURRENT_CONTENT_CATALOG_VERSION).pickupWeapons;

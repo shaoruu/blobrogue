@@ -46,7 +46,12 @@ import {
 } from "./balance.js";
 import type { PremiumTier, ShopMode } from "./balance.js";
 import { isBossFloor } from "./enemies.js";
-import { WEAPONS, rollWeaponRarity, rollMysteryTwist } from "./weapons.js";
+import {
+  WEAPONS,
+  isSideChannelEligibleLoadout,
+  rollWeaponRarity,
+  rollMysteryTwist,
+} from "./weapons.js";
 import { MAX_OWNED_WEAPONS } from "./constants.js";
 import {
   ITEMS, itemLevelsOf, itemMaxLevel, itemById, normalItemsForCatalog,
@@ -657,6 +662,9 @@ export function stockShopForViewer(
   }
 
   const excludedBlessings = new Set<string>();
+  if (!isSideChannelEligibleLoadout(viewer.ownedWeapons)) {
+    excludedBlessings.add("side_channel");
+  }
   for (const slot of shop.slots) {
     if (targetIds.has(slot.id) || !isPersonalBlessingStock(slot)) continue;
     const itemId = shopSlotForViewer(shop, slot, viewer.id).itemId;
@@ -909,6 +917,7 @@ export function shopSlotStatusFor(shop: ShopState, slot: ShopSlot, viewer: ShopV
       if (slot.buyers.includes(viewer.pid)) return "sold";
       if (slot.itemId === null) return "exhausted";
       const def = itemById(slot.itemId);
+      if (def?.id === "side_channel" && !isSideChannelEligibleLoadout(viewer.ownedWeapons)) return "exhausted";
       if (def && (itemLevelsOf(viewer.ownedItemIds).get(def.id) ?? 0) >= itemMaxLevel(def)) return "maxLevel";
       break;
     }
@@ -939,6 +948,7 @@ export function shopSlotStatusFor(shop: ShopState, slot: ShopSlot, viewer: ShopV
       if (slot.buyers.includes(viewer.pid)) return "sold";
       if (slot.itemId === null) return "exhausted";
       const def = itemById(slot.itemId);
+      if (def?.id === "side_channel" && !isSideChannelEligibleLoadout(viewer.ownedWeapons)) return "exhausted";
       if (def && (itemLevelsOf(viewer.ownedItemIds).get(def.id) ?? 0) >= itemMaxLevel(def)) return "maxLevel";
       if (hasSpentPremiumLock(shop, viewer)) return "locked";
       break;

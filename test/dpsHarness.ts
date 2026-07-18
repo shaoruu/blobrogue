@@ -21,7 +21,7 @@ import {
   canonicalItemId, itemById, createMods, recomputeMods, normalItemsForCatalog, rollItemChoicesWith,
 } from "../src/sim/items.js";
 import type { PlayerMods } from "../src/sim/items.js";
-import { WEAPONS } from "../src/sim/weapons.js";
+import { WEAPONS, isSideChannelProjectileWeapon } from "../src/sim/weapons.js";
 import { Rng } from "../src/sim/rng.js";
 import { OVERDRIVE, ULT, ticksToSec } from "../src/sim/kits.js";
 import type { KitId } from "../src/sim/kits.js";
@@ -254,10 +254,11 @@ export function practicalBossDps(
   const accuracy = practicalAccuracy(id, spreadTotal, isMelee ? 0 : wep.speed * mods.bulletSpeedMult);
   const perProjectile = wep.damage * coinFed * mods.damageMult * wepCoef * vuln;
   const primaryDps = perProjectile * effPellets * rate * accuracy;
-  const hasSideChannel = !isMelee
+  const hasSideChannel = isSideChannelProjectileWeapon(id)
     && ownedItemIds.some((itemId) => canonicalItemId(itemId) === "side_channel");
   const ghostRate = hasSideChannel ? Math.min(rate, 1 / SIDE_CHANNEL.icd) : 0;
-  const ghostDps = perProjectile * SIDE_CHANNEL.damageMult * ghostRate * accuracy;
+  const ghostDps = wep.damage * coinFed * mods.damageMult * wepCoef
+    * SIDE_CHANNEL.bossDamageMult * ghostRate * accuracy;
   return primaryDps + ghostDps + burnDot;
 }
 

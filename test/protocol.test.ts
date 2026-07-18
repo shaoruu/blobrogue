@@ -203,7 +203,7 @@ function serverRoundTripTests(): void {
     { id: 13, e: { t: "sentryShot", x: 400, y: 380, aim: 0.5 } },
     { id: 14, e: { t: "haloFlare", x: 300, y: 300, r: 96 } },
     { id: 15, e: { t: "pvpDraftTriggered", pid: "pMe", source: "dedup", isComeback: true, ordinal: 2, score: 2, leaderScore: 4 } },
-    { id: 16, e: { t: "pvpDraftOffered", pid: "pMe", source: "dedup", isComeback: true, ordinal: 2, items: "side_channel:uncommon:1,deadeye:rare:2,core_dash:rare:1" } },
+    { id: 16, e: { t: "pvpDraftOffered", pid: "pMe", source: "dedup", isComeback: true, ordinal: 2, items: "full_metal:uncommon:1,deadeye:rare:2,core_dash:rare:1" } },
     { id: 17, e: { t: "pvpDraftPicked", pid: "pMe", source: "dedup", isComeback: true, ordinal: 2, item: "deadeye", level: 2, latencyTicks: 18, hp: 72, score: 2, leaderScore: 4 } },
     { id: 18, e: { t: "pvpDraftResolved", pid: "pMe", source: "time", ordinal: 3, outcome: "expiry", latencyTicks: 1200 } },
     { id: 19, e: { t: "pvpDraftDelayed", pid: "pMe", ordinal: 3, reason: "absence", remainingTicks: 900 } },

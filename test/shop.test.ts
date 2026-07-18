@@ -26,7 +26,7 @@ import {
 import type { WorldState, PlayerSim, ShopBuyOutcome } from "../src/sim/world.js";
 import {
   isShopFloor, hasShopRoomOnFloor, buildShopState, shopSlotStatusFor, shopViewerOf, shopWeaponPrice,
-  shopSlotForViewer, isPremiumKind, SHOP_FOCUS_RANGE, SHOP_BUY_RANGE,
+  shopSlotForViewer, stockShopForViewer, isPremiumKind, SHOP_FOCUS_RANGE, SHOP_BUY_RANGE,
 } from "../src/sim/shop.js";
 import type { ShopSlot, ShopState } from "../src/sim/shop.js";
 import { SHOP, PREMIUM, isPremiumShopFloor, isSpoilsFloor } from "../src/sim/balance.js";
@@ -345,6 +345,18 @@ function buyCommandTests(): void {
     p.ownedItemIds.push("side_channel");
     check("a max-one Side Channel pedestal reads 'maxLevel' after one pick",
       shopSlotStatusFor(w.shop!, sideChannelSlot, shopViewerOf(p)) === "maxLevel");
+    p.ownedItemIds = [];
+    p.ownedWeapons = ["halo"];
+    p.weapon = "halo";
+    check("an all-ineligible inventory cannot buy a stale Side Channel pedestal",
+      shopSlotStatusFor(w.shop!, sideChannelSlot, shopViewerOf(p)) === "exhausted");
+    w.shop!.viewerStock[p.id] = {};
+    stockShopForViewer(w.shop!, w.seed, w.floor, p);
+    const personalBlessings = w.shop!.slots
+      .map((slot) => shopSlotForViewer(w.shop!, slot, p.id).itemId)
+      .filter((itemId) => itemId !== null);
+    check("Dealer stock excludes Side Channel for an all-ineligible inventory",
+      !personalBlessings.includes("side_channel"));
   }
 
   section("buy: liveness + proximity gates (a tampered client cannot remote-buy)");

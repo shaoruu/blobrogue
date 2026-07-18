@@ -216,9 +216,9 @@ export const ITEMS: readonly ItemDef[] = [
   {
     id: "side_channel", name: "Side Channel",
     descs: [
-      "After a dash or hard aim flick, your next shot also fires along your previous aim at 55% damage. 1.2s cooldown.",
-      "After a dash or hard aim flick, your next shot also fires along your previous aim at 55% damage. 1.2s cooldown.",
-      "After a dash or hard aim flick, your next shot also fires along your previous aim at 55% damage. 1.2s cooldown.",
+      "After a dash or hard aim flick, your next projectile shot fires a plain ghost along your previous aim at 55% damage, or 30% against bosses. 1.2s cooldown.",
+      "After a dash or hard aim flick, your next projectile shot fires a plain ghost along your previous aim at 55% damage, or 30% against bosses. 1.2s cooldown.",
+      "After a dash or hard aim flick, your next projectile shot fires a plain ghost along your previous aim at 55% damage, or 30% against bosses. 1.2s cooldown.",
     ],
     glyph: "/", tint: "#5ab6ff", rarity: "uncommon", maxLevel: 1,
     apply: () => {},
@@ -659,7 +659,6 @@ export const CORE_ITEM_IDS: readonly string[] = ["core_damage", "core_fire", "co
 
 const LEGACY_ITEM_ID_MIGRATIONS: Readonly<Record<string, string>> = {
   split_shot: "side_channel",
-  scattergun: "side_channel",
 };
 
 export function canonicalItemId(id: string): string {
@@ -678,8 +677,9 @@ export function itemLevelsOf(ownedItemIds: readonly string[]): Map<string, numbe
   const levels = new Map<string, number>();
   for (const legacyId of ownedItemIds) {
     const id = canonicalItemId(legacyId);
-    const maxLevel = itemById(id)?.maxLevel ?? MAX_ITEM_LEVEL;
-    levels.set(id, Math.min(maxLevel, (levels.get(id) ?? 0) + 1));
+    const item = itemById(id);
+    if (item === undefined) continue;
+    levels.set(id, Math.min(itemMaxLevel(item), (levels.get(id) ?? 0) + 1));
   }
   return levels;
 }
