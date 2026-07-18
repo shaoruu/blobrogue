@@ -7240,6 +7240,7 @@ export class Game {
           ? 0.5
           : 0.5 + Math.sin(this.animClock * (3 + strength * 2) + e.id) * 0.5;
         const glow = this.sprites.fxTinted("glow_round", "#d8f0e8");
+        ctx.save();
         ctx.globalCompositeOperation = "lighter";
         if (glow) {
           const coreRadius = 10 + strength * 8 + flare * 4;
@@ -7306,6 +7307,7 @@ export class Game {
           }
           ctx.globalCompositeOperation = "lighter";
         }
+        ctx.restore();
       } else {
         // Tether: a sagging chain from the owner to the latched body.
         const target = this.enemies.find((en) => en.id === e.eid);

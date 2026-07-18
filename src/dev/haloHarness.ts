@@ -55,6 +55,12 @@ function readState(game: Game, scene: HaloHarnessScene): HaloHarnessState | null
   };
 }
 
+function isArtReady(game: Game): boolean {
+  const sprites = game.devSprites();
+  return sprites.fxTinted("halo_blade", "#d8f0e8") !== null
+    && sprites.fxTinted("glow_round", "#d8f0e8") !== null;
+}
+
 declare global {
   interface Window {
     __haloVisual?: {
@@ -95,6 +101,8 @@ export function bootHaloHarness(
   window.__haloVisual = {
     scenes: HALO_HARNESS_SCENES,
     state: () => readState(game, scene),
-    isReady: () => readState(game, scene)?.tier === HALO_HARNESS_SCENES.indexOf(scene),
+    isReady: () =>
+      readState(game, scene)?.tier === HALO_HARNESS_SCENES.indexOf(scene)
+      && isArtReady(game),
   };
 }
