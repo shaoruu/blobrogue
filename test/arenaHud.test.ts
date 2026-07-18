@@ -38,6 +38,8 @@ function build(
     respawnTicks?: number;
     spawnGraceTicks?: number;
     spawnShieldTicks?: number;
+    hearthFavorTicks?: number;
+    hearthEmberTicks?: number;
   } = {},
 ) {
   const tick = args.tick ?? 100;
@@ -51,6 +53,8 @@ function build(
     spawnProtectionStartedTick: spawnShieldTicks > 0 ? tick : 0,
     spawnHardGraceEndsAtTick: tick + spawnGraceTicks,
     spawnShieldEndsAtTick: tick + spawnShieldTicks,
+    hearthFavorTicks: args.hearthFavorTicks ?? 0,
+    hearthEmberTicks: args.hearthEmberTicks ?? 0,
     nameOf: (id, isSelf) => isSelf ? "YOU" : `Player ${id}`,
   });
 }
@@ -145,6 +149,8 @@ section("countdown, result, and respawn states");
     spawnProtectionStartedTick: originTick,
     spawnHardGraceEndsAtTick: graceEndsAtTick,
     spawnShieldEndsAtTick: shieldEndsAtTick,
+    hearthFavorTicks: 0,
+    hearthEmberTicks: 0,
     nameOf: (id, isSelf) => isSelf ? "YOU" : id,
   });
   check("hard grace and normal shield share one origin and total shield remains 2.0s",
@@ -215,6 +221,30 @@ section("arena copy cannot fall back to dungeon exit chrome");
   check("every phase is arena copy", states.every((state) => arenaLaneCopy(state).startsWith("ARENA")));
   check("no arena phase can emit FLOOR/CLEAR/GO DOWN",
     !/\bFLOOR\b|\bCLEAR\b|GO DOWN/.test(copy), copy);
+}
+
+section("contested hearth readout (Pillar A) derives from authoritative wire state");
+{
+  const idle = build({ ph: "live", end: 6080, sc: SCORES, win: null });
+  check("no hearth activity leaves the lane copy unchanged",
+    idle.hearthFavorPips === 0 && !idle.isEmberArmed && !idle.isHearthContested
+    && arenaLaneCopy(idle) === "ARENA \u00b7 4:59 \u00b7 2 FRAGS");
+
+  const oneFavor = build({ ph: "live", end: 6080, sc: SCORES, win: null }, { hearthFavorTicks: 10 });
+  check("one full Favor tick (0.50s) shows a single pip", oneFavor.hearthFavorPips === 1 && oneFavor.hearthFavorMax === 2);
+  check("partial Favor progress annotates the lane", arenaLaneCopy(oneFavor).endsWith("HEARTH \u25c6\u25c7"));
+
+  const armed = build({ ph: "live", end: 6080, sc: SCORES, win: null }, { hearthEmberTicks: 61 });
+  check("an armed ember_edge reports as armed with ceil seconds", armed.isEmberArmed && armed.emberSeconds === 4);
+  check("the armed ember takes priority in the lane copy", arenaLaneCopy(armed) === "ARENA \u00b7 4:59 \u00b7 2 FRAGS \u00b7 EMBER 4s");
+
+  const contested = build({ ph: "live", end: 6080, sc: SCORES, win: null, hc: true }, { hearthFavorTicks: 10 });
+  check("a contested hearth surfaces the pause over pip progress",
+    contested.isHearthContested && arenaLaneCopy(contested).endsWith("HEARTH CONTESTED"));
+
+  const overHc = build({ ph: "over", end: 0, sc: SCORES, win: "p2", hc: true }, { hearthEmberTicks: 61, hearthFavorTicks: 10 });
+  check("hearth readouts are inert outside the live phase",
+    overHc.hearthFavorPips === 0 && !overHc.isEmberArmed && !overHc.isHearthContested);
 }
 
 section("continuous numeric HP view");

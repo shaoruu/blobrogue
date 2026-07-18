@@ -74,6 +74,9 @@ function distinctivePlayer(): PlayerSim {
   // windows, all reconciled so they survive a reconnect (see also test/petability.test.ts).
   p.petCdReadyAtTick = 321; p.petTellT = 0.2; p.petLightT = 1.75; p.petFetchT = 0.45;
   p.petShieldT = 2.1; p.petNullT = 0.3;
+  // Contested hearth authoritative timers (v47): accrued Favor + the armed ember_edge window,
+  // both reconciled through SelfWire so they survive a reconnect.
+  p.hearthFavorT = 13; p.hearthEmberT = 57;
   return p;
 }
 
@@ -288,7 +291,7 @@ function serverRoundTripTests(): void {
 // who is actually there (the Sev-0 readout).
 function worldBindingWireTests(): void {
   section("v4: authoritative world id + roster are required, strict, and round-trip");
-  check("protocol version covers the pet abilities roster (v46)", PROTOCOL_VERSION === 46, `v=${PROTOCOL_VERSION}`);
+  check("protocol version covers the PVP Wave 2 contested hearth (v47)", PROTOCOL_VERSION === 47, `v=${PROTOCOL_VERSION}`);
   check("room code maps to its world id", worldIdForRoomCode(" abcd ") === "room:ABCD");
   check("room world ids pass the shared charset gate", isValidWorldId(worldIdForRoomCode("ZZZZ")) && isValidWorldId("arena-1"));
   check("junk world ids fail the shared charset gate", !isValidWorldId("room:../../etc") && !isValidWorldId(""));

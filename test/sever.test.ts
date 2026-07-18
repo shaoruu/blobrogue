@@ -44,7 +44,7 @@ function pinGates(): void {
   check("WORLDSPLIT plant 1.5", SEVER.worldsplitPlant === 1.5);
   check("WORLDSPLIT fracture 1.2", SEVER.worldsplitFracture === 1.2);
   check("WORLDSPLIT punish 3.0", SEVER.worldsplitPunish === 3.0);
-  check("PROTOCOL_VERSION is 46 (pet abilities roster after the framework)", PROTOCOL_VERSION === 46);
+  check("PROTOCOL_VERSION is 47 (contested hearth after the pet abilities roster)", PROTOCOL_VERSION === 47);
   for (const seed of [0x51a9eb0b, 0xC0FFEE, 42, 0xDEAD]) {
     check(`seed ${seed.toString(16)} F50=gorge`, bossKindForFloor(seed, GORGE_FLOOR) === "gorge");
     check(`seed ${seed.toString(16)} F55=sever`, bossKindForFloor(seed, SEVER_FLOOR) === "sever");
