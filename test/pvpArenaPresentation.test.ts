@@ -21,7 +21,13 @@ interface CanvasLog {
   spawnShieldStrokeCalls: number;
   spawnShellFillCalls: number;
   remoteSoftStrokeCalls: number;
+  // Alpha of every body draw (hero sprite blit or its fallback disc). The protection ring and
+  // shell paint in their own amber palette, so these entries isolate the blob body itself —
+  // the regression surface for "ring drawn around an empty floor".
+  bodyDrawAlphas: number[];
 }
+
+const HERO_FALLBACK_TINT = "#a855f7";
 
 interface ArenaGameAccess {
   isArena: boolean;
@@ -62,6 +68,7 @@ function recordingCanvas(log: CanvasLog): HTMLCanvasElement {
   let strokeStyle = "";
   let fillStyle = "";
   let lineWidth = 1;
+  let globalAlpha = 1;
   const context = new Proxy({}, {
     get: (_target, property) => {
       if (property === "createLinearGradient" || property === "createRadialGradient" || property === "createPattern") {
@@ -78,7 +85,7 @@ function recordingCanvas(log: CanvasLog): HTMLCanvasElement {
         return () => { log.arcCalls++; };
       }
       if (property === "drawImage") {
-        return () => { log.drawImageCalls++; };
+        return () => { log.drawImageCalls++; log.bodyDrawAlphas.push(globalAlpha); };
       }
       if (property === "strokeRect") {
         return () => { if (strokeStyle === "#ff5a4f") log.dangerStrokeCalls++; };
@@ -93,6 +100,7 @@ function recordingCanvas(log: CanvasLog): HTMLCanvasElement {
       if (property === "fill") {
         return () => {
           if (fillStyle === "#f5e6c8" || fillStyle === "#ffd27a") log.spawnShellFillCalls++;
+          if (fillStyle === HERO_FALLBACK_TINT) log.bodyDrawAlphas.push(globalAlpha);
         };
       }
       if (property === "fillRect") {
@@ -104,6 +112,7 @@ function recordingCanvas(log: CanvasLog): HTMLCanvasElement {
       if (property === "strokeStyle" && typeof value === "string") strokeStyle = value;
       if (property === "fillStyle" && typeof value === "string") fillStyle = value;
       if (property === "lineWidth" && typeof value === "number") lineWidth = value;
+      if (property === "globalAlpha" && typeof value === "number") globalAlpha = value;
       return true;
     },
   }) as object as CanvasRenderingContext2D;
@@ -194,6 +203,7 @@ async function main(): Promise<void> {
     spawnShieldStrokeCalls: 0,
     spawnShellFillCalls: 0,
     remoteSoftStrokeCalls: 0,
+    bodyDrawAlphas: [],
   };
   const gameInstance = new Game(
     recordingCanvas(canvasLog),
@@ -351,6 +361,34 @@ async function main(): Promise<void> {
   game.renderRemotePlayers();
   check("world protection cues disappear on authoritative break or expiry",
     canvasLog.spawnShieldStrokeCalls === 0);
+
+  section("a fresh or freeze-frozen spawn origin never leaves the local body invisible");
+  // The exact Sev report: a full spawn shield is up (grace + shield windows in the future) but
+  // the protection ORIGIN sits level with the render tick — the state a countdown or reconnect
+  // freeze holds indefinitely. The ring must not be drawn around an empty floor.
+  self.spawnGraceT = 15;
+  self.spawnShieldT = 40;
+  rival.spawnGraceT = 15;
+  rival.spawnShieldT = 40;
+  world.tick++;
+  for (const player of [self, rival]) {
+    player.spawnProtectionStartedTick = world.tick;
+    player.spawnHardGraceEndsAtTick = world.tick + 15;
+    player.spawnShieldEndsAtTick = world.tick + 40;
+  }
+  socket.deliver(buildSnapshot(world, "p1", 0, [], 0, true, {
+    worldId: "pvp:room:ABCD",
+    roster,
+  }));
+  game.tick(FIXED_DT);
+  canvasLog.spawnShellFillCalls = 0;
+  canvasLog.bodyDrawAlphas = [];
+  game.renderPlayer();
+  const localBodyAlpha = canvasLog.bodyDrawAlphas.reduce((max, alpha) => Math.max(max, alpha), 0);
+  check("the protection ring still draws for the shielded local player",
+    canvasLog.spawnShellFillCalls === 1, `shellFills=${canvasLog.spawnShellFillCalls}`);
+  check("the local body renders at a clearly visible alpha, not faded to nothing",
+    canvasLog.bodyDrawAlphas.length > 0 && localBodyAlpha >= 0.3, `bodyAlpha=${localBodyAlpha}`);
 
   section("all floor and exit presentation paths are inert in arena mode");
   check("exit coordination returns no READY TO GO DOWN copy", game.exitWaitLabel() === null);

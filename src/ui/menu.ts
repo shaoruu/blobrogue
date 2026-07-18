@@ -836,8 +836,13 @@ export class Menu {
       : null;
     if (draftKitId !== openingLoadout.kitId) isKitRemembered = false;
     if (draftPetId !== openingLoadout.petId) isPetRemembered = false;
-    let isKitChoiceMade = false;
-    let isPetChoiceMade = false;
+    // Player-intent: a VALID remembered choice (a real prior pick or the lobby preselection,
+    // still unlocked/owned and drafted here) counts as already chosen for this run so the
+    // returning player advances straight to Review without re-clicking the same cards. Every
+    // gate screen still shows and every choice can still be changed; online start still needs
+    // the final Review confirm and per-member ready.
+    let isKitChoiceMade = isKitRemembered;
+    let isPetChoiceMade = isPetRemembered;
     let isLoadoutConfirmed = false;
     let isPersisting = false;
     let isProfileLoading = this.client !== null && profile === null;
@@ -924,16 +929,15 @@ export class Menu {
         const neededLevel = kitUnlockLevel(kit);
         const requirement = `REACH ACCOUNT LV ${neededLevel} · LV ${level}/${neededLevel}`;
         const isSelected = isKitChoiceMade && draftKitId === kit;
-        const isLast = !isKitChoiceMade && isKitRemembered && draftKitId === kit;
         const card = el(
           "button",
-          `loadout-card kit-option${isSelected ? " selected" : ""}${isLast ? " last-used" : ""}${isUnlocked ? "" : " locked"}`,
+          `loadout-card kit-option${isSelected ? " selected" : ""}${isUnlocked ? "" : " locked"}`,
         );
         card.type = "button";
         card.setAttribute("role", "radio");
         card.setAttribute("aria-checked", String(isSelected));
         card.setAttribute("aria-disabled", String(!isUnlocked));
-        card.tabIndex = isSelected || isLast || (!isKitChoiceMade && draftKitId === kit) ? 0 : -1;
+        card.tabIndex = isSelected || (!isKitChoiceMade && draftKitId === kit) ? 0 : -1;
         card.setAttribute(
           "aria-label",
           `${meta.name}, ${meta.role}, ${weaponName(KIT_START_WEAPON[kit])}, ultimate ${meta.ult}${isUnlocked ? "" : `, locked, ${requirement}`}`,
@@ -965,8 +969,6 @@ export class Menu {
           state.textContent = requirement;
         } else if (isSelected) {
           state.textContent = "SELECTED ✓";
-        } else if (isLast) {
-          state.textContent = "LAST USED";
         } else {
           state.textContent = "AVAILABLE";
         }
@@ -1079,17 +1081,16 @@ export class Menu {
           ? ""
           : `REACH FLOOR ${rescueFloor} TO RESCUE · ${reached}/${rescueFloor}`;
         const isSelected = isPetChoiceMade && draftPetId === option.petId;
-        const isLast = !isPetChoiceMade && isPetRemembered && draftPetId === option.petId;
         const name = option.node?.name.toUpperCase() ?? "NO PET";
         const card = el(
           "button",
-          `loadout-card pet-option${isSelected ? " selected" : ""}${isLast ? " last-used" : ""}${isOwned ? "" : " locked"}`,
+          `loadout-card pet-option${isSelected ? " selected" : ""}${isOwned ? "" : " locked"}`,
         );
         card.type = "button";
         card.setAttribute("role", "radio");
         card.setAttribute("aria-checked", String(isSelected));
         card.setAttribute("aria-disabled", String(!isOwned));
-        card.tabIndex = isSelected || isLast || (!isPetChoiceMade && draftPetId === option.petId) ? 0 : -1;
+        card.tabIndex = isSelected || (!isPetChoiceMade && draftPetId === option.petId) ? 0 : -1;
         card.setAttribute(
           "aria-label",
           `${name}${isOwned ? "" : `, locked, ${requirement}`}`,
@@ -1120,8 +1121,6 @@ export class Menu {
           state.textContent = requirement;
         } else if (isSelected) {
           state.textContent = "SELECTED ✓";
-        } else if (isLast) {
-          state.textContent = "LAST USED";
         } else if (option.petId === null) {
           state.textContent = "AVAILABLE";
         } else {
@@ -1348,10 +1347,14 @@ export class Menu {
         level = hydrated?.masteryLevel ?? 1;
         unlocks = hydrated?.unlocks ?? [];
         isProfileLoading = false;
+        // The optimistic pre-login pass ran at LV 1 with no unlocks, so a remembered choice
+        // could not be validated yet. Now that the real profile is in, re-validate it and, when
+        // it holds, treat it as already chosen (same player-intent rule as the synchronous open)
+        // — never override a pick the player already made while unlocks were loading.
         if (!isKitChoiceMade) {
           const nextKit = this.session.rememberedKit;
           const isRememberedKitValid = nextKit.isRemembered && isKitUnlocked(nextKit.kitId, level);
-          isKitRemembered = isRememberedKitValid;
+          isKitChoiceMade = isRememberedKitValid;
           draftKitId = isRememberedKitValid
             ? nextKit.kitId
             : KIT_IDS.find((kit) => isKitUnlocked(kit, level)) ?? "gunner";
@@ -1360,7 +1363,7 @@ export class Menu {
           const nextPet = this.session.rememberedPet;
           const isRememberedPetValid = nextPet.isRemembered
             && (nextPet.petId === null || isPetOwned(nextPet.petId, unlocks));
-          isPetRemembered = isRememberedPetValid;
+          isPetChoiceMade = isRememberedPetValid;
           draftPetId = isRememberedPetValid ? nextPet.petId : null;
         }
         if (step === "kit") showKit();

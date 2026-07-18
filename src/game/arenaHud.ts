@@ -50,13 +50,29 @@ export function ticksLeftSeconds(args: { endTick: number; tick: number }): numbe
   return Math.max(0, Math.ceil((args.endTick - args.tick) * FIXED_DT));
 }
 
+// How long the spawn "materialize" fade-in lasts (ticks) and the alpha it starts from. The
+// fade only ever lightens a body that is genuinely, freshly spawning THIS tick, and it never
+// drops below PVP_MATERIALIZE_MIN — a living present player is always clearly visible, so the
+// protection ring can never be left drawing around an empty floor.
+export const PVP_MATERIALIZE_FADE_TICKS = 5;
+export const PVP_MATERIALIZE_MIN = 0.6;
+
 export function pvpMaterializeFraction(args: {
   startedTick: number;
   tick: number;
   shieldEndsAtTick: number;
 }): number {
-  if (args.startedTick <= 0 || args.shieldEndsAtTick <= args.tick) return 1;
-  return Math.max(0, Math.min(1, (args.tick - args.startedTick) / 5));
+  const { startedTick, tick, shieldEndsAtTick } = args;
+  // Fully materialized unless a real spawn fade-in is progressing this tick. Bail to 1 when the
+  // shield is already down, when the origin is unset (<= 0), or when the origin is stale/ahead of
+  // the render tick — none of those states may strand a living body invisible. An origin that is
+  // frozen level with the render tick (a countdown or reconnect pause holds startedTick == tick)
+  // starts the fade at PVP_MATERIALIZE_MIN, so it reads as a solid, present blob rather than a
+  // ring around nothing.
+  if (startedTick <= 0 || startedTick > tick || shieldEndsAtTick <= tick) return 1;
+  const elapsed = tick - startedTick;
+  if (elapsed >= PVP_MATERIALIZE_FADE_TICKS) return 1;
+  return PVP_MATERIALIZE_MIN + (1 - PVP_MATERIALIZE_MIN) * (elapsed / PVP_MATERIALIZE_FADE_TICKS);
 }
 
 export function buildArenaMatchHud(source: ArenaMatchHudSource): ArenaMatchHudState {
