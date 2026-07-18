@@ -55,7 +55,7 @@ const BUILDS: Readonly<Record<string, Loadout>> = {
       ...L3("glass_cannon"),
       ...L3("hair_trigger"),
       ...L3("deadeye"),
-      "side_channel",
+      "coin_magnet",
       "coin_magnet",
       "coin_magnet",
     ],
