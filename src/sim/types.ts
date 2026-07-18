@@ -768,7 +768,13 @@ export interface Prop {
 // `slime` is the pet-authored floor patch (Baby Slime SLIMETRAIL): a purely enemy-slowing area
 // that deals ZERO damage to anyone. It rides the shared hazard list for its position/life/render
 // but has no player-damage branch in updateHazards, so it is inert to every existing hazard path.
-export type HazardKind = "web" | "cinder" | "charge" | "omen" | "corrupt" | "slime";
+// `tar` and `spark` are the PVP WAVE 2 ring-weather ground hazards (Pillar B, pvp-only, behind the
+// arena director): `tar` is the tar_bloom slow patch — ambient, ZERO damage, it only drags the
+// walk (like a web) for anyone standing in it. `spark` is the spark_mine's telegraph fuse — a
+// growing tell ring that detonates ONCE on expiry (a flat capped chip + micro knockback), the
+// `charge` pattern retargeted to the pvp funnel. Both are inert off the pvp path (nothing spawns
+// them in co-op). The cinder_gust wind is director-state-only (no hazard entity on this list).
+export type HazardKind = "web" | "cinder" | "charge" | "omen" | "corrupt" | "slime" | "tar" | "spark";
 
 export interface Hazard {
   id: number;      // stable per-floor id (wire identity + client anim keying)

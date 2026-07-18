@@ -91,7 +91,8 @@ import type {
 // v45: Pet abilities framework — client `input` gains a `petAbility` bit + SelfWire gains the owner-bound CD/tell/light/fetch readout.
 // v46: Pet abilities roster — SelfWire gains the PEBBLEBRACE/NULLWAKE windows, EnemyWire gains the STALK info-pip, a new `slime` HazardKind rides `hzds`.
 // v47: PVP Wave 2 Contested Hearth — SelfWire gains the hearth Favor/ember timers (hf/he), MatchWire gains the contested bool (hc).
-export const SYNTHETIC_JOIN_PROTOCOL = 47;
+// v48: PVP Wave 2 Ring Weather — `tar`/`spark` HazardKinds widen `hzds`, MatchWire gains the director projection (wk/wp/we/wd).
+export const SYNTHETIC_JOIN_PROTOCOL = 48;
 export const SYNTHETIC_COOP_TICKET_ENVELOPE = "v1";
 export const SYNTHETIC_PVP_TICKET_ENVELOPE = "v2";
 export const SYNTHETIC_ADMISSION_ENVELOPE = "a2";
