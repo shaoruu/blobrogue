@@ -92,7 +92,8 @@ import type {
 // v46: Pet abilities roster — SelfWire gains the PEBBLEBRACE/NULLWAKE windows, EnemyWire gains the STALK info-pip, a new `slime` HazardKind rides `hzds`.
 // v47: PVP Wave 2 Contested Hearth — SelfWire gains the hearth Favor/ember timers (hf/he), MatchWire gains the contested bool (hc).
 // v48: PVP Wave 2 Ring Weather — `tar`/`spark` HazardKinds widen `hzds`, MatchWire gains the director projection (wk/wp/we/wd).
-export const SYNTHETIC_JOIN_PROTOCOL = 48;
+// v49: PVP Wave 3 Arena ults — SelfWire gains the claimed arena ult kit (auk), input gains the claim field (ak), a new `ultArena` event.
+export const SYNTHETIC_JOIN_PROTOCOL = 49;
 export const SYNTHETIC_COOP_TICKET_ENVELOPE = "v1";
 export const SYNTHETIC_PVP_TICKET_ENVELOPE = "v2";
 export const SYNTHETIC_ADMISSION_ENVELOPE = "a2";

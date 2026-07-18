@@ -80,6 +80,7 @@ async function sendProbe(url: string, ticket: string): Promise<ProbeResult> {
             ult: false,
             pulse: false,
             pet: false,
+            ak: "",
             ackEv: 0,
             ackSnap: 0,
           }));

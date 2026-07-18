@@ -381,6 +381,115 @@ export function pvpSightPulseIcdTicks(): number { return Math.round(KIT_COUNTERS
 export function pvpSightOutlineTicks(): number { return Math.round(KIT_COUNTERS.sightOutlineSec * TICKS_PER_SECOND); }
 export function pvpRipIcdTicks(): number { return Math.round(KIT_COUNTERS.ripIcdSec * TICKS_PER_SECOND); }
 
+// ---- PVP WAVE 3: ARENA ULTS (PROTOCOL 49) --------------------------------------------------
+// Arena-only ults on the frag deathmatch (Quill FINAL 2026-07-18). A player CLAIMS one arena kit
+// (ult skin only — start still pistol + equal HP; co-op stat lean / passive / co-op ult never
+// apply), and a shared charge/cast model powers ONE of the four arena ult ids. The co-op ults
+// (Overdrive/Sanctuary/Aegis/Phase) are HARD-banned in the arena — PVP.ultsEnabled stays false
+// and they never select behind isPvp. All read only behind isPvp; co-op is byte-inert.
+//
+// The meter reuses the existing SelfWire.uc/ura fields (the fixed-point ult charge + the cast
+// lockout tick). It is expressed in the Quill "meter points" domain (max 100.0), stored as an
+// INTEGER in hundredths-of-a-point so accrual stays crisp and reads cleanly in a golden — which
+// makes meterMax exactly 10000, numerically matching ULT.meterMax but a distinct arena surface.
+export type ArenaUltKit = Exclude<KitId, "none">;
+export type ArenaUltKind = "salvo" | "triage" | "shove" | "slip";
+
+export const ARENA_ULT = {
+  // Fixed-point meter: 100.0 points = 10000 hundredths (reuses SelfWire.uc). Full = ready.
+  meterMax: 10000,
+  // +0.35 points per 1 PVP damage DEALT (hundredths: 0.35 * 100 = 35).
+  chargePerDamage: 35,
+  // +4.0 points/s while uncontested HOLDing the Brazier — WIRED but idle on frag DM (no-op until
+  // siege; the HOLD source never ticks without a Brazier objective). Kept so siege wires the path.
+  holdParticipationPerSec: 400,
+  // +0.25 points per 1 dmg to an Exposed Brazier — idle until siege (BREAK objective absent on DM).
+  breakChipPerDamage: 25,
+  // +1.0 points/s passive time (hundredths/s: 100).
+  passivePerSec: 100,
+  // Min cast spacing after a cast (the 8s hard floor, reuses SelfWire.ura like the co-op lockout).
+  castSpacingSec: 8.0,
+  // Tell floor shared by all four (>= 0.40s telegraph before the effect lands).
+  tellSec: 0.40,
+} as const;
+
+// A1 arena_salvo (Gunner): a committed aimed volley — a 0.40s tell/aim-lock, then 5 shots over
+// 0.55s at a flat 10 PVP dmg each with +1 pierce (volley only), while the caster runs GLASS
+// (+25% incoming) for the whole tell+active 0.95s. No lasting fire-rate buff.
+export const ARENA_SALVO = {
+  tellSec: 0.40,
+  volleySec: 0.55,
+  shots: 5,
+  perShotDamage: 10,
+  bonusPierce: 1,           // +1 pierce on the volley only (each shot may pass through one foe)
+  glassSec: 0.95,           // tell (0.40) + active (0.55); caster takes +25% incoming the whole time
+  glassIncomingMult: 1.25,
+  rangePx: 520,             // aimed hitscan reach across the arena (~19 tiles)
+  shotRadiusPx: 8,          // hit half-width along the aimed ray
+} as const;
+
+// A2 arena_triage (Mender): a 0.40s tell, then +18 HP instant SELF heal (never past maxHp) and a
+// cleanse of the tar slow + move slows. Never grounds a HoT / heals an ally / converts to shield.
+export const ARENA_TRIAGE = {
+  tellSec: 0.40,
+  healSelf: 18,
+  // Positional slows (tar/web) are re-derived every tick from standing ground, so the cleanse is
+  // a brief slow-IMMUNITY window (never a lasting buff) that also drops any current drag.
+  cleanseSec: 0.60,
+} as const;
+
+// A3 arena_bulwark_shove (Bulwark): a 0.40s tell, then a 0.75s frontal wall (70° arc, 48px reach)
+// that blocks ONE foe shot then shatters (or expires). The shatter shoves frontal foes 90px (brace
+// can half it). Never an HP dome — it is a single-shot frontal parry + shove.
+export const ARENA_SHOVE = {
+  tellSec: 0.40,
+  wallLifeSec: 0.75,
+  arcDeg: 70,
+  reachPx: 48,
+  shatterKb: 90,
+} as const;
+
+// A4 arena_slip (Phantom): a 0.40s tell, then a ~90px blink along aim with a 0.40s i-frame, then a
+// visible 0.35s end-lag (NO i-frame — the recovery is the counter-window). Never an ally aura.
+export const ARENA_SLIP = {
+  tellSec: 0.40,
+  iframeSec: 0.40,
+  blinkPx: 90,
+  endlagSec: 0.35,
+} as const;
+
+// The arena ult a claimed kit fires. Pure so the sim + client + tests agree on the mapping.
+export function arenaUltKindForKit(kit: ArenaUltKit): ArenaUltKind {
+  switch (kit) {
+    case "gunner": return "salvo";
+    case "mender": return "triage";
+    case "bulwark": return "shove";
+    case "phantom": return "slip";
+  }
+}
+
+// Arena charge helpers (fixed-point hundredths-of-a-point; integer, deterministic).
+export function arenaUltPassiveChargePerTick(): number {
+  return Math.max(1, Math.round(ARENA_ULT.passivePerSec / TICKS_PER_SECOND));
+}
+export function arenaUltChargeFromDamage(dmg: number): number {
+  return dmg <= 0 ? 0 : Math.max(0, Math.round(dmg * ARENA_ULT.chargePerDamage));
+}
+export function clampArenaUltCharge(charge: number): number {
+  return charge < 0 ? 0 : charge > ARENA_ULT.meterMax ? ARENA_ULT.meterMax : Math.floor(charge);
+}
+export function isArenaUltMeterFull(charge: number): boolean {
+  return charge >= ARENA_ULT.meterMax;
+}
+// Ready === meter full AND past the 8s cast-spacing lockout (server-only truth; a client asks).
+export function canCastArenaUlt(charge: number, tick: number, readyAtTick: number): boolean {
+  return isArenaUltMeterFull(charge) && tick >= readyAtTick;
+}
+export function arenaUltCastSpacingTicks(): number { return Math.round(ARENA_ULT.castSpacingSec * TICKS_PER_SECOND); }
+export function arenaUltTellTicks(): number { return Math.round(ARENA_ULT.tellSec * TICKS_PER_SECOND); }
+// Even shot cadence across the volley window (5 shots over 0.55s -> one every 0.11s).
+export function arenaSalvoShotSpacingSec(): number { return ARENA_SALVO.volleySec / ARENA_SALVO.shots; }
+
 // The match timers are counted in TICKS (never ms / wall-clock) for determinism; these convert
 // the named second-values at the authoritative tick rate.
 export function pvpRespawnDelayTicks(): number { return Math.round(PVP.respawnDelaySec * TICKS_PER_SECOND); }

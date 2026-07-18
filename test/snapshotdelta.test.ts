@@ -355,7 +355,7 @@ function safetyTests(): void {
   const d = diffSnapshot(snapshotToWire(base), snapshotToWire(next), next.sseq, fullWorld(next));
   check("a delta advertises its baseline sseq so a client can refuse a gap", d.b === base.sseq && d.q === 7);
 
-  check("protocol version is current (v48: ring weather after the contested hearth)", PROTOCOL_VERSION === 48);
+  check("protocol version is current (v49: ring weather after the contested hearth)", PROTOCOL_VERSION === 49);
 }
 
 function main(): void {

@@ -88,7 +88,7 @@ function pushTar(w: WorldState, x: number, y: number): Hazard {
 // ---------------------------------------------------------------------------------------------
 section("K1..K5 acceptance: pool, blacklist, version, kill-switch, defs");
 {
-  check("PROTOCOL_VERSION stays 48 (blessing ids ride existing wire — no bump)", PROTOCOL_VERSION === 48);
+  check("PROTOCOL_VERSION is 49 (Wave 3 arena ults bumped the wire)", PROTOCOL_VERSION === 49);
   check("the public PVP kill-switch stays OFF (K4)", PVP_PUBLIC_ENABLED === false);
   check("all three counters are in the PVP draft pool (K1)",
     PVP.blessingPool.includes(PVP_COUNTER_BRACE)

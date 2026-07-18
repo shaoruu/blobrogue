@@ -215,19 +215,24 @@ section("NO-SNOWBALL: a kill grants the killer ZERO in-match power");
   check("no combo accrues in pvp", shooter.combo === 0);
   check("no gunner momentum accrues in pvp", shooter.passiveState === 0);
   check("ult never fires in pvp (no overdrive granted)", shooter.overdriveT === 0);
-  check("ult meter never resets from a cast (updateUlts is gated off)", shooter.ultCharge === ULT.meterMax);
+  // Wave 3 (U1): even with a full meter + a gunner kitId, the CO-OP kit ult loop stays inert in the
+  // arena — the meter drives the SEPARATE arena ult table (arena_salvo), never Overdrive/momentum.
+  check("co-op kit ult/overheat loop never activates in arena (U1)",
+    shooter.overdriveT === 0 && shooter.overheatT === 0);
 }
 
 // ---------------------------------------------------------------------------------------------
-section("ult meter does not charge in pvp");
+section("ARENA ULT meter charges in the live arena (Wave 3)");
 {
   const w = pvpWorld(4, ["p1", "p2"]);
   advanceToLive(w);
   const p1 = w.players.get("p1")!;
-  p1.kitId = "gunner"; // a real kit — its charge loop must STILL be inert in pvp
+  // The arena meter is a SEPARATE surface from the co-op kit meter: kitId stays "none" in the arena
+  // (no co-op stat lean / passive / co-op ult), while the arena meter accrues off passive time.
   p1.ultCharge = 0;
   stepN(w, 120, new Map());
-  check("ult charge stays 0 across sustained pvp time", p1.ultCharge === 0);
+  check("arena ult meter accrues passive charge over live time", p1.ultCharge > 0);
+  check("the co-op kit slot stays neutral in the arena (no stat lean / passive)", p1.kitId === "none");
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -239,13 +244,14 @@ section("CHAIN FRAGS: deterministic juice with zero stat reward");
   const victim = w.players.get("p2")!;
   killer.weapon = "railgun";
   killer.ownedWeapons = ["railgun"];
+  // The arena ult meter (Wave 3) intentionally charges off damage dealt, so it is EXCLUDED here —
+  // the chain-frag CALLOUT itself still grants zero stat/power reward (the invariant under test).
   const statsBefore = JSON.stringify({
     hp: killer.hp,
     maxHp: killer.maxHp,
     mods: killer.mods,
     weapon: killer.weapon,
     weapons: killer.ownedWeapons,
-    ult: killer.ultCharge,
     combo: killer.combo,
   });
   const fragOnce = (): SimEvent[] => {
@@ -274,7 +280,6 @@ section("CHAIN FRAGS: deterministic juice with zero stat reward");
     mods: killer.mods,
     weapon: killer.weapon,
     weapons: killer.ownedWeapons,
-    ult: killer.ultCharge,
     combo: killer.combo,
   });
   check("chain frag grants zero stat or power reward", statsAfter === statsBefore);
@@ -1502,7 +1507,7 @@ section("DETERMINISM EDGE-CASES: self-immune, same-tick order-stable, no shoot-f
 // ---------------------------------------------------------------------------------------------
 section("P2 WIRE: protocol v47, match block + spawn protection + reliable events");
 {
-  check("PROTOCOL_VERSION bumped to 48", PROTOCOL_VERSION === 48);
+  check("PROTOCOL_VERSION bumped to 49", PROTOCOL_VERSION === 49);
 
   // A pvp snapshot round-trips the match block, per-player team, and the local respawn field.
   const w = pvpWorld(30, ["p1", "p2"]);
@@ -1827,8 +1832,10 @@ section("RESPAWN ENGAGEMENT RESET: cadence, locks, statuses, and owned transient
     && !victim.isPulseRequested
     && !w.match!.lastFragTick.has(victim.id)
     && !w.match!.fragChain.has(victim.id));
-  check("engagement reset does not alter ult charge or draft progression",
-    victim.ultCharge === 321 && victim.pvpDraftOrdinal === 7);
+  // Wave 3 (U2): a pvp death DUMPS the arena ult meter to 0 (charge never carries across a life),
+  // while server-side draft PROGRESSION (the offer ordinal) is preserved across the respawn.
+  check("death dumps arena ult charge to 0 (U2) and preserves draft progression",
+    victim.ultCharge === 0 && victim.pvpDraftOrdinal === 7);
 
   const staleWorld = pvpWorld(691, ["p1", "p2"]);
   advanceToLive(staleWorld);
