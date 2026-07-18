@@ -2,30 +2,30 @@
   "toolVersion": "god-build-v1",
   "legacy": {
     "catalogVersion": 0,
-    "sourceCommit": "e501819",
-    "maxPracticalDps": 46.17,
-    "strongestBuild": "midas + [coin_magnet,elementalist,glass_cannon,hair_trigger,overload,quickdraw,second_wind,vampire_fang,vanguard]",
-    "rationale": "Frozen pre-Wave-A catalog and deterministic 100k build stream with Quill FINAL melee boss coefficients."
+    "sourceCommit": "d72de70",
+    "maxPracticalDps": 49.26,
+    "strongestBuild": "midas + [big_iron,elementalist,featherweight,glass_cannon,hair_trigger,overload,side_channel,skirmisher,vampire_fang]",
+    "rationale": "Side Channel replaces the pellet blessings with an ICD-capped authored boss lane."
   },
   "waveA": {
     "catalogVersion": 1,
-    "sourceCommit": "c32a460",
-    "maxPracticalDps": 46.953,
-    "strongestBuild": "midas + [big_iron,big_iron,frostbite,hair_trigger,marksman,overload,overload,quickdraw,shared_rope]",
-    "rationale": "Expanded Wave A weapon/blessing space changes the strongest sampled combination while global caps, coefficients, and RNG seed remain unchanged."
+    "sourceCommit": "d72de70",
+    "maxPracticalDps": 48.365,
+    "strongestBuild": "midas + [executioner,executioner,glass_cannon,hair_trigger,incendiary_rounds,overload,quickdraw,thorns,vitality]",
+    "rationale": "Split Shot becomes Side Channel and Scattergun retires while the deterministic build stream remains unchanged."
   },
   "waveB": {
     "catalogVersion": 2,
-    "sourceCommit": "7d35f74",
-    "maxPracticalDps": 49.96,
-    "strongestBuild": "midas + [big_iron,glass_cannon,hair_trigger,overload,quickdraw,second_wind,skirmisher,swift_boots,vitality]",
-    "rationale": "Wave B catalog 2 expands the weapon/blessing space after Sever v36; Quill-locked Wave B verb numbers unchanged. Fail-closed Odds\u00d7Margin (gamble not storeable) preserved."
+    "sourceCommit": "d72de70",
+    "maxPracticalDps": 46.771,
+    "strongestBuild": "midas + [big_iron,executioner,glass_cannon,hair_trigger,overload,quickdraw,thorns,vampire_fang,vitality]",
+    "rationale": "Split Shot becomes Side Channel and Scattergun retires; Wave B verb numbers remain unchanged."
   },
   "waveC": {
     "catalogVersion": 3,
-    "sourceCommit": "45cac19",
-    "maxPracticalDps": 46.786,
-    "strongestBuild": "rapid + [deadeye,elementalist,executioner,glass_cannon,hair_trigger,hair_trigger,hair_trigger,last_warm_round,overload,quickdraw,static_charge,vampire_fang]",
-    "rationale": "Wave C catalog 3 is guns-only (+4 pickup weapons, no new blessings). The four new weapons widen the deterministic 100k build sample space, shifting the strongest SAMPLED combination while every global cap, coefficient, and blessing stays unchanged and the new verbs sit far below the estimator ceiling."
+    "sourceCommit": "d72de70",
+    "maxPracticalDps": 45.489,
+    "strongestBuild": "railgun + [adrenaline,big_iron,coin_magnet,deadeye,finisher,frostbite,glass_cannon,hair_trigger,momentum_charge,overload,quickdraw,side_channel]",
+    "rationale": "The current catalog includes melee-native blessings alongside Side Channel; the deterministic strongest build remains under every global ceiling."
   }
 }

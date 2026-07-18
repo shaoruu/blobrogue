@@ -1297,11 +1297,11 @@ function godBuildGates(): void {
   const roundedWaveB = Math.round(waveB.maxDps * 1000) / 1000;
   const roundedWaveC = Math.round(waveC.maxDps * 1000) / 1000;
   record("godBuild.maxPracticalDps", roundedLegacy);
-  check("legacy catalog preserves the reviewed 46.17 estimator fixture",
+  check("legacy catalog matches the reviewed Side Channel estimator fixture",
     roundedLegacy === fixtures.legacy.maxPracticalDps
     && legacy.top[0].build === fixtures.legacy.strongestBuild,
     `${roundedLegacy} ${legacy.top[0].build}`);
-  check("Wave A catalog matches the separately reviewed 46.953 estimator fixture",
+  check("Wave A catalog matches the reviewed Side Channel estimator fixture",
     roundedWaveA === fixtures.waveA.maxPracticalDps
     && waveA.top[0].build === fixtures.waveA.strongestBuild,
     `${roundedWaveA} ${waveA.top[0].build}`);
@@ -1309,7 +1309,7 @@ function godBuildGates(): void {
     roundedWaveB === fixtures.waveB.maxPracticalDps
     && waveB.top[0].build === fixtures.waveB.strongestBuild,
     `${roundedWaveB} ${waveB.top[0].build}`);
-  check("Wave C catalog matches the reviewed catalog-3 estimator fixture (guns-only: no new blessings)",
+  check("Wave C catalog matches the reviewed catalog-3 estimator fixture",
     roundedWaveC === fixtures.waveC.maxPracticalDps
     && waveC.top[0].build === fixtures.waveC.strongestBuild,
     `${roundedWaveC} ${waveC.top[0].build}`);
