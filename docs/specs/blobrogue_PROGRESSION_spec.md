@@ -234,7 +234,7 @@ Replace `ownedItems: ItemDef[]` with `itemLevels: Map<ItemId,1|2|3>` (HUD/summar
 ### Exact level effects (cumulative result at Lv1 / Lv2 / Lv3)
 - Glass Cannon: damage +60%/-2HP · +90%/-3HP · +110%/-3HP.
 - Hair Trigger: fire rate +35% · +55% · +70%.
-- Side Channel: after a dash or a 90-degree aim change within 0.40s, the next projectile shot fires exactly one plain ghost round along the previous aim; damage is 30%/45%/55%, or 16%/24%/30% against bosses; 1.2s internal cooldown at every level.
+- Side Channel: after a dash or a 90-degree aim change within 0.40s, the next projectile shot fires exactly one plain ghost round along the previous aim; room damage is 30%/45%/55%, boss damage is 30% at every level, and the internal cooldown is always 1.2s.
 - Full Metal: pierce +1 · +2 · +3.
 - Swift Boots: move +20% · +30% · +35%.
 - Big Iron: bullet size +80%/dmg+50%/speed-22%/rate-12% · size+115%/dmg+75%/speed-30%/rate-16% · size+140%/dmg+90%/speed-35%/rate-20%.

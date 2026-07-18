@@ -220,8 +220,8 @@ export const ITEMS: readonly ItemDef[] = [
   {
     id: "side_channel", name: "Side Channel",
     descs: [
-      "After a dash or hard aim flick, your next projectile shot fires a plain ghost along your previous aim at 30% damage, or 16% against bosses. 1.2s cooldown.",
-      "After a dash or hard aim flick, your next projectile shot fires a plain ghost along your previous aim at 45% damage, or 24% against bosses. 1.2s cooldown.",
+      "After a dash or hard aim flick, your next projectile shot fires a plain ghost along your previous aim at 30% damage. Boss damage is also 30%. 1.2s cooldown.",
+      "After a dash or hard aim flick, your next projectile shot fires a plain ghost along your previous aim at 45% damage, or 30% against bosses. 1.2s cooldown.",
       "After a dash or hard aim flick, your next projectile shot fires a plain ghost along your previous aim at 55% damage, or 30% against bosses. 1.2s cooldown.",
     ],
     glyph: "/", tint: "#5ab6ff", rarity: "uncommon",
