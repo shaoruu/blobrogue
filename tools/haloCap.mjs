@@ -92,6 +92,9 @@ async function main() {
       } else {
         process.kill(-devProcess.pid, "SIGTERM");
       }
+      devProcess.stdout.destroy();
+      devProcess.stderr.destroy();
+      devProcess.unref();
     }
   }
 }
