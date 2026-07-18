@@ -1328,7 +1328,7 @@ function haloTests(): void {
     stepFor(w, 1.2);
     const afterMore = presser.hp;
     check("a body inside the ring takes contact damage", afterFirst < hp0);
-    check("hits land on the re-hit cadence, not per tick", hp0 - afterFirst <= 3 && afterMore < afterFirst,
+    check("hits land on the re-hit cadence, not per tick", hp0 - afterFirst <= 4 && afterMore < afterFirst,
       `first=${(hp0 - afterFirst).toFixed(1)} total=${(hp0 - afterMore).toFixed(1)}`);
     // Switching away dismisses the ring.
     acquireWeaponInWorld(w, LOCAL_ID, "pistol");
@@ -1521,7 +1521,7 @@ function effectModsTests(): void {
     p.mods.bulletSpeedMult = 1.5;
     step(w, idle(w.tick + 1));
     const orbit = w.effects.find((e) => e.kind === "orbit");
-    check("speed maps to orbit speed", orbit !== undefined && orbit.kind === "orbit" && Math.abs(orbit.speed - 5.4) < 0.01);
+    check("speed maps to orbit speed", orbit !== undefined && orbit.kind === "orbit" && Math.abs(orbit.speed - 8.1) < 0.01);
   }
   {
     // status blessings roll on authored damage events (a wire snap shocks with Static Charge).

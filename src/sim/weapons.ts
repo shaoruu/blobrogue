@@ -438,14 +438,18 @@ export const WEAPONS: Record<WeaponId, Weapon> = {
   // OWN YOUR PERSONAL SPACE: blades orbit you and shred whatever presses in; the active
   // flares the ring outward for a beat. You have no reach — the pack must come to you
   // (or you to it).
-  // Damage 1.5 -> 2.2 (balancer envelope calibration): at 1.5 the ring cleared its own
-  // brawl showcase slower than mid-pack guns — the exposure cost bought nothing. 2.2
-  // keeps its persistent-family boss ceiling comfortably under 0.55 PU (contact is
-  // rehit-gated and coefficient-priced) while the point-blank room job lands.
+  // Damage 2.2 -> 3.5, spin 3.6 -> 5.2, blades 3 -> 4, rehit 0.5 -> 0.42, ring 46 -> 48,
+  // bladeRadius 12 -> 13, flareBonus 1.6 -> 2.0, flareRing 96 -> 110, flareDur 0.4 -> 0.45,
+  // fireCd 0.9 -> 0.85 (Quill FINAL main-viable buff): at 2.2 the ring was "cool but
+  // weak" — never a weapon somebody would main. This package makes the point-blank brawl
+  // feel dramatically better (faster, denser blades on a wider ring that chip more often
+  // and a heftier flare) while keeping the identity intact: worn blades, zero reach, the
+  // pack still has to come to you. Contact stays rehit-gated and coefficient-priced (boss
+  // coef 0.48), so the persistent-family boss ceiling holds well under 0.55 PU.
   halo: {
-    id: "halo", name: "Razor Halo", rarity: "rare", fireCd: 0.9, speed: 0, life: 0,
-    damage: 2.2, pellets: 1, spread: 0, bulletRadius: 0, color: "#d8f0e8", muzzle: 0,
-    orbit: { blades: 3, ring: 46, bladeRadius: 12, speed: 3.6, rehit: 0.5, flareRing: 96, flareDur: 0.4, flareBonus: 1.6 },
+    id: "halo", name: "Razor Halo", rarity: "rare", fireCd: 0.85, speed: 0, life: 0,
+    damage: 3.5, pellets: 1, spread: 0, bulletRadius: 0, color: "#d8f0e8", muzzle: 0,
+    orbit: { blades: 4, ring: 48, bladeRadius: 13, speed: 5.2, rehit: 0.42, flareRing: 110, flareDur: 0.45, flareBonus: 2.0 },
     special: "Blades orbit you, shredding anything that presses in. Fire flares the ring outward for a beat.",
   },
   // HOLD A SECOND LANE: park a destructible turret on the other approach and fight the

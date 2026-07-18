@@ -2551,7 +2551,7 @@ export const WEAPON_BOSS_COEF: Readonly<Partial<Record<WeaponId, number>>> = {
   breach: 0.85,
   snapwire: 0.6,
   frostline: 0.6,
-  halo: 0.65,
+  halo: 0.48,
   sentry: 0.6,
   crook: 0.75,
   // Legendaries stay inside the envelope: the Midas' coin-fed hits would otherwise ride a
