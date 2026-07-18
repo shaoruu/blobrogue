@@ -10,37 +10,66 @@ export interface Shockwave {
   r0: number; r1: number;
   color: string;
   width: number;
+  alpha: number;
 }
 
 const MAX_SHOCKWAVES = 12;
 
 export class ShockwaveField {
-  private list: Shockwave[] = [];
+  private readonly pool: Shockwave[] = Array.from({ length: MAX_SHOCKWAVES }, () => ({
+    x: 0, y: 0, t: 0, dur: 0, r0: 0, r1: 0, color: "#ffffff", width: 0, alpha: 0,
+  }));
+  private count = 0;
 
-  spawn(x: number, y: number, r0: number, r1: number, dur: number, color: string, width = 4): void {
-    if (this.list.length >= MAX_SHOCKWAVES) this.list.shift();
-    this.list.push({ x, y, t: 0, dur, r0, r1, color, width });
+  spawn(x: number, y: number, r0: number, r1: number, dur: number, color: string, width = 4, alpha = 1): void {
+    let wave: Shockwave;
+    if (this.count < MAX_SHOCKWAVES) {
+      wave = this.pool[this.count++];
+    } else {
+      wave = this.pool[0];
+      for (let i = 1; i < MAX_SHOCKWAVES; i++) this.pool[i - 1] = this.pool[i];
+      this.pool[MAX_SHOCKWAVES - 1] = wave;
+    }
+    wave.x = x;
+    wave.y = y;
+    wave.t = 0;
+    wave.dur = dur;
+    wave.r0 = r0;
+    wave.r1 = r1;
+    wave.color = color;
+    wave.width = width;
+    wave.alpha = alpha;
   }
 
   clear(): void {
-    this.list.length = 0;
+    this.count = 0;
   }
 
   update(dt: number): void {
-    if (this.list.length === 0) return;
-    for (const s of this.list) s.t += dt;
-    this.list = this.list.filter((s) => s.t < s.dur);
+    if (this.count === 0) return;
+    let live = 0;
+    for (let i = 0; i < this.count; i++) {
+      const s = this.pool[i];
+      s.t += dt;
+      if (s.t < s.dur) {
+        const slot = this.pool[live];
+        this.pool[live++] = s;
+        this.pool[i] = slot;
+      }
+    }
+    this.count = live;
   }
 
   render(ctx: CanvasRenderingContext2D, camX: number, camY: number): void {
-    if (this.list.length === 0) return;
+    if (this.count === 0) return;
     ctx.save();
     ctx.globalCompositeOperation = "lighter";
-    for (const s of this.list) {
+    for (let i = 0; i < this.count; i++) {
+      const s = this.pool[i];
       const k = s.t / s.dur; // 0..1
       const ease = 1 - (1 - k) * (1 - k); // ease-out: rings burst fast then coast
       const r = s.r0 + (s.r1 - s.r0) * ease;
-      ctx.globalAlpha = (1 - k) * 0.7;
+      ctx.globalAlpha = (1 - k) * 0.7 * s.alpha;
       ctx.strokeStyle = s.color;
       ctx.lineWidth = Math.max(1, s.width * (1 - k * 0.6));
       ctx.beginPath();

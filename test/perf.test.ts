@@ -180,6 +180,45 @@ async function measureOddsmakerSpam(): Promise<Stat> {
   return stat(times);
 }
 
+async function measureClaymoreCleave(): Promise<Stat> {
+  const { game } = await bootGame(VIEW_W, VIEW_H);
+  game.devStartSandbox();
+  loadDeterministicFloor(game, SEED, FLOOR);
+  const w = realWorld(game);
+  w.isGodMode = true;
+  const c = spawnCenter(w);
+  settleAt(game, c.x, c.y, VIEW_W, VIEW_H);
+  game.devGiveWeapon("longsword");
+  game.devSetCombo(20);
+  const kinds = ["slime", "bat", "skeleton", "spitter"] as const;
+  const refill = (): void => {
+    let nearby = 0;
+    for (const e of w.enemies) {
+      if (!e.dead && Math.hypot(e.x - c.x, e.y - c.y) < 120) nearby++;
+    }
+    for (let i = nearby; i < 36; i++) {
+      devSpawnEnemy(w, kinds[i % kinds.length], c.x + 38 + (i % 6) * 11, c.y - 45 + Math.floor(i / 6) * 18);
+    }
+  };
+  refill();
+  aimAndFire(game, c.x + 180, c.y);
+  for (let i = 0; i < WARMUP + 60; i++) {
+    if (i % 4 === 0) refill();
+    game.tick(1 / 60);
+    game.render();
+  }
+  const times: number[] = [];
+  for (let i = 0; i < FRAMES; i++) {
+    if (i % 4 === 0) refill();
+    const t0 = performance.now();
+    game.tick(1 / 60);
+    game.render();
+    times.push(performance.now() - t0);
+  }
+  game.stop();
+  return stat(times);
+}
+
 // Worst-case scenarios. Each builds a heavy live world around the settled player.
 const SCENARIOS: Record<string, Setup> = {
   "thumper-into-barrels": (game) => {
@@ -319,6 +358,11 @@ async function main(): Promise<void> {
     const s = await measureOddsmakerSpam();
     scenarios["oddsmaker-full-auto"] = s;
     process.stdout.write(`    oddsmaker-full-auto: median ${s.median.toFixed(2)}ms, p95 ${s.p95.toFixed(2)}ms\n`);
+  }
+  {
+    const s = await measureClaymoreCleave();
+    scenarios["claymore-cleave"] = s;
+    process.stdout.write(`    claymore-cleave: median ${s.median.toFixed(2)}ms, p95 ${s.p95.toFixed(2)}ms\n`);
   }
 
   if (isWrite) {

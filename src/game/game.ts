@@ -377,13 +377,36 @@ interface MeleeFeel {
   swingGain: number;
   hitTrauma: number;
   hitFreeze: number;
+  impactSparks: number;
+  sparkFan: number;
+  sparkSpeed: number;
+  impactKick: number;
+  trailLength: number;
+  trailWidth: number;
+  trailIntensity: number;
+  isHeavy: boolean;
   bladeSize: number; // held blade draw size in px (the 40px art scaled up)
   artAngle: number;  // baked-in angle of the blade axis in the art (rad; measured tip-ward)
 }
 const MELEE_FEEL: Partial<Record<WeaponId, MeleeFeel>> = {
-  sword: { swingSfx: "meleeSwing", swingRate: 1.12, swingGain: 0.7, hitTrauma: 0.12, hitFreeze: 0.045, bladeSize: 46, artAngle: -0.80 },
-  longsword: { swingSfx: "heavySwing", swingRate: 1, swingGain: 1, hitTrauma: 0.22, hitFreeze: 0.07, bladeSize: 56, artAngle: -0.80 },
-  spear: { swingSfx: "meleeSwing", swingRate: 1.3, swingGain: 0.6, hitTrauma: 0.15, hitFreeze: 0.05, bladeSize: 58, artAngle: -0.80 },
+  sword: {
+    swingSfx: "meleeSwing", swingRate: 1.12, swingGain: 0.7,
+    hitTrauma: 0.11, hitFreeze: 0.04, impactSparks: 9, sparkFan: 0.48, sparkSpeed: 1.18,
+    impactKick: 0.6, trailLength: 0.58, trailWidth: 1, trailIntensity: 1, isHeavy: false,
+    bladeSize: 46, artAngle: -0.80,
+  },
+  longsword: {
+    swingSfx: "heavySwing", swingRate: 1, swingGain: 1,
+    hitTrauma: 0.28, hitFreeze: 0.08, impactSparks: 7, sparkFan: 0.72, sparkSpeed: 0.82,
+    impactKick: 1.4, trailLength: 0.72, trailWidth: 1.35, trailIntensity: 1.15, isHeavy: true,
+    bladeSize: 56, artAngle: -0.80,
+  },
+  spear: {
+    swingSfx: "meleeSwing", swingRate: 1.3, swingGain: 0.6,
+    hitTrauma: 0.07, hitFreeze: 0.035, impactSparks: 6, sparkFan: 0.22, sparkSpeed: 1.3,
+    impactKick: 2.2, trailLength: 1, trailWidth: 1, trailIntensity: 1, isHeavy: false,
+    bladeSize: 58, artAngle: -0.80,
+  },
 };
 const MELEE_HIT_TRAUMA = 0.14; // fallback thump when the striker's weapon is unknown (remote hits)
 const MELEE_CLASH_FREEZE = 0.055; // extra stop when a swing connects mid enemy attack (the "parry")
@@ -930,6 +953,13 @@ export class Game {
   private fxBurstCount = 0;
   private burstFreeze = 0;
   private burstTrauma = 0;
+  private burstKick = 0;
+  private burstKickDir = 0;
+  private meleeShockwaveX = 0;
+  private meleeShockwaveY = 0;
+  private meleeShockwaveCount = 0;
+  private meleeShockwaveScale = 1;
+  private meleeShockwaveColor = "#ffffff";
   private decals: Decal[] = [];
   private afterimages: Afterimage[] = [];
   private dashImgCd = 0; // spacing timer for dropping dash afterimages
@@ -961,6 +991,13 @@ export class Game {
   // into one liquid body. Rebuilt per floor load.
   private poolTiles = new Set<number>();
   private meleeFlipDir = 1;      // alternates the visual sweep direction per swing (hitbox is symmetric)
+  private meleeTrailLength = 1;
+  private meleeTrailWidth = 1;
+  private meleeTrailIntensity = 1;
+  private meleeImpactWeapon: WeaponId | null = null;
+  private meleeImpactUntil = 0;
+  private meleeImpactAim = 0;
+  private meleeImpactPuffDist = 0;
   private footstepCd = 0;        // spacing timer for run-dust kicks
   private hurtDir: number | null = null; // world angle toward the last damage source (screen-edge hint)
   // Previous-frame player position -> velocity for the reactive ambience layer.
@@ -1342,6 +1379,10 @@ export class Game {
     this.freeze = 0;
     this.trauma = 0;
     this.kickX = 0; this.kickY = 0;
+    this.meleeImpactWeapon = null;
+    this.meleeImpactUntil = 0;
+    this.meleeImpactAim = 0;
+    this.meleeImpactPuffDist = 0;
     this.hurtFlash = 0;
     this.isPaused = false;
     this.isChoosing = false;
@@ -2451,12 +2492,19 @@ export class Game {
     this.fxBurstCount = 0;
     this.burstFreeze = 0;
     this.burstTrauma = 0;
+    this.burstKick = 0;
+    this.burstKickDir = 0;
     for (const e of events) this.handleSimEvent(e);
     // The explosion/kill burst coalesces its hitstop + shake into ONE apply per frame. The
     // per-event calls all clamp anyway (freeze -> max, trauma -> sum capped at 1), so this is
     // outcome-identical while a many-detonation frame no longer runs the apply 11 times.
     if (this.burstFreeze > 0) this.addFreeze(this.burstFreeze);
     if (this.burstTrauma > 0) this.addTrauma(this.burstTrauma);
+    if (this.burstKick > 0) {
+      const kick = this.burstKick * settings.effectiveRecoil;
+      this.kickX += Math.cos(this.burstKickDir) * kick;
+      this.kickY += Math.sin(this.burstKickDir) * kick;
+    }
   }
 
   // Coalesce heavy FX bursts: as more explosions/kills land in one frame, scale per-event
@@ -2465,6 +2513,28 @@ export class Game {
   private burstScale(): number {
     const n = this.fxBurstCount++;
     return n < FX_BURST_FULL ? 1 : n < FX_BURST_HALF ? 0.5 : 0.25;
+  }
+
+  private flushMeleeShockwave() {
+    if (this.meleeShockwaveCount === 0) return;
+    const flash = settings.flashFactor;
+    if (flash > 0) {
+      const scale = this.meleeShockwaveScale;
+      this.shockwaves.spawn(
+        this.meleeShockwaveX / this.meleeShockwaveCount,
+        this.meleeShockwaveY / this.meleeShockwaveCount,
+        10,
+        54 + 26 * scale,
+        0.26 + 0.06 * scale,
+        this.meleeShockwaveColor,
+        (3.5 + 1.5 * scale) * flash,
+        (0.65 + 0.35 * scale) * flash,
+      );
+    }
+    this.meleeShockwaveX = 0;
+    this.meleeShockwaveY = 0;
+    this.meleeShockwaveCount = 0;
+    this.meleeShockwaveScale = 1;
   }
 
   private handleSimEvent(e: SimEvent) {
@@ -2541,15 +2611,25 @@ export class Game {
         // A remote teammate's swing: the slash arc + a recoil punch on their blob + spatial
         // audio, no local camera kick/trauma (see the shot case).
         if (!this.isSelfPid(e.pid)) {
-          if (m) this.spawnSlashWind(e.x, e.y, e.aim, m, w.color);
+          const isVisible = this.isNearCamera(e.x, e.y);
+          if (m && isVisible) this.spawnSlashWind(e.x, e.y, e.aim, m, w.color);
           const entry = this.remoteAnims.get(e.pid);
           if (entry) triggerRecoil(entry.anim);
           if (feel) this.sfxAt(feel.swingSfx, e.x, e.y, { rate: feel.swingRate, gain: feel.swingGain * 0.4 });
           else this.sfxAt(SHOOT_SFX[e.weapon], e.x, e.y, { gain: 0.4 });
-          this.spawnParticles(e.bx + Math.cos(e.aim) * 14, e.by + Math.sin(e.aim) * 14, 4, w.color);
+          if (isVisible) this.spawnParticles(e.bx + Math.cos(e.aim) * 14, e.by + Math.sin(e.aim) * 14, 4, w.color);
           break;
         }
         this.meleeFlipDir = -this.meleeFlipDir; // alternate the visual sweep; the hitbox wedge is symmetric
+        const comboBuild = (Math.min(COMBO_MAX_MULT, comboTierFor(this.combo).mult) - 1) / (COMBO_MAX_MULT - 1);
+        const baseTrailLength = feel?.trailLength ?? 1;
+        this.meleeTrailLength = baseTrailLength + (1 - baseTrailLength) * comboBuild;
+        this.meleeTrailWidth = (feel?.trailWidth ?? 1) * (1 + comboBuild * 0.18);
+        this.meleeTrailIntensity = (feel?.trailIntensity ?? 1) * (1 + comboBuild * 0.45);
+        this.meleeImpactWeapon = m ? e.weapon : null;
+        this.meleeImpactUntil = this.animClock + (m?.swingDur ?? 0.2) + 0.1;
+        this.meleeImpactAim = e.aim;
+        this.meleeImpactPuffDist = m ? m.reach * (m.isThrust ? 0.65 : 0.55) : 0;
         triggerRecoil(this.playerAnim, FIRE_RECOIL[e.weapon] * settings.effectiveRecoil);
         if (m) this.spawnSlashWind(e.x, e.y, e.aim, m, w.color);
         if (feel) sfx(feel.swingSfx, { rate: feel.swingRate, gain: feel.swingGain });
@@ -2570,7 +2650,8 @@ export class Game {
         if (e.crit) {
           sfx("crit", { gain: 0.6 });
           this.spawnSparkFlash(e.puffX, e.puffY, "#fff3c4");
-          this.addFreeze(0.03); // a hair of impact-frame so a crit lands harder
+          if (e.melee) this.burstFreeze = Math.max(this.burstFreeze, 0.03);
+          else this.addFreeze(0.03); // a hair of impact-frame so a crit lands harder
         }
         if (e.closeShotgun) this.addFreeze(FREEZE_SHOTGUN);
         if (e.melee) this.replayMeleeImpact(e.eid, e.puffX, e.puffY, e.crit);
@@ -3308,20 +3389,55 @@ export class Game {
   // hit-stop/trauma land the blow. Striking an enemy MID-ATTACK (windup/active) reads as a
   // clash — the parry CLANG, a white flash, and a longer stop — rewarding aggressive timing.
   private replayMeleeImpact(eid: number, hitX: number, hitY: number, isCrit: boolean) {
-    const feel = MELEE_FEEL[this.weapon];
-    this.addTrauma(feel?.hitTrauma ?? MELEE_HIT_TRAUMA);
-    this.addFreeze(feel?.hitFreeze ?? FREEZE_KILL);
+    let isLocalBladeHit = false;
+    const localHits = this.meleeSwing?.hitList;
+    if (this.animClock <= this.meleeImpactUntil) {
+      if (localHits) {
+        for (const enemy of localHits) {
+          if (typeof enemy !== "number" && enemy.id === eid) {
+            isLocalBladeHit = true;
+            break;
+          }
+        }
+      } else {
+        const expectedX = this.px + Math.cos(this.meleeImpactAim) * this.meleeImpactPuffDist;
+        const expectedY = this.py + Math.sin(this.meleeImpactAim) * this.meleeImpactPuffDist;
+        const dx = hitX - expectedX;
+        const dy = hitY - expectedY;
+        isLocalBladeHit = dx * dx + dy * dy <= 24 * 24;
+      }
+    }
+    const weapon = isLocalBladeHit ? this.meleeImpactWeapon : null;
+    const feel = weapon === null ? undefined : MELEE_FEEL[weapon];
+    this.burstTrauma = Math.min(1, this.burstTrauma + (feel?.hitTrauma ?? MELEE_HIT_TRAUMA));
+    this.burstFreeze = Math.max(this.burstFreeze, feel?.hitFreeze ?? FREEZE_KILL);
     const dir = Math.atan2(hitY - this.py, hitX - this.px);
-    this.spawnSparks(hitX, hitY, isCrit ? 10 : 6, dir);
-    const bladeColor = WEAPONS[this.weapon].melee ? WEAPONS[this.weapon].color : "#fff3c4";
+    const bladeColor = weapon === null ? "#fff3c4" : WEAPONS[weapon].color;
+    const sparkCount = (feel?.impactSparks ?? 6) + (isCrit ? 4 : 0);
+    const sparkFan = (feel?.sparkFan ?? 0.9) * (isCrit ? 1.25 : 1);
+    this.spawnSparks(hitX, hitY, sparkCount, dir, sparkFan, isCrit ? bladeColor : undefined, feel?.sparkSpeed ?? 1);
     this.spawnSparkFlash(hitX, hitY, bladeColor);
+    if (feel && feel.impactKick > this.burstKick) {
+      this.burstKick = feel.impactKick;
+      this.burstKickDir = dir;
+    }
+    if (feel?.isHeavy && this.isNearCamera(hitX, hitY)) {
+      const frameBurst = this.meleeShockwaveCount < FX_BURST_FULL
+        ? 1
+        : this.meleeShockwaveCount < FX_BURST_HALF ? 0.5 : 0.25;
+      this.meleeShockwaveX += hitX;
+      this.meleeShockwaveY += hitY;
+      this.meleeShockwaveCount++;
+      this.meleeShockwaveScale = Math.min(this.meleeShockwaveScale, this.burstScale(), frameBurst);
+      this.meleeShockwaveColor = bladeColor;
+    }
     const target = this.enemies.find((en) => en.id === eid);
     const isClash = target !== undefined && (target.attack.phase === "windup" || target.attack.phase === "active") && target.attack.move !== "none";
     if (isClash) {
       sfx("parry", { gain: 0.85 });
       this.spawnSparkFlash(hitX, hitY, "#ffffff");
-      this.addFreeze(MELEE_CLASH_FREEZE);
-      this.addTrauma(0.08);
+      this.burstFreeze = Math.max(this.burstFreeze, MELEE_CLASH_FREEZE);
+      this.burstTrauma = Math.min(1, this.burstTrauma + 0.08);
     }
   }
 
@@ -4803,13 +4919,16 @@ export class Game {
   }
 
   // Bright, short sparks that shoot back off a surface (wall impacts).
-  private spawnSparks(x: number, y: number, n: number, angle: number) {
+  private spawnSparks(x: number, y: number, n: number, angle: number, fan = 0.9, tint?: string, speedScale = 1) {
     for (let i = 0; i < n; i++) {
-      const a = angle + (Math.random() * 2 - 1) * 0.9, s = 160 + Math.random() * 220;
+      const a = angle + (Math.random() * 2 - 1) * fan;
+      const s = (160 + Math.random() * 220) * speedScale;
       const life = 0.12 + Math.random() * 0.16;
       this.pushParticle({
         x, y, vx: Math.cos(a) * s, vy: Math.sin(a) * s,
-        life, maxLife: life, color: Math.random() < 0.5 ? "#fff3c4" : "#ffb43b",
+        life, maxLife: life, color: tint === undefined
+          ? (Math.random() < 0.5 ? "#fff3c4" : "#ffb43b")
+          : (i % 3 === 0 ? "#ffffff" : tint),
         size: 1 + Math.random() * 2, kind: "spark", rot: 0, vr: 0, gravity: 120, drag: 0.86,
       });
     }
@@ -4868,6 +4987,7 @@ export class Game {
   private render() {
     const { ctx, canvas } = this;
     if (this.isAwaitingOnlineWorld()) { this.renderConnectingVeil(); return; }
+    this.flushMeleeShockwave();
     // Sample the camera on the render clock ONCE for the whole frame: the sim-rate `cam`
     // interpolated between its last two steps by the same alpha the player body uses. Every
     // world-space pass below (tiles, props, pickups, hazards, enemies, fx, player) subtracts
@@ -10088,7 +10208,7 @@ export class Game {
   // The slash VFX: a crescent ribbon that TRAILS the blade through its eased sweep (or a
   // lunging streak for thrusts), plus a white-hot leading edge where the blade is right
   // now. Analytic — sampled from the same easing the blade uses — so the trail and the
-  // held sprite always agree, at any framerate, with zero retained state.
+  // held sprite always agree at any framerate without retaining trail geometry.
   private renderMeleeSwing() {
     const swing = this.meleeSwing;
     if (!swing || swing.timer <= 0) return;
@@ -10103,20 +10223,21 @@ export class Game {
     const sy = this.py - cam.y;
     const inner = 12;
     const outer = swing.reach * (0.9 + 0.1 * Math.sin(t * Math.PI));
+    const trailStart = Math.max(0, t - this.meleeTrailLength);
+    const trailSpan = t - trailStart;
     const SEGS = 10;
     const fadeOut = 1 - t * t; // the whole crescent dissolves as the swing settles
     ctx.save();
     ctx.globalCompositeOperation = "lighter";
     ctx.translate(sx, sy);
     ctx.fillStyle = swing.color;
-    // The full swept crescent so far (swing start -> blade), brightest at the blade and
-    // fading toward the tail — a real slash arc, not a momentary sliver.
+    // The analytic trailing crescent, brightest at the blade and fading toward the tail.
     for (let i = 0; i < SEGS; i++) {
       const s0 = i / SEGS, s1 = (i + 1) / SEGS; // 0 = tail (swing start), 1 = head (blade)
-      const a0 = this.swingBladeAngle(swing, t * s0);
-      const a1 = this.swingBladeAngle(swing, t * s1);
+      const a0 = this.swingBladeAngle(swing, trailStart + trailSpan * s0);
+      const a1 = this.swingBladeAngle(swing, trailStart + trailSpan * s1);
       if (Math.abs(a1 - a0) < 0.002) continue;
-      ctx.globalAlpha = 0.5 * Math.pow(s1, 1.4) * fadeOut;
+      ctx.globalAlpha = 0.5 * this.meleeTrailIntensity * Math.pow(s1, 1.4) * fadeOut;
       const ro = outer * (0.78 + 0.22 * s1); // tail tapers inward
       const ccw = a1 < a0;
       ctx.beginPath();
@@ -10129,16 +10250,16 @@ export class Game {
     const head = this.swingBladeAngle(swing, t);
     const hx = Math.cos(head), hy = Math.sin(head);
     ctx.lineCap = "round";
-    ctx.globalAlpha = 0.6 * fadeOut;
+    ctx.globalAlpha = Math.min(1, 0.6 * this.meleeTrailIntensity) * fadeOut;
     ctx.strokeStyle = swing.color;
-    ctx.lineWidth = 5;
+    ctx.lineWidth = 5 * this.meleeTrailWidth;
     ctx.beginPath();
     ctx.moveTo(hx * inner, hy * inner);
     ctx.lineTo(hx * outer, hy * outer);
     ctx.stroke();
-    ctx.globalAlpha = 0.9 * fadeOut;
+    ctx.globalAlpha = Math.min(1, 0.9 * this.meleeTrailIntensity) * fadeOut;
     ctx.strokeStyle = "#ffffff";
-    ctx.lineWidth = 2;
+    ctx.lineWidth = 2 * this.meleeTrailWidth;
     ctx.beginPath();
     ctx.moveTo(hx * (inner + 4), hy * (inner + 4));
     ctx.lineTo(hx * (outer - 2), hy * (outer - 2));
@@ -10177,7 +10298,11 @@ export class Game {
     ctx.lineTo(headX, headY);
     ctx.stroke();
     ctx.restore();
-    if (ext > 0.65) this.fxLayer("spark", "#ffffff", headX, headY, 18, 18, (ext - 0.65) * 2.4, swing.aim);
+    const glint = Math.max(0, 1 - Math.abs(t - 0.5) / 0.18);
+    if (glint > 0) {
+      this.fxLayer("spark", swing.color, headX, headY, 28, 10, glint * 0.8, swing.aim);
+      this.fxLayer("spark", "#ffffff", headX, headY, 18, 18, glint, swing.aim);
+    }
   }
 
   // The equipped gun, drawn over the hero and rotated to aim. Held sprites are authored
