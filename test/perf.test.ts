@@ -141,6 +141,45 @@ const BOSS_ARENAS: Record<string, number> = {
   "boss-arena-undertow": UNDERTOW_FLOOR,
 };
 
+// ODDSMAKER sustained full-auto into a tight cluster — the confirmed playtest FPS killer. The
+// legendary gambles ricochet/seeker/blast/pierce each shot; blast rolls chain multi-kills in the
+// packed cluster, so the explosion + kill FX bursts (particles/gibs/decals/shockwaves) reach the
+// steady-state volume Ian hit. Because it fires only ~2.5/s, the normal 90-frame window would see
+// ~4 shots and miss the build-up — so this refills the cluster every few frames AND pre-warms the
+// FX pool to steady state before timing, reproducing the sustained-spam load rather than a cold
+// opening burst.
+async function measureOddsmakerSpam(): Promise<Stat> {
+  const { game } = await bootGame(VIEW_W, VIEW_H);
+  game.devStartSandbox();
+  loadDeterministicFloor(game, SEED, FLOOR);
+  const w = realWorld(game);
+  w.isGodMode = true;
+  const c = spawnCenter(w);
+  settleAt(game, c.x, c.y, VIEW_W, VIEW_H);
+  game.devGiveWeapon("oddsmaker");
+  const kinds = ["slime", "bat", "skeleton", "spitter"] as const;
+  const refill = (): void => {
+    let alive = 0;
+    for (const e of w.enemies) if (!e.dead) alive++;
+    for (let i = alive; i < 40; i++) {
+      devSpawnEnemy(w, kinds[i % kinds.length], c.x + 150 + (i % 8) * 26, c.y - 90 + Math.floor(i / 8) * 28);
+    }
+  };
+  refill();
+  aimAndFire(game, c.x + 260, c.y);
+  for (let i = 0; i < WARMUP + 60; i++) { if (i % 4 === 0) refill(); game.tick(1 / 60); game.render(); }
+  const times: number[] = [];
+  for (let i = 0; i < FRAMES; i++) {
+    if (i % 4 === 0) refill();
+    const t0 = performance.now();
+    game.tick(1 / 60);
+    game.render();
+    times.push(performance.now() - t0);
+  }
+  game.stop();
+  return stat(times);
+}
+
 // Worst-case scenarios. Each builds a heavy live world around the settled player.
 const SCENARIOS: Record<string, Setup> = {
   "thumper-into-barrels": (game) => {
@@ -275,6 +314,11 @@ async function main(): Promise<void> {
     const s = await measureBossArena(floor);
     scenarios[name] = s;
     process.stdout.write(`    ${name} (F${floor}): median ${s.median.toFixed(2)}ms, p95 ${s.p95.toFixed(2)}ms\n`);
+  }
+  {
+    const s = await measureOddsmakerSpam();
+    scenarios["oddsmaker-full-auto"] = s;
+    process.stdout.write(`    oddsmaker-full-auto: median ${s.median.toFixed(2)}ms, p95 ${s.p95.toFixed(2)}ms\n`);
   }
 
   if (isWrite) {
