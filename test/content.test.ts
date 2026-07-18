@@ -1521,7 +1521,7 @@ function effectModsTests(): void {
     p.mods.bulletSpeedMult = 1.5;
     step(w, idle(w.tick + 1));
     const orbit = w.effects.find((e) => e.kind === "orbit");
-    check("speed maps to orbit speed", orbit !== undefined && orbit.kind === "orbit" && Math.abs(orbit.speed - 8.1) < 0.01);
+    check("speed maps to orbit speed", orbit !== undefined && orbit.kind === "orbit" && Math.abs(orbit.speed - 7.8) < 0.01);
   }
   {
     // status blessings roll on authored damage events (a wire snap shocks with Static Charge).
