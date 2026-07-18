@@ -435,17 +435,16 @@ export const WEAPONS: Record<WeaponId, Weapon> = {
     paint: { spacing: 30, radius: 26, life: 3.5, chillRate: 2.4 },
     special: "Beads paint a chilling trail on the ground; enemies standing in it slow, then freeze.",
   },
-  // OWN YOUR PERSONAL SPACE: blades orbit you and shred whatever presses in; the active
+    // OWN YOUR PERSONAL SPACE: blades orbit you and shred whatever presses in; the active
   // flares the ring outward for a beat. You have no reach — the pack must come to you
   // (or you to it).
-  // Damage 1.5 -> 2.2 (balancer envelope calibration): at 1.5 the ring cleared its own
-  // brawl showcase slower than mid-pack guns — the exposure cost bought nothing. 2.2
-  // keeps its persistent-family boss ceiling comfortably under 0.55 PU (contact is
-  // rehit-gated and coefficient-priced) while the point-blank room job lands.
+  // Quill FINAL hefty main-viable buff (2026-07-18): contact 3.5 / spin 5.2 / 4 blades /
+  // rehit 0.42 / flare 2.0×110 / fireCd 0.85; bossCoef 0.48 pays for the raise so the
+  // persistent-family boss ceiling stays sane. Identity unchanged: worn orbit, zero reach.
   halo: {
-    id: "halo", name: "Razor Halo", rarity: "rare", fireCd: 0.9, speed: 0, life: 0,
-    damage: 2.2, pellets: 1, spread: 0, bulletRadius: 0, color: "#d8f0e8", muzzle: 0,
-    orbit: { blades: 3, ring: 46, bladeRadius: 12, speed: 3.6, rehit: 0.5, flareRing: 96, flareDur: 0.4, flareBonus: 1.6 },
+    id: "halo", name: "Razor Halo", rarity: "rare", fireCd: 0.85, speed: 0, life: 0,
+    damage: 3.5, pellets: 1, spread: 0, bulletRadius: 0, color: "#d8f0e8", muzzle: 0,
+    orbit: { blades: 4, ring: 48, bladeRadius: 13, speed: 5.2, rehit: 0.42, flareRing: 110, flareDur: 0.45, flareBonus: 2.0 },
     special: "Blades orbit you, shredding anything that presses in. Fire flares the ring outward for a beat.",
   },
   // HOLD A SECOND LANE: park a destructible turret on the other approach and fight the

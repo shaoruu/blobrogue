@@ -1328,7 +1328,8 @@ function haloTests(): void {
     stepFor(w, 1.2);
     const afterMore = presser.hp;
     check("a body inside the ring takes contact damage", afterFirst < hp0);
-    check("hits land on the re-hit cadence, not per tick", hp0 - afterFirst <= 3 && afterMore < afterFirst,
+    // Quill FINAL contact is 3.5; still one hit in the first 0.3s window, not a tick-spray.
+    check("hits land on the re-hit cadence, not per tick", hp0 - afterFirst <= 4 && afterMore < afterFirst,
       `first=${(hp0 - afterFirst).toFixed(1)} total=${(hp0 - afterMore).toFixed(1)}`);
     // Switching away dismisses the ring.
     acquireWeaponInWorld(w, LOCAL_ID, "pistol");
@@ -1340,7 +1341,7 @@ function haloTests(): void {
     const { w, p } = arena(0x4A11);
     p.x = 700; p.y = 600;
     acquireWeaponInWorld(w, LOCAL_ID, "halo");
-    const standoff = spawnReady(w, "spitter", p.x + 88, p.y); // outside ring 46, inside flare 96
+    const standoff = spawnReady(w, "spitter", p.x + 88, p.y); // outside ring 48, inside flare 110
     standoff.hp = standoff.maxHp = 40;
     standoff.speed = 0;
     stepFor(w, 0.8);
@@ -1521,7 +1522,7 @@ function effectModsTests(): void {
     p.mods.bulletSpeedMult = 1.5;
     step(w, idle(w.tick + 1));
     const orbit = w.effects.find((e) => e.kind === "orbit");
-    check("speed maps to orbit speed", orbit !== undefined && orbit.kind === "orbit" && Math.abs(orbit.speed - 5.4) < 0.01);
+    check("speed maps to orbit speed", orbit !== undefined && orbit.kind === "orbit" && Math.abs(orbit.speed - 7.8) < 0.01);
   }
   {
     // status blessings roll on authored damage events (a wire snap shocks with Static Charge).
