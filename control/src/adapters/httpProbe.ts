@@ -89,7 +89,8 @@ import type {
 // v43: Batch3B Wake F80 closed AttackMove `last_procession` + wake/warm_bier/convoy_blocker/shadow_front kinds (after Claimant v42).
 // v44: Content Wave C catalog `3` guns-only closed WeaponId (hushiron/backtalk/lamplighter/faultlink) + `cat` version 3.
 // v45: Pet abilities framework — client `input` gains a `petAbility` bit + SelfWire gains the owner-bound CD/tell/light/fetch readout.
-export const SYNTHETIC_JOIN_PROTOCOL = 45;
+// v46: Pet abilities roster — SelfWire gains the PEBBLEBRACE/NULLWAKE windows, EnemyWire gains the STALK info-pip, a new `slime` HazardKind rides `hzds`.
+export const SYNTHETIC_JOIN_PROTOCOL = 46;
 export const SYNTHETIC_COOP_TICKET_ENVELOPE = "v1";
 export const SYNTHETIC_PVP_TICKET_ENVELOPE = "v2";
 export const SYNTHETIC_ADMISSION_ENVELOPE = "a2";

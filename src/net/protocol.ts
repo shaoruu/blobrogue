@@ -375,7 +375,14 @@ export const FIXED_DT = 1 / TICK_HZ; // 50ms authoritative step
 //   sit at 0 in a pvp arena (abilities OFF — cosmetic follow only). No new PlayerWire field: the
 //   cosmetic companion still rides `pt`, and remotes need no ability readout for the two pilots.
 //   The bump is a real wire cut (exactKeys on the input frame) so a v44 client cleanly rejects.
-export const PROTOCOL_VERSION = 45;
+// v46 (Pet abilities roster — the remaining 6 verbs): SelfWire grows two more owner-bound windows
+//   — the PEBBLEBRACE one-hit brace (`psh`) and the NULLWAKE floor-hazard-null window (`pnl`) —
+//   and EnemyWire grows the Cat STALK info-pip window (`pmk`, a pure readout that amplifies
+//   nothing). A NEW HazardKind `slime` (the Baby Slime SLIMETRAIL floor patch) rides the existing
+//   `hzds` list with no new hazard field. EMBERPUFF/RATTLE are one-shot server-side effects
+//   (hazard-life scale / trash wind-up interrupt) with no new wire state. All windows sit at 0 in
+//   a pvp arena (abilities OFF). The bump lets a v45 client cleanly reject the new closed sets.
+export const PROTOCOL_VERSION = 46;
 
 
 // How long the server reserves a disconnected player's body (their seat) before the
@@ -467,10 +474,12 @@ export interface SelfWire {
   sse: number;                 // authoritative total-shield end tick
   sfl: boolean;                // held offense must release before it can fire
   // PET ABILITY (v45) — owner-bound authoritative readout, all 0 in a pvp arena (abilities OFF):
-  pcd: number;                 // petCdReadyAtTick (the shared active-bind cooldown gate)
+  pcd: number;                 // petCdReadyAtTick (the per-verb active-bind cooldown gate)
   ptt: number;                 // pet tell seconds left (the 0.30s wind-up telegraph)
   plt: number;                 // PINPRICK owner-only light window seconds left
   pft: number;                 // FETCH pull window seconds left
+  psh: number;                 // PEBBLEBRACE one-hit brace window seconds left (v46)
+  pnl: number;                 // NULLWAKE floor-hazard-null window seconds left (v46)
 }
 
 // Another player as seen by this client (rendered via interpolation, never predicted).
@@ -596,6 +605,9 @@ export interface EnemyWire {
   // PHANTOM dash-through MARK seconds remaining (Wave 2): a shared authoritative vulnerability so
   // every client renders the marked glow (0 = unmarked). enemyFromWire restores it into markT.
   mkt: number;
+  // Cat STALK info-pip seconds remaining (v46): a PURE readout every client draws as a pip. It
+  // amplifies nothing (distinct from mkt on purpose). enemyFromWire restores it into petMarkT.
+  pmk: number;
 }
 
 export interface BulletWire {
@@ -927,7 +939,7 @@ const SHOP_SLOT_KINDS: Record<ShopSlotKind, true> = {
 const SHOP_MODES: Record<ShopMode, true> = { dealer: true, premium: true, spoils: true, climax: true };
 const MATCH_PHASES: Record<MatchPhase, true> = { lobby: true, countdown: true, live: true, over: true };
 const CHEST_KINDS: Record<ChestKind, true> = { wood: true, boss: true };
-const HAZARD_KINDS: Record<HazardKind, true> = { web: true, cinder: true, charge: true, omen: true, corrupt: true };
+const HAZARD_KINDS: Record<HazardKind, true> = { web: true, cinder: true, charge: true, omen: true, corrupt: true, slime: true };
 const EFFECT_KINDS: Record<EffectKind, true> = { zone: true, wire: true, orbit: true, sentry: true, tether: true, sanctuary: true, aegis: true };
 const ATTACK_PHASES: Record<AttackPhase, true> = { none: true, windup: true, active: true, recover: true };
 const ATTACK_MOVES: Record<AttackMove, true> = {
@@ -1338,6 +1350,8 @@ function validateSelfWire(v: unknown): SelfWire {
     ptt: num(o, "ptt", 0, 1e4),
     plt: num(o, "plt", 0, 1e4),
     pft: num(o, "pft", 0, 1e4),
+    psh: num(o, "psh", 0, 1e4),
+    pnl: num(o, "pnl", 0, 1e4),
   };
 }
 
@@ -1412,6 +1426,7 @@ function validateEnemyWire(v: unknown): EnemyWire {
     mir: idRefOf(o, "mir"),
     burn: num(o, "burn", 0, 1e4), chill: num(o, "chill", 0, 1e4), shock: num(o, "shock", 0, 1e4),
     mkt: num(o, "mkt", 0, 1e4),
+    pmk: num(o, "pmk", 0, 1e4),
   };
 }
 
@@ -1834,6 +1849,8 @@ export function selfWireFromSnapshot(s: AuthoritativePlayerSnapshot): SelfWire {
     ptt: s.petTellT,
     plt: s.petLightT,
     pft: s.petFetchT,
+    psh: s.petShieldT,
+    pnl: s.petNullT,
   };
 }
 
@@ -1867,6 +1884,8 @@ export function snapshotFromSelfWire(w: SelfWire): AuthoritativePlayerSnapshot {
     petTellT: w.ptt,
     petLightT: w.plt,
     petFetchT: w.pft,
+    petShieldT: w.psh,
+    petNullT: w.pnl,
   };
 }
 
@@ -1957,7 +1976,7 @@ export function toEnemyWire(e: Enemy): EnemyWire {
     afx: e.rollAffix,
     afs: e.affixState,
     mir: e.mirrorOf ?? "",
-    burn: e.burn, chill: e.chill, shock: e.shock, mkt: e.markT,
+    burn: e.burn, chill: e.chill, shock: e.shock, mkt: e.markT, pmk: e.petMarkT,
   };
 }
 
@@ -1980,7 +1999,7 @@ export function enemyFromWire(w: EnemyWire, x: number, y: number): Enemy {
     aux: w.aux, seq: 0, panicTime: 0, echoTime: 0, echoAngle: 0,
     speed: 0, touchDamage: 0, zig: 0, hopClock: 0, hopMove: 0, spawnTimer: 0, stuckTimer: 0,
     avoidSide: 0, avoidTime: 0,
-    burn: w.burn, burnDmg: 0, chill: w.chill, shock: w.shock, markT: w.mkt, revealT: 0, statusTick: 0, burnOwner: null,
+    burn: w.burn, burnDmg: 0, chill: w.chill, shock: w.shock, markT: w.mkt, petMarkT: w.pmk, revealT: 0, statusTick: 0, burnOwner: null,
     mirrorOf: w.mir.length > 0 ? w.mir : null,
     attack: {
       phase: w.atk.ph, time: w.atk.tm, move: w.atk.mv, windup: w.atk.wu, cooldown: 0,

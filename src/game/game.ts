@@ -48,7 +48,8 @@ import type { OnlineExitReason, OnlinePhase } from "../ui/onlineCopy.js";
 import { applyItemToWorld, chooseBlessingInWorld, dismissBlessingOfferInWorld, applyMaxHpBonus, loadFloorIntoWorld, descend, devSpawnEnemy, devSpawnProp, devSpawnChest, acquireWeaponInWorld, isFloorCleared, isPvp, navDebugField, workerBuildSites, nearestShopSlot, isPlayerInCombat, rollBlessingChoicesInWorld, setPlayerKit, effectiveReviveRadius, effectiveReviveRate, grapplePreview, resolveWarmthDrain, spawnPlayerInWorld } from "../sim/world.js";
 import type { WorldState, PlayerSim, MeleeSwing, RemoteTarget } from "../sim/world.js";
 import { ULT, isRealKit, canCastUlt, KIT_META, MOMENTUM, OVERSHIELD, HEAL_PULSE, LIFEBLOOM } from "../sim/kits.js";
-import { PET_ABILITY, petVerbFor } from "../sim/petAbilities.js";
+import { PET_ABILITY, petVerbFor, petCooldownTicks } from "../sim/petAbilities.js";
+import type { PetVerb } from "../sim/petAbilities.js";
 import type { KitId } from "../sim/kits.js";
 import { UltCueTracker, isFlyingMoteSource, isPassiveMeterPulse } from "./ultCue.js";
 import type { UltMoteSource } from "./ultCue.js";
@@ -482,6 +483,7 @@ const CHILL_TINT = "#7fd3ff";
 const FREEZE_TINT = "#dff4ff";
 const SHOCK_TINT = "#7fe9ff";
 const MARK_TINT = "#c9a0ff"; // PHANTOM dash-through mark ring (the phantom violet accent)
+const STALK_TINT = "#b98bff"; // Cat STALK info-pip caret (a cooler, quieter violet than the mark)
 
 // Hurt vignette: a red screen-edge flash on damage that fades fast (seconds⁻¹).
 const HURT_FLASH_DECAY = 3.2;
@@ -6309,10 +6311,34 @@ export class Game {
     this.ctx.restore();
   }
 
-  // The minimal PET ABILITY cue (PROTOCOL 45): a world-anchored tell ring over the local player
-  // while the 0.30s wind-up plays, the FETCH pull radius while a pull is live, and a small CD arc
-  // under the player while on cooldown. All read purely off the reconciled SelfWire timers, so it
-  // is reconnect-safe and never diverges from the authoritative ability state.
+  // The minimal PET ABILITY cue (PROTOCOL 46): a world-anchored tell ring over the local player
+  // while the 0.30s wind-up plays, the verb's active-effect ring while a window is live (the FETCH
+  // pull radius, the PEBBLEBRACE brace bubble, the NULLWAKE shimmer), and a small CD arc under the
+  // player. All read purely off the reconciled SelfWire timers, so it is reconnect-safe and never
+  // diverges from the authoritative ability state. Per-verb effects that live on OTHER bodies (the
+  // STALK pip, the SLIMETRAIL patch) render in their own passes off the enemy/hazard wires.
+  private petVerbColor(verb: PetVerb): string {
+    switch (verb) {
+      case "fetch": return "#ffd166";
+      case "pinprick": return "#ffdda0";
+      case "stalk": return "#b98bff";
+      case "emberpuff": return "#ff9a52";
+      case "slimetrail": return "#8be86b";
+      case "pebblebrace": return "#b9c4d6";
+      case "rattle": return "#cfd8ff";
+      case "nullwake": return "#6fe0d0";
+    }
+  }
+  private petVerbReach(verb: PetVerb): number {
+    switch (verb) {
+      case "fetch": return PET_ABILITY.fetch.radius;
+      case "stalk": return PET_ABILITY.stalk.radius;
+      case "rattle": return PET_ABILITY.rattle.radius;
+      case "emberpuff": return PET_ABILITY.emberpuff.radius;
+      case "slimetrail": return PET_ABILITY.slimetrail.patchRadius;
+      case "pinprick": case "pebblebrace": case "nullwake": return 64;
+    }
+  }
   private renderPetAbilityCue() {
     const p = this.p;
     const verb = petVerbFor(this.selfPet);
@@ -6320,12 +6346,11 @@ export class Game {
     const ctx = this.ctx;
     const sx = this.px - this.renderCam.x;
     const sy = this.py - this.renderCam.y;
-    const gold = "#ffd166";
-    const color = verb === "fetch" ? gold : "#ffdda0";
+    const color = this.petVerbColor(verb);
     // Active tell: a ring that grows toward the verb's reach across the wind-up.
     if (p.petTellT > 0) {
       const k = 1 - Math.min(1, p.petTellT / PET_ABILITY.tellSec);
-      const reach = verb === "fetch" ? PET_ABILITY.fetch.radius : 64;
+      const reach = this.petVerbReach(verb);
       ctx.save();
       ctx.globalAlpha = 0.35 + 0.4 * k;
       ctx.strokeStyle = color;
@@ -6339,15 +6364,40 @@ export class Game {
     if (p.petFetchT > 0) {
       ctx.save();
       ctx.globalAlpha = 0.2 + 0.2 * Math.min(1, p.petFetchT / PET_ABILITY.fetch.pulseSec);
-      ctx.strokeStyle = gold;
+      ctx.strokeStyle = color;
       ctx.lineWidth = 2;
       ctx.beginPath();
       ctx.arc(sx, sy, PET_ABILITY.fetch.radius, 0, Math.PI * 2);
       ctx.stroke();
       ctx.restore();
     }
+    // Active PEBBLEBRACE brace: a solid stone bubble hugging the body until it is spent.
+    if (p.petShieldT > 0) {
+      const pulse = 0.6 + 0.4 * Math.sin(this.animClock * 6);
+      ctx.save();
+      ctx.globalAlpha = 0.5 + 0.35 * pulse;
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 2.5;
+      ctx.beginPath();
+      ctx.arc(sx, sy, this.pr + 8, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.restore();
+    }
+    // Active NULLWAKE window: a brief teal shimmer ring (the floor under the owner is voided).
+    if (p.petNullT > 0) {
+      ctx.save();
+      ctx.globalAlpha = 0.3 + 0.4 * Math.min(1, p.petNullT / PET_ABILITY.nullwake.nullSec);
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 2;
+      ctx.setLineDash([4, 4]);
+      ctx.beginPath();
+      ctx.arc(sx, sy, this.pr + 12, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.restore();
+    }
     // CD pip: a small arc under the player that empties as the cooldown clears.
-    const cd = Math.max(0, Math.min(1, (p.petCdReadyAtTick - this.kitHudTick()) / PET_ABILITY.cooldownTicks));
+    const cd = Math.max(0, Math.min(1, (p.petCdReadyAtTick - this.kitHudTick()) / petCooldownTicks(verb)));
     if (cd > 0 && p.petTellT <= 0) {
       const start = -Math.PI / 2;
       ctx.save();
@@ -6643,6 +6693,10 @@ export class Game {
       // is shared authoritative state on the wire). A pure cosmetic read off e.markT.
       if (e.markT > 0) this.renderMarkGlow(e, sx, sy, drawSize);
 
+      // Cat STALK info pip (v46): a small caret above a marked body. Pure info (never a threat
+      // signal), so it stays quiet and small — distinct from the PHANTOM vulnerability ring.
+      if (e.petMarkT > 0) this.renderStalkPip(e, sx, sy, drawSize);
+
       // The shielder's guard arc — drawn from the sim's authoritative block angle.
       if (e.kind === "shielder") this.renderShielderGuard(e, sx, sy, drawSize);
       // The formation guards: the rootward's slow arc, the marshal's P1 frontage (its
@@ -6835,6 +6889,19 @@ export class Game {
         ctx.globalAlpha = 0.12 + 0.14 * urgency * blink;
         ctx.fillStyle = "#ff5a3b";
         ctx.beginPath(); ctx.arc(sx, sy, h.radius, 0, 6.28); ctx.fill();
+        continue;
+      }
+      if (h.kind === "slime") {
+        // Baby Slime SLIMETRAIL: a low, gooey green patch — ally-safe, enemy-slowing. Quiet floor
+        // residue (never a danger tell), so it sits under bodies/telegraphs like other residue.
+        const wob = 0.85 + 0.15 * Math.sin(this.animClock * 4 + h.id * 2.1);
+        ctx.globalAlpha = 0.22 * fade * wob;
+        ctx.fillStyle = "#5fbf4a";
+        ctx.beginPath(); ctx.arc(sx, sy, h.radius, 0, 6.28); ctx.fill();
+        ctx.globalAlpha = 0.42 * fade;
+        ctx.strokeStyle = "#8be86b";
+        ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.arc(sx, sy, h.radius, 0, 6.28); ctx.stroke();
         continue;
       }
       const isFlaring = isOnFlareLane(h.x, h.y);
@@ -8605,6 +8672,25 @@ export class Game {
     ctx.beginPath();
     ctx.arc(sx, sy, size * 0.5, 0, 6.28);
     ctx.stroke();
+    ctx.restore();
+  }
+
+  // Cat STALK info pip (v46): a small downward caret hovering over a marked body. It reads as a
+  // "watched" tag, never a threat/vulnerability cue — the authoritative mark (e.petMarkT) carries
+  // no gameplay effect, so the glyph stays deliberately quiet.
+  private renderStalkPip(e: Enemy, sx: number, sy: number, size: number) {
+    const { ctx } = this;
+    const bob = Math.sin(this.animForEnemy(e).clock * 4) * 2;
+    const cy = sy - size * 0.8 + bob;
+    ctx.save();
+    ctx.globalAlpha = 0.85;
+    ctx.fillStyle = STALK_TINT;
+    ctx.beginPath();
+    ctx.moveTo(sx, cy + 5);
+    ctx.lineTo(sx - 4, cy - 2);
+    ctx.lineTo(sx + 4, cy - 2);
+    ctx.closePath();
+    ctx.fill();
     ctx.restore();
   }
 

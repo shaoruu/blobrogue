@@ -70,6 +70,10 @@ function distinctivePlayer(): PlayerSim {
   // Wave 2 signature server-owned fields (SelfWire-reconciled): overheat window, overshield pool,
   // heal-pulse CD gate. (overshieldRegenT is server-ONLY, never on SelfWire, so it is not here.)
   p.overheatT = 2.15; p.overshield = 2; p.pulseReadyAtTick = 4242;
+  // Pet ability authoritative windows (v45/v46): the per-verb CD gate plus the owner-bound active
+  // windows, all reconciled so they survive a reconnect (see also test/petability.test.ts).
+  p.petCdReadyAtTick = 321; p.petTellT = 0.2; p.petLightT = 1.75; p.petFetchT = 0.45;
+  p.petShieldT = 2.1; p.petNullT = 0.3;
   return p;
 }
 
@@ -126,7 +130,7 @@ function unknownFieldTests(): void {
   let v44Input = false;
   try { jsonCodec.decodeClient(JSON.stringify({ t: "input", seq: 1, mx: 1, my: 0, aim: 0, fire: false, dash: false, act: false, ult: false, pulse: false, ackEv: 0, ackSnap: 0 })); }
   catch (err) { v44Input = err instanceof ProtocolError; }
-  check("a v44 input (no pet) is a protocol error — the pet-ability intent is mandatory (v45)", v44Input);
+  check("a v44 input (no pet) is a protocol error — the pet-ability intent is mandatory (v45+)", v44Input);
   let specExtra = false;
   try { jsonCodec.decodeClient(JSON.stringify({ t: "spec", target: "p1", x: 5 })); }
   catch (err) { specExtra = err instanceof ProtocolError; }
@@ -284,7 +288,7 @@ function serverRoundTripTests(): void {
 // who is actually there (the Sev-0 readout).
 function worldBindingWireTests(): void {
   section("v4: authoritative world id + roster are required, strict, and round-trip");
-  check("protocol version covers the pet abilities framework after Wave C (v45)", PROTOCOL_VERSION === 45, `v=${PROTOCOL_VERSION}`);
+  check("protocol version covers the pet abilities roster (v46)", PROTOCOL_VERSION === 46, `v=${PROTOCOL_VERSION}`);
   check("room code maps to its world id", worldIdForRoomCode(" abcd ") === "room:ABCD");
   check("room world ids pass the shared charset gate", isValidWorldId(worldIdForRoomCode("ZZZZ")) && isValidWorldId("arena-1"));
   check("junk world ids fail the shared charset gate", !isValidWorldId("room:../../etc") && !isValidWorldId(""));
