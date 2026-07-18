@@ -86,9 +86,12 @@ export interface InputSample {
   // The MENDER heal-pulse hold (R). Like ult, a gameplay-context level input; the server alone
   // validates the pulse cooldown and resolves the directed heal.
   pulse: boolean;
+  // The PET ABILITY hold (V) — the active bind (PROTOCOL 45). Like ult/pulse, a gameplay-context
+  // level input; the server alone validates mode/downed/cooldown and resolves the verb.
+  petAbility: boolean;
 }
 
-const IDLE_SAMPLE: InputSample = { moveX: 0, moveY: 0, firing: false, dash: false, interact: false, ult: false, pulse: false };
+const IDLE_SAMPLE: InputSample = { moveX: 0, moveY: 0, firing: false, dash: false, interact: false, ult: false, pulse: false, petAbility: false };
 
 // Double-tap-to-dash timing (game-designer spec). A dash fires on a down->up->down where the
 // FIRST press was a genuine TAP (held <= TAP_MAX_HOLD) and the SECOND press lands within
@@ -314,7 +317,9 @@ export class InputController {
     // on the dedicated F key (a controller button later). A held bit is safe — the server resets
     // the meter on cast, so holding it can never chain a second ult. The MENDER heal-pulse (Wave
     // 2) lives on C — a held bit is likewise safe (the server owns the pulse cooldown).
-    return { moveX, moveY, firing, dash: dashHeld || dashTap, interact: this.keys.has("e"), ult: this.keys.has("f"), pulse: this.keys.has("c") };
+    // The pet-ability bind lives on V (an active tap; a held bit is safe — the server owns the
+    // shared cooldown, so holding can never chain a second cast, exactly like the ult/pulse binds).
+    return { moveX, moveY, firing, dash: dashHeld || dashTap, interact: this.keys.has("e"), ult: this.keys.has("f"), pulse: this.keys.has("c"), petAbility: this.keys.has("v") };
   }
 
   private suspendFire(): void {

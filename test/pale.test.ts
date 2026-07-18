@@ -615,7 +615,7 @@ function lastLightGates(): void {
     && PALE.lastLightScarCount === 3 && PALE.lastLightFall === 1.0 && PALE.lastLightPunish === 4.0);
   check("AttackMove last_light is on Pale moveset",
     ENEMY_MOVESET.pale.includes("last_light"));
-  check("PROTOCOL is 44 after Wave C catalog 3 (Pale last_light still fits)", PROTOCOL_VERSION === 44);
+  check("PROTOCOL is 45 after the pet abilities framework (Pale last_light still fits)", PROTOCOL_VERSION === 45);
   const near = (seconds: number) => {
     const exact = Math.round(seconds * TICK_HZ);
     return { lo: exact - 1, hi: exact + 1, exact };

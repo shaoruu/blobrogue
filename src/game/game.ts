@@ -48,6 +48,7 @@ import type { OnlineExitReason, OnlinePhase } from "../ui/onlineCopy.js";
 import { applyItemToWorld, chooseBlessingInWorld, dismissBlessingOfferInWorld, applyMaxHpBonus, loadFloorIntoWorld, descend, devSpawnEnemy, devSpawnProp, devSpawnChest, acquireWeaponInWorld, isFloorCleared, isPvp, navDebugField, workerBuildSites, nearestShopSlot, isPlayerInCombat, rollBlessingChoicesInWorld, setPlayerKit, effectiveReviveRadius, effectiveReviveRate, grapplePreview, resolveWarmthDrain, spawnPlayerInWorld } from "../sim/world.js";
 import type { WorldState, PlayerSim, MeleeSwing, RemoteTarget } from "../sim/world.js";
 import { ULT, isRealKit, canCastUlt, KIT_META, MOMENTUM, OVERSHIELD, HEAL_PULSE, LIFEBLOOM } from "../sim/kits.js";
+import { PET_ABILITY, petVerbFor } from "../sim/petAbilities.js";
 import type { KitId } from "../sim/kits.js";
 import { UltCueTracker, isFlyingMoteSource, isPassiveMeterPulse } from "./ultCue.js";
 import type { UltMoteSource } from "./ultCue.js";
@@ -1905,11 +1906,11 @@ export class Game {
     // movement key can't turn the cancel frame into a real dash.
     if (this.isChargeCancelPending) {
       if (this.p.chargeT > 0) {
-        return { seq: ++this.inputSeq, moveX: 0, moveY: 0, aim, firing: false, dash: true, interact: false, ult: false, pulse: false };
+        return { seq: ++this.inputSeq, moveX: 0, moveY: 0, aim, firing: false, dash: true, interact: false, ult: false, pulse: false, petAbility: false };
       }
       this.isChargeCancelPending = false;
     }
-    return { seq: ++this.inputSeq, moveX: s.moveX, moveY: s.moveY, aim, firing: s.firing, dash: s.dash, interact: s.interact, ult: s.ult || devUlt, pulse: s.pulse };
+    return { seq: ++this.inputSeq, moveX: s.moveX, moveY: s.moveY, aim, firing: s.firing, dash: s.dash, interact: s.interact, ult: s.ult || devUlt, pulse: s.pulse, petAbility: s.petAbility };
   }
 
   // Co-op teammate positions fed to the sim as extra enemy-aggro targets (Stage A keeps
@@ -4870,6 +4871,7 @@ export class Game {
     this.renderWorldLabels();
     this.renderInteractPrompt(); // world-anchored [E] chip over the interact target (item 6)
     this.renderUltReadyNudge();  // one-time "[F] <ULT> READY" chip over the player
+    this.renderPetAbilityCue();  // PROTOCOL 45: pet ability tell ring + CD pip over the player
     ctx.restore();
     this.renderBiomeVignette();
     this.screenFlash.render(ctx, canvas.width, canvas.height);
@@ -4897,7 +4899,10 @@ export class Game {
     const visionMult = floorVisionMult(this.world.floorDescriptor.mutators);
     if (this.isRunning && this.isWorldRevealed) {
       if (!this.isDown && !this.isArenaRespawning()) {
-        this.lighting.pushDynamic(this.px, this.py, HERO_GLOW_RADIUS * visionMult, HERO_GLOW_CUT, HERO_GLOW_COLOR, HERO_GLOW_STAIN, true);
+        // Wick PINPRICK (PROTOCOL 45): the owner-only light window bumps the hero glow by a flat
+        // +radius while it is live. Reconnect-safe — petLightT rides SelfWire, never predicted.
+        const pinprick = this.p.petLightT > 0 ? PET_ABILITY.pinprick.lightRadiusBonus : 0;
+        this.lighting.pushDynamic(this.px, this.py, HERO_GLOW_RADIUS * visionMult + pinprick, HERO_GLOW_CUT, HERO_GLOW_COLOR, HERO_GLOW_STAIN, true);
       }
       for (const r of this.remotes()) {
         if (!r.isDown && !r.isAbsent && (!this.isArena || r.hp > 0) && this.isNearCamera(r.x, r.y, REMOTE_GLOW_RADIUS)) {
@@ -6302,6 +6307,58 @@ export class Game {
     this.ctx.globalAlpha = Math.max(0, Math.min(1, alpha));
     this.drawKeyChip(sx, sy, "F", n.verb);
     this.ctx.restore();
+  }
+
+  // The minimal PET ABILITY cue (PROTOCOL 45): a world-anchored tell ring over the local player
+  // while the 0.30s wind-up plays, the FETCH pull radius while a pull is live, and a small CD arc
+  // under the player while on cooldown. All read purely off the reconciled SelfWire timers, so it
+  // is reconnect-safe and never diverges from the authoritative ability state.
+  private renderPetAbilityCue() {
+    const p = this.p;
+    const verb = petVerbFor(this.selfPet);
+    if (verb === null || !this.isRunning || !this.isWorldRevealed || this.isDown) return;
+    const ctx = this.ctx;
+    const sx = this.px - this.renderCam.x;
+    const sy = this.py - this.renderCam.y;
+    const gold = "#ffd166";
+    const color = verb === "fetch" ? gold : "#ffdda0";
+    // Active tell: a ring that grows toward the verb's reach across the wind-up.
+    if (p.petTellT > 0) {
+      const k = 1 - Math.min(1, p.petTellT / PET_ABILITY.tellSec);
+      const reach = verb === "fetch" ? PET_ABILITY.fetch.radius : 64;
+      ctx.save();
+      ctx.globalAlpha = 0.35 + 0.4 * k;
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(sx, sy, 18 + (reach - 18) * k, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.restore();
+    }
+    // Active FETCH pull window: a soft ring at the pull radius so the yank reads.
+    if (p.petFetchT > 0) {
+      ctx.save();
+      ctx.globalAlpha = 0.2 + 0.2 * Math.min(1, p.petFetchT / PET_ABILITY.fetch.pulseSec);
+      ctx.strokeStyle = gold;
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(sx, sy, PET_ABILITY.fetch.radius, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.restore();
+    }
+    // CD pip: a small arc under the player that empties as the cooldown clears.
+    const cd = Math.max(0, Math.min(1, (p.petCdReadyAtTick - this.kitHudTick()) / PET_ABILITY.cooldownTicks));
+    if (cd > 0 && p.petTellT <= 0) {
+      const start = -Math.PI / 2;
+      ctx.save();
+      ctx.globalAlpha = 0.85;
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.arc(sx, sy + 30, 8, start, start + Math.PI * 2 * (1 - cd));
+      ctx.stroke();
+      ctx.restore();
+    }
   }
 
   // A charge mote's flight target: the bottom-left ult meter's center in canvas pixels, mapped

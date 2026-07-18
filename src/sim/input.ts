@@ -26,6 +26,10 @@ export interface InputCmd {
   // reads as released. Like `ult`, the client can only REQUEST — the authoritative sim validates
   // the pulse cooldown + resolves the directed heal. Inert for every non-Mender kit.
   pulse?: boolean;
+  // The PET ABILITY intent (PROTOCOL 45). Optional so pre-existing callers stay valid; absent
+  // reads as released. Like `ult`/`pulse`, the client can only REQUEST — the authoritative sim
+  // validates mode/downed/cooldown and resolves the verb. Inert without an ability pet equipped.
+  petAbility?: boolean;
 }
 
 export const IDLE_INPUT: InputCmd = { seq: 0, moveX: 0, moveY: 0, aim: 0, firing: false, dash: false };

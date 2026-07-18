@@ -367,7 +367,15 @@ export const FIXED_DT = 1 / TICK_HZ; // 50ms authoritative step
 //   four verbs are server-owned TRANSIENT combat state (sub-10s), never reconciled. The bump
 //   is purely so a pre-v44 client cleanly rejects a `cat=3` run instead of decoding it.
 //   MERGE ORDER: Wake (43) is on main — Wave C owns PROTOCOL 44.
-export const PROTOCOL_VERSION = 44;
+// v45 (Pet abilities framework — FETCH + PINPRICK pilot): the client `input` frame grows a
+//   `petAbility` request bit (the active bind), and SelfWire grows the owner-bound ability
+//   readout — the CD gate (`pcd`) plus three short-lived active-effect windows: the 0.30s tell
+//   (`ptt`), the PINPRICK owner-only light window (`plt`), and the FETCH pull window (`pft`). All
+//   are server-owned + reconciled so the CD pip / tell VFX / effects are reconnect-safe, and all
+//   sit at 0 in a pvp arena (abilities OFF — cosmetic follow only). No new PlayerWire field: the
+//   cosmetic companion still rides `pt`, and remotes need no ability readout for the two pilots.
+//   The bump is a real wire cut (exactKeys on the input frame) so a v44 client cleanly rejects.
+export const PROTOCOL_VERSION = 45;
 
 
 // How long the server reserves a disconnected player's body (their seat) before the
@@ -458,6 +466,11 @@ export interface SelfWire {
   sge: number;                 // authoritative hard-grace end tick
   sse: number;                 // authoritative total-shield end tick
   sfl: boolean;                // held offense must release before it can fire
+  // PET ABILITY (v45) — owner-bound authoritative readout, all 0 in a pvp arena (abilities OFF):
+  pcd: number;                 // petCdReadyAtTick (the shared active-bind cooldown gate)
+  ptt: number;                 // pet tell seconds left (the 0.30s wind-up telegraph)
+  plt: number;                 // PINPRICK owner-only light window seconds left
+  pft: number;                 // FETCH pull window seconds left
 }
 
 // Another player as seen by this client (rendered via interpolation, never predicted).
@@ -683,7 +696,7 @@ export type ClientMsg =
   // `ackSnap` (v24): the highest snapshot sseq this client has applied + retained as its delta
   // baseline. The server deltas the next snapshot against exactly that baseline (or sends a
   // full keyframe if it can no longer honor it), so a missed baseline can never be applied.
-  | { t: "input"; seq: number; mx: number; my: number; aim: number; fire: boolean; dash: boolean; act: boolean; ult: boolean; pulse: boolean; ackEv: number; ackSnap: number }
+  | { t: "input"; seq: number; mx: number; my: number; aim: number; fire: boolean; dash: boolean; act: boolean; ult: boolean; pulse: boolean; pet: boolean; ackEv: number; ackSnap: number }
   | { t: "pong"; id: number }
   // Spectate intent: which teammate a DOWNED player's camera follows. Pure view preference —
   // the server uses it only to center that client's interest view (and positional events)
@@ -1158,7 +1171,7 @@ function decodeClientMsg(raw: string): ClientMsg {
     case "input": {
       // seq + ackEv: non-negative safe integers. NO dt — inputs are intent samples; the server
       // tick owns simulation time, and exactKeys rejects a smuggled dt outright.
-      exactKeys(o, ["t", "seq", "mx", "my", "aim", "fire", "dash", "act", "ult", "pulse", "ackEv", "ackSnap"]);
+      exactKeys(o, ["t", "seq", "mx", "my", "aim", "fire", "dash", "act", "ult", "pulse", "pet", "ackEv", "ackSnap"]);
       return {
         t: "input",
         seq: intOf(o, "seq", 0, Number.MAX_SAFE_INTEGER),
@@ -1170,6 +1183,7 @@ function decodeClientMsg(raw: string): ClientMsg {
         act: boolOf(o, "act"),
         ult: boolOf(o, "ult"),
         pulse: boolOf(o, "pulse"),
+        pet: boolOf(o, "pet"),
         ackEv: intOf(o, "ackEv", 0, Number.MAX_SAFE_INTEGER),
         ackSnap: intOf(o, "ackSnap", 0, Number.MAX_SAFE_INTEGER),
       };
@@ -1320,6 +1334,10 @@ function validateSelfWire(v: unknown): SelfWire {
     sge: intOf(o, "sge", 0, Number.MAX_SAFE_INTEGER),
     sse: intOf(o, "sse", 0, Number.MAX_SAFE_INTEGER),
     sfl: boolOf(o, "sfl"),
+    pcd: intOf(o, "pcd", 0, Number.MAX_SAFE_INTEGER),
+    ptt: num(o, "ptt", 0, 1e4),
+    plt: num(o, "plt", 0, 1e4),
+    pft: num(o, "pft", 0, 1e4),
   };
 }
 
@@ -1812,6 +1830,10 @@ export function selfWireFromSnapshot(s: AuthoritativePlayerSnapshot): SelfWire {
     sge: s.spawnHardGraceEndsAtTick,
     sse: s.spawnShieldEndsAtTick,
     sfl: s.isSpawnOffenseLatched,
+    pcd: s.petCdReadyAtTick,
+    ptt: s.petTellT,
+    plt: s.petLightT,
+    pft: s.petFetchT,
   };
 }
 
@@ -1841,6 +1863,10 @@ export function snapshotFromSelfWire(w: SelfWire): AuthoritativePlayerSnapshot {
     spawnHardGraceEndsAtTick: w.sge,
     spawnShieldEndsAtTick: w.sse,
     isSpawnOffenseLatched: w.sfl,
+    petCdReadyAtTick: w.pcd,
+    petTellT: w.ptt,
+    petLightT: w.plt,
+    petFetchT: w.pft,
   };
 }
 

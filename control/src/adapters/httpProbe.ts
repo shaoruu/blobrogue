@@ -88,7 +88,8 @@ import type {
 // v42: Batch3A Claimant F70 closed AttackMove `all_things_owed` + claimant/claim_token/claim_socket kinds (after Undertow v41).
 // v43: Batch3B Wake F80 closed AttackMove `last_procession` + wake/warm_bier/convoy_blocker/shadow_front kinds (after Claimant v42).
 // v44: Content Wave C catalog `3` guns-only closed WeaponId (hushiron/backtalk/lamplighter/faultlink) + `cat` version 3.
-export const SYNTHETIC_JOIN_PROTOCOL = 44;
+// v45: Pet abilities framework — client `input` gains a `petAbility` bit + SelfWire gains the owner-bound CD/tell/light/fetch readout.
+export const SYNTHETIC_JOIN_PROTOCOL = 45;
 export const SYNTHETIC_COOP_TICKET_ENVELOPE = "v1";
 export const SYNTHETIC_PVP_TICKET_ENVELOPE = "v2";
 export const SYNTHETIC_ADMISSION_ENVELOPE = "a2";
