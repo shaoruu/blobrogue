@@ -18,7 +18,7 @@ import {
   BOSS_EXTRA_PELLET_COEF, BOSS_NATIVE_PELLET_COEF, SIDE_CHANNEL, WEAPON_BOSS_COEF, BOSS_VULN_CAP,
 } from "../src/sim/balance.js";
 import {
-  canonicalItemId, itemById, createMods, recomputeMods, normalItemsForCatalog, rollItemChoicesWith,
+  itemById, createMods, recomputeMods, normalItemsForCatalog, rollItemChoicesWith,
 } from "../src/sim/items.js";
 import type { PlayerMods } from "../src/sim/items.js";
 import { WEAPONS, isSideChannelProjectileWeapon } from "../src/sim/weapons.js";
@@ -232,7 +232,6 @@ export function practicalAccuracy(id: WeaponId, spreadTotal: number, speed: numb
 export function practicalBossDps(
   id: WeaponId,
   mods: PlayerMods,
-  ownedItemIds: readonly string[] = [],
 ): number {
   const wep = WEAPONS[id];
   const isMelee = wep.melee !== undefined;
@@ -255,10 +254,10 @@ export function practicalBossDps(
   const perProjectile = wep.damage * coinFed * mods.damageMult * wepCoef * vuln;
   const primaryDps = perProjectile * effPellets * rate * accuracy;
   const hasSideChannel = isSideChannelProjectileWeapon(id)
-    && ownedItemIds.some((itemId) => canonicalItemId(itemId) === "side_channel");
+    && mods.sideChannelBossDamageMult > 0;
   const ghostRate = hasSideChannel ? Math.min(rate, 1 / SIDE_CHANNEL.icd) : 0;
   const ghostDps = wep.damage * coinFed * mods.damageMult * wepCoef
-    * SIDE_CHANNEL.bossDamageMult * ghostRate * accuracy;
+    * mods.sideChannelBossDamageMult * ghostRate * accuracy;
   return primaryDps + ghostDps + burnDot;
 }
 

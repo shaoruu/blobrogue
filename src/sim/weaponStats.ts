@@ -9,7 +9,6 @@
 import { WEAPONS, MAX_ORBIT_BLADES, isSideChannelProjectileWeapon } from "./weapons.js";
 import type { Weapon } from "./weapons.js";
 import type { WeaponId, WeaponRarity } from "./types.js";
-import { canonicalItemId } from "./items.js";
 import type { PlayerMods } from "./items.js";
 import {
   CAPS, POWER, BOSS_VULN_CAP, BOSS_NATIVE_PELLET_COEF, BOSS_EXTRA_PELLET_COEF,
@@ -280,7 +279,6 @@ function mechanicsOf(w: Weapon, mods: PlayerMods): WeaponMechanic[] {
 export function expectedBossDps(
   id: WeaponId,
   mods: PlayerMods,
-  ownedItemIds: readonly string[] = [],
 ): number {
   const w = WEAPONS[id];
   const isMelee = w.melee !== undefined;
@@ -296,10 +294,10 @@ export function expectedBossDps(
   const perProjectile = w.damage * mods.damageMult * wepCoef * vuln;
   const primaryDps = perProjectile * effPellets * rate * POWER.practicalFactor;
   const hasSideChannel = isSideChannelProjectileWeapon(id)
-    && ownedItemIds.some((itemId) => canonicalItemId(itemId) === "side_channel");
+    && mods.sideChannelBossDamageMult > 0;
   const ghostRate = hasSideChannel ? Math.min(rate, 1 / SIDE_CHANNEL.icd) : 0;
   const ghostDps = w.damage * mods.damageMult * wepCoef
-    * SIDE_CHANNEL.bossDamageMult * ghostRate * POWER.practicalFactor;
+    * mods.sideChannelBossDamageMult * ghostRate * POWER.practicalFactor;
   return primaryDps + ghostDps + burnDot;
 }
 

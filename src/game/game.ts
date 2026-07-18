@@ -415,6 +415,8 @@ const BOSS_JUMP_HEIGHT = 42;   // px the boss visually lifts mid hop-slam
 const FREEZE_AT = 3;           // chill >= this renders as frozen-solid crust
 const BURN_TINT = "#ff8a3b";   // ember/burn overlay + burn-tick dmg number color
 const AIM_DASH: number[] = [7, 6]; // dashed aim-line pattern (telegraph render)
+const SIDE_CHANNEL_ARMED_COLOR = "#5ab6ff";
+const SIDE_CHANNEL_LANE_LENGTH = 180;
 
 const DEATH_DUR = 0.3;        // seconds a fade-only corpse (ghost/spitter) animates out
 const DEATH_DUR_SHEET = 0.4;  // slime/skeleton/bat: their 5-frame death clip
@@ -5036,6 +5038,7 @@ export class Game {
     this.renderEffectEntities(); // weapon effect bodies (sentries, orbit blades, tether chains)
     this.renderChargeMarker();   // the local Breach hold: charge ring + landing marker
     this.renderGrapplePreview();
+    this.renderSideChannelArmed();
     this.renderTracers();
     this.renderRemotePlayers();
     this.renderDevPalePlayers();
@@ -7607,6 +7610,33 @@ export class Game {
     ctx.strokeStyle = "#a8d7a0";
     ctx.beginPath();
     ctx.arc(preview.destinationX - cam.x, preview.destinationY - cam.y, 7, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  private renderSideChannelArmed() {
+    const aim = this.p.sideChannelArmedAim;
+    if (aim === null || this.isDown || this.p.isAbsent) return;
+    const { ctx, renderCam: cam } = this;
+    const dx = Math.cos(aim);
+    const dy = Math.sin(aim);
+    const muzzleX = this.px + dx * 18 - cam.x;
+    const muzzleY = this.py + dy * 18 - cam.y;
+    const tipX = this.px + dx * SIDE_CHANNEL_LANE_LENGTH - cam.x;
+    const tipY = this.py + dy * SIDE_CHANNEL_LANE_LENGTH - cam.y;
+    ctx.save();
+    ctx.globalAlpha = 0.72;
+    ctx.strokeStyle = SIDE_CHANNEL_ARMED_COLOR;
+    ctx.lineWidth = 2;
+    ctx.setLineDash(AIM_DASH);
+    ctx.beginPath();
+    ctx.moveTo(muzzleX, muzzleY);
+    ctx.lineTo(tipX, tipY);
+    ctx.stroke();
+    ctx.setLineDash(AIM_SOLID);
+    ctx.globalAlpha = 0.92;
+    ctx.beginPath();
+    ctx.arc(tipX, tipY, 5, 0, Math.PI * 2);
     ctx.stroke();
     ctx.restore();
   }

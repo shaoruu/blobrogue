@@ -342,8 +342,8 @@ function buyCommandTests(): void {
     const p = w.players.get(LOCAL_ID)!;
     const blessing = slotOf(w, "blessing");
     const sideChannelSlot: ShopSlot = { ...blessing, itemId: "side_channel" };
-    p.ownedItemIds.push("side_channel");
-    check("a max-one Side Channel pedestal reads 'maxLevel' after one pick",
+    p.ownedItemIds.push("side_channel", "side_channel", "side_channel");
+    check("a max-rank Side Channel pedestal reads 'maxLevel' after three picks",
       shopSlotStatusFor(w.shop!, sideChannelSlot, shopViewerOf(p)) === "maxLevel");
     p.ownedItemIds = [];
     p.ownedWeapons = ["halo"];

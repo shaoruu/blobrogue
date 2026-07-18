@@ -4,7 +4,7 @@
 // then clamped to the raw caps — no irreversible incremental applies, no cap escapes. The
 // authoritative sim (solo LocalTransport and the server) runs the identical recompute.
 
-import { CAPS } from "./balance.js";
+import { CAPS, SIDE_CHANNEL } from "./balance.js";
 import { applyKitStatLean } from "./kits.js";
 import type { KitId } from "./kits.js";
 import { PVP, PVP_COUNTER_BRACE, PVP_COUNTER_SIGHT, PVP_COUNTER_RIP } from "./pvp.js";
@@ -45,6 +45,8 @@ export interface PlayerMods {
   chillChance: number;     // 0..1 chance a hit also chills (slow → freeze)
   shockChance: number;     // 0..1 chance a hit also shocks (+dmg amp + arc)
   selfKnockbackMult: number;
+  sideChannelNormalDamageMult: number;
+  sideChannelBossDamageMult: number;
   reclaimedBounceDamage: number;
   muddyDashRefund: number;
   comboWindowBonus: number;
@@ -105,6 +107,8 @@ export function createMods(): PlayerMods {
     chillChance: 0,
     shockChance: 0,
     selfKnockbackMult: 1,
+    sideChannelNormalDamageMult: 0,
+    sideChannelBossDamageMult: 0,
     reclaimedBounceDamage: 0,
     muddyDashRefund: 0,
     comboWindowBonus: 0,
@@ -216,12 +220,21 @@ export const ITEMS: readonly ItemDef[] = [
   {
     id: "side_channel", name: "Side Channel",
     descs: [
-      "After a dash or hard aim flick, your next projectile shot fires a plain ghost along your previous aim at 55% damage, or 30% against bosses. 1.2s cooldown.",
-      "After a dash or hard aim flick, your next projectile shot fires a plain ghost along your previous aim at 55% damage, or 30% against bosses. 1.2s cooldown.",
+      "After a dash or hard aim flick, your next projectile shot fires a plain ghost along your previous aim at 30% damage, or 16% against bosses. 1.2s cooldown.",
+      "After a dash or hard aim flick, your next projectile shot fires a plain ghost along your previous aim at 45% damage, or 24% against bosses. 1.2s cooldown.",
       "After a dash or hard aim flick, your next projectile shot fires a plain ghost along your previous aim at 55% damage, or 30% against bosses. 1.2s cooldown.",
     ],
-    glyph: "/", tint: "#5ab6ff", rarity: "uncommon", maxLevel: 1,
-    apply: () => {},
+    glyph: "/", tint: "#5ab6ff", rarity: "uncommon",
+    apply: (m, l) => {
+      m.sideChannelNormalDamageMult = Math.max(
+        m.sideChannelNormalDamageMult,
+        lv(SIDE_CHANNEL.normalDamageByLevel, l),
+      );
+      m.sideChannelBossDamageMult = Math.max(
+        m.sideChannelBossDamageMult,
+        lv(SIDE_CHANNEL.bossDamageByLevel, l),
+      );
+    },
   },
   {
     id: "full_metal", name: "Full Metal",

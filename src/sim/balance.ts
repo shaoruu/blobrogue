@@ -2534,6 +2534,8 @@ export const BOSS_EXTRA_PELLET_COEF = 0;     // added pellets: room tools, zero 
 export const SIDE_CHANNEL = {
   normalDamageMult: 0.55,
   bossDamageMult: 0.30,
+  normalDamageByLevel: [0.30, 0.45, 0.55] as const,
+  bossDamageByLevel: [0.16, 0.24, 0.30] as const,
   icd: 1.2,
   aimWindow: 0.40,
   aimDelta: Math.PI / 2,

@@ -2346,7 +2346,7 @@ export function setPlayerAbsence(w: WorldState, id: PlayerId, isAbsent: boolean)
 function sampleEncounterPower(w: WorldState): number {
   const contributions: number[] = [];
   for (const p of w.players.values()) {
-    contributions.push(expectedBossDps(p.weapon, p.mods, p.ownedItemIds));
+    contributions.push(expectedBossDps(p.weapon, p.mods));
   }
   return powerRatioFor(contributions, w.floor);
 }
@@ -4790,7 +4790,7 @@ function strikeEnemy(w: WorldState, p: PlayerSim | null, e: Enemy, hit: StrikeIn
   // Known by Touch: a melee hit is a reveal trigger (shared ICD; weaponSkill hits trigger
   // at their own sites). Only the owner's OWN melee reveals.
   if (p !== null && hit.isMelee && p.mods.revealRadius > 0) triggerKnownByTouch(w, p, ev);
-  if (killed) killEnemy(w, p, e, ev);
+  if (killed) killEnemy(w, p, e, ev, hit.isPlainGhost === true);
 }
 
 // Summon-only fake/mechanic bodies (never kills, never loot): the echojack's echo, The
@@ -4817,26 +4817,33 @@ function isQuorumHusk(kind: Enemy["kind"]): boolean {
 
 // `p` null = the killing actor has left: the kill still resolves (death, loot, boss chest) but
 // grants no personal reward (kills/combo/lifesteal) and never credits another live player.
-function killEnemy(w: WorldState, p: PlayerSim | null, e: Enemy, ev: SimEvent[]): void {
+function killEnemy(
+  w: WorldState,
+  p: PlayerSim | null,
+  e: Enemy,
+  ev: SimEvent[],
+  isPlainGhost = false,
+): void {
   e.dead = true;
   // Decoys and mechanic bodies are plays, not kills: no credit, no combo fuel — popping
   // the echojack's echo, silencing a knell, breaking a Weaver knot or bursting a sac
   // is counterplay, never an economy.
   const isDecoy = isDecoyKind(e.kind);
   if (p && !isDecoy) {
-    const previousComboTier = comboTierIndex(p.combo);
     p.kills++;
-    p.combo++;
-    p.comboTimer = C.COMBO_WINDOW + p.mods.comboWindowBonus;
-    const nextComboTier = comboTierIndex(p.combo);
-    if (p.mods.beatFireRatePerTier > 0 && nextComboTier > previousComboTier) {
-      ev.push({
-        t: "blessingProc", pid: p.id, item: "on_the_beat",
-        phase: "tierUp", x: p.x, y: p.y,
-      });
+    if (!isPlainGhost) {
+      const previousComboTier = comboTierIndex(p.combo);
+      p.combo++;
+      p.comboTimer = C.COMBO_WINDOW + p.mods.comboWindowBonus;
+      const nextComboTier = comboTierIndex(p.combo);
+      if (p.mods.beatFireRatePerTier > 0 && nextComboTier > previousComboTier) {
+        ev.push({
+          t: "blessingProc", pid: p.id, item: "on_the_beat",
+          phase: "tierUp", x: p.x, y: p.y,
+        });
+      }
+      accrueUlt(p, "kill", ultChargeFromKill());
     }
-    // Kill bonus to the ult meter (all kits — spec §3), share-capped. Inert for the baseline.
-    accrueUlt(p, "kill", ultChargeFromKill());
   }
   const big = isBossKind(e.kind);
   ev.push({
@@ -4884,13 +4891,13 @@ function killEnemy(w: WorldState, p: PlayerSim | null, e: Enemy, ev: SimEvent[])
   }
   // Vampire Fang: one heart per proc, on a shared 1.25s cooldown, never off summoned adds —
   // sustain comes from scarcity decisions, not add-farming.
-  if (p && !e.isSummoned && p.mods.lifestealChance > 0 && p.fangCd === 0
+  if (!isPlainGhost && p && !e.isSummoned && p.mods.lifestealChance > 0 && p.fangCd === 0
     && p.hp < p.maxHp && w.rng.next() < p.mods.lifestealChance) {
     p.hp++;
     p.fangCd = FANG_PROC_COOLDOWN;
     ev.push({ t: "heal", pid: p.id, x: e.x, y: e.y });
   }
-  dropLoot(w, p, e, ev);
+  dropLoot(w, isPlainGhost ? null : p, e, ev);
 }
 
 // Boss death ends danger immediately (spec §5): every remaining enemy and queued
@@ -5253,8 +5260,14 @@ function trackSideChannelAim(w: WorldState, p: PlayerSim, aim: number, dt: numbe
   const isAimChange = last === undefined
     || Math.abs(normalizeAngle(aim - last.aim)) > SIDE_CHANNEL.meaningfulAimDelta;
   if (isAimChange) {
-    const prior = p.sideChannelAimSamples.find((sample) =>
-      Math.abs(normalizeAngle(aim - sample.aim)) >= SIDE_CHANNEL.aimDelta);
+    let prior: SideChannelAimSample | undefined;
+    for (let index = p.sideChannelAimSamples.length - 1; index >= 0; index--) {
+      const sample = p.sideChannelAimSamples[index];
+      if (Math.abs(normalizeAngle(aim - sample.aim)) >= SIDE_CHANNEL.aimDelta) {
+        prior = sample;
+        break;
+      }
+    }
     if (prior !== undefined) p.sideChannelArmedAim = prior.aim;
     p.sideChannelAimSamples.push({ aim, time: p.sideChannelAimClock });
     if (p.sideChannelAimSamples.length > 64) p.sideChannelAimSamples.shift();
@@ -5265,10 +5278,7 @@ function trackSideChannelAim(w: WorldState, p: PlayerSim, aim: number, dt: numbe
 
 function armSideChannelFromDash(w: WorldState, p: PlayerSim, previousAim: number): void {
   if (!hasActiveSideChannel(w, p) || p.sideChannelIcdT > 0) return;
-  const aimDelta = Math.abs(normalizeAngle(p.aimAngle - previousAim));
-  p.sideChannelArmedAim = aimDelta > SIDE_CHANNEL.meaningfulAimDelta
-    ? previousAim
-    : Math.atan2(-p.dashDy, -p.dashDx);
+  p.sideChannelArmedAim = previousAim;
 }
 
 function spawnSideChannelGhost(
@@ -5283,6 +5293,9 @@ function spawnSideChannelGhost(
     || aim === null
     || p.sideChannelIcdT > 0
     || !hasActiveSideChannel(w, p)) return;
+  const normalDamageMult = p.mods.sideChannelNormalDamageMult;
+  const bossDamageMult = p.mods.sideChannelBossDamageMult;
+  if (normalDamageMult <= 0 || bossDamageMult <= 0) return;
   const speed = Math.hypot(parent.vx, parent.vy);
   const x = p.x + Math.cos(aim) * 18;
   const y = p.y + Math.sin(aim) * 18;
@@ -5299,15 +5312,15 @@ function spawnSideChannelGhost(
     life: parent.life,
     friendly: true,
     owner: p.id,
-    damage: parentDirectDamage * SIDE_CHANNEL.normalDamageMult,
+    damage: parentDirectDamage * normalDamageMult,
     color: parent.color,
     pierce: 0,
     hitList: null,
     isCrit: false,
     critX: 1,
     bossCoef: parentBossCoef
-      * SIDE_CHANNEL.bossDamageMult
-      / SIDE_CHANNEL.normalDamageMult,
+      * bossDamageMult
+      / normalDamageMult,
     fx: parent.fx,
     enemyHits: 0,
     isSideChannelGhost: true,
