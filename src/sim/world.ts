@@ -100,6 +100,10 @@ import {
   isPvpWeaponSupported,
   HEARTH, isWithinHearth, pvpHearthArmTicks, pvpHearthEmptyDecayTicks,
   pvpHearthArmedHoldTicks, pvpHearthEmberWindowTicks,
+  WEATHER, PVP_WEATHER_ORDER, PVP_WEATHER_CARDINALS, createWeatherDirector,
+  pvpWeatherFirstEventTicks, pvpWeatherIdleGapTicks, pvpWeatherGustTellTicks,
+  pvpWeatherGustActiveTicks, pvpWeatherTarLifeTicks, pvpWeatherSparkTellTicks,
+  pvpWeatherStartCursor, pvpWeatherGustCardinal, pvpWeatherTarSpots, pvpWeatherSparkCandidates,
 } from "./pvp.js";
 import type {
   WorldMode,
@@ -2308,7 +2312,7 @@ export function loadFloorIntoWorld(w: WorldState, floor: number, playerCountAtLo
     // where a clean slate is exactly right.
     const arena = buildPvpArena();
     w.dungeon = arena.dungeon;
-    w.match = createMatchState(arena.spawns, arena.pits, arena.centerPickup);
+    w.match = createMatchState(arena.spawns, arena.pits, arena.centerPickup, arena.forcedChokepoints);
     pvpCover = arena.cover;
     for (const p of w.players.values()) p.pvpRecentSpawnIndices = [];
   } else {
@@ -4750,7 +4754,7 @@ function updatePlayer(w: WorldState, p: PlayerSim, input: InputCmd, dt: number, 
   // 1 (a no-op) whenever no warmth-drain giant is live, so every other floor is byte-identical.
   const isMoveIntentActive = input.moveX * input.moveX + input.moveY * input.moveY > 0.01;
   const warmthMult = warmthDrainMult(w, p, isMoveIntentActive, dt, ev);
-  const speed = PLAYER.moveSpeed * p.mods.moveSpeedMult * webSlowMult(w, p.x, p.y) * chargeSlow * phaseSurge * warmthMult;
+  const speed = PLAYER.moveSpeed * p.mods.moveSpeedMult * hazardMoveSlowMult(w, p.x, p.y) * chargeSlow * phaseSurge * warmthMult;
   // Snap accumulated float dust to zero so a cooldown that is an exact multiple of the
   // tick (Second Wind Lv3: 0.35s at 60Hz) recovers on its true tick, not one late.
   p.dashCd = Math.max(0, p.dashCd - dt);
@@ -4797,6 +4801,11 @@ function updatePlayer(w: WorldState, p: PlayerSim, input: InputCmd, dt: number, 
   const selfMoveY = p.y;
   [p.x, p.y] = moveCircle(w, p.x, p.y, p.pr, mvx, 0);
   [p.x, p.y] = moveCircle(w, p.x, p.y, p.pr, 0, mvy);
+  // PVP WAVE 2 · cinder_gust: an active gust adds a soft positional drift through the SAME
+  // wall/prop-aware collision (never a teleport). Gated to pvp + a live active gust + the mid band,
+  // and sheltered by upwind cover — a no-op everywhere else. A drift into a pit rings the body out
+  // on Wave 1's env-kill credit window (the gust is ownerless, so it never steals a set-up frag).
+  applyPvpGustDrift(w, p, dt);
   recordWarmthPath(w, p, isMoveIntentActive, Math.hypot(p.x - selfMoveX, p.y - selfMoveY), ev);
   if (p.dashTime > 0 && w.props.length > 0) dashBreakProps(w, p, ev);
   // Sticky silk yields to the dash: every web the dash crosses is CLEARED — the dash
@@ -15342,14 +15351,19 @@ function recordWarmthPath(
   ev.push({ t: "cue", name: "pale.warmthClear", x: p.x, y: p.y, rate: 1, gain: 0.5, trauma: 0 });
 }
 
-function webSlowMult(w: WorldState, x: number, y: number): number {
+function hazardMoveSlowMult(w: WorldState, x: number, y: number): number {
   // Pathmaker pave is silk-immune: a player center on live pave never takes Weaver web slow.
   if (isPavedAt(w, x, y)) return 1;
+  let mult = 1;
   for (const h of w.hazards) {
-    if (h.kind !== "web") continue;
-    if (Math.hypot(x - h.x, y - h.y) < h.radius) return WEAVER.webSlow;
+    // Weaver silk (co-op) and PVP WAVE 2 tar_bloom both drag the WALK only (the dash rips free at
+    // full speed at its own site). They never coexist (web is co-op, tar is the pvp arena), but we
+    // take the STRONGEST slow if they ever did, so the rule is order-independent.
+    if (h.kind !== "web" && h.kind !== "tar") continue;
+    if (Math.hypot(x - h.x, y - h.y) >= h.radius) continue;
+    mult = Math.min(mult, h.kind === "tar" ? WEATHER.tarMoveMult : WEAVER.webSlow);
   }
-  return 1;
+  return mult;
 }
 
 function updateHazards(w: WorldState, dt: number, ev: SimEvent[]): void {
@@ -15365,6 +15379,10 @@ function updateHazards(w: WorldState, dt: number, ev: SimEvent[]): void {
     }
     // A volatile charge detonates the instant its fuse runs out — the delayed shared burst.
     if (h.kind === "charge" && h.life <= 0) detonateCharge(w, h, ev);
+    // PVP WAVE 2 · spark_mine: the telegraph fuse detonates once on expiry (a flat capped chip +
+    // micro knockback through the pvp funnel). The `charge` pattern retargeted to pvp — inert in
+    // co-op (nothing spawns a `spark` there).
+    if (h.kind === "spark" && h.life <= 0) detonateSparkMine(w, h, ev);
     // An omen's beat is over: the ambush body it announced arrives (fair surprise §2).
     if (h.kind === "omen" && h.life <= 0) resolveOmen(w, h, ev);
     // Cinders burn any player standing in them; post-hit protection self-limits the ticks.
@@ -16010,6 +16028,10 @@ interface PvpHitContext {
   // funnel adds the flat chip + the KB scalar and spends the charge (once). Undefined everywhere
   // else (splash / chain / melee / co-op), so ember never leaks past "the next 1 gun hit".
   isEmber?: boolean;
+  // A FIXED knockback distance (px) that overrides the per-weapon KB table — the ambient
+  // spark_mine's micro shove (PVP WAVE 2 · Pillar B). Undefined everywhere else, so weapon KB is
+  // unchanged. Still clamped by kbMaxPerHit and nulled while protected, like every pvp knockback.
+  kbDistance?: number;
 }
 
 // The ONE player-damage funnel. `by` is the attacking player for kill attribution (bullet.owner
@@ -16190,9 +16212,10 @@ function pvpDraftOutputScale(w: WorldState, by: PlayerId | null, weapon: WeaponI
 function applyPvpKnockback(w: WorldState, p: PlayerSim, hit: PvpHitContext | null, emberScalar = 1): number {
   if (hit === null) return 0;
   const protectionScale = isProtected(p) ? PVP.kbSelfDuringIframe : 1;
+  const base = hit.kbDistance ?? C.WEAPON_KB[hit.weapon] * PVP.kbScalar;
   const distance = Math.min(
     PVP.kbMaxPerHit,
-    Math.max(0, C.WEAPON_KB[hit.weapon] * PVP.kbScalar * emberScalar * protectionScale),
+    Math.max(0, base * emberScalar * protectionScale),
   );
   if (distance <= 0) return 0;
   const magnitude = Math.hypot(hit.dirX, hit.dirY) || 1;
@@ -16587,6 +16610,8 @@ function pvpEndMatch(w: WorldState, winner: PlayerId | null, ev: SimEvent[]): vo
   m.phaseEndTick = 0;
   clearPvpPendingDrafts(w, ev, "reset");
   resetPvpDrafts(w);
+  m.weather = createWeatherDirector();
+  clearPvpWeatherHazards(w);
   ev.push({ t: "pvpMatchOver", winner: winner ?? "" });
 }
 
@@ -16749,6 +16774,8 @@ function pvpResetToLobby(w: WorldState, m: MatchState, ev: SimEvent[]): void {
   clearPvpPendingDrafts(w, ev, "reset");
   resetPvpDrafts(w);
   pvpClearOwnedEntities(w);
+  m.weather = createWeatherDirector();
+  clearPvpWeatherHazards(w);
 }
 
 function raiseDuePvpDrafts(w: WorldState, ev: SimEvent[]): void {
@@ -16834,6 +16861,200 @@ export function isPvpHearthContested(w: WorldState): boolean {
     if (isWithinHearth(p, m.hearthCenter) && ++occupancy >= 2) return true;
   }
   return false;
+}
+
+// ---- PVP WAVE 2 · PILLAR B: RING WEATHER (the arena director) -----------------------------
+// A single one-at-a-time director cycles ambient hazard events on a seeded rotation, spaced by a
+// fixed idle gap. Every event is pressure that shapes the fight, never a kill on its own (tar
+// slows, gust nudges, spark chips a capped micro-hit). Runs only in a LIVE, non-grace-paused
+// match — the same gate the hearth + respawn clock use — and is fully server-authoritative; the
+// wire projects only kind/phase/dir for VFX. Pure off the pvp path (nothing here runs in co-op).
+
+// Is `p` a live, unprotected body the weather may push/chip right now? Absent/downed/dead/
+// respawning and spawn-protected bodies are skipped — the gust never shoves a body mid-grace.
+function isPvpWeatherTarget(p: PlayerSim | undefined): p is PlayerSim {
+  return p !== undefined && !p.isAbsent && !p.isDown && p.hp > 0 && p.respawnT === 0 && !isProtected(p);
+}
+
+// True when upwind cover (a standing prop) or a wall breaks the gust's line onto `p` — the "not
+// behind cover line-break" shelter. Sampled along the short upwind segment (against the wind).
+function isShelteredFromGust(w: WorldState, p: PlayerSim, dir: Vec2): boolean {
+  const SAMPLES = 4;
+  for (let i = 1; i <= SAMPLES; i++) {
+    const reach = (WEATHER.gustCoverProbePx * i) / SAMPLES;
+    const ux = p.x - dir.x * reach;
+    const uy = p.y - dir.y * reach;
+    if (isWall(w, ux, uy)) return true;
+    for (const prop of w.props) {
+      if (prop.dead || prop.breakT !== undefined) continue;
+      if (Math.hypot(ux - prop.x, uy - prop.y) <= prop.radius + p.pr) return true;
+    }
+  }
+  return false;
+}
+
+// Apply the active cinder_gust's soft positional drift to one body. Gated: pvp + a live ACTIVE
+// gust + a target in the mid band (within gustMidBandDist of the hearth) that is not sheltered
+// upwind by cover. Routes through moveCircle so walls/props stop the drift (never a wall-clip).
+function applyPvpGustDrift(w: WorldState, p: PlayerSim, dt: number): void {
+  const m = w.match;
+  if (m === null || m.phase !== "live") return;
+  const weather = m.weather;
+  if (weather.kind !== "gust" || weather.phase !== "active") return;
+  if (!isPvpWeatherTarget(p)) return;
+  if (Math.hypot(p.x - m.hearthCenter.x, p.y - m.hearthCenter.y) > WEATHER.gustMidBandDist) return;
+  const dir = PVP_WEATHER_CARDINALS[weather.gustDir] ?? PVP_WEATHER_CARDINALS[0];
+  if (isShelteredFromGust(w, p, dir)) return;
+  const step = WEATHER.gustDriftPxPerSec * dt;
+  [p.x, p.y] = moveCircle(w, p.x, p.y, p.pr, dir.x * step, 0);
+  [p.x, p.y] = moveCircle(w, p.x, p.y, p.pr, 0, dir.y * step);
+}
+
+// The spark_mine blast: one ownerless, flat capped chip + micro knockback to every foe body in the
+// blast radius. Routes through the ONE pvp damage funnel (per-hit cap, protection gate, pit
+// attribution all unchanged) with `by = null`, so it can never one-shot, never hits a protected
+// body, and never credits itself a frag. A blast-induced pit fall still rides the recent-attacker
+// env credit window (unchanged), never the mine.
+function detonateSparkMine(w: WorldState, h: Hazard, ev: SimEvent[]): void {
+  ev.push({ t: "explosion", x: h.x, y: h.y, r: WEATHER.sparkBlastRadius, src: "spark" });
+  if (!isPvp(w) || w.match?.phase !== "live") return;
+  for (const id of [...w.players.keys()].sort()) {
+    const p = w.players.get(id);
+    if (!isPvpWeatherTarget(p)) continue;
+    const dx = p.x - h.x;
+    const dy = p.y - h.y;
+    if (Math.hypot(dx, dy) > WEATHER.sparkBlastRadius + p.pr) continue;
+    damagePlayer(w, p, WEATHER.sparkChipDamage, ev, null, {
+      weapon: PVP.startWeapon,
+      dirX: dx,
+      dirY: dy,
+      kbDistance: WEATHER.sparkKnockback,
+    });
+  }
+}
+
+// Arm the director for a fresh match at the live whistle: idle until the first event, seeded onto
+// the rotation. Clears any lingering weather ground hazards (belt to the whistle's clean arena).
+function armPvpWeather(w: WorldState): void {
+  const m = w.match;
+  if (m === null) return;
+  clearPvpWeatherHazards(w);
+  m.weather = {
+    kind: null,
+    phase: "idle",
+    phaseEndTick: w.tick + pvpWeatherFirstEventTicks(),
+    cursor: pvpWeatherStartCursor(w.seed),
+    ordinal: 0,
+    gustDir: 0,
+  };
+}
+
+// Drop every weather-owned ground hazard (tar patches + spark fuses). Called on arm/end/reset so
+// a weather event never bleeds across a match boundary or a grace-pause reset.
+function clearPvpWeatherHazards(w: WorldState): void {
+  if (w.hazards.length === 0) return;
+  w.hazards = w.hazards.filter((h) => h.kind !== "tar" && h.kind !== "spark");
+}
+
+function spawnPvpWeatherHazard(w: WorldState, kind: "tar" | "spark", x: number, y: number, radius: number, lifeSec: number): void {
+  w.hazards.push({ id: w.nextHazardId++, kind, x, y, radius, life: lifeSec, maxLife: lifeSec });
+}
+
+// Begin the director's next event (the cursor's kind), advancing the rotation + ordinal. tar and
+// spark spawn their ground hazards here; gust is a director-only wind (its push rides the active
+// window). Returns the phase to enter and how long it lasts.
+function beginPvpWeatherEvent(w: WorldState): void {
+  const m = w.match;
+  if (m === null) return;
+  const weather = m.weather;
+  const kind = PVP_WEATHER_ORDER[weather.cursor % PVP_WEATHER_ORDER.length];
+  weather.cursor = (weather.cursor + 1) % PVP_WEATHER_ORDER.length;
+  const ordinal = weather.ordinal++;
+  weather.kind = kind;
+  weather.gustDir = 0;
+  if (kind === "tar") {
+    // No tell — the patches bloom straight onto the forced chokepoints (never hearth/spawn/pit by
+    // construction). Hard cap 2 concurrent, and the one-at-a-time director bounds it further.
+    const spots = pvpWeatherTarSpots(w.seed, ordinal, m.forcedChokepoints).slice(0, WEATHER.tarMaxPatches);
+    for (const spot of spots) spawnPvpWeatherHazard(w, "tar", spot.x, spot.y, WEATHER.tarRadius, WEATHER.tarLifeSec);
+    weather.phase = "active";
+    weather.phaseEndTick = w.tick + pvpWeatherTarLifeTicks();
+  } else if (kind === "gust") {
+    weather.phase = "tell";
+    weather.phaseEndTick = w.tick + pvpWeatherGustTellTicks();
+  } else {
+    // spark_mine: plant the telegraph fuse on the first annulus candidate that lands on open floor
+    // clear of the pit denylist; it detonates on expiry (updateHazards). If none is valid (never,
+    // for the authored arena), the event simply passes as a harmless idle beat.
+    const spot = firstValidSparkSpot(w, ordinal, m.hearthCenter);
+    if (spot !== null) spawnPvpWeatherHazard(w, "spark", spot.x, spot.y, WEATHER.sparkBlastRadius, WEATHER.sparkTellSec);
+    weather.phase = "tell";
+    weather.phaseEndTick = w.tick + pvpWeatherSparkTellTicks();
+  }
+}
+
+// The first spark candidate on open floor that is NOT a pit and not within a blast of one (the H1
+// denylist: pits, and the spark is centered in the annulus so it is already clear of the hearth
+// and spawns). Returns null when the seeded ring yields nothing valid.
+function firstValidSparkSpot(w: WorldState, ordinal: number, hearthCenter: Vec2): Vec2 | null {
+  const m = w.match;
+  for (const cand of pvpWeatherSparkCandidates(w.seed, ordinal, hearthCenter)) {
+    if (isWall(w, cand.x, cand.y)) continue;
+    const tx = Math.floor(cand.x / TILE);
+    const ty = Math.floor(cand.y / TILE);
+    if (tx < 0 || ty < 0 || tx >= w.dungeon.w || ty >= w.dungeon.h) continue;
+    if (w.dungeon.tiles[ty * w.dungeon.w + tx] === 2) continue; // never on a pit tile (H1)
+    if (m !== null && m.spawns.some((s) => Math.hypot(cand.x - s.x, cand.y - s.y) <= WEATHER.sparkBlastRadius)) continue;
+    return cand;
+  }
+  return null;
+}
+
+// The ring-weather director step (Pillar B). One event at a time on the seeded rotation, spaced by
+// the idle gap (tightened in sudden death — cadence only). Freezes with the match: a grace-paused
+// or non-live match runs no weather (identical gate to stepPvpHearth).
+function stepPvpWeather(w: WorldState): void {
+  const m = w.match;
+  if (m === null || m.phase !== "live") return;
+  if (pvpPresentPlayers(w).length < PVP.minPlayers) return; // grace pause freezes the weather too
+  const weather = m.weather;
+  // spark_mine's tell is HAZARD-DRIVEN, not timer-driven: the fuse detonates in updateHazards the
+  // tick its life hits 0 (the `charge` idiom), so the event is done the tick its hazard is gone.
+  // Keying off the hazard (not a parallel tick timer) makes the fuse the SINGLE source of truth —
+  // no float race between the life countdown and a separate director clock.
+  if (weather.kind === "spark" && weather.phase === "tell") {
+    if (!w.hazards.some((h) => h.kind === "spark")) endPvpWeatherEvent(w);
+    return;
+  }
+  if (w.tick < weather.phaseEndTick) return;
+  switch (weather.phase) {
+    case "idle":
+      beginPvpWeatherEvent(w);
+      break;
+    case "tell":
+      // Only the gust reaches here (spark is handled above). Its tell resolves into the active
+      // drift: pick the seeded cardinal now (toward a pit side).
+      weather.phase = "active";
+      weather.gustDir = pvpWeatherGustCardinal(w.seed, weather.ordinal - 1);
+      weather.phaseEndTick = w.tick + pvpWeatherGustActiveTicks();
+      break;
+    case "active":
+      // tar's patches have faded (their life == the active window) and gust's drift is spent.
+      endPvpWeatherEvent(w);
+      break;
+  }
+}
+
+// Close the current event: clear any lingering weather hazards and idle until the next beat (idle
+// gap tightened in sudden death — the cadence-only storm-closes-in beat).
+function endPvpWeatherEvent(w: WorldState): void {
+  const m = w.match;
+  if (m === null) return;
+  clearPvpWeatherHazards(w);
+  m.weather.kind = null;
+  m.weather.gustDir = 0;
+  m.weather.phase = "idle";
+  m.weather.phaseEndTick = w.tick + pvpWeatherIdleGapTicks(m.isSuddenDeath);
 }
 
 // PVP WAVE 2 · CONTESTED HEARTH (Pillar A — HOLD_THE_HEARTH). One lone body standing UNCONTESTED
@@ -16965,6 +17186,7 @@ function stepPvpMatch(w: WorldState, ev: SimEvent[]): void {
         m.fragChain.clear();
         m.isSuddenDeath = false;
         resetPvpDrafts(w);
+        armPvpWeather(w); // PVP WAVE 2 · Pillar B: the ring-weather director opens fresh at the whistle
       }
       break;
     case "live": {
@@ -17360,6 +17582,7 @@ export function stepWorldPhase(w: WorldState, dt: number, ev: SimEvent[]): void 
     tickPendingBlessings(w, dt, ev);
     stepPvpHearth(w);
     stepPvpMatch(w, ev);
+    stepPvpWeather(w);
   } else {
     updateUlts(w, ev);
     updateRevives(w, dt, ev);

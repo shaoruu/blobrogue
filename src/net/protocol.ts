@@ -389,7 +389,15 @@ export const FIXED_DT = 1 / TICK_HZ; // 50ms authoritative step
 //   fully server-resolved (no client input changes). `hf`/`he` are REQUIRED self fields (a v46
 //   server frame lacking them fails strict self validation); `hc` is decode-optional (defaults
 //   false) so a co-op-shaped or older match block still decodes. The bump keeps the ends in lockstep.
-export const PROTOCOL_VERSION = 47;
+// v48 (PVP Wave 2 — Ring Weather director): TWO new dynamic HazardKinds widen the `hzds` closed
+//   set — `tar` (the tar_bloom slow patch, ambient/zero-damage) and `spark` (the spark_mine
+//   telegraph fuse that detonates once), both riding the existing HazardWire shape with NO new
+//   hazard field. MatchWire grows the director projection `wk`/`wp`/`we`/`wd` (active weather kind,
+//   phase, phase-end tick, gust cardinal) so the HUD draws the tell + the gust wind; the
+//   cinder_gust wind is director-only (no hazard entity). All sit at idle defaults ("" / "idle" /
+//   0 / 0) in co-op and on the public path, and the whole director is behind isPvp. The bump lets
+//   a v47 client cleanly reject the widened hazard closed set + the new director fields.
+export const PROTOCOL_VERSION = 48;
 
 
 // How long the server reserves a disconnected player's body (their seat) before the
@@ -703,6 +711,17 @@ export interface MatchWire {
   // safe `false` default (like the PlayerWire cosmetic fields) so an older frame — or a
   // co-op-shaped match block — still decodes. toMatchWire always sets it.
   hc?: boolean;
+  // RING WEATHER (v48): the arena director's projection for the HUD/ambient VFX. `wk` is the
+  // active weather kind ("tar" | "gust" | "spark", or "" while idle); `wp` its phase
+  // ("idle" | "tell" | "active") so a client draws the harmless tell distinctly from the active
+  // window; `we` the absolute tick the current phase ends (telegraph fill / active countdown); `wd`
+  // the active gust's cardinal (0..3 = E/S/W/N, 0 otherwise). tar/spark ground hazards ride `hzds`;
+  // the gust wind is director-only, so `wd` is how a client aims its wind streaks. All decode-
+  // OPTIONAL with safe idle defaults (like `hc`) so an older / co-op-shaped block still decodes.
+  wk?: "" | "tar" | "gust" | "spark";
+  wp?: "idle" | "tell" | "active";
+  we?: number;
+  wd?: number;
 }
 
 // ---- messages ----
@@ -955,8 +974,11 @@ const SHOP_SLOT_KINDS: Record<ShopSlotKind, true> = {
 };
 const SHOP_MODES: Record<ShopMode, true> = { dealer: true, premium: true, spoils: true, climax: true };
 const MATCH_PHASES: Record<MatchPhase, true> = { lobby: true, countdown: true, live: true, over: true };
+// RING WEATHER (v48): the closed sets the MatchWire director projection validates against.
+const MATCH_WEATHER_KINDS: Record<NonNullable<MatchWire["wk"]>, true> = { "": true, tar: true, gust: true, spark: true };
+const MATCH_WEATHER_PHASES: Record<NonNullable<MatchWire["wp"]>, true> = { idle: true, tell: true, active: true };
 const CHEST_KINDS: Record<ChestKind, true> = { wood: true, boss: true };
-const HAZARD_KINDS: Record<HazardKind, true> = { web: true, cinder: true, charge: true, omen: true, corrupt: true, slime: true };
+const HAZARD_KINDS: Record<HazardKind, true> = { web: true, cinder: true, charge: true, omen: true, corrupt: true, slime: true, tar: true, spark: true };
 const EFFECT_KINDS: Record<EffectKind, true> = { zone: true, wire: true, orbit: true, sentry: true, tether: true, sanctuary: true, aegis: true };
 const ATTACK_PHASES: Record<AttackPhase, true> = { none: true, windup: true, active: true, recover: true };
 const ATTACK_MOVES: Record<AttackMove, true> = {
@@ -1583,6 +1605,10 @@ function validateMatchWire(v: unknown): MatchWire {
     sc,
     win: win as PlayerId | null,
     hc: o.hc === undefined ? false : boolOf(o, "hc"),
+    wk: o.wk === undefined ? "" : inSet(MATCH_WEATHER_KINDS, o.wk, "match.wk"),
+    wp: o.wp === undefined ? "idle" : inSet(MATCH_WEATHER_PHASES, o.wp, "match.wp"),
+    we: o.we === undefined ? 0 : intOf(o, "we", 0, Number.MAX_SAFE_INTEGER),
+    wd: o.wd === undefined ? 0 : intOf(o, "wd", 0, 3),
   };
 }
 
@@ -1973,7 +1999,11 @@ export function toMatchWire(m: MatchState, w: WorldState): MatchWire {
     // standing. Mirrors the sim's canDamagePlayer/present-roster contract.
     sc.push({ id, f: m.scores.get(id) ?? 0, a: p !== undefined && !p.isAbsent && p.hp > 0 && p.respawnT === 0 });
   }
-  return { ph: m.phase, end: m.phaseEndTick, sc, win: m.winner, hc: isPvpHearthContested(w) };
+  const weather = m.weather;
+  return {
+    ph: m.phase, end: m.phaseEndTick, sc, win: m.winner, hc: isPvpHearthContested(w),
+    wk: weather.kind ?? "", wp: weather.phase, we: weather.phaseEndTick, wd: weather.gustDir,
+  };
 }
 
 export function toEnemyWire(e: Enemy): EnemyWire {

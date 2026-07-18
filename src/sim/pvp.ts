@@ -14,6 +14,7 @@ import type { Dungeon, Room } from "./dungeon.js";
 import { TICKS_PER_SECOND } from "./kits.js";
 import type { KitId } from "./kits.js";
 import { PLAYER } from "./balance.js";
+import { Rng } from "./rng.js";
 
 // The world-content discriminant. "coop" is the DEFAULT everywhere (solo, legacy co-op, the
 // authoritative shared dungeon) so every existing code path and golden master is zero-diff;
@@ -205,6 +206,129 @@ export const HEARTH = {
   emberKbScalar: 1.15,
 } as const;
 
+// ---- PVP WAVE 2 · PILLAR B: RING WEATHER (the arena director) ------------------------------
+// The one weather tuning surface (Quill FINAL 2026-07-18). A single DIRECTOR runs ONE ambient
+// hazard event at a time on a seeded rotation (tar_bloom -> cinder_gust -> spark_mine -> repeat),
+// spacing them by a fixed idle gap. Every event is ambient pressure that shapes the fight, never
+// a kill by itself: tar only slows, gust only nudges, spark chips a capped micro-hit. All read
+// behind isPvp — co-op is inert. The compact wire kind/phase names ("tar"/"gust"/"spark") match
+// the HazardKind widening so the director state and the ground hazards speak one vocabulary.
+export const WEATHER = {
+  // Director cadence (seconds). The first event fires at live + firstEventSec; thereafter events
+  // are spaced by idleGapSec of empty air. Sudden death tightens the CADENCE only (× the mult) —
+  // never the damage or the drift (a presentation-faithful "storm closes in", not a power spike).
+  firstEventSec: 8.0,
+  idleGapSec: 10.0,
+  suddenDeathIdleMult: 0.70,
+
+  // B2 tar_bloom — 1..2 slow patches on the forced chokepoints (never the hearth / spawns / pits).
+  // Ambient tar: no damage, it only drags the WALK (like the Weaver web) so a chokepoint costs
+  // tempo to cross. Hard cap of 2 concurrent patches (the director's one-at-a-time already bounds
+  // it; the cap is the belt-and-suspenders ceiling the placement asserts).
+  tarMinPatches: 1,
+  tarMaxPatches: 2,
+  tarRadius: 40,
+  tarLifeSec: 3.5,
+  tarMoveMult: 0.70,
+
+  // B1 cinder_gust — a telegraphed cardinal wind. tellSec of a building tell, then activeSec of a
+  // soft positional drift (px/s) applied to bodies in the MID BAND (within midBandDist of the
+  // hearth) that are NOT sheltered upwind by cover/wall. Seeded cardinal toward a pit side; a body
+  // shoved into a pit rides Wave 1's env-kill credit window (2.0s), so the gust never steals a
+  // frag it did not set up. Never damages.
+  gustTellSec: 0.75,
+  gustActiveSec: 1.80,
+  gustDriftPxPerSec: 55,
+  gustMidBandDist: 128,
+  gustCoverProbePx: 56,
+
+  // B3 spark_mine — a telegraphed floor mine in an annulus around the hearth. tellSec of a growing
+  // telegraph ring (rides the hzds list like the volatile `charge` fuse), then a one-shot blast:
+  // a flat capped chip + a micro knockback inside blastRadius. Never under spawn grace/shield (the
+  // one funnel's protection gate), never a one-shot (the chip is a fraction of the per-hit cap).
+  sparkAnnulusInner: 72,
+  sparkAnnulusOuter: 110,
+  sparkTellSec: 0.55,
+  sparkBlastRadius: 36,
+  sparkChipDamage: 12,
+  sparkKnockback: 60,
+} as const;
+
+// The director's rotation vocabulary. Compact names shared with the HazardKind widening: "tar"
+// and "spark" are ground hazards on the hzds list; "gust" is a director-only wind (no hazard).
+export type PvpWeatherKind = "tar" | "gust" | "spark";
+export type PvpWeatherPhase = "idle" | "tell" | "active";
+
+// The seeded rotation. tar_bloom ships first (B2); the per-match start offset rotates it so no two
+// seeds open on the same beat, but the cycle order is fixed and one-at-a-time.
+export const PVP_WEATHER_ORDER: readonly PvpWeatherKind[] = ["tar", "gust", "spark"];
+
+// Weather timers in TICKS (deterministic; never wall-clock). idleGap tightens in sudden death.
+export function pvpWeatherFirstEventTicks(): number { return Math.round(WEATHER.firstEventSec * TICKS_PER_SECOND); }
+export function pvpWeatherIdleGapTicks(isSuddenDeath: boolean): number {
+  const sec = WEATHER.idleGapSec * (isSuddenDeath ? WEATHER.suddenDeathIdleMult : 1);
+  return Math.round(sec * TICKS_PER_SECOND);
+}
+export function pvpWeatherGustTellTicks(): number { return Math.round(WEATHER.gustTellSec * TICKS_PER_SECOND); }
+export function pvpWeatherGustActiveTicks(): number { return Math.round(WEATHER.gustActiveSec * TICKS_PER_SECOND); }
+export function pvpWeatherTarLifeTicks(): number { return Math.round(WEATHER.tarLifeSec * TICKS_PER_SECOND); }
+export function pvpWeatherSparkTellTicks(): number { return Math.round(WEATHER.sparkTellSec * TICKS_PER_SECOND); }
+
+// A fresh deterministic stream for the weather event of the given ordinal — seeded off the match
+// seed so every client + the server derive the SAME event placement/direction with zero wire cost.
+function pvpWeatherRng(seed: number, ordinal: number): Rng {
+  return new Rng(pvpMix32((seed ^ 0x52494e47) + Math.imul(ordinal + 1, 0x9e3779b1)));
+}
+
+// The rotation offset the match opens on (0..2), seeded off the match seed.
+export function pvpWeatherStartCursor(seed: number): number {
+  return ((pvpMix32(seed ^ 0x57454154) % PVP_WEATHER_ORDER.length) + PVP_WEATHER_ORDER.length)
+    % PVP_WEATHER_ORDER.length;
+}
+
+// The seeded cardinal (0..3 = E/S/W/N unit) a gust event blows toward. Every cardinal faces a pit
+// pocket in the 4-fold-symmetric arena, so any pick is a legitimate "toward the pit side".
+export const PVP_WEATHER_CARDINALS: ReadonlyArray<Vec2> = [
+  { x: 1, y: 0 }, { x: 0, y: 1 }, { x: -1, y: 0 }, { x: 0, y: -1 },
+];
+export function pvpWeatherGustCardinal(seed: number, ordinal: number): number {
+  return pvpWeatherRng(seed, ordinal).int(0, PVP_WEATHER_CARDINALS.length - 1);
+}
+
+// The 1..2 forced-chokepoint patch centers a tar_bloom event drops on, chosen (seeded, no repeats)
+// from the arena's forcedChokepoints. Returns [] when the arena has none. Placement is BY DESIGN
+// confined to the chokepoints, so it can never touch the hearth (9,9), a spawn pad, or a PIT_TILE.
+export function pvpWeatherTarSpots(seed: number, ordinal: number, chokepoints: readonly Vec2[]): Vec2[] {
+  if (chokepoints.length === 0) return [];
+  const rng = pvpWeatherRng(seed, ordinal);
+  const pool = chokepoints.map((c) => ({ x: c.x, y: c.y }));
+  // Fisher-Yates over a copy (deterministic) so the picks are distinct chokepoints.
+  for (let i = pool.length - 1; i > 0; i--) {
+    const j = rng.int(0, i);
+    const tmp = pool[i]; pool[i] = pool[j]; pool[j] = tmp;
+  }
+  const maxCount = Math.min(WEATHER.tarMaxPatches, pool.length);
+  const count = Math.max(WEATHER.tarMinPatches, rng.int(WEATHER.tarMinPatches, maxCount));
+  return pool.slice(0, Math.min(count, maxCount));
+}
+
+// A deterministic ring of candidate spark-mine blast centers in the [inner,outer] annulus around
+// the hearth. The caller walks them in order and takes the first one on open floor clear of the
+// denylist (pits/spawns), so the pure helper stays geometry-only (no dungeon dependency here).
+export function pvpWeatherSparkCandidates(seed: number, ordinal: number, hearthCenter: Vec2): Vec2[] {
+  const rng = pvpWeatherRng(seed, ordinal);
+  const base = rng.next() * Math.PI * 2;
+  const out: Vec2[] = [];
+  const RING = 12;
+  for (let i = 0; i < RING; i++) {
+    const ang = base + (i / RING) * Math.PI * 2;
+    const t = rng.next();
+    const radius = WEATHER.sparkAnnulusInner + t * (WEATHER.sparkAnnulusOuter - WEATHER.sparkAnnulusInner);
+    out.push({ x: hearthCenter.x + Math.cos(ang) * radius, y: hearthCenter.y + Math.sin(ang) * radius });
+  }
+  return out;
+}
+
 // The match timers are counted in TICKS (never ms / wall-clock) for determinism; these convert
 // the named second-values at the authoritative tick rate.
 export function pvpRespawnDelayTicks(): number { return Math.round(PVP.respawnDelaySec * TICKS_PER_SECOND); }
@@ -355,9 +479,37 @@ export interface MatchState {
   // The contested-hearth center (tile-center px), reused from the arena centerPickup at (9,9).
   // Static for the match; the Favor/ember_edge occupancy scan measures every player against it.
   hearthCenter: Vec2;
+  // Authored forced-chokepoint centers (tile-center px), the ONLY ground tar_bloom may bloom on
+  // (never the hearth / spawns / pits). Static for the match.
+  forcedChokepoints: Vec2[];
+  // PVP WAVE 2 · PILLAR B: the ring-weather director. One event at a time on the seeded rotation.
+  weather: WeatherDirectorState;
 }
 
-export function createMatchState(spawns: Vec2[], pits: Vec2[] = [], hearthCenter: Vec2 = { x: 0, y: 0 }): MatchState {
+// The ring-weather director state — a single one-at-a-time machine. `kind` is the active event
+// (null while idle); `phase` distinguishes the harmless tell from the active window; `phaseEndTick`
+// is the absolute tick the current phase ends; `cursor` is the next rotation index; `ordinal`
+// counts events begun (it seeds each event's placement RNG); `gustDir` is the active gust's seeded
+// cardinal (0..3). All of it is server-authoritative; the wire projects kind/phase/dir for VFX.
+export interface WeatherDirectorState {
+  kind: PvpWeatherKind | null;
+  phase: PvpWeatherPhase;
+  phaseEndTick: number;
+  cursor: number;
+  ordinal: number;
+  gustDir: number;
+}
+
+export function createWeatherDirector(): WeatherDirectorState {
+  return { kind: null, phase: "idle", phaseEndTick: 0, cursor: 0, ordinal: 0, gustDir: 0 };
+}
+
+export function createMatchState(
+  spawns: Vec2[],
+  pits: Vec2[] = [],
+  hearthCenter: Vec2 = { x: 0, y: 0 },
+  forcedChokepoints: Vec2[] = [],
+): MatchState {
   return {
     phase: "lobby",
     phaseEndTick: 0,
@@ -371,6 +523,8 @@ export function createMatchState(spawns: Vec2[], pits: Vec2[] = [], hearthCenter
     isSuddenDeath: false,
     pits,
     hearthCenter,
+    forcedChokepoints,
+    weather: createWeatherDirector(),
   };
 }
 
