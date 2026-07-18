@@ -131,7 +131,7 @@ section("catalog v3, typed hooks, and additive migration");
   check("Wave C adds NO new blessings (guns-only): catalog 3 blessing pool equals catalog 2",
     JSON.stringify(contentCatalogFor(WAVE_C_CONTENT_CATALOG_VERSION).normalBlessingIds)
       === JSON.stringify(contentCatalogFor(WAVE_B_CONTENT_CATALOG_VERSION).normalBlessingIds)
-    && ITEMS.filter((i) => i.isPremiumOnly !== true).length === 40);
+    && ITEMS.filter((i) => i.isPremiumOnly !== true && i.isPvpOnly !== true).length === 40);
   check("catalog 2 (Wave B) arrays are never mutated by Wave C",
     contentCatalogFor(WAVE_B_CONTENT_CATALOG_VERSION).pickupWeapons.length === 45
     && WAVE_C_WEAPONS.every((id) => !contentCatalogFor(WAVE_B_CONTENT_CATALOG_VERSION).pickupWeapons.includes(id)));

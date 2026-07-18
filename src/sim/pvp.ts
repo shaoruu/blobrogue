@@ -65,6 +65,13 @@ export function isPvpWeaponSupported(id: WeaponId): boolean {
   return !PVP_UNSUPPORTED_WEAPON_IDS.has(id);
 }
 
+// PVP WAVE 2 · PILLAR C draft kit counters — the three blessing ids, named once so the pool
+// entry below and the match-sim gates in world.ts never drift. Each is an uncommon DRAFT blessing
+// whose behavior lives in the pvp match sim (behind isPvp — co-op is inert), keyed off ownership.
+export const PVP_COUNTER_BRACE = "brace_band";
+export const PVP_COUNTER_SIGHT = "clear_eyes";
+export const PVP_COUNTER_RIP = "rip_post";
+
 // ---- PVP CONFIG (balancer + designer surface) ---------------------------------------------
 // Numbers are the balancer finals (2026-07-15): FIXED 100 HP + a global 1.78x scalar
 // (PvE damage 100% untouched) tuned to a ~4.0s median TTK (3-5s band), a small per-weapon
@@ -131,6 +138,10 @@ export const PVP = {
     "core_fire",
     "core_move",
     "core_dash",
+    // PVP WAVE 2 · PILLAR C draft kit counters (all uncommon; behavior in the match sim).
+    PVP_COUNTER_BRACE,
+    PVP_COUNTER_SIGHT,
+    PVP_COUNTER_RIP,
   ] as readonly string[],
   // Base offers favor uncommon mechanics. A bottom-third player receives one rarity-weight
   // bump on their own offer only; no live combat stat is changed.
@@ -328,6 +339,45 @@ export function pvpWeatherSparkCandidates(seed: number, ordinal: number, hearthC
   }
   return out;
 }
+
+// ---- PVP WAVE 2 · PILLAR C: DRAFT KIT COUNTERS (brace / sight / rip) -----------------------
+// Three uncommon DRAFT blessings that answer specific kit pressure without ever removing agency
+// (Quill FINAL 2026-07-18). Each is a soft, on-cadence counter — never immunity, never a kill,
+// never a demolition. The blessing ids ride the existing SelfWire.items strip (no new wire field,
+// no protocol bump); the per-life counter timers are server-owned transient (sub-10s, rebuilt
+// after a resume, cleared on death), never reconciled. All read only behind isPvp — co-op is inert.
+export const KIT_COUNTERS = {
+  // brace_band (stackCategory pvp_brace): bank one brace charge every 7.0s (max 1); the next
+  // incoming knockback while banked is HALVED (x0.50) and spends the charge — a soft anti-shove,
+  // never full KB immunity, never pit immunity, never a spawn-shield extend.
+  braceRechargeSec: 7.0,
+  braceMaxCharges: 1,
+  braceKbScalar: 0.50,
+  // If the braced body ends within this ETA of the nearest pit edge (edge distance / walk speed),
+  // a pit-warning pulse fires — PRESENTATION ONLY (it changes no state, grants no pit immunity).
+  bracePitWarnEtaSec: 0.45,
+
+  // clear_eyes (stackCategory pvp_sight): every 7.0s the pulse outlines the nearest foe within
+  // 180px AND clear line-of-sight for 1.50s. Info only — no damage, no wallhack (LOS is required).
+  sightPulseIcdSec: 7.0,
+  sightRadius: 180,
+  sightOutlineSec: 1.50,
+
+  // rip_post (stackCategory pvp_rip): the next reload OR dash (whichever first) rips the post — it
+  // clears tar under the body (r40) and chips ONE adjacent breakable cover by a single break tick
+  // — then goes on an 8.0s cooldown. Never player damage, illegal pathing, or a demolition ult.
+  ripIcdSec: 8.0,
+  ripTarClearRadius: 40,
+  ripCoverChipDamage: 1,
+  // "Adjacent" cover: the nearest breakable prop whose EDGE is within this reach of the body.
+  ripCoverReachPx: 60,
+} as const;
+
+// Counter timers in TICKS (deterministic; never wall-clock).
+export function pvpBraceRechargeTicks(): number { return Math.round(KIT_COUNTERS.braceRechargeSec * TICKS_PER_SECOND); }
+export function pvpSightPulseIcdTicks(): number { return Math.round(KIT_COUNTERS.sightPulseIcdSec * TICKS_PER_SECOND); }
+export function pvpSightOutlineTicks(): number { return Math.round(KIT_COUNTERS.sightOutlineSec * TICKS_PER_SECOND); }
+export function pvpRipIcdTicks(): number { return Math.round(KIT_COUNTERS.ripIcdSec * TICKS_PER_SECOND); }
 
 // The match timers are counted in TICKS (never ms / wall-clock) for determinism; these convert
 // the named second-values at the authoritative tick rate.

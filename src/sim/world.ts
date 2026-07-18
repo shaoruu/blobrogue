@@ -104,6 +104,8 @@ import {
   pvpWeatherFirstEventTicks, pvpWeatherIdleGapTicks, pvpWeatherGustTellTicks,
   pvpWeatherGustActiveTicks, pvpWeatherTarLifeTicks, pvpWeatherSparkTellTicks,
   pvpWeatherStartCursor, pvpWeatherGustCardinal, pvpWeatherTarSpots, pvpWeatherSparkCandidates,
+  KIT_COUNTERS, PVP_COUNTER_BRACE, PVP_COUNTER_SIGHT, PVP_COUNTER_RIP,
+  pvpBraceRechargeTicks, pvpSightPulseIcdTicks, pvpRipIcdTicks,
 } from "./pvp.js";
 import type {
   WorldMode,
@@ -568,6 +570,17 @@ export interface PlayerSim {
   // 0.40s unarmed-progress clear and the 1.5s armed-charge hold. Server-only bookkeeping (never
   // wired — the client renders only the Favor/ember readouts above). Always 0 in co-op.
   hearthAwayT: number;
+  // ---- PVP WAVE 2 · PILLAR C: DRAFT KIT COUNTERS (brace / sight / rip) ----
+  // Per-life counter timers, keyed off the drafted blessing ids (ownedItemIds). Server-owned
+  // TRANSIENT combat state: never wired (all sub-10s, rebuilt from live inputs after a resume),
+  // cleared on death (resetPvpLifeTransient), and always 0 / inert in co-op or outside a live match.
+  // brace_band: banked brace charges (0..braceMaxCharges) and the ticks accrued toward the next one.
+  pvpBraceCharge: number;
+  pvpBraceRegenT: number;
+  // clear_eyes: ticks until the next outline pulse may mark (0 = armed).
+  pvpSightIcdT: number;
+  // rip_post: ticks until the post is armed again (0 = armed; the next reload/dash rips it).
+  pvpRipIcdT: number;
 }
 
 // Extra AI target points fed in by the client from co-op presence (Stage A keeps co-op on
@@ -864,6 +877,10 @@ export function createPlayer(id: PlayerId, x: number, y: number): PlayerSim {
     hearthFavorT: 0,
     hearthEmberT: 0,
     hearthAwayT: 0,
+    pvpBraceCharge: 0,
+    pvpBraceRegenT: 0,
+    pvpSightIcdT: 0,
+    pvpRipIcdT: 0,
   };
 }
 
@@ -16209,13 +16226,20 @@ function pvpDraftOutputScale(w: WorldState, by: PlayerId | null, weapon: WeaponI
   return outputPerSec > outputCap ? outputCap / outputPerSec : 1;
 }
 
-function applyPvpKnockback(w: WorldState, p: PlayerSim, hit: PvpHitContext | null, emberScalar = 1): number {
+function applyPvpKnockback(w: WorldState, p: PlayerSim, hit: PvpHitContext | null, ev: SimEvent[], emberScalar = 1): number {
   if (hit === null) return 0;
   const protectionScale = isProtected(p) ? PVP.kbSelfDuringIframe : 1;
   const base = hit.kbDistance ?? C.WEAPON_KB[hit.weapon] * PVP.kbScalar;
+  // brace_band: the first incoming knockback while a brace charge is banked is HALVED (never
+  // nulled) and spends the charge — a soft anti-shove, not KB/pit immunity. Only a hit that
+  // actually carries knockback (base > 0, not fully nulled by protection) consumes it.
+  const isBraced = base > 0 && protectionScale > 0
+    && ownsPvpCounter(w, p, PVP_COUNTER_BRACE) && p.pvpBraceCharge > 0;
+  if (isBraced) { p.pvpBraceCharge = 0; p.pvpBraceRegenT = 0; }
+  const braceScalar = isBraced ? KIT_COUNTERS.braceKbScalar : 1;
   const distance = Math.min(
     PVP.kbMaxPerHit,
-    Math.max(0, base * emberScalar * protectionScale),
+    Math.max(0, base * emberScalar * braceScalar * protectionScale),
   );
   if (distance <= 0) return 0;
   const magnitude = Math.hypot(hit.dirX, hit.dirY) || 1;
@@ -16225,6 +16249,14 @@ function applyPvpKnockback(w: WorldState, p: PlayerSim, hit: PvpHitContext | nul
   const beforeY = p.y;
   [p.x, p.y] = moveCircle(w, p.x, p.y, p.pr, dx, 0);
   [p.x, p.y] = moveCircle(w, p.x, p.y, p.pr, 0, dy);
+  if (isBraced) {
+    ev.push({ t: "blessingProc", pid: p.id, item: PVP_COUNTER_BRACE, phase: "brace", x: p.x, y: p.y });
+    // Post-hit pit-warning pulse (presentation only): the braced body ended within a short ETA of
+    // a pit edge. It changes no state — brace grants no pit immunity, only the readable heads-up.
+    if (isPvpBracePitWarn(w, p)) {
+      ev.push({ t: "blessingProc", pid: p.id, item: PVP_COUNTER_BRACE, phase: "pitwarn", x: p.x, y: p.y });
+    }
+  }
   return Math.hypot(p.x - beforeX, p.y - beforeY);
 }
 
@@ -16370,7 +16402,7 @@ function damagePlayerPvp(
       victimHp: Math.max(0, p.hp),
     });
   }
-  const knockback = applyPvpKnockback(w, p, pvpHit, isEmberHit ? HEARTH.emberKbScalar : 1);
+  const knockback = applyPvpKnockback(w, p, pvpHit, ev, isEmberHit ? HEARTH.emberKbScalar : 1);
   if (knockback > 0 && by !== null && by !== p.id) {
     p.lastPvpKnockbackBy = by;
     p.lastPvpKnockbackTick = w.tick;
@@ -16638,6 +16670,9 @@ function resetPvpLifeTransient(p: PlayerSim): void {
   // Contested-hearth: Favor + armed ember_edge NEVER survive a death or carry across a (re)spawn
   // (Quill FINAL — "Death: Favor + charge cleared"; "no carry across death").
   p.hearthFavorT = 0; p.hearthEmberT = 0; p.hearthAwayT = 0;
+  // Draft kit counters: no charge or armed post carries across a life. A respawned body re-earns
+  // its brace charge (0), and its sight/rip come back ARMED (icd 0) — an equal-footing restart.
+  p.pvpBraceCharge = 0; p.pvpBraceRegenT = 0; p.pvpSightIcdT = 0; p.pvpRipIcdT = 0;
 }
 
 // Wipe every PLAYER-OWNED transient object from the arena — in-flight bullets and every deployed
@@ -17112,6 +17147,126 @@ function stepPvpHearth(w: WorldState): void {
   }
 }
 
+// ---- PVP WAVE 2 · PILLAR C: DRAFT KIT COUNTERS (brace / sight / rip) -----------------------
+// Three uncommon draft blessings, each a soft on-cadence counter resolved in the match sim and
+// keyed off the drafted blessing id (ownedItemIds). Server-authoritative, behind isPvp — pure off
+// the pvp path (nothing here runs in co-op). The blessing ids ride SelfWire.items; the per-life
+// counter timers are server-owned transient (never wired, cleared on death).
+
+// Does `p` currently own the named pvp draft counter? True only on the pvp path with the id drafted.
+function ownsPvpCounter(w: WorldState, p: PlayerSim, id: string): boolean {
+  return isPvp(w) && p.ownedItemIds.includes(id);
+}
+
+// brace_band pit-warning ETA gate: the braced body ends within bracePitWarnEtaSec of the nearest
+// pit edge, measured as edge distance / the body's current walk speed. Presentation-only heads-up.
+function isPvpBracePitWarn(w: WorldState, p: PlayerSim): boolean {
+  const m = w.match;
+  if (m === null || m.pits.length === 0) return false;
+  const speed = PLAYER.moveSpeed * p.mods.moveSpeedMult;
+  if (speed <= 0) return false;
+  return pvpNearestPitEdgeDistance(p, m.pits) / speed <= KIT_COUNTERS.bracePitWarnEtaSec;
+}
+
+// The nearest live foe body within the clear_eyes radius AND clear line-of-sight (no wallhack).
+// Info only — the caller emits a presentation mark, never damage. id-sorted for determinism.
+function nearestPvpSightFoe(w: WorldState, p: PlayerSim): PlayerSim | null {
+  let best: PlayerSim | null = null;
+  let bestD: number = KIT_COUNTERS.sightRadius;
+  for (const id of [...w.players.keys()].sort()) {
+    const foe = w.players.get(id);
+    if (foe === undefined || foe.id === p.id || !isPvpHearthBody(foe)) continue;
+    if (!arePvpFoes({ team: p.team, id: p.id }, { team: foe.team, id: foe.id })) continue;
+    const d = Math.hypot(foe.x - p.x, foe.y - p.y);
+    if (d > bestD) continue;
+    if (!hasLineOfSight(w, p.x, p.y, foe.x, foe.y)) continue;
+    bestD = d; best = foe;
+  }
+  return best;
+}
+
+// The nearest ADJACENT breakable cover (a live, non-brazier prop whose edge is within reach) — the
+// one piece rip_post chips. The arena's cover is breakable crates; the outer wall is a tile and the
+// hearth/players are not props, so those are excluded by construction. id-order is prop-array order,
+// which is deterministic (spawned once, id-sorted in the pvp arena build).
+function nearestBreakablePvpCover(w: WorldState, p: PlayerSim): Prop | null {
+  let best: Prop | null = null;
+  let bestEdge = Infinity;
+  for (const prop of w.props) {
+    if (prop.dead || prop.breakT !== undefined || prop.kind === "brazier") continue;
+    const edge = Math.hypot(p.x - prop.x, p.y - prop.y) - prop.radius - p.pr;
+    if (edge > KIT_COUNTERS.ripCoverReachPx) continue;
+    if (edge < bestEdge) { bestEdge = edge; best = prop; }
+  }
+  return best;
+}
+
+// Rip the post: clear tar under the body (r40, so the drag never traps the rip) and chip ONE
+// adjacent breakable cover by a single break tick. Never damages a player, never demolishes a
+// piece outright, never touches the hearth/outer wall.
+function firePvpRip(w: WorldState, p: PlayerSim, ev: SimEvent[]): void {
+  let clearedTar = false;
+  for (const h of w.hazards) {
+    if (h.kind !== "tar" || h.life <= 0) continue;
+    if (Math.hypot(p.x - h.x, p.y - h.y) > KIT_COUNTERS.ripTarClearRadius + h.radius) continue;
+    h.life = 0;
+    clearedTar = true;
+  }
+  if (clearedTar) w.hazards = w.hazards.filter((h) => h.life > 0);
+  const cover = nearestBreakablePvpCover(w, p);
+  if (cover !== null) damageProp(w, cover, KIT_COUNTERS.ripCoverChipDamage, ev, p);
+  ev.push({ t: "blessingProc", pid: p.id, item: PVP_COUNTER_RIP, phase: "rip", x: p.x, y: p.y });
+}
+
+// The draft-counter step (Pillar C). Advances each owner's counter and fires the soft effect on
+// cadence. Runs only in a LIVE, non-grace-paused match — the same gate the hearth/weather use.
+// Placed after the weather step so rip clears the freshest tar and the match/respawn state settles
+// first (an eliminated body is no longer a kit body and is skipped).
+function stepPvpKits(w: WorldState, ev: SimEvent[]): void {
+  const m = w.match;
+  if (m === null || m.phase !== "live") return;
+  if (pvpPresentPlayers(w).length < PVP.minPlayers) return; // grace pause freezes the kits too
+  // rip_post triggers on the owner's next reload OR dash this tick. The arena has no reload action,
+  // so a fired shot (cycling the weapon) IS the "reload" beat; both ride events already emitted in
+  // the player phase (dashStart / shot), so one scan resolves whichever came first.
+  const actedThisTick = new Set<PlayerId>();
+  for (const e of ev) {
+    if (e.t === "dashStart" || e.t === "shot") actedThisTick.add(e.pid);
+  }
+  for (const id of [...w.players.keys()].sort()) {
+    const p = w.players.get(id);
+    if (!isPvpHearthBody(p)) continue;
+    // brace_band: bank toward one charge on the 7.0s cadence (max 1).
+    if (ownsPvpCounter(w, p, PVP_COUNTER_BRACE) && p.pvpBraceCharge < KIT_COUNTERS.braceMaxCharges) {
+      if (++p.pvpBraceRegenT >= pvpBraceRechargeTicks()) {
+        p.pvpBraceRegenT = 0;
+        p.pvpBraceCharge++;
+        ev.push({ t: "blessingProc", pid: p.id, item: PVP_COUNTER_BRACE, phase: "ready", x: p.x, y: p.y });
+      }
+    }
+    // clear_eyes: on the 7.0s ICD, outline the nearest foe in radius + LOS (info only). The ICD is
+    // spent only on a successful mark, so a lone player's pulse fires the instant a foe is in sight.
+    if (ownsPvpCounter(w, p, PVP_COUNTER_SIGHT)) {
+      if (p.pvpSightIcdT > 0) p.pvpSightIcdT--;
+      if (p.pvpSightIcdT <= 0) {
+        const foe = nearestPvpSightFoe(w, p);
+        if (foe !== null) {
+          p.pvpSightIcdT = pvpSightPulseIcdTicks();
+          ev.push({ t: "blessingProc", pid: p.id, item: PVP_COUNTER_SIGHT, phase: "mark", x: foe.x, y: foe.y });
+        }
+      }
+    }
+    // rip_post: on the 8.0s ICD; when armed and the owner reloaded/dashed this tick, rip the post.
+    if (ownsPvpCounter(w, p, PVP_COUNTER_RIP)) {
+      if (p.pvpRipIcdT > 0) p.pvpRipIcdT--;
+      if (p.pvpRipIcdT <= 0 && actedThisTick.has(p.id)) {
+        firePvpRip(w, p, ev);
+        p.pvpRipIcdT = pvpRipIcdTicks();
+      }
+    }
+  }
+}
+
 // The frag-limit RESPAWN deathmatch state machine (lobby -> countdown -> live -> over). Pure sim,
 // counted in TICKS off w.tick — no rounds, no last-standing, no wipe. A death respawns after a
 // delay; the match ends when a player reaches the frag limit OR the time cap expires (highest
@@ -17583,6 +17738,7 @@ export function stepWorldPhase(w: WorldState, dt: number, ev: SimEvent[]): void 
     stepPvpHearth(w);
     stepPvpMatch(w, ev);
     stepPvpWeather(w);
+    stepPvpKits(w, ev);
   } else {
     updateUlts(w, ev);
     updateRevives(w, dt, ev);
