@@ -21,6 +21,7 @@ import {
   AMBIENT_ZONE_EVENTS, HAZARD_WAVE_EVENTS, PVP_WAVE_EVENTS,
   ALWAYS_REACHABLE_EVENTS, BEAM_WEAPON_ID, BEAM_START_IDLE_MS, BEAM_STOP_GAP_MS, BEAM_FIRE_CUE_GAP_MS,
   BURROW_EMITTER, BURROW_THUD_EVENT, DEEP_EMITTER, takeStemsOf, emitterRand,
+  meleeSwingCue, meleeImpactCue,
 } from "./waveSpec.js";
 import {
   MAX_CONCURRENT_MOB_LOCKS, MOB_LOCK_WINDOW_MS, GROUP_LOOP_KEY,
@@ -307,6 +308,18 @@ class WaveAudioDirector {
 
   isBeamWeapon(weapon: string): boolean {
     return weapon === BEAM_WEAPON_ID;
+  }
+
+  playMeleeSwing(weapon: string, opts?: WavePlayOpts): boolean {
+    const event = meleeSwingCue(weapon);
+    if (event === undefined) return false;
+    return this.play(event, opts);
+  }
+
+  playMeleeImpact(weapon: string, opts?: WavePlayOpts): boolean {
+    const event = meleeImpactCue(weapon);
+    if (event === undefined) return false;
+    return this.play(event, opts);
   }
 
   // Owns the sound of manifest-bound weapons; returns false so legacy weapons keep their
