@@ -195,7 +195,7 @@ export const FIXED_DT = 1 / TICK_HZ; // 50ms authoritative step
 // (control/src/adapters/httpProbe.ts SYNTHETIC_JOIN_PROTOCOL).
 // v18 (the KIT/CLASS + ULT + account-MASTERY system — docs/specs/blobrogue_KIT_XP_SYSTEM_spec.md):
 //   - SelfWire grows the authoritative kit/ult block the client reconciles + renders: kit (the
-//     chosen KitId), uc (the fixed-point ult meter 0..1000), ura (the ultReadyAtTick 8s lockout),
+//     chosen KitId), uc (the fixed-point ult meter 0..ULT.meterMax), ura (the ultReadyAtTick 8s lockout),
 //     ovt/phs/uiv (Overdrive / Phase-speed / Phase-invuln self-buff seconds), pst (the per-kit
 //     passive channel). A v17 client would reject a snapshot carrying them.
 //   - the input command grows a mandatory `ult` bit (the "ult requested" intent, alongside

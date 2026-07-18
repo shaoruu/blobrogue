@@ -4174,7 +4174,7 @@ export class Game {
   private sigHud(): HudState["sig"] {
     const p = this.p;
     if (!isRealKit(p.kitId)) return null;
-    const tick = this.world.tick;
+    const tick = this.kitHudTick();
     return {
       momentum: p.kitId === "gunner"
         ? { stacks: Math.round(p.passiveState), max: MOMENTUM.maxStacks, isOverheat: p.overheatT > 0 }
@@ -4210,12 +4210,27 @@ export class Game {
     }));
   }
 
+  // The authoritative clock for kit HUD readiness/cooldown readouts. Online, ready-at ticks
+  // (ultReadyAtTick / pulseReadyAtTick) are reconciled as SERVER-ABSOLUTE ticks, but the local
+  // render world's tick is never stepped against the server clock — so comparing them to
+  // world.tick leaves every "readyAt" perpetually in the future (meter stuck empty / "8s"
+  // lockout even after the server meter is full). The snapshot tick is that same server clock,
+  // so kit readouts must read it online, exactly like localPvpProtectionState. Solo/co-op step
+  // the world in-process, so world.tick is the authoritative clock there.
+  private kitHudTick(): number {
+    if (this.mode === "online" && this.wsTransport) {
+      const snap = this.wsTransport.getLatestSnapshot();
+      if (snap) return snap.tick;
+    }
+    return this.world.tick;
+  }
+
   // The local player's ult meter readout (spec §3/§6). null for a neutral-kit player (the meter
   // is hidden). cd is the 8s lockout fraction still remaining after a cast.
   private ultHud(): HudState["ult"] {
     const p = this.p;
     if (!isRealKit(p.kitId)) return null;
-    const tick = this.world.tick;
+    const tick = this.kitHudTick();
     const cd = Math.max(0, Math.min(1, (p.ultReadyAtTick - tick) / ULT.lockoutTicks));
     return {
       charge: p.ultCharge / ULT.meterMax,
