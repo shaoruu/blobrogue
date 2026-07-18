@@ -1341,7 +1341,14 @@ function godBuildGates(): void {
 
   section("balancer god-build gate: the strongest estimator build proves every sim floor");
   // The top family from the report: smg carrying max fire-rate/damage/crit stacking.
-  const godPicks = [...L3("hair_trigger"), ...L3("glass_cannon"), ...L3("deadeye"), ...L3("full_metal")];
+  const godPicks = [
+    ...L3("hair_trigger"),
+    ...L3("glass_cannon"),
+    ...L3("deadeye"),
+    "side_channel",
+    "coin_magnet",
+    "coin_magnet",
+  ];
   for (const [kind, floor] of [["boss", 5], ["marrow", 15], ["weaver", 20], ["gilded", 25], ["choir", 30]] as Array<[EnemyKind, number]>) {
     const r = measureBossTtk("smg", godPicks, { kind, floor });
     record(`${kind}.godBuild`, r.seconds);
