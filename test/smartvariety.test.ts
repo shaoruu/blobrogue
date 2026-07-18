@@ -71,7 +71,9 @@ function personalSlot(world: WorldState, player: PlayerSim, kind: ShopSlot["kind
 
 section("catalog contracts");
 {
-  const normal = ITEMS.filter((item) => item.isPremiumOnly !== true);
+  const normal = ITEMS.filter((item) => item.isPremiumOnly !== true && item.isPvpOnly !== true);
+  const premium = ITEMS.filter((item) => item.isPremiumOnly === true);
+  const pvpOnly = ITEMS.filter((item) => item.isPvpOnly === true);
   const counts = {
     common: normal.filter((item) => item.rarity === "common").length,
     uncommon: normal.filter((item) => item.rarity === "uncommon").length,
@@ -81,8 +83,8 @@ section("catalog contracts");
     Object.keys(WEAPONS).length === 50
     && PICKUP_WEAPONS.length === 49
     && !PICKUP_WEAPONS.includes("pistol"));
-  check("44 blessings split into 40 normal and 4 premium cores",
-    ITEMS.length === 44 && normal.length === 40 && ITEMS.length - normal.length === 4);
+  check("47 blessings split into 40 co-op normal, 4 premium cores, 3 pvp-only counters",
+    ITEMS.length === 47 && normal.length === 40 && premium.length === 4 && pvpOnly.length === 3);
   check("normal blessing rarities are exactly 10 common, 19 uncommon, 11 rare",
     counts.common === 10 && counts.uncommon === 19 && counts.rare === 11,
     JSON.stringify(counts));
@@ -263,7 +265,7 @@ section("blessing history weights and complete-offer memory");
 
 section("normal and rare blessing guarantees");
 {
-  const normal = ITEMS.filter((item) => item.isPremiumOnly !== true);
+  const normal = ITEMS.filter((item) => item.isPremiumOnly !== true && item.isPvpOnly !== true);
   const history = createBlessingOfferHistory();
   const rng = new Rng(0xb1e55);
   let isPityHeld = true;
@@ -308,7 +310,7 @@ section("upgrade cap and max-level exclusion");
 {
   const history = createBlessingOfferHistory();
   const upgradeIds = ITEMS
-    .filter((item) => item.isPremiumOnly !== true)
+    .filter((item) => item.isPremiumOnly !== true && item.isPvpOnly !== true)
     .slice(0, 12)
     .map((item) => item.id);
   const choices = rollItemChoicesWith(3, () => 0.99, upgradeIds, { history });
@@ -316,7 +318,7 @@ section("upgrade cap and max-level exclusion");
     choices.filter((item) => upgradeIds.includes(item.id)).length <= 1);
 
   const nearSaturation = createBlessingOfferHistory();
-  const normal = ITEMS.filter((item) => item.isPremiumOnly !== true);
+  const normal = ITEMS.filter((item) => item.isPremiumOnly !== true && item.isPvpOnly !== true);
   const lastUnseen = normal[normal.length - 1];
   for (const item of normal) {
     if (item !== lastUnseen) nearSaturation.blessingSeenCounts[item.id] = 1;
@@ -425,7 +427,7 @@ section("Dealer and Premium viewer projections");
 
   const maxedWorld = createWorld(0xdea2, 3, { isShared: true, skipLocalPlayer: true });
   const maxedPlayer = spawnPlayerInWorld(maxedWorld, "viewer");
-  const maxedIds = ITEMS.filter((item) => item.isPremiumOnly !== true).slice(0, 10);
+  const maxedIds = ITEMS.filter((item) => item.isPremiumOnly !== true && item.isPvpOnly !== true).slice(0, 10);
   for (const item of maxedIds) {
     for (let level = 0; level < itemMaxLevel(item); level++) maxedPlayer.ownedItemIds.push(item.id);
   }

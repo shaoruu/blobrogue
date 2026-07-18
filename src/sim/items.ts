@@ -7,7 +7,7 @@
 import { CAPS } from "./balance.js";
 import { applyKitStatLean } from "./kits.js";
 import type { KitId } from "./kits.js";
-import { PVP } from "./pvp.js";
+import { PVP, PVP_COUNTER_BRACE, PVP_COUNTER_SIGHT, PVP_COUNTER_RIP } from "./pvp.js";
 import { blessingHistoryWeight, blessingSeenCount } from "./offerHistory.js";
 import type { BlessingOfferHistory } from "./offerHistory.js";
 import {
@@ -159,6 +159,10 @@ export interface ItemDef {
   // Premium-only stock (the shop's core infusions): NEVER enters a blessing offer roll —
   // the offer pool and its seeded streams are byte-identical with or without these defs.
   isPremiumOnly?: boolean;
+  // PVP-only draft blessing (the Wave 2 kit counters): lives in PVP.blessingPool, never in any
+  // co-op content catalog, so it only ever reaches the pvp draft roll. Excluded from the co-op
+  // offer roll (like isPremiumOnly) so the co-op offer stream stays byte-identical.
+  isPvpOnly?: boolean;
   // Per-item level cap (defaults to MAX_ITEM_LEVEL; the dash core caps at 1).
   maxLevel?: number;
   // Writes the blessing's TOTAL contribution at the given cumulative level (1–3) onto a
@@ -532,6 +536,41 @@ export const ITEMS: readonly ItemDef[] = [
     glyph: "\u00bb", tint: "#5ab6ff", rarity: "rare", isPremiumOnly: true, maxLevel: 1,
     apply: (m) => { m.extraDashCharge += 1; },
   },
+  // ---- PVP WAVE 2 · PILLAR C: draft kit counters (brace / sight / rip). PVP-ONLY: these are
+  // NOT in any co-op content catalog, so they never enter a co-op offer (co-op zero-diff). Each is
+  // a single-tier counter (maxLevel 1 — you have it or you do not), and its effect is a pvp-arena
+  // mechanic resolved in the match sim keyed off ownership, so `apply` writes NO PlayerMods (they
+  // touch no stat and stay clear of the pvp pool-safety net). ----
+  {
+    id: PVP_COUNTER_BRACE, name: "Brace Band",
+    descs: [
+      "Bank a brace charge every 7s; your next incoming knockback is halved.",
+      "Bank a brace charge every 7s; your next incoming knockback is halved.",
+      "Bank a brace charge every 7s; your next incoming knockback is halved.",
+    ],
+    glyph: "B", tint: "#8fd0ff", rarity: "uncommon", isPvpOnly: true, maxLevel: 1,
+    apply: () => { /* pvp-arena counter: brace charge + KB halving resolve in the match sim */ },
+  },
+  {
+    id: PVP_COUNTER_SIGHT, name: "Clear Eyes",
+    descs: [
+      "Every 7s, outline the nearest foe in your line of sight for 1.5s. Info only.",
+      "Every 7s, outline the nearest foe in your line of sight for 1.5s. Info only.",
+      "Every 7s, outline the nearest foe in your line of sight for 1.5s. Info only.",
+    ],
+    glyph: "C", tint: "#ffe08a", rarity: "uncommon", isPvpOnly: true, maxLevel: 1,
+    apply: () => { /* pvp-arena counter: the sight pulse resolves in the match sim */ },
+  },
+  {
+    id: PVP_COUNTER_RIP, name: "Rip Post",
+    descs: [
+      "Your next reload or dash clears tar underfoot and chips nearby cover (8s).",
+      "Your next reload or dash clears tar underfoot and chips nearby cover (8s).",
+      "Your next reload or dash clears tar underfoot and chips nearby cover (8s).",
+    ],
+    glyph: "R", tint: "#c9a26b", rarity: "uncommon", isPvpOnly: true, maxLevel: 1,
+    apply: () => { /* pvp-arena counter: the rip resolves in the match sim */ },
+  },
 ];
 
 // The stat cores the core-infusion pedestal may stock (the dash core prices higher —
@@ -591,6 +630,7 @@ export function rollItemChoicesWith(
   const levels = itemLevelsOf(ownedItemIds);
   const eligible = (opts.eligibleItems ?? ITEMS).filter((item) =>
     (opts.isPremiumAllowed === true || item.isPremiumOnly !== true)
+    && item.isPvpOnly !== true
     && (levels.get(item.id) ?? 0) < itemMaxLevel(item)
     && !opts.excludedIds?.has(item.id)
   );

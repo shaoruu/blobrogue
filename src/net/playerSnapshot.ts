@@ -205,6 +205,12 @@ type ServerOnlyField =
   // unarmed clear + the 1.5s armed hold). The client renders only the Favor/ember readouts, so
   // this never crosses the wire (like overshieldRegenT).
   | "hearthAwayT"
+  // Server-only PVP WAVE 2 draft-counter timers (brace charge/regen, sight ICD, rip ICD). All
+  // sub-10s transient combat state, rebuilt from live inputs after a resume — never wired.
+  | "pvpBraceCharge"
+  | "pvpBraceRegenT"
+  | "pvpSightIcdT"
+  | "pvpRipIcdT"
   | "weaponOfferHistory"
   | "blessingOfferHistory"
   | "blessingOfferOrdinal"
