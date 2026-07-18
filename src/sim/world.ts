@@ -85,7 +85,8 @@ import {
   KIT_START_WEAPON, ticksToSec, TICKS_PER_SECOND,
 } from "./kits.js";
 import type { KitId, UltSource } from "./kits.js";
-import { PET_ABILITY, petVerbFor, isFetchablePickup } from "./petAbilities.js";
+import { PET_ABILITY, petVerbFor, petCooldownTicks, petVerbNeedsTarget, slimeSlowMul, isFetchablePickup } from "./petAbilities.js";
+import type { PetVerb } from "./petAbilities.js";
 import {
   PVP, buildPvpArena, createMatchState, pvpHitDamage, pvpPerHitCap, arePvpFoes, farthestSpawnIndex, pvpRespawnIndex,
   pvpRespawnDelayTicks, pvpCountdownTicks, pvpMatchTimeTicks, pvpFragLimit,
@@ -492,6 +493,15 @@ export interface PlayerSim {
   // Doggie FETCH active pull window (seconds): while > 0 loose non-heart loot is drawn toward the
   // owner each tick. Server-owned + wired (reconnect-safe). 0 = no active pull.
   petFetchT: number;
+  // Pebble PEBBLEBRACE absorb window (seconds): while > 0 the owner carries a one-hit shield that
+  // eats the next incoming hit of at most PET_ABILITY.pebblebrace.absorbMax, then is spent (set to
+  // 0). Decays on its own if unspent; cleared the instant the owner is downed. Server-owned +
+  // wired so the bubble is reconnect-safe. 0 = no shield.
+  petShieldT: number;
+  // Nullfin NULLWAKE window (seconds): while > 0 the owner takes NO floor-hazard damage (tile
+  // hazards + cinder pools). Never blocks bullets/contact, never voids required-hazard objectives.
+  // Server-owned + wired (reconnect-safe). 0 = not active.
+  petNullT: number;
   // Whether a pet ability was REQUESTED this tick (the client's pet input bit). Same contract as
   // isUltRequested: re-derived from the consumed input every stepPlayerPhase, resolved + cleared
   // in the authoritative updatePetAbilities, never wired — a client can request, never resolve.
@@ -803,6 +813,8 @@ export function createPlayer(id: PlayerId, x: number, y: number): PlayerSim {
     petTellT: 0,
     petLightT: 0,
     petFetchT: 0,
+    petShieldT: 0,
+    petNullT: 0,
     isPetAbilityRequested: false,
     team: 0,
     respawnT: 0,
@@ -1507,6 +1519,8 @@ export function setPlayerKit(w: WorldState, pid: PlayerId, kit: KitId): void {
   p.petTellT = 0;
   p.petLightT = 0;
   p.petFetchT = 0;
+  p.petShieldT = 0;
+  p.petNullT = 0;
   p.isPetAbilityRequested = false;
   // BULWARK opens with a full OVERSHIELD so the signature is felt in the first 30 seconds; every
   // other kit carries none (the pool is inert for them).
@@ -1679,14 +1693,17 @@ function lowestHpAllyInRange(w: WorldState, p: PlayerSim, range: number): Player
 // prediction never runs, so every ult effect (heal/shield/teleport/invuln + the meter) is
 // server-owned and a client only ever renders the resulting SimEvents/entities. Handles the
 // slow time-trickle FLOOR, the MENDER lifebloom HoT payout, and resolving each pending cast.
-// The authoritative PET ABILITY pass (PROTOCOL 45). Server-owned exactly like updateUlts: online
+// The authoritative PET ABILITY pass (PROTOCOL 46). Server-owned exactly like updateUlts: online
 // prediction never runs this world phase, so a client can only REQUEST an ability, never resolve
-// one. Hard OFF in pvp — the whole pass returns before any state moves, so a fetch/pinprick can
-// never fire in the arena and the wire fields stay zeroed (abilities OFF; cosmetic follow only).
-function updatePetAbilities(w: WorldState, dt: number): void {
+// one. Hard OFF in pvp — the whole pass returns before any state moves, so no verb can fire in the
+// arena and the wire fields stay zeroed (abilities OFF; cosmetic follow only).
+function updatePetAbilities(w: WorldState, dt: number, ev: SimEvent[]): void {
   if (isPvp(w)) return;
   for (const p of w.players.values()) {
-    // A fresh request opens the 0.30s tell and BURNS the shared cooldown up front — a later
+    // The one-hit brace is a downed-clears rail: a body that goes down loses the shield outright
+    // (checked every tick so a mid-tell down can't leave a stale bubble hanging).
+    if (p.isDown && p.petShieldT > 0) p.petShieldT = 0;
+    // A fresh request opens the 0.30s tell and BURNS the verb's cooldown up front — a later
     // party-throttle / soft-cap no-op deliberately gets no CD refund (spam is punished).
     if (p.isPetAbilityRequested) {
       p.isPetAbilityRequested = false;
@@ -1696,37 +1713,50 @@ function updatePetAbilities(w: WorldState, dt: number): void {
     // re-open it: the CD was burned at tell start, so tryStartPetAbility refuses until it lapses.
     if (p.petTellT > 0) {
       p.petTellT = p.petTellT > dt ? p.petTellT - dt : 0;
-      if (p.petTellT <= 0) firePetVerb(w, p);
+      if (p.petTellT <= 0) firePetVerb(w, p, ev);
     }
-    // Active windows decay + apply. FETCH pulls each tick it is live; PINPRICK just counts down
-    // (the light bump is read off petLightT by the client renderer, owner-only).
+    // Active windows decay + apply. FETCH pulls each tick it is live; every other window just
+    // counts down (its effect is read off the timer by the resolver/renderer, owner-only).
     if (p.petFetchT > 0) {
       applyFetchPull(w, p, dt);
       p.petFetchT = p.petFetchT > dt ? p.petFetchT - dt : 0;
     }
     if (p.petLightT > 0) p.petLightT = p.petLightT > dt ? p.petLightT - dt : 0;
+    if (p.petShieldT > 0) p.petShieldT = p.petShieldT > dt ? p.petShieldT - dt : 0;
+    if (p.petNullT > 0) p.petNullT = p.petNullT > dt ? p.petNullT - dt : 0;
   }
 }
 
 // Gate + open a pet ability: no ability pet -> silent no-op (no CD); OFF while downed/absent;
-// refused on cooldown or while a tell is already in flight. On success it burns the CD and opens
-// the tell — the verb itself fires when the tell elapses (firePetVerb).
+// refused on cooldown or while a tell is already in flight. STALK/RATTLE additionally require a
+// live target and fail-soft with NO cooldown when nothing is in reach (checked HERE, at cast). On
+// success it burns the verb's CD and opens the tell — the verb fires when the tell elapses.
 function tryStartPetAbility(w: WorldState, p: PlayerSim): void {
-  if (petVerbFor(p.pet) === null) return;
+  const verb = petVerbFor(p.pet);
+  if (verb === null) return;
   if (p.isDown || p.hp <= 0 || p.isAbsent) return;
   if (w.tick < p.petCdReadyAtTick) return;
   if (p.petTellT > 0) return;
-  p.petCdReadyAtTick = w.tick + PET_ABILITY.cooldownTicks;
+  if (petVerbNeedsTarget(verb) && findPetTarget(w, p, verb) === null) return;
+  p.petCdReadyAtTick = w.tick + petCooldownTicks(verb);
   p.petTellT = PET_ABILITY.tellSec;
 }
 
 // Fire the equipped pet's verb once its tell has elapsed. Fail-soft if the owner went down during
 // the tell (utility OFF while downed — the CD stays burned, nothing fires).
-function firePetVerb(w: WorldState, p: PlayerSim): void {
+function firePetVerb(w: WorldState, p: PlayerSim, ev: SimEvent[]): void {
   const verb = petVerbFor(p.pet);
   if (verb === null || p.isDown || p.hp <= 0 || p.isAbsent) return;
-  if (verb === "fetch") firePetFetch(w, p);
-  else firePetPinprick(w, p);
+  switch (verb) {
+    case "fetch": firePetFetch(w, p); break;
+    case "pinprick": firePetPinprick(w, p); break;
+    case "stalk": firePetStalk(w, p); break;
+    case "emberpuff": firePetEmberpuff(w, p, ev); break;
+    case "slimetrail": firePetSlimetrail(w, p, ev); break;
+    case "pebblebrace": p.petShieldT = PET_ABILITY.pebblebrace.shieldSec; break;
+    case "rattle": firePetRattle(w, p, ev); break;
+    case "nullwake": p.petNullT = PET_ABILITY.nullwake.nullSec; break;
+  }
 }
 
 // Doggie FETCH: open a short pull window, gated by the party throttle (1 pulse / party / 2.0s).
@@ -1746,6 +1776,86 @@ function firePetPinprick(w: WorldState, p: PlayerSim): void {
   }
   if (active >= PET_ABILITY.pinprick.partyMaxWindows) return;
   p.petLightT = PET_ABILITY.pinprick.lightSec;
+}
+
+// Cat STALK: stamp an INFO pip on the nearest valid body (elite, or anyone mid-tell). Info only —
+// it never amplifies damage/stun/phase; the CD outlasts the mark so no owner can hold two.
+// Fail-soft if the target left reach during the tell (CD already committed).
+function firePetStalk(w: WorldState, p: PlayerSim): void {
+  const target = findPetTarget(w, p, "stalk");
+  if (target === null) return;
+  target.petMarkT = Math.max(target.petMarkT, PET_ABILITY.stalk.markSec);
+}
+
+// Baby Dragon EMBERPUFF: scale the REMAINING life of every damaging floor hazard (cinder pools
+// only) overlapping the owner. Never a boss tell (omen) / volatile charge / JET corruption / pave
+// / convoy / objective light — those hazard kinds are left untouched. 0 damage.
+function firePetEmberpuff(w: WorldState, p: PlayerSim, ev: SimEvent[]): void {
+  const reach = PET_ABILITY.emberpuff.radius;
+  let touched = false;
+  for (const h of w.hazards) {
+    if (h.kind !== "cinder") continue;
+    if (Math.hypot(p.x - h.x, p.y - h.y) > reach + h.radius) continue;
+    h.life *= PET_ABILITY.emberpuff.hazardLifeMul;
+    touched = true;
+  }
+  if (touched) ev.push({ t: "puff", x: p.x, y: p.y, n: 6, color: "#ffb066" });
+}
+
+// Baby Slime SLIMETRAIL: drop an enemy-slowing floor patch under the owner. The whole PARTY shares
+// a hard cap of live patches per room; over the cap it is a fail-soft no-op (CD already committed).
+// The patch deals ZERO damage — it rides the hazard list purely for position/life/render.
+function firePetSlimetrail(w: WorldState, p: PlayerSim, ev: SimEvent[]): void {
+  let live = 0;
+  for (const h of w.hazards) if (h.kind === "slime") live++;
+  if (live >= PET_ABILITY.slimetrail.partyPatchCap) return;
+  w.hazards.push({
+    id: w.nextHazardId++, kind: "slime", x: p.x, y: p.y,
+    radius: PET_ABILITY.slimetrail.patchRadius,
+    life: PET_ABILITY.slimetrail.patchLifeSec, maxLife: PET_ABILITY.slimetrail.patchLifeSec,
+  });
+  ev.push({ t: "puff", x: p.x, y: p.y, n: 6, color: "#8be86b" });
+}
+
+// Clatter RATTLE: cancel the nearest trash body's wind-up into recover (a real telegraph interrupt,
+// never damage). Elites/bosses/mechanic sockets are immune (excluded by findPetTarget). Fail-soft
+// if the target left its wind-up during the tell (CD already committed).
+function firePetRattle(w: WorldState, p: PlayerSim, ev: SimEvent[]): void {
+  const target = findPetTarget(w, p, "rattle");
+  if (target === null) return;
+  enterRecover(target);
+  ev.push({ t: "puff", x: target.x, y: target.y, n: 5, color: "#cfd8ff" });
+}
+
+// The STALK/RATTLE target picker: the nearest LIVE body in the verb's radius that passes the verb's
+// eligibility rail. Returns null when nothing qualifies (the fail-soft, no-CD path at cast).
+function findPetTarget(w: WorldState, p: PlayerSim, verb: PetVerb): Enemy | null {
+  const radius = verb === "stalk" ? PET_ABILITY.stalk.radius : PET_ABILITY.rattle.radius;
+  let best: Enemy | null = null;
+  let bestD = radius * radius;
+  for (const e of w.enemies) {
+    if (e.dead || isUntargetable(e)) continue;
+    if (!(verb === "stalk" ? isStalkTarget(e) : isRattleTarget(e))) continue;
+    const d = (e.x - p.x) ** 2 + (e.y - p.y) ** 2;
+    if (d >= bestD) continue;
+    best = e; bestD = d;
+  }
+  return best;
+}
+
+// STALK marks an elite outright, or ANY body (trash/brute/boss) only while it is mid-tell — a boss
+// is info-tagged solely to read its telegraph aim, never at rest.
+function isStalkTarget(e: Enemy): boolean {
+  if (e.tier === "elite") return true;
+  return e.attack.phase === "windup";
+}
+
+// RATTLE only bites a trash wind-up: the body must be winding up AND be neither elite nor
+// boss-grade (boss/miniboss/captain). Sockets/props never wind up, so they never qualify.
+function isRattleTarget(e: Enemy): boolean {
+  if (e.attack.phase !== "windup") return false;
+  if (e.tier === "elite" || isBossGradeKind(e)) return false;
+  return true;
 }
 
 // One FETCH pull step: draw every FETCHABLE loose pickup (coins only — hearts/weapons excluded) in
@@ -2312,6 +2422,8 @@ export function resetRunInWorld(w: WorldState, seed: number): void {
     p.petTellT = 0;
     p.petLightT = 0;
     p.petFetchT = 0;
+    p.petShieldT = 0;
+    p.petNullT = 0;
     p.isPetAbilityRequested = false;
     resetWaveCState(p);
   }
@@ -3718,6 +3830,16 @@ function chillMoveScale(e: Enemy): number {
   if (e.chill <= 0) return 1;
   return isFrozen(e) ? 0 : C.CHILL_SLOW;
 }
+// Baby Slime SLIMETRAIL enemy-slow: 1 (no patch under this body), the full slow for trash/brute,
+// half for elites, and always 1 for bosses (immune). Read off the shared hazard list each move.
+function slimeSlowMult(w: WorldState, e: Enemy): number {
+  if (isBossKind(e.kind)) return 1; // bosses immune (also skips the scan)
+  for (const h of w.hazards) {
+    if (h.kind !== "slime") continue;
+    if (Math.hypot(e.x - h.x, e.y - h.y) < h.radius) return slimeSlowMul(false, e.tier === "elite");
+  }
+  return 1;
+}
 function applyBurn(e: Enemy, secs: number, owner: PlayerId | null, ev: SimEvent[]): void {
   // First application announces through the SHARED status library; re-stamps and the
   // DoT's ticks stay silent by contract (their cadence carries no decision).
@@ -3764,6 +3886,7 @@ function tickStatuses(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void
   }
   if (e.shock > 0) e.shock = e.shock > dt ? e.shock - dt : 0;
   if (e.markT > 0) e.markT = e.markT > dt ? e.markT - dt : 0; // PHANTOM dash-through mark decay
+  if (e.petMarkT > 0) e.petMarkT = e.petMarkT > dt ? e.petMarkT - dt : 0; // Cat STALK info-pip decay
   if (e.revealT > 0) e.revealT = e.revealT > dt ? e.revealT - dt : 0; // Known by Touch reveal decay
   if (e.burn > 0) {
     e.burn = e.burn > dt ? e.burn - dt : 0;
@@ -14895,6 +15018,12 @@ function moveEnemyBy(w: WorldState, e: Enemy, dx: number, dy: number): void {
     const s = chillMoveScale(e);
     dx *= s; dy *= s;
   }
+  // Baby Slime SLIMETRAIL: a body crossing a live slime patch is slowed (bosses immune, elites
+  // half). Allies never call this path, so "allies unaffected" holds by construction.
+  if (w.hazards.length > 0) {
+    const s = slimeSlowMult(w, e);
+    if (s !== 1) { dx *= s; dy *= s; }
+  }
   if (ENEMY_ARCHETYPES[e.kind].isPhasing) {
     e.x = Math.max(TILE, Math.min((w.dungeon.w - 1) * TILE, e.x + dx));
     e.y = Math.max(TILE, Math.min((w.dungeon.h - 1) * TILE, e.y + dy));
@@ -15151,6 +15280,7 @@ function cinderBurn(w: WorldState, h: Hazard, ev: SimEvent[]): void {
   for (const p of w.players.values()) {
     if (isProtected(p) || p.isDown || p.isAbsent || p.hp <= 0 || w.pendingBlessings.has(p.id)) continue;
     if (isPavedAt(w, p.x, p.y)) continue;
+    if (p.petNullT > 0) continue; // Nullfin NULLWAKE: floor-hazard damage nulled for the window
     if (Math.hypot(p.x - h.x, p.y - h.y) < h.radius) damagePlayer(w, p, 1, ev);
   }
 }
@@ -15737,6 +15867,9 @@ function updateFloorHazards(w: WorldState, dt: number, ev: SimEvent[]): void {
       p.y = ny;
     }
     if (isProtected(p)) continue;
+    // Nullfin NULLWAKE: a live window nulls floor-hazard damage (never the rift drag above, which
+    // is displacement not damage, and never any objective's required hazard presence).
+    if (p.petNullT > 0) continue;
     const tx = Math.floor(p.x / TILE), ty = Math.floor(p.y / TILE);
     for (const h of w.floorHazards) {
       if (h.tx !== tx || h.ty !== ty || !isFloorHazardDamaging(h, w.floorHazardClock)) continue;
@@ -15833,6 +15966,15 @@ function damagePlayer(
       p.overshield -= absorbed;
       amount -= absorbed;
     }
+  }
+  // Pebble PEBBLEBRACE: the one-hit brace eats up to absorbMax of this hit, then is spent. Capped
+  // at 2 so it is NEVER a lethal-save on a big blow (it only ever softens a hit by 2), and it
+  // grants no iframe — it is orthogonal to Remember Me and the post-hit protection below.
+  if (p.petShieldT > 0 && amount > 0) {
+    const absorbed = Math.min(PET_ABILITY.pebblebrace.absorbMax, amount);
+    amount -= absorbed;
+    p.petShieldT = 0;
+    ev.push({ t: "puff", x: p.x, y: p.y, n: 5, color: "#b9c4d6" });
   }
   if (amount <= 0) return;
   // The ult meter charges off damage TAKEN for the tank (spec §2.3), normalized by the tank's
@@ -17004,7 +17146,7 @@ export function stepWorldPhase(w: WorldState, dt: number, ev: SimEvent[]): void 
   // Pet abilities resolve BEFORE pickup collection so a FETCH pulse can draw coins into reach the
   // same tick. The resolver is a hard no-op in pvp (abilities OFF in the arena — cosmetic follow
   // only), so a fetch/pinprick can never fire there and the wire fields stay zeroed.
-  updatePetAbilities(w, dt);
+  updatePetAbilities(w, dt, ev);
   updatePickups(w, dt, ev);
   if (pvp) {
     // The deathmatch replaces the whole co-op end-of-run loop: NO ult accrual/firing (ults off +

@@ -397,6 +397,11 @@ export interface Enemy extends Entity {
   // the BOSS_VULN_CAP with the crit channel (never additive on top). Rides the wire (EnemyWire.mkt)
   // so every client draws the marked glow. Decays in tickStatuses.
   markT: number;
+  // Cat STALK info mark (PROTOCOL 46): seconds an INFO pip stays over this body (0 = unmarked).
+  // Purely a readout — it never amplifies damage, stuns, phases, or reveals; the whole point of a
+  // separate field from `markT` is that it carries NO gameplay effect. Rides the wire
+  // (EnemyWire.pmk) so every client draws the pip. Decays in tickStatuses.
+  petMarkT: number;
   // Known by Touch (Wave B): seconds a body stays REVEALED — an evasion-untargetable body
   // (a diving burrower, a faded choir, a blinking weaver) can be hit while this is live.
   // Sim-internal, transient, never on the wire.
@@ -760,7 +765,10 @@ export interface Prop {
 // JET wins and drains a player standing in it. It ALWAYS carries a bright authored edge
 // (dead-amber crack-lines / cold-frost rim) so "don't stand here" reads on a dark floor —
 // the corruption creep is mood, the bright edge is the fairness cue.
-export type HazardKind = "web" | "cinder" | "charge" | "omen" | "corrupt";
+// `slime` is the pet-authored floor patch (Baby Slime SLIMETRAIL): a purely enemy-slowing area
+// that deals ZERO damage to anyone. It rides the shared hazard list for its position/life/render
+// but has no player-damage branch in updateHazards, so it is inert to every existing hazard path.
+export type HazardKind = "web" | "cinder" | "charge" | "omen" | "corrupt" | "slime";
 
 export interface Hazard {
   id: number;      // stable per-floor id (wire identity + client anim keying)

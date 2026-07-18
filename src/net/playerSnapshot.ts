@@ -77,6 +77,8 @@ export interface AuthoritativePlayerSnapshot {
   petTellT: number;
   petLightT: number;
   petFetchT: number;
+  petShieldT: number;
+  petNullT: number;
   // pvp respawn countdown (ticks; 0 = alive). Server-owned + reconciled so client prediction
   // gates movement/shooting on the local player's dead-awaiting-respawn state. Always 0 in co-op.
   respawnT: number;
@@ -267,6 +269,8 @@ export function projectPlayer(p: PlayerSim): AuthoritativePlayerSnapshot {
     petTellT: p.petTellT,
     petLightT: p.petLightT,
     petFetchT: p.petFetchT,
+    petShieldT: p.petShieldT,
+    petNullT: p.petNullT,
     respawnT: p.respawnT,
     spawnGraceT: p.spawnGraceT,
     spawnShieldT: p.spawnShieldT,
@@ -334,6 +338,8 @@ export function applyPlayerSnapshot(p: PlayerSim, s: AuthoritativePlayerSnapshot
   p.petTellT = s.petTellT;
   p.petLightT = s.petLightT;
   p.petFetchT = s.petFetchT;
+  p.petShieldT = s.petShieldT;
+  p.petNullT = s.petNullT;
   p.respawnT = s.respawnT;
   p.spawnGraceT = s.spawnGraceT;
   p.spawnShieldT = s.spawnShieldT;
