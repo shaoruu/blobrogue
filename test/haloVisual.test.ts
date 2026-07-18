@@ -69,7 +69,7 @@ function main(): void {
 
   process.stdout.write("\n[Razor Halo visual input caps]\n");
   check(
-    "inputs above every legal cap clamp to strength 1",
+    "inputs above every visual cap clamp to strength 1",
     haloVisualStrength(99, 999, 999) === 1,
   );
   check(
