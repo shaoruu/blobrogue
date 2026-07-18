@@ -392,13 +392,13 @@ const MELEE_FEEL: Partial<Record<WeaponId, MeleeFeel>> = {
   sword: {
     swingSfx: "meleeSwing", swingRate: 1.12, swingGain: 0.7,
     hitTrauma: 0.11, hitFreeze: 0.04, impactSparks: 9, sparkFan: 0.48, sparkSpeed: 1.18,
-    impactKick: 0.6, trailLength: 1, trailWidth: 1, trailIntensity: 1, isHeavy: false,
+    impactKick: 0.6, trailLength: 0.58, trailWidth: 1, trailIntensity: 1, isHeavy: false,
     bladeSize: 46, artAngle: -0.80,
   },
   longsword: {
     swingSfx: "heavySwing", swingRate: 1, swingGain: 1,
     hitTrauma: 0.28, hitFreeze: 0.08, impactSparks: 7, sparkFan: 0.72, sparkSpeed: 0.82,
-    impactKick: 1.4, trailLength: 1.06, trailWidth: 1.35, trailIntensity: 1.15, isHeavy: true,
+    impactKick: 1.4, trailLength: 0.72, trailWidth: 1.35, trailIntensity: 1.15, isHeavy: true,
     bladeSize: 56, artAngle: -0.80,
   },
   spear: {
@@ -991,6 +991,8 @@ export class Game {
   private meleeTrailLength = 1;
   private meleeTrailWidth = 1;
   private meleeTrailIntensity = 1;
+  private meleeImpactWeapon: WeaponId | null = null;
+  private meleeImpactUntil = 0;
   private footstepCd = 0;        // spacing timer for run-dust kicks
   private hurtDir: number | null = null; // world angle toward the last damage source (screen-edge hint)
   // Previous-frame player position -> velocity for the reactive ambience layer.
@@ -1369,6 +1371,8 @@ export class Game {
     this.freeze = 0;
     this.trauma = 0;
     this.kickX = 0; this.kickY = 0;
+    this.meleeImpactWeapon = null;
+    this.meleeImpactUntil = 0;
     this.hurtFlash = 0;
     this.isPaused = false;
     this.isChoosing = false;
@@ -2587,9 +2591,12 @@ export class Game {
         }
         this.meleeFlipDir = -this.meleeFlipDir; // alternate the visual sweep; the hitbox wedge is symmetric
         const comboBuild = (Math.min(COMBO_MAX_MULT, comboTierFor(this.combo).mult) - 1) / (COMBO_MAX_MULT - 1);
-        this.meleeTrailLength = (feel?.trailLength ?? 1) * (1 + comboBuild * 0.12);
+        const baseTrailLength = feel?.trailLength ?? 1;
+        this.meleeTrailLength = baseTrailLength + (1 - baseTrailLength) * comboBuild;
         this.meleeTrailWidth = (feel?.trailWidth ?? 1) * (1 + comboBuild * 0.18);
         this.meleeTrailIntensity = (feel?.trailIntensity ?? 1) * (1 + comboBuild * 0.45);
+        this.meleeImpactWeapon = m ? e.weapon : null;
+        this.meleeImpactUntil = this.animClock + (m?.swingDur ?? 0.2) + 0.1;
         triggerRecoil(this.playerAnim, FIRE_RECOIL[e.weapon] * settings.effectiveRecoil);
         if (m) this.spawnSlashWind(e.x, e.y, e.aim, m, w.color);
         if (feel) sfx(feel.swingSfx, { rate: feel.swingRate, gain: feel.swingGain });
@@ -3334,11 +3341,22 @@ export class Game {
   // hit-stop/trauma land the blow. Striking an enemy MID-ATTACK (windup/active) reads as a
   // clash — the parry CLANG, a white flash, and a longer stop — rewarding aggressive timing.
   private replayMeleeImpact(eid: number, hitX: number, hitY: number, isCrit: boolean) {
-    const feel = MELEE_FEEL[this.weapon];
+    let isLocalBladeHit = false;
+    const localHits = this.meleeSwing?.hitList;
+    if (this.animClock <= this.meleeImpactUntil && localHits) {
+      for (const enemy of localHits) {
+        if (enemy.id === eid) {
+          isLocalBladeHit = true;
+          break;
+        }
+      }
+    }
+    const weapon = isLocalBladeHit ? this.meleeImpactWeapon : null;
+    const feel = weapon === null ? undefined : MELEE_FEEL[weapon];
     this.burstTrauma = Math.min(1, this.burstTrauma + (feel?.hitTrauma ?? MELEE_HIT_TRAUMA));
     this.burstFreeze = Math.max(this.burstFreeze, feel?.hitFreeze ?? FREEZE_KILL);
     const dir = Math.atan2(hitY - this.py, hitX - this.px);
-    const bladeColor = WEAPONS[this.weapon].melee ? WEAPONS[this.weapon].color : "#fff3c4";
+    const bladeColor = weapon === null ? "#fff3c4" : WEAPONS[weapon].color;
     const sparkCount = (feel?.impactSparks ?? 6) + (isCrit ? 4 : 0);
     const sparkFan = (feel?.sparkFan ?? 0.9) * (isCrit ? 1.25 : 1);
     this.spawnSparks(hitX, hitY, sparkCount, dir, sparkFan, isCrit ? bladeColor : undefined, feel?.sparkSpeed ?? 1);
@@ -10130,7 +10148,7 @@ export class Game {
   // The slash VFX: a crescent ribbon that TRAILS the blade through its eased sweep (or a
   // lunging streak for thrusts), plus a white-hot leading edge where the blade is right
   // now. Analytic — sampled from the same easing the blade uses — so the trail and the
-  // held sprite always agree, at any framerate, with zero retained state.
+  // held sprite always agree at any framerate without retaining trail geometry.
   private renderMeleeSwing() {
     const swing = this.meleeSwing;
     if (!swing || swing.timer <= 0) return;
@@ -10144,19 +10162,20 @@ export class Game {
     const sx = this.px - cam.x;
     const sy = this.py - cam.y;
     const inner = 12;
-    const outer = swing.reach * (0.9 + 0.1 * Math.sin(t * Math.PI)) * this.meleeTrailLength;
+    const outer = swing.reach * (0.9 + 0.1 * Math.sin(t * Math.PI));
+    const trailStart = Math.max(0, t - this.meleeTrailLength);
+    const trailSpan = t - trailStart;
     const SEGS = 10;
     const fadeOut = 1 - t * t; // the whole crescent dissolves as the swing settles
     ctx.save();
     ctx.globalCompositeOperation = "lighter";
     ctx.translate(sx, sy);
     ctx.fillStyle = swing.color;
-    // The full swept crescent so far (swing start -> blade), brightest at the blade and
-    // fading toward the tail — a real slash arc, not a momentary sliver.
+    // The analytic trailing crescent, brightest at the blade and fading toward the tail.
     for (let i = 0; i < SEGS; i++) {
       const s0 = i / SEGS, s1 = (i + 1) / SEGS; // 0 = tail (swing start), 1 = head (blade)
-      const a0 = this.swingBladeAngle(swing, t * s0);
-      const a1 = this.swingBladeAngle(swing, t * s1);
+      const a0 = this.swingBladeAngle(swing, trailStart + trailSpan * s0);
+      const a1 = this.swingBladeAngle(swing, trailStart + trailSpan * s1);
       if (Math.abs(a1 - a0) < 0.002) continue;
       ctx.globalAlpha = 0.5 * this.meleeTrailIntensity * Math.pow(s1, 1.4) * fadeOut;
       const ro = outer * (0.78 + 0.22 * s1); // tail tapers inward
