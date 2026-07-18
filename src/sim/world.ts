@@ -85,7 +85,7 @@ import {
   KIT_START_WEAPON, ticksToSec, TICKS_PER_SECOND,
 } from "./kits.js";
 import type { KitId, UltSource } from "./kits.js";
-import { PET_ABILITY, petVerbFor, petCooldownTicks, petVerbNeedsTarget, slimeSlowMul, isFetchablePickup } from "./petAbilities.js";
+import { PET_ABILITY, PET_AUTOCAST, petVerbFor, petCooldownTicks, petVerbNeedsTarget, slimeSlowMul, isFetchablePickup } from "./petAbilities.js";
 import type { PetVerb } from "./petAbilities.js";
 import {
   PVP, buildPvpArena, createMatchState, pvpHitDamage, pvpPerHitCap, arePvpFoes, farthestSpawnIndex, pvpRespawnIndex,
@@ -1693,24 +1693,33 @@ function lowestHpAllyInRange(w: WorldState, p: PlayerSim, range: number): Player
 // prediction never runs, so every ult effect (heal/shield/teleport/invuln + the meter) is
 // server-owned and a client only ever renders the resulting SimEvents/entities. Handles the
 // slow time-trickle FLOOR, the MENDER lifebloom HoT payout, and resolving each pending cast.
-// The authoritative PET ABILITY pass (PROTOCOL 46). Server-owned exactly like updateUlts: online
-// prediction never runs this world phase, so a client can only REQUEST an ability, never resolve
-// one. Hard OFF in pvp — the whole pass returns before any state moves, so no verb can fire in the
-// arena and the wire fields stay zeroed (abilities OFF; cosmetic follow only).
+// The authoritative PET ABILITY pass. Server-owned exactly like updateUlts: online prediction
+// never runs this world phase, so a client can never resolve one. Pets now fire AUTONOMOUSLY —
+// no player bind: each tick a living owner's verb self-evaluates its smart trigger and casts when
+// a useful context is present (shouldPetAutoCast). The retired active-bind is kept only as a debug
+// FORCE-cast (isPetAbilityRequested, production-unbound) so a dev build can still exercise a verb
+// on demand; both paths funnel through tryStartPetAbility, which owns every rail. Hard OFF in pvp —
+// the whole pass returns before any state moves, so no verb can fire in the arena and the wire
+// fields stay zeroed (abilities OFF; cosmetic follow only).
 function updatePetAbilities(w: WorldState, dt: number, ev: SimEvent[]): void {
   if (isPvp(w)) return;
   for (const p of w.players.values()) {
     // The one-hit brace is a downed-clears rail: a body that goes down loses the shield outright
     // (checked every tick so a mid-tell down can't leave a stale bubble hanging).
     if (p.isDown && p.petShieldT > 0) p.petShieldT = 0;
-    // A fresh request opens the 0.30s tell and BURNS the verb's cooldown up front — a later
-    // party-throttle / soft-cap no-op deliberately gets no CD refund (spam is punished).
-    if (p.isPetAbilityRequested) {
-      p.isPetAbilityRequested = false;
+    // Open a cast this tick — auto (smart trigger) or the debug force bit. The cheap eligibility
+    // precheck (equipped verb, alive, ready, not mid-tell) gates the smart-trigger world read;
+    // tryStartPetAbility then re-validates every rail and BURNS the CD up front on success (a later
+    // party-throttle / soft-cap no-op deliberately gets no refund — the AI does not get free retries).
+    const isForced = p.isPetAbilityRequested;
+    p.isPetAbilityRequested = false;
+    const verb = petVerbFor(p.pet);
+    if (verb !== null && p.petTellT <= 0 && !p.isDown && p.hp > 0 && !p.isAbsent && w.tick >= p.petCdReadyAtTick
+      && (isForced || shouldPetAutoCast(w, p, verb))) {
       tryStartPetAbility(w, p);
     }
-    // The tell resolves into the verb the tick it elapses (never mid-tell). A held bind can't
-    // re-open it: the CD was burned at tell start, so tryStartPetAbility refuses until it lapses.
+    // The tell resolves into the verb the tick it elapses (never mid-tell). A cast cannot re-open
+    // it: the CD was burned at tell start, so tryStartPetAbility refuses until it lapses.
     if (p.petTellT > 0) {
       p.petTellT = p.petTellT > dt ? p.petTellT - dt : 0;
       if (p.petTellT <= 0) firePetVerb(w, p, ev);
@@ -1740,6 +1749,87 @@ function tryStartPetAbility(w: WorldState, p: PlayerSim): void {
   if (petVerbNeedsTarget(verb) && findPetTarget(w, p, verb) === null) return;
   p.petCdReadyAtTick = w.tick + petCooldownTicks(verb);
   p.petTellT = PET_ABILITY.tellSec;
+}
+
+// The AUTO-CAST decision: does the verb's SMART trigger read a useful context right NOW? A pure,
+// deterministic read of the current world (no RNG) — false means "nothing worth casting on", so
+// the CD is never burned on empty air (the fail-soft rail the retired manual bind had). Each rule
+// mirrors the resolver's own reach/eligibility so the AI never opens a tell that would then no-op:
+//   FETCH       — a fetchable pickup (coins; never hearts/loot) sits inside the pull radius
+//   PINPRICK    — the owner is IN COMBAT (a live enemy at the doorstep): light the fight, not idle
+//   STALK       — an eligible mark (elite, or anyone mid-tell) is in reach (defers to findPetTarget)
+//   EMBERPUFF   — a cinder pool overlaps the owner's reach (there is fire to shorten)
+//   SLIMETRAIL  — a non-boss enemy stands close enough to cross a patch dropped under the owner
+//   PEBBLEBRACE — a high-signal hurt read (hit within ~2s, OR in the low-HP band): never idle chip
+//   RATTLE      — an interruptible trash wind-up is in reach (defers to findPetTarget)
+//   NULLWAKE    — the owner is taking / about to take floor-hazard damage (cinder, or a live/arming tile)
+function shouldPetAutoCast(w: WorldState, p: PlayerSim, verb: PetVerb): boolean {
+  switch (verb) {
+    case "fetch": return hasFetchablePickupInReach(w, p);
+    case "pinprick": return isPlayerInCombat(w, p);
+    case "stalk": return findPetTarget(w, p, "stalk") !== null;
+    case "emberpuff": return cinderOverlapsReach(w, p, PET_ABILITY.emberpuff.radius);
+    case "slimetrail": return hasSlowableEnemyNear(w, p);
+    case "pebblebrace": return wasOwnerRecentlyDamaged(w, p) || p.hp <= p.maxHp * PET_AUTOCAST.braceLowHpFrac;
+    case "rattle": return findPetTarget(w, p, "rattle") !== null;
+    case "nullwake": return isOwnerInFloorHazardDanger(w, p);
+  }
+}
+
+// FETCH auto-trigger: at least one FETCHABLE pickup (coins only) sits within the pull radius — the
+// same reach applyFetchPull draws from, so a fired pull always has something to yank.
+function hasFetchablePickupInReach(w: WorldState, p: PlayerSim): boolean {
+  const reach = PET_ABILITY.fetch.radius;
+  for (const pk of w.pickups) {
+    if (!isFetchablePickup(pk.kind)) continue;
+    if (Math.hypot(pk.x - p.x, pk.y - p.y) <= reach) return true;
+  }
+  return false;
+}
+
+// EMBERPUFF auto-trigger: a damaging cinder pool overlaps the owner's reach — mirrors the resolver's
+// own reach + h.radius overlap so the puff always finds fire to shorten.
+function cinderOverlapsReach(w: WorldState, p: PlayerSim, reach: number): boolean {
+  for (const h of w.hazards) {
+    if (h.kind !== "cinder") continue;
+    if (Math.hypot(p.x - h.x, p.y - h.y) <= reach + h.radius) return true;
+  }
+  return false;
+}
+
+// SLIMETRAIL auto-trigger: a NON-boss enemy (bosses are slow-immune) stands within the auto reach,
+// close enough that the patch dropped under the owner will actually be crossed.
+function hasSlowableEnemyNear(w: WorldState, p: PlayerSim): boolean {
+  const r = PET_AUTOCAST.slimeEnemyRadius;
+  for (const e of w.enemies) {
+    if (e.dead || isUntargetable(e) || isBossGradeKind(e)) continue;
+    if (Math.hypot(e.x - p.x, e.y - p.y) <= r) return true;
+  }
+  return false;
+}
+
+// The PEBBLEBRACE "hurt" read: a hit landed within the recent-damage window. A pure tick compare
+// (-1 = never hit reads as not-recent), so the brace AI is deterministic + reconnect-safe.
+function wasOwnerRecentlyDamaged(w: WorldState, p: PlayerSim): boolean {
+  return p.lastDamagedTick >= 0 && w.tick - p.lastDamagedTick < PET_AUTOCAST.recentDamageTicks;
+}
+
+// NULLWAKE auto-trigger: the owner is taking (or about to take) FLOOR-hazard damage — standing in a
+// cinder pool, or on a floor-hazard tile that is damaging now or arming (telegraph). The 0.30s tell
+// plus the null window then cover the burn. Never reads projectiles/contact (NULLWAKE voids only
+// floor damage), matching the damage side (updateFloorHazards / cinderBurn).
+function isOwnerInFloorHazardDanger(w: WorldState, p: PlayerSim): boolean {
+  for (const h of w.hazards) {
+    if (h.kind !== "cinder") continue;
+    if (Math.hypot(p.x - h.x, p.y - h.y) < h.radius) return true;
+  }
+  const tx = Math.floor(p.x / TILE), ty = Math.floor(p.y / TILE);
+  for (const h of w.floorHazards) {
+    if (h.tx !== tx || h.ty !== ty) continue;
+    const phase = floorHazardPhaseAt(h, w.floorHazardClock);
+    if (phase === "active" || phase === "telegraph") return true;
+  }
+  return false;
 }
 
 // Fire the equipped pet's verb once its tell has elapsed. Fail-soft if the owner went down during
@@ -17086,8 +17176,9 @@ export function stepPlayerPhase(w: WorldState, p: PlayerSim, input: InputCmd, dt
   p.isUltRequested = input.ult === true && !p.isDown && p.hp > 0 && !isSpawnAttackSuppressed;
   // The MENDER heal-pulse intent — same contract as the ult request (resolved in updateUlts).
   p.isPulseRequested = input.pulse === true && !p.isDown && p.hp > 0 && !isSpawnAttackSuppressed;
-  // The PET ABILITY intent — same request-only contract (resolved in the authoritative
-  // updatePetAbilities): utility is OFF while downed, so a downed owner can never trigger it.
+  // The PET ABILITY intent. Production pets AUTO-cast (no bind), so a live client never sets this;
+  // it survives only as a debug FORCE-cast the authoritative updatePetAbilities honors under the
+  // same rails as auto-cast. Utility is OFF while downed, so a downed owner can never force it.
   p.isPetAbilityRequested = input.petAbility === true && !p.isDown && p.hp > 0 && !isSpawnAttackSuppressed;
   // Self-buff ult timers decay per player step (so prediction applies the server-granted buff
   // the server reconciles) alongside the melee-swing timer. Phase invuln is capped at cast.
