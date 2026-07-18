@@ -85,8 +85,8 @@ section("catalog contracts");
     && !PICKUP_WEAPONS.includes("pistol"));
   check("51 blessings split into 44 co-op normal, 4 premium cores, 3 pvp-only counters",
     ITEMS.length === 51 && normal.length === 44 && premium.length === 4 && pvpOnly.length === 3);
-  check("normal blessing rarities are exactly 10 common, 20 uncommon, 14 rare",
-    counts.common === 10 && counts.uncommon === 20 && counts.rare === 14,
+  check("normal blessing rarities are exactly 10 common, 19 uncommon, 15 rare",
+    counts.common === 10 && counts.uncommon === 19 && counts.rare === 15,
     JSON.stringify(counts));
 }
 

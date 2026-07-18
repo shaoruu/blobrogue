@@ -400,7 +400,7 @@ section("10k deterministic offer seeds");
   let slots = 0;
   let isClean = true;
   const seen = new Set<string>();
-  for (let seed = 0; seed < 10_000; seed++) {
+  for (let seed = 0; seed < 50_000; seed++) {
     const normalRng = new Rng(pvpDraftSeed(seed, "p1", 900, 1));
     const comebackRng = new Rng(pvpDraftSeed(seed, "p1", 900, 1));
     const normal = rollPvpDraftChoicesWith(3, () => normalRng.next(), [], { tierBump: 0 });

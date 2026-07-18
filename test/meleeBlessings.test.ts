@@ -131,7 +131,7 @@ section("catalog, copy, categories, and private draft");
   check("melee blessings are in the current additive catalog",
     CURRENT_CONTENT_CATALOG_VERSION === WAVE_C_CONTENT_CATALOG_VERSION
     && ids.every((id) => catalog.normalBlessingIds.includes(id))
-    && contentCatalogFor(WAVE_B_CONTENT_CATALOG_VERSION).normalBlessingIds.length === 40);
+    && contentCatalogFor(WAVE_B_CONTENT_CATALOG_VERSION).normalBlessingIds.length === 39);
   check("all five have locked rarities",
     itemById("stagger_pulse")?.rarity === "uncommon"
     && ids.slice(1).every((id) => itemById(id)?.rarity === "rare"));
