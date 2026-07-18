@@ -85,7 +85,7 @@ import {
 } from "./waveSpec.js";
 import { pvpKillCue, pvpMatchOverCue, pvpFragStreakRate, pvpCountTickRate } from "./waveSpec.js";
 import type { WaveEventId } from "./waveSpec.js";
-import { PVP, HEARTH, pvpDraftSeed, pvpSpawnHardGraceTicks } from "../sim/pvp.js";
+import { PVP, HEARTH, WEATHER, PVP_WEATHER_CARDINALS, pvpDraftSeed, pvpSpawnHardGraceTicks } from "../sim/pvp.js";
 import type { MatchPhase } from "../sim/pvp.js";
 import { ShockwaveField, ScreenFlash, AmbienceField } from "./vfx.js";
 import { LightingRenderer } from "./lighting.js";
@@ -4846,6 +4846,7 @@ export class Game {
     this.renderDecals();
     this.renderFloorHazards(); // floor-level danger: over decals, under the ambient air + entities
     this.renderArenaHearth(); // PVP Wave 2: the contested-hearth marker (arena only, floor level)
+    this.renderRingWeather(); // PVP Wave 2: the cinder_gust wind (director-only; tar/spark ride renderHazards)
     this.renderHazards(); // dynamic boss hazards (the Weaver's webs), over the floor layer
     this.renderGroundEffects(); // weapon ground effects (chill zones, snap wires) at floor level
     this.motes.render(ctx, this.renderCam.x, this.renderCam.y); // ambient biome air, over the floor, under entities
@@ -5215,6 +5216,45 @@ export class Game {
     ctx.beginPath();
     ctx.arc(cx, cy, HEARTH.radius, 0, 6.28);
     ctx.stroke();
+    ctx.restore();
+  }
+
+  // PVP Wave 2 — the cinder_gust wind. The gust is a director-only field (no hazard entity), so it
+  // reads from the MatchWire projection: cold streaks blowing along the seeded cardinal across the
+  // mid band around the hearth. A faint building shimmer during the tell, then a stronger drift
+  // during the active window. tar/spark ride renderHazards; only the wind is drawn here.
+  private renderRingWeather(): void {
+    if (!this.isArena) return;
+    const match = this.wsTransport?.getLatestSnapshot()?.match ?? null;
+    if (match === null || match.ph !== "live" || match.wk !== "gust") return;
+    const isActive = match.wp === "active";
+    if (!isActive && match.wp !== "tell") return;
+    const dir = PVP_WEATHER_CARDINALS[match.wd ?? 0] ?? PVP_WEATHER_CARDINALS[0];
+    const cx = this.dungeon.spawn.x * TILE + TILE / 2 - this.renderCam.x;
+    const cy = this.dungeon.spawn.y * TILE + TILE / 2 - this.renderCam.y;
+    const band = WEATHER.gustMidBandDist;
+    const { ctx } = this;
+    ctx.save();
+    ctx.strokeStyle = "#bfe6ff";
+    // The tell breathes in; the active window blows steady + brighter.
+    const baseAlpha = isActive ? 0.28 : 0.12;
+    const speed = isActive ? 90 : 26;
+    const perp = { x: -dir.y, y: dir.x };
+    const LANES = 7;
+    for (let i = 0; i < LANES; i++) {
+      const laneOff = (i / (LANES - 1) - 0.5) * 2 * band; // across the wind
+      const flow = ((this.animClock * speed + i * 37) % (band * 2)) - band; // along the wind
+      const mx = cx + perp.x * laneOff + dir.x * flow;
+      const my = cy + perp.y * laneOff + dir.y * flow;
+      if (Math.hypot(mx - cx, my - cy) > band) continue;
+      const len = isActive ? 16 : 10;
+      ctx.globalAlpha = baseAlpha * (0.6 + 0.4 * Math.sin(this.animClock * 6 + i));
+      ctx.lineWidth = isActive ? 2 : 1.5;
+      ctx.beginPath();
+      ctx.moveTo(mx - dir.x * len, my - dir.y * len);
+      ctx.lineTo(mx + dir.x * len, my + dir.y * len);
+      ctx.stroke();
+    }
     ctx.restore();
   }
 
@@ -6937,6 +6977,38 @@ export class Game {
         ctx.strokeStyle = "#8be86b";
         ctx.lineWidth = 2;
         ctx.beginPath(); ctx.arc(sx, sy, h.radius, 0, 6.28); ctx.stroke();
+        continue;
+      }
+      if (h.kind === "tar") {
+        // PVP WAVE 2 tar_bloom: a dark, oily slow patch — ambient, ZERO damage, so it reads as
+        // sticky FLOOR (a tempo cost), never a danger tell: a low dark fill with a slow-wobbling
+        // sheen rim and no hot register.
+        const wob = 0.85 + 0.15 * Math.sin(this.animClock * 3 + h.id * 1.7);
+        ctx.globalAlpha = 0.34 * fade * wob;
+        ctx.fillStyle = "#241a2e";
+        ctx.beginPath(); ctx.arc(sx, sy, h.radius, 0, 6.28); ctx.fill();
+        ctx.globalAlpha = 0.26 * fade;
+        ctx.fillStyle = "#3b2c49";
+        ctx.beginPath(); ctx.arc(sx, sy, h.radius * 0.6, 0, 6.28); ctx.fill();
+        ctx.globalAlpha = 0.4 * fade;
+        ctx.strokeStyle = "#6b5a7e";
+        ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.arc(sx, sy, h.radius, 0, 6.28); ctx.stroke();
+        continue;
+      }
+      if (h.kind === "spark") {
+        // PVP WAVE 2 spark_mine: a telegraph fuse — an electric ring that crackles faster as the
+        // blast nears (urgency = age), in a cold white-blue distinct from the charge's hot red so
+        // "step off this ring" reads on any floor.
+        const urgency = 1 - h.life / Math.max(0.001, h.maxLife);
+        const blink = 0.5 + 0.5 * Math.sin(this.animClock * (9 + urgency * 26));
+        ctx.globalAlpha = 0.3 + 0.55 * urgency * blink;
+        ctx.strokeStyle = "#8fdcff";
+        ctx.lineWidth = 2 + 2.5 * urgency;
+        ctx.beginPath(); ctx.arc(sx, sy, h.radius, 0, 6.28); ctx.stroke();
+        ctx.globalAlpha = (0.1 + 0.2 * urgency) * blink;
+        ctx.fillStyle = "#d6f2ff";
+        ctx.beginPath(); ctx.arc(sx, sy, h.radius * (0.35 + 0.3 * urgency), 0, 6.28); ctx.fill();
         continue;
       }
       const isFlaring = isOnFlareLane(h.x, h.y);
