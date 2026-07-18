@@ -85,7 +85,7 @@ import {
 } from "./waveSpec.js";
 import { pvpKillCue, pvpMatchOverCue, pvpFragStreakRate, pvpCountTickRate } from "./waveSpec.js";
 import type { WaveEventId } from "./waveSpec.js";
-import { PVP, pvpDraftSeed, pvpSpawnHardGraceTicks } from "../sim/pvp.js";
+import { PVP, HEARTH, pvpDraftSeed, pvpSpawnHardGraceTicks } from "../sim/pvp.js";
 import type { MatchPhase } from "../sim/pvp.js";
 import { ShockwaveField, ScreenFlash, AmbienceField } from "./vfx.js";
 import { LightingRenderer } from "./lighting.js";
@@ -2084,6 +2084,8 @@ export class Game {
       spawnProtectionStartedTick: snap.self?.spo ?? 0,
       spawnHardGraceEndsAtTick: snap.self?.sge ?? 0,
       spawnShieldEndsAtTick: snap.self?.sse ?? 0,
+      hearthFavorTicks: snap.self?.hf ?? 0,
+      hearthEmberTicks: snap.self?.he ?? 0,
       nameOf: (id, isSelf) => this.arenaNameOf(id, isSelf),
     });
   }
@@ -4843,6 +4845,7 @@ export class Game {
     this.renderProps();
     this.renderDecals();
     this.renderFloorHazards(); // floor-level danger: over decals, under the ambient air + entities
+    this.renderArenaHearth(); // PVP Wave 2: the contested-hearth marker (arena only, floor level)
     this.renderHazards(); // dynamic boss hazards (the Weaver's webs), over the floor layer
     this.renderGroundEffects(); // weapon ground effects (chill zones, snap wires) at floor level
     this.motes.render(ctx, this.renderCam.x, this.renderCam.y); // ambient biome air, over the floor, under entities
@@ -5185,6 +5188,36 @@ export class Game {
   // in HAZARD_SOURCES the sheet replaces the body; the primitive fallback below speaks
   // the game's existing telegraph language (the boss-slam-marker family), so hazards are
   // fair on day one.
+  // PVP Wave 2 — the contested hearth marker at the arena center (9,9). A floor-level ring +
+  // radial glow that reads calm while uncontested, warms while an ember_edge is armed locally,
+  // and flips to a dashed hot ring while contested. Rendered only inside a LIVE arena match, so
+  // co-op and the pre/post-match freeze never draw it.
+  private renderArenaHearth(): void {
+    if (!this.isArena) return;
+    const hud = this.arenaMatchHud();
+    if (hud === null || hud.phase !== "live") return;
+    const { ctx } = this;
+    const cx = this.dungeon.spawn.x * TILE + TILE / 2 - this.renderCam.x;
+    const cy = this.dungeon.spawn.y * TILE + TILE / 2 - this.renderCam.y;
+    const pulse = 0.5 + 0.5 * Math.sin(this.animClock * 3.2);
+    const rgb = hud.isHearthContested ? "255,92,64" : hud.isEmberArmed ? "255,184,96" : "255,150,84";
+    ctx.save();
+    const glow = ctx.createRadialGradient(cx, cy, 0, cx, cy, HEARTH.radius);
+    glow.addColorStop(0, `rgba(${rgb},${(0.15 + 0.1 * pulse).toFixed(3)})`);
+    glow.addColorStop(1, `rgba(${rgb},0)`);
+    ctx.fillStyle = glow;
+    ctx.beginPath();
+    ctx.arc(cx, cy, HEARTH.radius, 0, 6.28);
+    ctx.fill();
+    ctx.strokeStyle = `rgba(${rgb},${(0.5 + 0.35 * pulse).toFixed(3)})`;
+    ctx.lineWidth = hud.isHearthContested ? 3 : 2;
+    ctx.setLineDash(hud.isHearthContested ? [6, 5] : []);
+    ctx.beginPath();
+    ctx.arc(cx, cy, HEARTH.radius, 0, 6.28);
+    ctx.stroke();
+    ctx.restore();
+  }
+
   private renderFloorHazards() {
     const hazards = this.world.floorHazards;
     if (hazards.length === 0) return;
