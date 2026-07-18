@@ -1,6 +1,6 @@
 import type { WeaponId } from "./types.js";
 
-export type ContentCatalogVersion = 0 | 1 | 2 | 3;
+export type ContentCatalogVersion = 0 | 1 | 2 | 3 | 4;
 
 export interface ContentCatalog {
   readonly version: ContentCatalogVersion;
@@ -12,7 +12,8 @@ export const LEGACY_CONTENT_CATALOG_VERSION: ContentCatalogVersion = 0;
 export const WAVE_A_CONTENT_CATALOG_VERSION: ContentCatalogVersion = 1;
 export const WAVE_B_CONTENT_CATALOG_VERSION: ContentCatalogVersion = 2;
 export const WAVE_C_CONTENT_CATALOG_VERSION: ContentCatalogVersion = 3;
-export const CURRENT_CONTENT_CATALOG_VERSION = WAVE_C_CONTENT_CATALOG_VERSION;
+export const MELEE_BLESSING_CONTENT_CATALOG_VERSION: ContentCatalogVersion = 4;
+export const CURRENT_CONTENT_CATALOG_VERSION = MELEE_BLESSING_CONTENT_CATALOG_VERSION;
 
 const LEGACY_PICKUP_WEAPONS: readonly WeaponId[] = [
   "shotgun", "rapid", "smg", "cannon", "burst", "ricochet", "homing", "tesla",
@@ -62,6 +63,11 @@ const WAVE_B_NORMAL_BLESSING_IDS: readonly string[] = [
 // blessing pool is identical to Wave B's (program mix stays 8 identity / 2 support).
 const WAVE_C_NORMAL_BLESSING_IDS: readonly string[] = WAVE_B_NORMAL_BLESSING_IDS;
 
+const MELEE_BLESSING_NORMAL_IDS: readonly string[] = [
+  ...WAVE_C_NORMAL_BLESSING_IDS,
+  "stagger_pulse", "blade_ward", "cleave_crit", "momentum_charge", "finisher",
+];
+
 export const CONTENT_CATALOGS: Readonly<Record<ContentCatalogVersion, ContentCatalog>> = {
   0: {
     version: LEGACY_CONTENT_CATALOG_VERSION,
@@ -83,6 +89,11 @@ export const CONTENT_CATALOGS: Readonly<Record<ContentCatalogVersion, ContentCat
     pickupWeapons: WAVE_C_PICKUP_WEAPONS,
     normalBlessingIds: WAVE_C_NORMAL_BLESSING_IDS,
   },
+  4: {
+    version: MELEE_BLESSING_CONTENT_CATALOG_VERSION,
+    pickupWeapons: WAVE_C_PICKUP_WEAPONS,
+    normalBlessingIds: MELEE_BLESSING_NORMAL_IDS,
+  },
 };
 
 export function contentCatalogFor(version: ContentCatalogVersion): ContentCatalog {
@@ -93,5 +104,6 @@ export function isContentCatalogVersion(value: number): value is ContentCatalogV
   return value === LEGACY_CONTENT_CATALOG_VERSION
     || value === WAVE_A_CONTENT_CATALOG_VERSION
     || value === WAVE_B_CONTENT_CATALOG_VERSION
-    || value === WAVE_C_CONTENT_CATALOG_VERSION;
+    || value === WAVE_C_CONTENT_CATALOG_VERSION
+    || value === MELEE_BLESSING_CONTENT_CATALOG_VERSION;
 }

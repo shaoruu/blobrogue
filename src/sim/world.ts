@@ -245,6 +245,7 @@ export interface MeleeSwing {
   duration: number;
   aim: number;
   arc: number;
+  arcScale: number;
   reach: number;
   isThrust: boolean;
   color: string;
@@ -287,6 +288,8 @@ interface StrikeInfo {
   chill?: number;
   shock?: number;
   isMelee: boolean;
+  meleeSource?: "swing" | "crook" | "halo";
+  isThrust?: boolean;
   // Persistent-source damage (turret bolts, trap snaps — output that runs while nobody
   // aims it). Against boss-grade bodies it draws from the party's shared persistent
   // budget (PERSISTENT_BOSS_DPS_FRAC of partySize x PU_DPS per rolling second) and the
@@ -355,6 +358,12 @@ export interface PlayerSim {
   rememberMeArmed: boolean;          // remember_me: lethal-save available this floor
   disabledBlessing: DisabledBlessing | null; // remember_me: the blessing muted by a save
   lightSoloDashIcd: number;          // carry_the_light: solo dash-restore cooldown
+  staggerPulseIcdT: number;
+  bladeWardT: number;
+  bladeWardAbsorb: number;
+  isMomentumArmed: boolean;
+  momentumIcdT: number;
+  momentumMoveSamples: Array<{ at: number; distance: number }>;
   // ---- Content Wave C server-owned transient combat state (never on the reconcile wire;
   // all sub-10s, rebuilt from live inputs after a resume) ----
   hushStacks: number;        // hushiron: current stance stacks (0..maxStacks)
@@ -846,6 +855,8 @@ export function createPlayer(id: PlayerId, x: number, y: number): PlayerSim {
     forkLink: null, penMarks: new Map(), penSkillCd: 0, penInputLock: 0,
     marginStore: null, sidewinderArcT: 0, sidewinderArcAim: 0,
     revealIcdT: 0, rememberMeArmed: true, disabledBlessing: null, lightSoloDashIcd: 0,
+    staggerPulseIcdT: 0, bladeWardT: 0, bladeWardAbsorb: 0,
+    isMomentumArmed: false, momentumIcdT: 0, momentumMoveSamples: [],
     hushStacks: 0, hushStillT: 0, hushStackT: 0, hushVentT: 0,
     backtalkHoldT: 0, backtalkWindowT: 0, backtalkCd: 0, backtalkReturnT: 0,
     backtalkCaughtDmg: 0, backtalkLock: 0, lampPatches: [],
@@ -2446,6 +2457,12 @@ export function loadFloorIntoWorld(w: WorldState, floor: number, playerCountAtLo
     p.sidewinderArcT = 0;
     p.revealIcdT = 0;
     p.lightSoloDashIcd = 0;
+    p.staggerPulseIcdT = 0;
+    p.bladeWardT = 0;
+    p.bladeWardAbsorb = 0;
+    p.isMomentumArmed = false;
+    p.momentumIcdT = 0;
+    p.momentumMoveSamples = [];
     p.rememberMeArmed = true;
     p.disabledBlessing = null;
     resetWaveCState(p);
@@ -2599,6 +2616,12 @@ export function resetRunInWorld(w: WorldState, seed: number): void {
     p.rememberMeArmed = true;
     p.disabledBlessing = null;
     p.lightSoloDashIcd = 0;
+    p.staggerPulseIcdT = 0;
+    p.bladeWardT = 0;
+    p.bladeWardAbsorb = 0;
+    p.isMomentumArmed = false;
+    p.momentumIcdT = 0;
+    p.momentumMoveSamples = [];
     p.petCdReadyAtTick = 0;
     p.petTellT = 0;
     p.petLightT = 0;
@@ -3980,13 +4003,19 @@ function tickPendingBlessings(w: WorldState, dt: number, ev: SimEvent[]): void {
 
 // ---- knockback ----
 
-function applyKnockbackDir(weapon: WeaponId, e: Enemy, dirX: number, dirY: number): void {
+function applyKnockbackDir(
+  weapon: WeaponId,
+  e: Enemy,
+  dirX: number,
+  dirY: number,
+  impulseScale = 1,
+): void {
   // The GIANTS (Gorge F50 / Pale Throne F75) are anchored SET-PIECES (and their tectonic
   // weak-points jut from a fixed spot on the shell): they absorb the hit, they never slide.
   // Immovable at the source.
   if (e.kind === "gorge" || e.kind === "gorge_seam" || e.kind === "pale" || e.kind === "pale_seam") return;
   const sp = Math.hypot(dirX, dirY) || 1;
-  const v = (C.WEAPON_KB[weapon] * C.KB_LAMBDA) / e.kbResist;
+  const v = (C.WEAPON_KB[weapon] * C.KB_LAMBDA * impulseScale) / e.kbResist;
   e.vx += (dirX / sp) * v;
   e.vy += (dirY / sp) * v;
   const mag = Math.hypot(e.vx, e.vy);
@@ -4008,8 +4037,8 @@ function isFrozen(e: Enemy): boolean {
   return !isBossKind(e.kind) && e.chill >= C.FREEZE_AT;
 }
 function chillMoveScale(e: Enemy): number {
-  if (e.chill <= 0) return 1;
-  return isFrozen(e) ? 0 : C.CHILL_SLOW;
+  const chillScale = e.chill <= 0 ? 1 : isFrozen(e) ? 0 : C.CHILL_SLOW;
+  return Math.min(chillScale, e.meleeSlowT > 0 ? e.meleeSlowMult : 1);
 }
 // Baby Slime SLIMETRAIL enemy-slow: 1 (no patch under this body), the full slow for trash/brute,
 // half for elites, and always 1 for bosses (immune). Read off the shared hazard list each move.
@@ -4041,6 +4070,10 @@ function applyChill(e: Enemy, secs: number, ev: SimEvent[]): void {
   e.chill = Math.min(C.CHILL_MAX, e.chill + secs);
   if (!wasFrozen && isFrozen(e)) ev.push({ t: "frozeSolid", eid: e.id, x: e.x, y: e.y });
 }
+function applyMeleeSlow(e: Enemy, moveMult: number, secs: number): void {
+  e.meleeSlowMult = e.meleeSlowT > 0 ? Math.min(e.meleeSlowMult, moveMult) : moveMult;
+  e.meleeSlowT = Math.max(e.meleeSlowT, secs);
+}
 function applyShock(e: Enemy, secs: number, ev: SimEvent[]): void {
   if (e.shock === 0 && secs > 0) ev.push({ t: "statusApplied", eid: e.id, x: e.x, y: e.y, kind: "shock" });
   if (secs > e.shock) e.shock = secs;
@@ -4058,6 +4091,10 @@ function applyHitStatuses(w: WorldState, p: PlayerSim | null, e: Enemy, src: Str
 }
 
 function tickStatuses(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void {
+  if (e.meleeSlowT > 0) {
+    e.meleeSlowT = e.meleeSlowT > dt ? e.meleeSlowT - dt : 0;
+    if (e.meleeSlowT === 0) e.meleeSlowMult = 1;
+  }
   if (e.chill > 0) {
     const wasFrozen = isFrozen(e);
     e.chill = e.chill > dt ? e.chill - dt : 0;
@@ -4539,6 +4576,82 @@ function drawPersistentBossBudget(w: WorldState, e: Enemy, dmg: number): number 
   return allowed;
 }
 
+const STAGGER_PULSE_ICD = 0.8;
+const STAGGER_PULSE_SLOW_SECONDS = 0.4;
+const STAGGER_PULSE_TARGET_CAP = 4;
+const STAGGER_PULSE_KB_SCALE = 0.4;
+const PIKE_STAGGER_RADIUS = 40;
+const MOMENTUM_ICD = 2.5;
+const MOMENTUM_KB_SCALE = 1.5;
+
+function pulseMeleeStagger(
+  w: WorldState,
+  p: PlayerSim,
+  impact: Enemy,
+  hit: StrikeInfo,
+  ev: SimEvent[],
+): void {
+  if (hit.meleeSource === "halo" || p.mods.staggerPulseRadius <= 0 || p.staggerPulseIcdT > 0) return;
+  p.staggerPulseIcdT = STAGGER_PULSE_ICD;
+  const radius = hit.isThrust === true ? PIKE_STAGGER_RADIUS : p.mods.staggerPulseRadius;
+  const targets = w.enemies
+    .filter((enemy) =>
+      !enemy.dead
+      && enemy.hp > 0
+      && !isUntargetable(enemy)
+      && Math.hypot(enemy.x - impact.x, enemy.y - impact.y) <= radius
+    )
+    .sort((a, b) => {
+      const distanceA = (a.x - impact.x) ** 2 + (a.y - impact.y) ** 2;
+      const distanceB = (b.x - impact.x) ** 2 + (b.y - impact.y) ** 2;
+      return distanceA - distanceB || a.id - b.id;
+    })
+    .slice(0, STAGGER_PULSE_TARGET_CAP);
+  for (const target of targets) {
+    const dirX = target.x - impact.x;
+    const dirY = target.y - impact.y;
+    applyKnockbackDir(
+      "longsword",
+      target,
+      dirX === 0 && dirY === 0 ? hit.kbDirX : dirX,
+      dirX === 0 && dirY === 0 ? hit.kbDirY : dirY,
+      STAGGER_PULSE_KB_SCALE,
+    );
+    applyMeleeSlow(target, p.mods.staggerPulseSlowMult, STAGGER_PULSE_SLOW_SECONDS);
+  }
+  ev.push({
+    t: "blessingProc",
+    pid: p.id,
+    item: "stagger_pulse",
+    phase: "pulse",
+    x: impact.x,
+    y: impact.y,
+  });
+}
+
+function refreshBladeWard(p: PlayerSim, hit: StrikeInfo, ev: SimEvent[]): void {
+  if (hit.meleeSource === "halo" || p.mods.bladeWardAbsorb <= 0) return;
+  p.bladeWardAbsorb = p.mods.bladeWardAbsorb;
+  p.bladeWardT = p.mods.bladeWardWindow;
+  ev.push({
+    t: "blessingProc",
+    pid: p.id,
+    item: "blade_ward",
+    phase: "refresh",
+    x: p.x,
+    y: p.y,
+  });
+}
+
+function isMeleeFinisherEligible(p: PlayerSim, e: Enemy, hit: StrikeInfo): boolean {
+  if (!hit.isMelee || p.mods.finisherThreshold <= 0) return false;
+  if (isBossKind(e.kind) || e.boss !== null || e.captainPhase !== undefined) return false;
+  const threshold = e.tier === "elite"
+    ? p.mods.finisherEliteThreshold
+    : p.mods.finisherThreshold;
+  return threshold > 0 && e.hp <= e.maxHp * threshold;
+}
+
 // `p` may be null when the striking actor has left (their projectile outlived them): damage,
 // knockback (from the fire-time weapon), and baked-in statuses still land, but nothing is
 // credited to any player.
@@ -4550,14 +4663,24 @@ function strikeEnemy(w: WorldState, p: PlayerSim | null, e: Enemy, hit: StrikeIn
   // PHANTOM MARK (Wave 2): a dash-through enemy takes +vulnMult from ALL sources (this shared hit
   // path is every player's shots, so a marked boss is a team focus target). 1 when unmarked.
   const markMult = e.markT > 0 ? PHANTOM_MARK.vulnMult : 1;
+  const isMomentumPayoff = p !== null
+    && hit.meleeSource === "swing"
+    && p.isMomentumArmed
+    && p.mods.momentumDamageBonus > 0;
+  const momentumDamageMult = isMomentumPayoff ? 1 + p.mods.momentumDamageBonus : 1;
+  const isExecuted = p !== null && isMeleeFinisherEligible(p, e, hit);
   let dmg: number;
-  if (isBossGrade) {
+  if (isExecuted) {
+    dmg = e.hp;
+  } else if (isBossGrade) {
     // The boss vulnerability CHANNEL (balancer remediation): statuses keep their utility
     // (arc, slow, DoT) but amplify NOTHING here, and the crit multiplier AND the phantom mark
     // SHARE the BOSS_VULN_CAP — combined vulnerability ≤1.35, the mark NEVER adds on top.
     // hit.damage carries the crit multiplier baked in, so it is divided back out before
     // the capped channel applies. The fire-time pellet/weapon coefficient rides on top.
-    dmg = (hit.damage / hit.critX) * Math.min(BOSS_VULN_CAP, hit.critX * markMult) * hit.bossCoef;
+    dmg = (hit.damage * momentumDamageMult / hit.critX)
+      * Math.min(BOSS_VULN_CAP, hit.critX * markMult)
+      * hit.bossCoef;
     if (hit.isPersistent) {
       dmg = drawPersistentBossBudget(w, e, dmg);
       // A fully budget-capped hit lands as pressure, not damage: no zero-damage number,
@@ -4565,21 +4688,58 @@ function strikeEnemy(w: WorldState, p: PlayerSim | null, e: Enemy, hit: StrikeIn
       if (dmg <= 0) return;
     }
   } else {
-    dmg = hit.damage * (e.shock > 0 ? C.SHOCK_DMG_MULT : 1) * (frozen ? C.FROZEN_DMG_MULT : 1) * markMult;
+    dmg = hit.damage * momentumDamageMult
+      * (e.shock > 0 ? C.SHOCK_DMG_MULT : 1)
+      * (frozen ? C.FROZEN_DMG_MULT : 1)
+      * markMult;
+  }
+  if (isMomentumPayoff && p !== null) {
+    p.isMomentumArmed = false;
+    p.momentumIcdT = MOMENTUM_ICD;
+    p.momentumMoveSamples = [];
+    ev.push({
+      t: "blessingProc",
+      pid: p.id,
+      item: "momentum_charge",
+      phase: "payoff",
+      x: e.x,
+      y: e.y,
+    });
   }
   damageEnemy(w, hit.ownerId, e, dmg, ev);
   // Kit hooks (ult meter charge from damage dealt, GUNNER momentum ramp, MENDER lifebloom
   // credit). Inert for the neutral baseline, so shipped combat is byte-identical.
   onKitDamageDealt(w, p, dmg);
-  applyKnockbackDir(p ? p.weapon : hit.fxWeapon ?? "pistol", e, hit.kbDirX, hit.kbDirY);
+  applyKnockbackDir(
+    p ? p.weapon : hit.fxWeapon ?? "pistol",
+    e,
+    hit.kbDirX,
+    hit.kbDirY,
+    isMomentumPayoff ? MOMENTUM_KB_SCALE : 1,
+  );
   applyHitStatuses(w, p, e, hit, ev);
+  if (p !== null && hit.isMelee) {
+    pulseMeleeStagger(w, p, e, hit, ev);
+    refreshBladeWard(p, hit, ev);
+  }
   const closeShotgun = !hit.isMelee && p !== null && p.weapon === "shotgun" && Math.hypot(p.x - e.x, p.y - e.y) < C.SHOTGUN_FREEZE_RANGE;
   const killed = e.hp <= 0 && !e.dead;
-  const puffColor = hit.isCrit ? "#fff3c4" : ENEMY_ARCHETYPES[e.kind].tint;
+  const isCritPresentation = hit.isCrit || isExecuted;
+  const puffColor = isCritPresentation ? "#fff3c4" : ENEMY_ARCHETYPES[e.kind].tint;
   ev.push({
-    t: "enemyHit", eid: e.id, dmgX: e.x, dmgY: e.y - e.radius, dmg, crit: hit.isCrit,
+    t: "enemyHit", eid: e.id, dmgX: e.x, dmgY: e.y - e.radius, dmg, crit: isCritPresentation,
     puffX: hit.puffX, puffY: hit.puffY, puffColor, melee: hit.isMelee, closeShotgun, killed,
   });
+  if (isExecuted && p !== null) {
+    ev.push({
+      t: "blessingProc",
+      pid: p.id,
+      item: "finisher",
+      phase: "execute",
+      x: e.x,
+      y: e.y,
+    });
+  }
   if (e.shock > 0) shockArc(w, p, e, ev);
   // Known by Touch: a melee hit is a reveal trigger (shared ICD; weaponSkill hits trigger
   // at their own sites). Only the owner's OWN melee reveals.
@@ -4860,6 +5020,7 @@ function updatePlayer(w: WorldState, p: PlayerSim, input: InputCmd, dt: number, 
     // prediction too, and the meter must stay server-owned).
     ev.push({ t: "dashStart", pid: p.id, x: p.x, y: p.y });
   }
+  const isDashMovement = p.dashTime > 0;
   let mvx: number, mvy: number;
   if (p.dashTime > 0) {
     p.dashTime -= dt;
@@ -4873,12 +5034,14 @@ function updatePlayer(w: WorldState, p: PlayerSim, input: InputCmd, dt: number, 
   const selfMoveY = p.y;
   [p.x, p.y] = moveCircle(w, p.x, p.y, p.pr, mvx, 0);
   [p.x, p.y] = moveCircle(w, p.x, p.y, p.pr, 0, mvy);
+  const playerMoveDistance = Math.hypot(p.x - selfMoveX, p.y - selfMoveY);
   // PVP WAVE 2 · cinder_gust: an active gust adds a soft positional drift through the SAME
   // wall/prop-aware collision (never a teleport). Gated to pvp + a live active gust + the mid band,
   // and sheltered by upwind cover — a no-op everywhere else. A drift into a pit rings the body out
   // on Wave 1's env-kill credit window (the gust is ownerless, so it never steals a set-up frag).
   applyPvpGustDrift(w, p, dt);
   recordWarmthPath(w, p, isMoveIntentActive, Math.hypot(p.x - selfMoveX, p.y - selfMoveY), ev);
+  recordMomentumMovement(w, p, isDashMovement ? 0 : playerMoveDistance, ev);
   if (p.dashTime > 0 && w.props.length > 0) dashBreakProps(w, p, ev);
   // Sticky silk yields to the dash: every web the dash crosses is CLEARED — the dash
   // itself is the cost (designer contract), and a cleared lane is exactly the P3 bait.
@@ -5348,6 +5511,7 @@ function rememberMeDisableTarget(p: PlayerSim): string | null {
 
 // Dash end: fires the Known by Touch reveal and the Carry the Light SOLO dash-restore.
 function onDashEnd(w: WorldState, p: PlayerSim, ev: SimEvent[]): void {
+  armMomentumCharge(p, ev);
   triggerKnownByTouch(w, p, ev);
   if (w.players.size === 1 && p.mods.lightSoloDashRestore > 0 && p.lightSoloDashIcd <= 0) {
     const maxCd = WEAPONS[p.weapon].fireCd;
@@ -5356,6 +5520,37 @@ function onDashEnd(w: WorldState, p: PlayerSim, ev: SimEvent[]): void {
     p.lightSoloDashIcd = 5;
     ev.push({ t: "blessingProc", pid: p.id, item: "carry_the_light", phase: "solo", x: p.x, y: p.y });
   }
+}
+
+function armMomentumCharge(p: PlayerSim, ev: SimEvent[]): void {
+  if (p.mods.momentumDamageBonus <= 0 || p.isMomentumArmed || p.momentumIcdT > 0) return;
+  p.isMomentumArmed = true;
+  p.momentumMoveSamples = [];
+  ev.push({
+    t: "blessingProc",
+    pid: p.id,
+    item: "momentum_charge",
+    phase: "armed",
+    x: p.x,
+    y: p.y,
+  });
+}
+
+function recordMomentumMovement(
+  w: WorldState,
+  p: PlayerSim,
+  distance: number,
+  ev: SimEvent[],
+): void {
+  if (p.mods.momentumDamageBonus <= 0 || p.isMomentumArmed || p.momentumIcdT > 0) {
+    p.momentumMoveSamples = [];
+    return;
+  }
+  const cutoff = w.waveBClock - 1;
+  p.momentumMoveSamples = p.momentumMoveSamples.filter((sample) => sample.at > cutoff);
+  if (distance > 0) p.momentumMoveSamples.push({ at: w.waveBClock, distance });
+  const moved = p.momentumMoveSamples.reduce((total, sample) => total + sample.distance, 0);
+  if (moved >= 200) armMomentumCharge(p, ev);
 }
 
 // Known by Touch: a dash-end or a melee/skill hit reveals hidden bodies within radius.
@@ -5919,7 +6114,7 @@ function sweepTether(w: WorldState, p: PlayerSim, t: TetherEffect, ev: SimEvent[
       bossCoef: WEAPON_BOSS_COEF[t.fx] ?? 1,
       puffX: e.x, puffY: e.y,
       kbDirX: kbX === 0 && kbY === 0 ? 1 : kbX, kbDirY: kbY,
-      isMelee: true,
+      isMelee: true, meleeSource: "crook",
       ownerId: p.id, fxWeapon: t.fx,
     }, ev);
   }
@@ -5958,6 +6153,8 @@ function startMeleeSwing(w: WorldState, p: PlayerSim, ev: SimEvent[]): void {
   const m = wep.melee;
   if (!m) return;
   const isCrit = p.mods.critChance > 0 && w.rng.next() < p.mods.critChance;
+  const cleaveArcScale = isCrit ? p.mods.cleaveCritArcMult : 1;
+  const cleaveReachScale = isCrit ? p.mods.cleaveCritReachMult : 1;
   // Last Warm Round: every melee swing is its own cycle-final beat (family: melee).
   const warm = p.mods.warmRoundBonus > 0 ? 1 + p.mods.warmRoundBonus : 1;
   const baseDmg = wep.damage * currentDamageMult(p) * warm;
@@ -5965,8 +6162,9 @@ function startMeleeSwing(w: WorldState, p: PlayerSim, ev: SimEvent[]): void {
     timer: m.swingDur ?? 0.2,
     duration: m.swingDur ?? 0.2,
     aim: p.aimAngle,
-    arc: m.arc,
-    reach: m.reach,
+    arc: m.arc * cleaveArcScale,
+    arcScale: cleaveArcScale,
+    reach: m.reach * cleaveReachScale,
     isThrust: m.isThrust === true,
     color: wep.color,
     damage: isCrit ? baseDmg * p.mods.critMult : baseDmg,
@@ -6019,7 +6217,7 @@ function isPointInMeleeHit(px: number, py: number, x: number, y: number, radius:
     const fwd = dx * cos + dy * sin;
     if (fwd < -radius * 0.4 || fwd > swing.reach + radius) return false;
     const lat = Math.abs(dx * sin - dy * cos);
-    return lat < C.MELEE_THRUST_WIDTH + radius;
+    return lat < C.MELEE_THRUST_WIDTH * swing.arcScale + radius;
   }
   let ang = Math.atan2(dy, dx) - swing.aim;
   while (ang > Math.PI) ang -= Math.PI * 2;
@@ -6797,7 +6995,7 @@ function updateOrbitEffect(w: WorldState, e: OrbitEffect, dt: number, ev: SimEve
         bossCoef: WEAPON_BOSS_COEF[e.fx] ?? 1,
         puffX: bx, puffY: by,
         kbDirX: kbX === 0 && kbY === 0 ? 1 : kbX, kbDirY: kbY,
-        isMelee: true,
+        isMelee: true, meleeSource: "halo",
         ownerId: e.owner, fxWeapon: e.fx,
       }, ev);
       e.rehit.set(en.id, spec.rehit);
@@ -7311,7 +7509,8 @@ function updateEnemies(w: WorldState, dt: number, ev: SimEvent[]): void {
           damage: swing.damage, isCrit: swing.isCrit,
           critX: swing.isCrit ? player.mods.critMult : 1, bossCoef: swing.bossCoef,
           puffX: player.x + kbDirX * puffDist, puffY: player.y + kbDirY * puffDist,
-          kbDirX, kbDirY, burn: swing.burn, chill: swing.chill, shock: swing.shock, isMelee: true,
+          kbDirX, kbDirY, burn: swing.burn, chill: swing.chill, shock: swing.shock,
+          isMelee: true, meleeSource: "swing", isThrust: swing.isThrust,
           ownerId: player.id, fxWeapon: null,
         }, ev);
         (swing.hitList ??= []).push(e);
@@ -16186,6 +16385,19 @@ function damagePlayer(
     p.petShieldT = 0;
     ev.push({ t: "puff", x: p.x, y: p.y, n: 5, color: "#b9c4d6" });
   }
+  if (p.bladeWardT > 0 && p.bladeWardAbsorb > 0 && amount > 0) {
+    amount -= Math.min(p.bladeWardAbsorb, amount);
+    p.bladeWardT = 0;
+    p.bladeWardAbsorb = 0;
+    ev.push({
+      t: "blessingProc",
+      pid: p.id,
+      item: "blade_ward",
+      phase: "absorbed",
+      x: p.x,
+      y: p.y,
+    });
+  }
   if (amount <= 0) return;
   // The ult meter charges off damage TAKEN for the tank (spec §2.3), normalized by the tank's
   // own maxHp (§10 target-agnostic), off the post-reduction amount.
@@ -16207,6 +16419,8 @@ function damagePlayer(
   ev.push({ t: "playerHurt", pid: p.id, x: p.x, y: p.y });
   if (p.hp <= 0) {
     p.hp = 0;
+    p.bladeWardT = 0;
+    p.bladeWardAbsorb = 0;
     resetPlayerWarmth(p);
     p.chargeT = 0; // a held charge never survives going down
     // The banked REVIVE TOKEN (premium, cap 1): the lethal hit consumes it and the player
@@ -16736,6 +16950,8 @@ function resetPvpLifeTransient(p: PlayerSim): void {
   p.combo = 0; p.comboTimer = 0; p.fangCd = 0;
   p.overdriveT = 0; p.overheatT = 0; p.phaseSpeed = 0; p.ultInvuln = 0;
   p.passiveState = 0; p.overshield = 0; p.overshieldRegenT = 0;
+  p.staggerPulseIcdT = 0; p.bladeWardT = 0; p.bladeWardAbsorb = 0;
+  p.isMomentumArmed = false; p.momentumIcdT = 0; p.momentumMoveSamples = [];
   p.isUltRequested = false; p.isPulseRequested = false;
   // Contested-hearth: Favor + armed ember_edge NEVER survive a death or carry across a (re)spawn
   // (Quill FINAL — "Death: Favor + charge cleared"; "no carry across death").
@@ -17984,6 +18200,22 @@ export function stepPlayerPhase(w: WorldState, p: PlayerSim, input: InputCmd, dt
 // advanced. Only the sim RNG (w.rng) is consumed here, so the server is the single roller.
 export function stepWorldPhase(w: WorldState, dt: number, ev: SimEvent[]): void {
   w.waveBClock += dt; // Content Wave B: monotonic real-seconds clock for the proc window
+  for (const player of w.players.values()) {
+    if (player.staggerPulseIcdT > 0) {
+      player.staggerPulseIcdT = player.staggerPulseIcdT > dt ? player.staggerPulseIcdT - dt : 0;
+    }
+    if (player.bladeWardT > 0) {
+      player.bladeWardT = player.bladeWardT > dt ? player.bladeWardT - dt : 0;
+      if (player.bladeWardT === 0) player.bladeWardAbsorb = 0;
+    }
+    if (player.isDown) {
+      player.bladeWardT = 0;
+      player.bladeWardAbsorb = 0;
+    }
+    if (player.momentumIcdT > 0) {
+      player.momentumIcdT = player.momentumIcdT > dt ? player.momentumIcdT - dt : 0;
+    }
+  }
   w.barrelExplosionsThisTick = 0; // reset the per-tick explosive-barrel chain budget
   const pvp = isPvp(w);
   // Reset the per-victim per-tick pvp damage-cap accumulator BEFORE any damage this tick.

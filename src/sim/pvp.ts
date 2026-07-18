@@ -40,6 +40,8 @@ export const pvpBlessingBlacklist = [
   "known_by_touch",
   "remember_me",
   "carry_the_light",
+  "blade_ward",
+  "finisher",
 ] as const;
 
 export type PvpDraftTrigger = "none" | "frag" | "time" | "dedup";

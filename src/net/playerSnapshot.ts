@@ -167,6 +167,12 @@ type ServerOnlyField =
   | "rememberMeArmed"
   | "disabledBlessing"
   | "lightSoloDashIcd"
+  | "staggerPulseIcdT"
+  | "bladeWardT"
+  | "bladeWardAbsorb"
+  | "isMomentumArmed"
+  | "momentumIcdT"
+  | "momentumMoveSamples"
   // Content Wave C transient combat state: sub-10s, rebuilt from live inputs after a resume.
   | "hushStacks"
   | "hushStillT"

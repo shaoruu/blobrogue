@@ -391,6 +391,8 @@ export interface Enemy extends Entity {
   burn: number;       // seconds of burn DoT left
   burnDmg: number;    // burn damage per second (stacks up to a cap)
   chill: number;      // seconds of slow left (high stacks freeze solid)
+  meleeSlowT: number;
+  meleeSlowMult: number;
   shock: number;      // seconds the shocked tag is active (amp + on-hit arc)
   // PHANTOM MARK (Wave 2): seconds the +vuln dash-through mark is live (0 = unmarked). A shared
   // authoritative vulnerability the whole team's damage reads; against boss-grade bodies it shares

@@ -27,6 +27,7 @@ import {
   WAVE_A_CONTENT_CATALOG_VERSION,
   WAVE_B_CONTENT_CATALOG_VERSION,
   WAVE_C_CONTENT_CATALOG_VERSION,
+  MELEE_BLESSING_CONTENT_CATALOG_VERSION,
   CURRENT_CONTENT_CATALOG_VERSION,
   contentCatalogFor,
 } from "../src/sim/contentCatalog.js";
@@ -125,13 +126,14 @@ section("catalog v3, typed hooks, and additive migration");
   check("Hushiron and Backtalk are rare; Faultlink is legendary (1C / 2R / 1L)",
     WEAPONS.hushiron.rarity === "rare" && WEAPONS.backtalk.rarity === "rare"
     && WEAPONS.faultlink.rarity === "legendary");
-  check("Wave C is the current catalog and pickups are additive (+4 guns)",
-    CURRENT_CONTENT_CATALOG_VERSION === WAVE_C_CONTENT_CATALOG_VERSION
+  check("Wave C pickups remain additive (+4 guns)",
+    CURRENT_CONTENT_CATALOG_VERSION === MELEE_BLESSING_CONTENT_CATALOG_VERSION
     && PICKUP_WEAPONS.length === 49);
   check("Wave C adds NO new blessings (guns-only): catalog 3 blessing pool equals catalog 2",
     JSON.stringify(contentCatalogFor(WAVE_C_CONTENT_CATALOG_VERSION).normalBlessingIds)
       === JSON.stringify(contentCatalogFor(WAVE_B_CONTENT_CATALOG_VERSION).normalBlessingIds)
-    && ITEMS.filter((i) => i.isPremiumOnly !== true && i.isPvpOnly !== true).length === 40);
+    && contentCatalogFor(WAVE_C_CONTENT_CATALOG_VERSION).normalBlessingIds.length === 40
+    && ITEMS.filter((i) => i.isPremiumOnly !== true && i.isPvpOnly !== true).length === 45);
   check("catalog 2 (Wave B) arrays are never mutated by Wave C",
     contentCatalogFor(WAVE_B_CONTENT_CATALOG_VERSION).pickupWeapons.length === 45
     && WAVE_C_WEAPONS.every((id) => !contentCatalogFor(WAVE_B_CONTENT_CATALOG_VERSION).pickupWeapons.includes(id)));
@@ -144,16 +146,18 @@ section("catalog v3, typed hooks, and additive migration");
     && replay.catalogVersion === WAVE_C_CONTENT_CATALOG_VERSION
     && drawWeaponFromBag(replay, new Set()) === drawWeaponFromBag(bag, new Set()));
 
-  check("genuinely fresh production worlds select Wave C without a browser field",
-    createWorld(0xCC01, 1).catalogVersion === WAVE_C_CONTENT_CATALOG_VERSION);
-  const snap = buildSnapshot(createWorld(0xCC02, 1), LOCAL_ID, 0, [], 0, false, { worldId: "catalog-v3" });
+  check("genuinely fresh production worlds select the melee blessing catalog",
+    createWorld(0xCC01, 1).catalogVersion === MELEE_BLESSING_CONTENT_CATALOG_VERSION);
+  const snap = buildSnapshot(createWorld(0xCC02, 1, {
+    catalogVersion: WAVE_C_CONTENT_CATALOG_VERSION,
+  }), LOCAL_ID, 0, [], 0, false, { worldId: "catalog-v3" });
   check("catalog version 3 rides the authoritative snapshot", snap.cat === 3);
   const oldWire = JSON.parse(JSON.stringify(snap)) as ReturnType<typeof buildSnapshot> & { cat?: number };
   delete oldWire.cat;
   check("old snapshots missing catalog still decode legacy", validateSnap(oldWire).cat === 0);
   let isUnknownRejected = false;
-  try { validateSnap({ ...snap, cat: 4 }); } catch { isUnknownRejected = true; }
-  check("unsupported future catalog versions (4+) still fail closed", isUnknownRejected);
+  try { validateSnap({ ...snap, cat: 5 }); } catch { isUnknownRejected = true; }
+  check("unsupported future catalog versions (5+) still fail closed", isUnknownRejected);
   let isForged = false;
   try {
     jsonCodec.decodeClient(JSON.stringify({
