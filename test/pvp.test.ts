@@ -1167,7 +1167,7 @@ section("PER-WEAPON TTK band (1v1 median 3-5s across the arsenal)");
 {
   // Expected 1v1 TTK from the shipped model: pellets * per-pellet pvp damage / trigger, clamped
   // by the per-hit cap, against the fixed HP pool. This is the balancer ship-gate.
-  const gateWeapons = ["pistol", "smg", "cannon", "railgun", "rapid", "sawnoff", "flamer", "burst", "spear", "beam"] as const;
+  const gateWeapons = ["pistol", "smg", "cannon", "railgun", "rapid", "sawnoff", "flamer", "burst", "sword", "longsword", "spear", "beam"] as const;
   for (const id of gateWeapons) {
     const wep = WEAPONS[id];
     const perTrigger = Math.min(pvpPerHitCap(), wep.pellets * pvpHitDamage(id, wep.damage));
