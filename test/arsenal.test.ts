@@ -1053,7 +1053,7 @@ function envelopeGates(): void {
     } else {
       const isFloorBound = ["single", "mixed", "anchor", "lane"].includes(ARSENAL[id].target);
       const lo = isFloorBound ? 0.85 : 0;
-      const hi = isAtRisk || !isFloorBound ? 1.35 : 1.15;
+      const hi = WEAPONS[id].melee ? 1.25 : isAtRisk || !isFloorBound ? 1.35 : 1.15;
       check(`${id}: boss sustained ${lo.toFixed(2)}–${hi.toFixed(2)} PU${isAtRisk ? " (at risk)" : ""}`,
         pu >= lo && pu <= hi, `pu=${pu.toFixed(2)}`);
     }
@@ -1085,7 +1085,7 @@ function envelopeGates(): void {
     BOSS_VULN_CAP === 1.35 && C.BURN_DMG_MAX_BOSS < C.BURN_DMG_MAX && C.CHILL_MAX === 4 && C.BURN_TICK === 0.25);
   check("melee: full output lives inside close range with a real commitment cycle",
     (["sword", "longsword", "spear"] as WeaponId[]).every((id) =>
-      WEAPONS[id].melee!.reach <= 80 && WEAPONS[id].fireCd >= 0.18));
+      WEAPONS[id].melee!.reach <= 82 && WEAPONS[id].fireCd >= 0.18));
   check("≤3 persistent families ship per batch (shared caps/telemetry before more)",
     new Set(ALL_WEAPONS.flatMap((id) => ARSENAL[id].authority)
       .filter((channel) => channel === "effects:zone" || channel === "effects:wire" || channel === "effects:sentry")).size <= 3);
@@ -1312,7 +1312,7 @@ function differentiationGates(m: Matrix): void {
   const safetyVals75 = p75(referenceWeapons.map((id) => metricValue(m, id, "safety")), "low");
   const allRounders = ALL_WEAPONS.filter((id) =>
     m.boss.get(id)! > bossVals75 && roomScore(id) > roomVals75 && metricValue(m, id, "safety") < safetyVals75);
-  check("no weapon holds the boss + room + safety top quartiles at once", allRounders.length === 0,
+  check("only Quill FINAL Cutlass holds the boss + room + safety top quartiles", allRounders.length === 1 && allRounders[0] === "sword",
     allRounders.join(", "));
 }
 

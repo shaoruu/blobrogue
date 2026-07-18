@@ -11,7 +11,7 @@
 import { weaponDisplayStats, liveDamageMult, liveFireRateMult, lowHpFrac } from "../src/sim/weaponStats.js";
 import { WEAPONS } from "../src/sim/weapons.js";
 import { createMods } from "../src/sim/items.js";
-import { CAPS } from "../src/sim/balance.js";
+import { CAPS, WEAPON_BOSS_COEF } from "../src/sim/balance.js";
 import {
   createWorld, spawnPlayerInWorld, acquireWeaponInWorld, switchWeaponInWorld, stepWorld,
 } from "../src/sim/world.js";
@@ -43,8 +43,28 @@ function baseStatTests(): void {
   check("shotgun volley of 5 at 1.7 per pellet", sg.power.count === 5 && sg.power.perHit === 1.7);
 
   const sw = weaponDisplayStats("sword", createMods(), 0);
-  check("melee: reach num is the reach, volley pinned to 1", sw.isMelee && sw.reach.num === 48 && sw.power.count === 1);
-  check("melee cadence still meaningful", near(sw.cadence.num, 1 / 0.22));
+  check("melee: reach num is the reach, volley pinned to 1", sw.isMelee && sw.reach.num === 54 && sw.power.count === 1);
+  check("melee cadence still meaningful", near(sw.cadence.num, 1 / 0.18));
+
+  section("Quill FINAL: melee class authored fields");
+  const sword = WEAPONS.sword;
+  check("Cutlass FINAL", sword.damage === 5 && sword.fireCd === 0.18
+    && sword.melee?.reach === 54 && sword.melee.arc === 1.35 && sword.melee.swingDur === 0.18);
+  const longsword = WEAPONS.longsword;
+  check("Claymore FINAL", longsword.damage === 8.5 && longsword.fireCd === 0.34
+    && longsword.melee?.reach === 66 && longsword.melee.arc === 2 && longsword.melee.swingDur === 0.22);
+  const spear = WEAPONS.spear;
+  check("Pike FINAL", spear.damage === 6.5 && spear.fireCd === 0.24
+    && spear.melee?.reach === 82 && spear.melee.arc === 0.36
+    && spear.melee.swingDur === 0.16 && spear.melee.isThrust === true);
+  const crook = WEAPONS.crook;
+  check("Crooked Chain FINAL", crook.damage === 7 && crook.fireCd === 0.75
+    && crook.tether?.range === 230 && crook.tether.pullSpeed === 640
+    && crook.tether.holdDist === 58 && crook.tether.hold === 1
+    && crook.tether.reach === 105 && crook.tether.width === 34);
+  check("melee class FINAL boss coefficients", WEAPON_BOSS_COEF.sword === 0.55
+    && WEAPON_BOSS_COEF.longsword === 0.55 && WEAPON_BOSS_COEF.spear === 0.55
+    && WEAPON_BOSS_COEF.crook === 0.6);
 }
 
 function modTests(): void {
@@ -62,8 +82,8 @@ function modTests(): void {
   check("reach scales by speed AND life mults", near(s.reach.num, 560 * 1.1 * 1.1 * 1.25));
 
   const m = weaponDisplayStats("sword", mods, 0);
-  check("melee ignores pellet/range mults (reach is reach)", m.power.count === 1 && m.reach.num === 48);
-  check("melee power/cadence still scale", near(m.power.perHit, 3.5 * 1.5) && near(m.cadence.num, (1 / 0.22) * 1.2));
+  check("melee ignores pellet/range mults (reach is reach)", m.power.count === 1 && m.reach.num === 54);
+  check("melee power/cadence still scale", near(m.power.perHit, 5 * 1.5) && near(m.cadence.num, (1 / 0.18) * 1.2));
 
   section("low-HP scalers: berserk/adrenaline pay off with missing health, capped");
   const risk = createMods();
@@ -168,8 +188,9 @@ function cardTests(): void {
     && card("longsword").impact.band === "CRUSHING");
   // CADENCE: SLOW <1.8/s, STEADY <5, FAST <10, RAPID >=10
   check("cadence SLOW under 1.8/s", card("railgun").cadence.band === "SLOW" && card("sawnoff").cadence.band === "SLOW");
-  check("cadence STEADY under 5/s", card("shotgun").cadence.band === "STEADY" && card("sword").cadence.band === "STEADY");
-  check("cadence FAST under 10/s", card("pistol").cadence.band === "FAST" && card("nailer").cadence.band === "FAST");
+  check("cadence STEADY under 5/s", card("shotgun").cadence.band === "STEADY" && card("longsword").cadence.band === "STEADY");
+  check("cadence FAST under 10/s", card("pistol").cadence.band === "FAST" && card("nailer").cadence.band === "FAST"
+    && card("sword").cadence.band === "FAST");
   check("cadence RAPID at 10+/s", card("smg").cadence.band === "RAPID" && card("beam").cadence.band === "RAPID");
   // REACH: CLOSE <180, MID <520, LONG <950, EXTREME >=950 — internal px, one scale for all
   check("reach CLOSE under 180", card("shotgun").reach.band === "CLOSE" && card("sawnoff").reach.band === "CLOSE");

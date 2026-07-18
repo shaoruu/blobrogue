@@ -236,7 +236,7 @@ export function practicalBossDps(id: WeaponId, mods: PlayerMods): number {
   const extra = Math.max(0, pellets - wep.pellets);
   // The fire-time pellet/weapon coefficients, exactly as fire() bakes them.
   const effPellets = isMelee ? 1 : 1 + Math.max(0, wep.pellets - 1) * BOSS_NATIVE_PELLET_COEF + extra * BOSS_EXTRA_PELLET_COEF;
-  const wepCoef = isMelee ? 1 : WEAPON_BOSS_COEF[id] ?? 1;
+  const wepCoef = WEAPON_BOSS_COEF[id] ?? 1;
   const spreadTotal = isMelee ? 0 : (pellets > 1 ? Math.max(wep.spread, C.MIN_MULTI_SPREAD) + mods.spreadAdd : wep.spread);
   // The boss vulnerability channel: statuses amplify NOTHING against boss-grade bodies
   // (utility only), and the crit multiplier counts at most BOSS_VULN_CAP.

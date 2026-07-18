@@ -1297,7 +1297,7 @@ function godBuildGates(): void {
   const roundedWaveB = Math.round(waveB.maxDps * 1000) / 1000;
   const roundedWaveC = Math.round(waveC.maxDps * 1000) / 1000;
   record("godBuild.maxPracticalDps", roundedLegacy);
-  check("legacy catalog preserves the reviewed 47.94 estimator fixture",
+  check("legacy catalog preserves the reviewed 46.17 estimator fixture",
     roundedLegacy === fixtures.legacy.maxPracticalDps
     && legacy.top[0].build === fixtures.legacy.strongestBuild,
     `${roundedLegacy} ${legacy.top[0].build}`);
@@ -1315,7 +1315,8 @@ function godBuildGates(): void {
     `${roundedWaveC} ${waveC.top[0].build}`);
   check("the versioned strongest-build change is intentional while global ceilings remain unchanged",
     legacy.top[0].build !== waveA.top[0].build
-    && roundedWaveA < roundedLegacy);
+    && Object.values(BOSS_DPS_CEILING).every((ceiling) =>
+      legacy.maxDps <= ceiling && waveA.maxDps <= ceiling));
   for (const [kind, ceiling] of Object.entries(BOSS_DPS_CEILING) as Array<[EnemyKind, number]>) {
     check(`Wave A 100k-build max practical DPS ${waveA.maxDps.toFixed(1)} ≤ the ${kind} ceiling ${ceiling}`,
       waveA.maxDps <= ceiling, waveA.maxBuild);

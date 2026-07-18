@@ -461,7 +461,7 @@ function shielderTests(): void {
   {
     const { w, p } = arena(0x51E2);
     p.x = 760; p.y = 600;
-    const e = spawnReady(w, "shielder", 812, 600); // inside sword reach (48 + its radius)
+    const e = spawnReady(w, "shielder", 812, 600); // inside sword reach (54 + its radius)
     e.attack.cooldown = 5; // hold the bash so the swing test is isolated
     stepFor(w, 0.1);
     const hp0 = e.hp;
