@@ -191,14 +191,14 @@ function fleeAcrossEdges(): void {
   }
   check("Sever flees through ≥2 RoomEdges", edgesUsed.size >= 2, `edges=${[...edgesUsed]} rooms=${roomsVisited.size}`);
 
-  // Soft-fail the escape meter to max — run must remain uncleared-but-winnable (not wiped).
+  // Soft-fail the escape meter to max. Sever has NO other damage path (the body is guarded
+  // until a window), so this MUST open the exit — the run can never softlock on F55.
   w.encounter.flags.escapeMeter = SEVER.escapeMeterMax;
-  w.encounter.failed = true;
-  w.encounter.flags.interceptState = "escaped";
-  check("escape soft-fail does not complete floor", isFloorCleared(w) === false);
+  step(w, 2);
+  check("escape soft-fail OPENS the exit (no Sev-0 softlock)", isFloorCleared(w) === true);
+  check("the hunt resolves failed/escaped (worsened route, not a wipe)",
+    w.encounter.failed === true && w.encounter.flags.interceptState === "escaped" && w.encounter.completed === true);
   check("escape does not kill players", [...w.players.values()].every((pl) => pl.hp > 0));
-  w.encounter.completed = true;
-  check("custom completion still opens exit after escapes", isFloorCleared(w) === true);
 }
 
 function anchorsAndWindow(): void {
@@ -252,6 +252,37 @@ function carrierHudPip(): void {
   check("objective copy brands WORLDSPLIT", !!copyNone && copyNone.includes("WORLDSPLIT"));
   check("carrier pip present when carrierId set", !!copyPip && copyPip.includes("\u25cf"));
   check("no pip without carrier", !!copyNone && !copyNone.includes("\u25cf"));
+}
+
+function severNoSoftlock(): void {
+  section("Sev-0 fail-safe: stuck party never softlocks F55 (anchors never broken)");
+  const w = createWorld(0x50FA, 55, {});
+  loadFloorIntoWorld(w, 55);
+  const boss = w.enemies.find((e) => e.kind === "sever");
+  if (!boss || !w.encounter) { check("sever for no-softlock", false); return; }
+  const p = w.players.get(LOCAL_ID)!;
+  p.x = boss.x + 40; p.y = boss.y; p.invuln = 999;
+  boss.spawnTimer = 0;
+  boss.attack.cooldown = 999; // suppress WORLDSPLIT — with anchors never broken there is NO damage path
+  step(w, 3);
+  check("encounter active with the boss fully guarded", w.encounter.active === true);
+  const hp0 = boss.hp;
+  // Glue a LIVING player to Sever (so the escape meter never bumps) and never break an anchor:
+  // the stall watchdog is the ONLY thing that can save the run.
+  const budget = Math.ceil((SEVER.stallFailoverSec + 90) / DT);
+  let clearedAt = -1;
+  for (let i = 0; i < budget; i++) {
+    p.x = boss.x + 40; p.y = boss.y; p.invuln = 999; p.isDown = false; p.hp = Math.max(p.hp, 1);
+    step(w, 1);
+    if (isFloorCleared(w)) { clearedAt = i; break; }
+  }
+  check("fail-safe opens the exit before an infinite softlock", clearedAt >= 0, `clearedAt=${clearedAt}`);
+  check("fail-safe dealt the boss no damage (guard intact — HP only drops in windows)", boss.hp === hp0, `hp=${boss.hp}/${hp0}`);
+  check("hunt resolves as a soft escape, not a wipe",
+    w.encounter.failed === true && w.encounter.flags.interceptState === "escaped");
+  check("floor completes via the encounter path (boss still alive)",
+    w.encounter.completed === true && !boss.dead);
+  check("no player was killed by the fail-safe", [...w.players.values()].every((pl) => pl.hp > 0));
 }
 
 function anchorReadability(): void {
@@ -448,6 +479,7 @@ worldsplitToothSuccess();
 worldsplitSurvivalOnly();
 interceptIndependentOfWorldsplit();
 fleeAcrossEdges();
+severNoSoftlock();
 anchorsAndWindow();
 lateJoinCheckpoint();
 carrierHudPip();
