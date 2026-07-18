@@ -254,6 +254,44 @@ function carrierHudPip(): void {
   check("no pip without carrier", !!copyNone && !copyNone.includes("\u25cf"));
 }
 
+function anchorReadability(): void {
+  section("Anchors readable + distinguishable (client render hooks)");
+  // Copy: the hunt objective LEADS with the live action so players know what to shoot NOW.
+  const copyAnchors = encounterObjectiveCopy({
+    kind: "hunt", progress: 0.2, checkpoint: 0, carrierId: null, completed: false, mechanic: "anchors",
+  });
+  const copyTooth = encounterObjectiveCopy({
+    kind: "hunt", progress: 0.5, checkpoint: 1, carrierId: null, completed: false, mechanic: "tooth",
+  });
+  const copyIdle = encounterObjectiveCopy({
+    kind: "hunt", progress: 0.5, checkpoint: 1, carrierId: null, completed: false, mechanic: null,
+  });
+  check("trap copy says BREAK THE EXIT ANCHORS", !!copyAnchors && copyAnchors.includes("BREAK THE EXIT ANCHORS"));
+  check("WORLDSPLIT copy says BREAK THE TOOTH", !!copyTooth && copyTooth.includes("BREAK THE TOOTH"));
+  check("no break-target falls back to WORLDSPLIT brand", !!copyIdle && copyIdle.includes("WORLDSPLIT") && !copyIdle.includes("BREAK"));
+
+  // Live plant: exactly 2 intercept anchors, aux===0 (distinct from the aux===1 tooth), at
+  // clearly separate positions — never piled on each other or the boss body.
+  const w = createWorld(0xAEAD, 55, {});
+  loadFloorIntoWorld(w, 55);
+  const boss = w.enemies.find((e) => e.kind === "sever");
+  if (!boss || !w.encounter) { check("sever for anchor readability", false); return; }
+  const p = w.players.get(LOCAL_ID)!;
+  p.x = boss.x + 40; p.y = boss.y; p.invuln = 999;
+  boss.spawnTimer = 0;
+  step(w, 3);
+  const anchors = w.enemies.filter((e) => e.kind === "sever_anchor" && !e.dead);
+  check("CP0 plant yields 2 living anchors", anchors.length === 2, `n=${anchors.length}`);
+  check("intercept anchors ride aux===0 (tooth is aux===1)", anchors.length === 2 && anchors.every((a) => a.aux === 0));
+  if (anchors.length === 2) {
+    const [a0, a1] = anchors;
+    const sep = Math.hypot(a0.x - a1.x, a0.y - a1.y);
+    check("the two anchors are visibly separated (not piled)", sep > TILE, `sep=${sep.toFixed(1)}`);
+    check("neither anchor is colocated with the boss body",
+      Math.hypot(a0.x - boss.x, a0.y - boss.y) > TILE && Math.hypot(a1.x - boss.x, a1.y - boss.y) > TILE);
+  }
+}
+
 function noPreActivationAggro(): void {
   section("No pre-activation aggro / WORLDSPLIT");
   const w = createWorld(0x4055, 55, {});
@@ -413,6 +451,7 @@ fleeAcrossEdges();
 anchorsAndWindow();
 lateJoinCheckpoint();
 carrierHudPip();
+anchorReadability();
 noPreActivationAggro();
 
 process.stdout.write(`\n${passed} passed, ${failed} failed\n`);

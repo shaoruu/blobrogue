@@ -4225,7 +4225,21 @@ export class Game {
       checkpoint: enc.checkpoint,
       carrierId: enc.carrierPlayerId,
       completed: enc.completed,
+      mechanic: this.severBreakTarget(),
     };
+  }
+
+  // The live Sever break-target for the objective line, read straight off the authoritative
+  // enemies (never encounter flags, which stay sim-internal and off the wire): the WORLDSPLIT
+  // tooth (aux===1) out-ranks the intercept trap anchors (aux===0). null when nothing is up.
+  private severBreakTarget(): "anchors" | "tooth" | null {
+    let isAnchorLive = false;
+    for (const e of this.world.enemies) {
+      if (e.dead || e.kind !== "sever_anchor") continue;
+      if (e.aux === 1) return "tooth";
+      isAnchorLive = true;
+    }
+    return isAnchorLive ? "anchors" : null;
   }
 
   private partyHud(): HudState["party"] {
@@ -6613,6 +6627,11 @@ export class Game {
           ctx.restore();
         }
       }
+      // SEVER F55 mechanic bodies wear the Weaver placeholder sprite, so — like the giant
+      // seams above — the client paints the "shoot me" read the shared sheet can't. The
+      // intercept trap anchors (aux===0) get a steady amber resin marker + a BREAK label;
+      // the WORLDSPLIT tooth (aux===1) is deliberately LOUDER so it out-reads the anchors.
+      if (e.kind === "sever_anchor") this.renderSeverAnchor(e, sx, sy, drawSize, anim.clock);
       if (this.isDevHitRadiusVisible && isGiantKind(e.kind)) {
         ctx.save();
         ctx.globalAlpha = 0.95;
@@ -6665,9 +6684,14 @@ export class Game {
       // QUORUM husks share the core's pool (shown on the HUD boss bar + the tether), so their
       // own floating bar reads their BREAK INTEGRITY (aux) in amber — the "focus this husk" tell.
       const isHusk = e.kind === "quorum_shield" || e.kind === "quorum_heal" || e.kind === "quorum_dmg";
+      // A resin anchor / WORLDSPLIT tooth reads its progress in amber — the "break this" tell,
+      // matching its ground marker (and the WORLDSPLIT tooth burns a shade hotter than the anchors).
+      const isBreakTarget = e.kind === "sever_anchor";
       const barFrac = isHusk ? e.aux : Math.max(0, e.hp / e.maxHp);
       ctx.fillStyle = "#000"; ctx.fillRect(sx - barW / 2, barY, barW, 4);
-      ctx.fillStyle = isHusk ? "#c77320" : isBoss ? "#ffb43b" : "#ff5a5a";
+      ctx.fillStyle = isHusk ? "#c77320"
+        : isBreakTarget ? (e.aux === 1 ? "#ffd27a" : "#f2a63b")
+        : isBoss ? "#ffb43b" : "#ff5a5a";
       ctx.fillRect(sx - barW / 2, barY, barW * barFrac, 4);
     }
   }
@@ -7647,6 +7671,55 @@ export class Game {
     ctx.beginPath();
     ctx.ellipse(sx, gy, size * 0.6, size * 0.28, 0, 0, 6.28);
     ctx.stroke();
+    ctx.restore();
+  }
+
+  // SEVER's resin ANCHOR / WORLDSPLIT tooth read (both share the Weaver placeholder sprite,
+  // so the "shoot me to open the window" language is painted client-side off the wire). The
+  // intercept trap anchors (aux===0) get a steady amber resin marker; the WORLDSPLIT tooth
+  // (aux===1) is LOUDER — hotter, larger, faster, an extra halo ring — so it always out-reads
+  // the parallel intercept anchors. A floating BREAK label names the target while it is on camera.
+  private renderSeverAnchor(e: Enemy, sx: number, sy: number, size: number, clock: number) {
+    const { ctx } = this;
+    const isTooth = e.aux === 1;
+    const color = isTooth ? "#ffd27a" : "#f2a63b";
+    const gy = sy + size * 0.32;
+    const pulse = 0.5 + 0.5 * Math.sin(clock * (isTooth ? 9 : 5) + e.id);
+    // A resin marker wider than the small body — a bigger interaction silhouette to aim at.
+    const ringR = size * (isTooth ? 0.82 : 0.6);
+    this.fxLayer("glow_round", color, sx, gy, ringR * 2.2 * (0.9 + 0.2 * pulse), ringR * (0.9 + 0.2 * pulse), (isTooth ? 0.42 : 0.26) + 0.14 * pulse, 0);
+    ctx.save();
+    ctx.globalAlpha = (isTooth ? 0.85 : 0.6) + 0.15 * pulse;
+    ctx.strokeStyle = color;
+    ctx.lineWidth = isTooth ? 4 : 2.5;
+    ctx.setLineDash(isTooth ? AIM_SOLID : [6, 4]);
+    ctx.beginPath();
+    ctx.ellipse(sx, gy, ringR, ringR * 0.42, 0, 0, 6.28);
+    ctx.stroke();
+    // The louder tooth wears a second, wider halo ring the anchors never get.
+    if (isTooth) {
+      ctx.globalAlpha = 0.35 + 0.2 * pulse;
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.ellipse(sx, gy, ringR * 1.35, ringR * 0.56, 0, 0, 6.28);
+      ctx.stroke();
+    }
+    ctx.setLineDash(AIM_SOLID);
+    ctx.restore();
+    // Floating label — the same pixel voice as the arena squeeze's GET INSIDE tell.
+    const title = isTooth ? "TOOTH" : "ANCHOR";
+    const labelY = sy - size * 0.62;
+    ctx.save();
+    ctx.font = '10px "Press Start 2P", monospace';
+    ctx.textAlign = "center";
+    ctx.globalAlpha = 0.6 + 0.35 * pulse;
+    ctx.fillStyle = "#1a1206";
+    ctx.fillText(title, sx + 1, labelY + 1);
+    ctx.fillText("BREAK", sx + 1, labelY + 13);
+    ctx.fillStyle = color;
+    ctx.fillText(title, sx, labelY);
+    ctx.fillStyle = isTooth ? "#fff3c4" : "#ffd8a0";
+    ctx.fillText("BREAK", sx, labelY + 12);
     ctx.restore();
   }
 

@@ -60,7 +60,9 @@ export interface HudState {
   // "WAITING AT EXIT…"); null hides it.
   waitLabel: string | null;
   // Batch0 encounter HUD: progress/checkpoint/carrier (null = no encounter / arena boss bar wins).
-  encounter: { kind: string; progress: number; checkpoint: number; carrierId: string | null; completed: boolean } | null;
+  // `mechanic` is the live break-target read (Sever: which body to shoot right now), derived
+  // from the authoritative enemies on the wire — null when no mechanic body is up.
+  encounter: { kind: string; progress: number; checkpoint: number; carrierId: string | null; completed: boolean; mechanic?: "anchors" | "tooth" | null } | null;
   dashFill: number; // 0..1 dash-meter fill, 1 = ready
   // Kill-chain combo (per-local-player). combo 0 hides the widget entirely.
   combo: number;      // current chain length
@@ -182,7 +184,12 @@ export function encounterObjectiveCopy(enc: HudState["encounter"]): string | nul
   // Soft carrier pip: show a marker when a player holds intercept credit.
   if (enc.kind === "hunt") {
     const pip = enc.carrierId ? " \u25cf" : "";
-    return `WORLDSPLIT \u00b7 INTERCEPT ${pct}% \u00b7 CP ${enc.checkpoint}/2${pip}`;
+    // Lead with the ACTION when a break-target is live: the WORLDSPLIT tooth out-ranks the
+    // intercept anchors (it is the time-critical signature tell). Otherwise brand WORLDSPLIT.
+    const lead = enc.mechanic === "tooth" ? "BREAK THE TOOTH"
+      : enc.mechanic === "anchors" ? "BREAK THE EXIT ANCHORS"
+      : "WORLDSPLIT";
+    return `${lead} \u00b7 INTERCEPT ${pct}% \u00b7 CP ${enc.checkpoint}/2${pip}`;
   }  // Choirmaster F60 split: story name THE LAST NOTE on the objective lane.
   if (enc.kind === "split") {
     const pip = enc.carrierId ? " \u25cf" : "";
@@ -1643,9 +1650,15 @@ export class Hud {
       }
     } else {
       // The objective line ALWAYS leads with the floor (UI designer: "what floor am I on" is
-      // answered where the eye already goes). During a boss it reads FLOOR N (the boss bar owns
-      // the rest); the dev sandbox hides it. `what` is the state copy (enemy count / cleared).
-      let what = s.isObjectiveHidden ? "" : isBossActive ? "" : (encounterObjectiveCopy(s.encounter) ?? objectiveCopy(s.isCleared, s.enemiesLeft, s.isParty));
+      // answered where the eye already goes). During a boss the bar normally OWNS the lane
+      // (objective blanks) — EXCEPT Sever's hunt, whose whole fight is "shoot the anchors/tooth
+      // to earn the window": that action line must always read, so it keeps the lane (the slot's
+      // reserved min-height means showing it under the bar shifts nothing). The dev sandbox hides
+      // it. `what` is the state copy (enemy count / cleared).
+      const isHuntBoss = isBossActive && s.encounter?.kind === "hunt";
+      let what = s.isObjectiveHidden ? ""
+        : isBossActive ? (isHuntBoss ? (encounterObjectiveCopy(s.encounter) ?? "") : "")
+        : (encounterObjectiveCopy(s.encounter) ?? objectiveCopy(s.isCleared, s.enemiesLeft, s.isParty));
       // The cleared copy starts with "FLOOR CLEAR ..." which would double the FLOOR N lead token;
       // drop that leading word so it reads "FLOOR N · CLEAR · GO DOWN".
       if (what.startsWith("FLOOR ")) what = what.slice("FLOOR ".length);

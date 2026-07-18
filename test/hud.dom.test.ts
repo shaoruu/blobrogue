@@ -735,6 +735,22 @@ function hierarchyTests(): void {
     root.querySelector("[data-bossbar]")!.classList.contains("show") && objective.textContent === "FLOOR 2");
   check("the lane marks boss so the combo yields at 70%", lane.classList.contains("boss"));
 
+  section("Sever hunt: the break-target action keeps the objective lane under the boss bar");
+  hud.update(mkState({ floor: 55, isBossActive: true, bossHpFrac: 0.9, bossName: "Sever",
+    encounter: { kind: "hunt", progress: 0.1, checkpoint: 0, carrierId: null, completed: false, mechanic: "anchors" } }));
+  check("trap phase names the anchors under the boss bar",
+    root.querySelector("[data-bossbar]")!.classList.contains("show")
+    && /BREAK THE EXIT ANCHORS/.test(objective.textContent ?? "")
+    && objective.classList.contains("show"), objective.textContent ?? "");
+  hud.update(mkState({ floor: 55, isBossActive: true, bossHpFrac: 0.6, bossName: "Sever",
+    encounter: { kind: "hunt", progress: 0.5, checkpoint: 1, carrierId: null, completed: false, mechanic: "tooth" } }));
+  check("WORLDSPLIT phase names the tooth under the boss bar",
+    /BREAK THE TOOTH/.test(objective.textContent ?? ""), objective.textContent ?? "");
+  hud.update(mkState({ floor: 70, isBossActive: true, bossHpFrac: 0.7, bossName: "The Claimant",
+    encounter: { kind: "arena", progress: 0.3, checkpoint: 0, carrierId: null, completed: false } }));
+  check("a non-hunt (arena) boss still yields the whole lane to the bar (objective is just the floor)",
+    objective.textContent === "FLOOR 70", objective.textContent ?? "");
+
   section("boss bar label: the tracked boss's authored name (flavor-spec canon)");
   const bossLabel = root.querySelector<HTMLElement>("[data-bossname]")!;
   const rosterNames = {

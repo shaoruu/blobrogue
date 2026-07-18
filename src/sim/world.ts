@@ -11953,18 +11953,30 @@ function severPlantAnchors(w: WorldState, e: Enemy, ev: SimEvent[]): void {
   if (!room) return;
   const exits = neighbors(w.dungeon, enc.currentRoomId).slice(0, SEVER.anchorsPerCheckpoint);
   const hp = severAnchorHpForFloor(w.floor);
+  const cxCenter = room.cx * TILE + TILE / 2;
+  const cyCenter = room.cy * TILE + TILE / 2;
+  const r = ENEMY_ARCHETYPES.sever_anchor.radius;
   for (let i = 0; i < SEVER.anchorsPerCheckpoint; i++) {
+    // Preferred site: on a checkpoint-room exit door (the "trap both exits" read).
     let x = (room.cx + (i === 0 ? -2 : 2)) * TILE + TILE / 2;
-    let y = room.cy * TILE + TILE / 2;
+    let y = cyCenter;
     if (exits[i]) {
       const edge = exits[i];
       const door = edge.a === enc.currentRoomId ? edge.doorA : edge.doorB;
       x = door.x * TILE + TILE / 2;
       y = door.y * TILE + TILE / 2;
     }
-    if (!settleSpawnPoint(w, x, y, ENEMY_ARCHETYPES.sever_anchor.radius)) {
-      x = room.cx * TILE + TILE / 2 + (i === 0 ? -40 : 40);
-      y = room.cy * TILE + TILE / 2;
+    if (settleSpawnPoint(w, x, y, r)) {
+      x = settlePoint.x; y = settlePoint.y;
+    } else {
+      // No exit / a blocked door mouth: fan the anchors out on OPPOSITE sides of the room
+      // center rather than piling them on top of each other (and the boss). Each is still
+      // settled onto valid floor, so both stay reachable, living, and visibly distinct.
+      const ang = Math.PI / 4 + (Math.PI * 2 * i) / SEVER.anchorsPerCheckpoint;
+      const fx = cxCenter + Math.cos(ang) * TILE * 2.5;
+      const fy = cyCenter + Math.sin(ang) * TILE * 2.5;
+      if (settleSpawnPoint(w, fx, fy, r)) { x = settlePoint.x; y = settlePoint.y; }
+      else { x = fx; y = fy; }
     }
     const anchor = createEnemy("sever_anchor", x, y, w.floor, w.rng, w.nextEnemyId++, { isSummoned: true });
     anchor.hp = anchor.maxHp = hp;
