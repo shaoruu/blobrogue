@@ -91,7 +91,9 @@ export const PVP = {
     sawnoff: 0.45, // Boomstick (worst offender)
     flamer: 0.45,  // Dragon (players take no burn DoT — direct pellets only)
     burst: 0.72,   // Triplet
-    spear: 0.85,   // Pike
+    sword: 0.47,   // Cutlass
+    longsword: 0.52, // Claymore
+    spear: 0.48,   // Pike
     beam: 0.85,    // Sunlance
   } as Partial<Record<WeaponId, number>>,
   // Anti-one-shot backstop: no single tick may remove more than this fraction of maxHp from a

@@ -159,7 +159,7 @@ section("damage model (balancer numbers)");
   check("pistol hit = base*dmgMult", Math.abs(pvpHitDamage("pistol", WEAPONS.pistol.damage) - WEAPONS.pistol.damage * PVP.dmgMult) < 1e-9);
   // outliers stack ON TOP of the global scalar.
   check("sawnoff outlier 0.45 stacks on the scalar", Math.abs(pvpHitDamage("sawnoff", WEAPONS.sawnoff.damage) - WEAPONS.sawnoff.damage * PVP.dmgMult * 0.45) < 1e-9);
-  check("spear outlier 0.85 stacks on the scalar", Math.abs(pvpHitDamage("spear", WEAPONS.spear.damage) - WEAPONS.spear.damage * PVP.dmgMult * 0.85) < 1e-9);
+  check("spear outlier 0.48 stacks on the scalar", Math.abs(pvpHitDamage("spear", WEAPONS.spear.damage) - WEAPONS.spear.damage * PVP.dmgMult * 0.48) < 1e-9);
   // Frag limit scales with the match-start player count: clamp(round(6+count), 8, 16).
   check("fragLimit scales 2->8,3->9,4->10,5->11,6->12", pvpFragLimit(2) === 8 && pvpFragLimit(3) === 9 && pvpFragLimit(4) === 10 && pvpFragLimit(5) === 11 && pvpFragLimit(6) === 12);
   check("fragLimit clamps to [8,16]", pvpFragLimit(1) === 8 && pvpFragLimit(20) === 16);
@@ -1167,7 +1167,7 @@ section("PER-WEAPON TTK band (1v1 median 3-5s across the arsenal)");
 {
   // Expected 1v1 TTK from the shipped model: pellets * per-pellet pvp damage / trigger, clamped
   // by the per-hit cap, against the fixed HP pool. This is the balancer ship-gate.
-  const gateWeapons = ["pistol", "smg", "cannon", "railgun", "rapid", "sawnoff", "flamer", "burst", "spear", "beam"] as const;
+  const gateWeapons = ["pistol", "smg", "cannon", "railgun", "rapid", "sawnoff", "flamer", "burst", "sword", "longsword", "spear", "beam"] as const;
   for (const id of gateWeapons) {
     const wep = WEAPONS[id];
     const perTrigger = Math.min(pvpPerHitCap(), wep.pellets * pvpHitDamage(id, wep.damage));
