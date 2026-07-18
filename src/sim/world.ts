@@ -376,6 +376,7 @@ export interface PlayerSim {
   sideChannelAimClock: number;
   sideChannelAimSamples: SideChannelAimSample[];
   sideChannelArmedAim: number | null;
+  sideChannelArmedT: number;
   sideChannelIcdT: number;
   // ---- Content Wave C server-owned transient combat state (never on the reconcile wire;
   // all sub-10s, rebuilt from live inputs after a resume) ----
@@ -871,7 +872,8 @@ export function createPlayer(id: PlayerId, x: number, y: number): PlayerSim {
     staggerPulseIcdT: 0, staggerPulseAppliedTick: -1,
     bladeWardT: 0, bladeWardAbsorb: 0, bladeWardAppliedTick: -1,
     isMomentumArmed: false, momentumIcdT: 0, momentumMoveSamples: [],
-    sideChannelAimClock: 0, sideChannelAimSamples: [], sideChannelArmedAim: null, sideChannelIcdT: 0,
+    sideChannelAimClock: 0, sideChannelAimSamples: [], sideChannelArmedAim: null,
+    sideChannelArmedT: 0, sideChannelIcdT: 0,
     hushStacks: 0, hushStillT: 0, hushStackT: 0, hushVentT: 0,
     backtalkHoldT: 0, backtalkWindowT: 0, backtalkCd: 0, backtalkReturnT: 0,
     backtalkCaughtDmg: 0, backtalkLock: 0, lampPatches: [],
@@ -5239,6 +5241,7 @@ function resetSideChannelState(p: PlayerSim, aim?: number): void {
   p.sideChannelAimClock = 0;
   p.sideChannelAimSamples = aim === undefined ? [] : [{ aim, time: 0 }];
   p.sideChannelArmedAim = null;
+  p.sideChannelArmedT = 0;
   p.sideChannelIcdT = 0;
 }
 
@@ -5248,9 +5251,16 @@ function trackSideChannelAim(w: WorldState, p: PlayerSim, aim: number, dt: numbe
     return;
   }
   p.sideChannelIcdT = p.sideChannelIcdT > dt ? p.sideChannelIcdT - dt : 0;
+  if (p.sideChannelArmedAim !== null) {
+    p.sideChannelArmedT = p.sideChannelArmedT > dt ? p.sideChannelArmedT - dt : 0;
+    if (p.sideChannelArmedT === 0) p.sideChannelArmedAim = null;
+  } else {
+    p.sideChannelArmedT = 0;
+  }
   p.sideChannelAimClock += dt;
   if (!isSideChannelProjectileWeapon(p.weapon) || p.sideChannelIcdT > 0) {
     p.sideChannelArmedAim = null;
+    p.sideChannelArmedT = 0;
     p.sideChannelAimSamples = [{ aim, time: p.sideChannelAimClock }];
     return;
   }
@@ -5268,7 +5278,10 @@ function trackSideChannelAim(w: WorldState, p: PlayerSim, aim: number, dt: numbe
         break;
       }
     }
-    if (prior !== undefined) p.sideChannelArmedAim = prior.aim;
+    if (prior !== undefined) {
+      p.sideChannelArmedAim = prior.aim;
+      p.sideChannelArmedT = p.mods.sideChannelArmedWindow;
+    }
     p.sideChannelAimSamples.push({ aim, time: p.sideChannelAimClock });
     if (p.sideChannelAimSamples.length > 64) p.sideChannelAimSamples.shift();
   } else if (last !== undefined) {
@@ -5279,6 +5292,7 @@ function trackSideChannelAim(w: WorldState, p: PlayerSim, aim: number, dt: numbe
 function armSideChannelFromDash(w: WorldState, p: PlayerSim, previousAim: number): void {
   if (!hasActiveSideChannel(w, p) || p.sideChannelIcdT > 0) return;
   p.sideChannelArmedAim = previousAim;
+  p.sideChannelArmedT = p.mods.sideChannelArmedWindow;
 }
 
 function spawnSideChannelGhost(
@@ -5291,6 +5305,7 @@ function spawnSideChannelGhost(
   if (parent === undefined
     || parent.isSideChannelGhost === true
     || aim === null
+    || p.sideChannelArmedT <= 0
     || p.sideChannelIcdT > 0
     || !hasActiveSideChannel(w, p)) return;
   const normalDamageMult = p.mods.sideChannelNormalDamageMult;
@@ -5329,7 +5344,8 @@ function spawnSideChannelGhost(
   };
   w.bullets.push(ghost);
   p.sideChannelArmedAim = null;
-  p.sideChannelIcdT = SIDE_CHANNEL.icd;
+  p.sideChannelArmedT = 0;
+  p.sideChannelIcdT = p.mods.sideChannelIcd;
   ev.push({ t: "blessingProc", pid: p.id, item: "side_channel", phase: "ghost", x, y });
 }
 

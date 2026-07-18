@@ -47,6 +47,8 @@ export interface PlayerMods {
   selfKnockbackMult: number;
   sideChannelNormalDamageMult: number;
   sideChannelBossDamageMult: number;
+  sideChannelArmedWindow: number;
+  sideChannelIcd: number;
   reclaimedBounceDamage: number;
   muddyDashRefund: number;
   comboWindowBonus: number;
@@ -109,6 +111,8 @@ export function createMods(): PlayerMods {
     selfKnockbackMult: 1,
     sideChannelNormalDamageMult: 0,
     sideChannelBossDamageMult: 0,
+    sideChannelArmedWindow: 0,
+    sideChannelIcd: 0,
     reclaimedBounceDamage: 0,
     muddyDashRefund: 0,
     comboWindowBonus: 0,
@@ -220,9 +224,9 @@ export const ITEMS: readonly ItemDef[] = [
   {
     id: "side_channel", name: "Side Channel",
     descs: [
-      "After a dash or hard aim flick, your next projectile shot fires a plain ghost along your previous aim at 30% damage. Boss damage is also 30%. 1.2s cooldown.",
-      "After a dash or hard aim flick, your next projectile shot fires a plain ghost along your previous aim at 45% damage, or 30% against bosses. 1.2s cooldown.",
-      "After a dash or hard aim flick, your next projectile shot fires a plain ghost along your previous aim at 55% damage, or 30% against bosses. 1.2s cooldown.",
+      "A dash or hard aim flick arms your previous aim for 2 seconds. Your next projectile shot fires one plain ghost at 55% damage, or 30% against bosses. 1.2s cooldown.",
+      "A dash or hard aim flick arms your previous aim for 2.3 seconds. Your next projectile shot fires one plain ghost at 65% damage, or 34% against bosses. 1.05s cooldown.",
+      "A dash or hard aim flick arms your previous aim for 2.6 seconds. Your next projectile shot fires one plain ghost at 75% damage, or 38% against bosses. 0.9s cooldown.",
     ],
     glyph: "/", tint: "#5ab6ff", rarity: "uncommon",
     apply: (m, l) => {
@@ -233,6 +237,14 @@ export const ITEMS: readonly ItemDef[] = [
       m.sideChannelBossDamageMult = Math.max(
         m.sideChannelBossDamageMult,
         lv(SIDE_CHANNEL.bossDamageByLevel, l),
+      );
+      m.sideChannelArmedWindow = Math.max(
+        m.sideChannelArmedWindow,
+        lv(SIDE_CHANNEL.armedWindowByLevel, l),
+      );
+      m.sideChannelIcd = Math.max(
+        m.sideChannelIcd,
+        lv(SIDE_CHANNEL.icdByLevel, l),
       );
     },
   },

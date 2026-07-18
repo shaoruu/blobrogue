@@ -2532,11 +2532,10 @@ export const BOSS_VULN_CAP = 1.35;           // the crit channel's cap vs boss-g
 export const BOSS_NATIVE_PELLET_COEF = 0.75; // native pellets beyond the first
 export const BOSS_EXTRA_PELLET_COEF = 0;     // added pellets: room tools, zero vs bosses
 export const SIDE_CHANNEL = {
-  normalDamageMult: 0.55,
-  bossDamageMult: 0.30,
-  normalDamageByLevel: [0.30, 0.45, 0.55] as const,
-  bossDamageByLevel: [0.30, 0.30, 0.30] as const,
-  icd: 1.2,
+  normalDamageByLevel: [0.55, 0.65, 0.75] as const,
+  bossDamageByLevel: [0.30, 0.34, 0.38] as const,
+  armedWindowByLevel: [2.0, 2.3, 2.6] as const,
+  icdByLevel: [1.20, 1.05, 0.90] as const,
   aimWindow: 0.40,
   aimDelta: Math.PI / 2,
   meaningfulAimDelta: 0.01,

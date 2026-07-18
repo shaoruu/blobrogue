@@ -15,7 +15,7 @@ import type { InputCmd, PlayerId } from "../src/sim/input.js";
 import { LOCAL_ID } from "../src/sim/input.js";
 import type { Bullet, EnemyKind, WeaponId } from "../src/sim/types.js";
 import {
-  BOSS_EXTRA_PELLET_COEF, BOSS_NATIVE_PELLET_COEF, SIDE_CHANNEL, WEAPON_BOSS_COEF, BOSS_VULN_CAP,
+  BOSS_EXTRA_PELLET_COEF, BOSS_NATIVE_PELLET_COEF, WEAPON_BOSS_COEF, BOSS_VULN_CAP,
 } from "../src/sim/balance.js";
 import {
   itemById, createMods, recomputeMods, normalItemsForCatalog, rollItemChoicesWith,
@@ -254,8 +254,9 @@ export function practicalBossDps(
   const perProjectile = wep.damage * coinFed * mods.damageMult * wepCoef * vuln;
   const primaryDps = perProjectile * effPellets * rate * accuracy;
   const hasSideChannel = isSideChannelProjectileWeapon(id)
-    && mods.sideChannelBossDamageMult > 0;
-  const ghostRate = hasSideChannel ? Math.min(rate, 1 / SIDE_CHANNEL.icd) : 0;
+    && mods.sideChannelBossDamageMult > 0
+    && mods.sideChannelIcd > 0;
+  const ghostRate = hasSideChannel ? Math.min(rate, 1 / mods.sideChannelIcd) : 0;
   const ghostDps = wep.damage * coinFed * mods.damageMult * wepCoef
     * mods.sideChannelBossDamageMult * ghostRate * accuracy;
   return primaryDps + ghostDps + burnDot;

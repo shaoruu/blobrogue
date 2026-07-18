@@ -12,7 +12,7 @@ import type { WeaponId, WeaponRarity } from "./types.js";
 import type { PlayerMods } from "./items.js";
 import {
   CAPS, POWER, BOSS_VULN_CAP, BOSS_NATIVE_PELLET_COEF, BOSS_EXTRA_PELLET_COEF,
-  SIDE_CHANNEL, WEAPON_BOSS_COEF,
+  WEAPON_BOSS_COEF,
 } from "./balance.js";
 import { MIN_MULTI_SPREAD, FIRE_KNOCKBACK } from "./constants.js";
 import { MOMENTUM, OVERHEAT } from "./kits.js";
@@ -294,8 +294,9 @@ export function expectedBossDps(
   const perProjectile = w.damage * mods.damageMult * wepCoef * vuln;
   const primaryDps = perProjectile * effPellets * rate * POWER.practicalFactor;
   const hasSideChannel = isSideChannelProjectileWeapon(id)
-    && mods.sideChannelBossDamageMult > 0;
-  const ghostRate = hasSideChannel ? Math.min(rate, 1 / SIDE_CHANNEL.icd) : 0;
+    && mods.sideChannelBossDamageMult > 0
+    && mods.sideChannelIcd > 0;
+  const ghostRate = hasSideChannel ? Math.min(rate, 1 / mods.sideChannelIcd) : 0;
   const ghostDps = w.damage * mods.damageMult * wepCoef
     * mods.sideChannelBossDamageMult * ghostRate * POWER.practicalFactor;
   return primaryDps + ghostDps + burnDot;
