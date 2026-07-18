@@ -993,6 +993,8 @@ export class Game {
   private meleeTrailIntensity = 1;
   private meleeImpactWeapon: WeaponId | null = null;
   private meleeImpactUntil = 0;
+  private meleeImpactAim = 0;
+  private meleeImpactPuffDist = 0;
   private footstepCd = 0;        // spacing timer for run-dust kicks
   private hurtDir: number | null = null; // world angle toward the last damage source (screen-edge hint)
   // Previous-frame player position -> velocity for the reactive ambience layer.
@@ -1373,6 +1375,8 @@ export class Game {
     this.kickX = 0; this.kickY = 0;
     this.meleeImpactWeapon = null;
     this.meleeImpactUntil = 0;
+    this.meleeImpactAim = 0;
+    this.meleeImpactPuffDist = 0;
     this.hurtFlash = 0;
     this.isPaused = false;
     this.isChoosing = false;
@@ -2465,10 +2469,6 @@ export class Game {
     this.burstTrauma = 0;
     this.burstKick = 0;
     this.burstKickDir = 0;
-    this.meleeShockwaveX = 0;
-    this.meleeShockwaveY = 0;
-    this.meleeShockwaveCount = 0;
-    this.meleeShockwaveScale = 1;
     for (const e of events) this.handleSimEvent(e);
     // The explosion/kill burst coalesces its hitstop + shake into ONE apply per frame. The
     // per-event calls all clamp anyway (freeze -> max, trauma -> sum capped at 1), so this is
@@ -2480,22 +2480,6 @@ export class Game {
       this.kickX += Math.cos(this.burstKickDir) * kick;
       this.kickY += Math.sin(this.burstKickDir) * kick;
     }
-    if (this.meleeShockwaveCount > 0) {
-      const flash = settings.flashFactor;
-      if (flash > 0) {
-        const scale = this.meleeShockwaveScale;
-        this.shockwaves.spawn(
-          this.meleeShockwaveX / this.meleeShockwaveCount,
-          this.meleeShockwaveY / this.meleeShockwaveCount,
-          10,
-          54 + 26 * scale,
-          0.26 + 0.06 * scale,
-          this.meleeShockwaveColor,
-          (3.5 + 1.5 * scale) * flash,
-          (0.65 + 0.35 * scale) * flash,
-        );
-      }
-    }
   }
 
   // Coalesce heavy FX bursts: as more explosions/kills land in one frame, scale per-event
@@ -2504,6 +2488,28 @@ export class Game {
   private burstScale(): number {
     const n = this.fxBurstCount++;
     return n < FX_BURST_FULL ? 1 : n < FX_BURST_HALF ? 0.5 : 0.25;
+  }
+
+  private flushMeleeShockwave() {
+    if (this.meleeShockwaveCount === 0) return;
+    const flash = settings.flashFactor;
+    if (flash > 0) {
+      const scale = this.meleeShockwaveScale;
+      this.shockwaves.spawn(
+        this.meleeShockwaveX / this.meleeShockwaveCount,
+        this.meleeShockwaveY / this.meleeShockwaveCount,
+        10,
+        54 + 26 * scale,
+        0.26 + 0.06 * scale,
+        this.meleeShockwaveColor,
+        (3.5 + 1.5 * scale) * flash,
+        (0.65 + 0.35 * scale) * flash,
+      );
+    }
+    this.meleeShockwaveX = 0;
+    this.meleeShockwaveY = 0;
+    this.meleeShockwaveCount = 0;
+    this.meleeShockwaveScale = 1;
   }
 
   private handleSimEvent(e: SimEvent) {
@@ -2597,6 +2603,8 @@ export class Game {
         this.meleeTrailIntensity = (feel?.trailIntensity ?? 1) * (1 + comboBuild * 0.45);
         this.meleeImpactWeapon = m ? e.weapon : null;
         this.meleeImpactUntil = this.animClock + (m?.swingDur ?? 0.2) + 0.1;
+        this.meleeImpactAim = e.aim;
+        this.meleeImpactPuffDist = m ? m.reach * (m.isThrust ? 0.65 : 0.55) : 0;
         triggerRecoil(this.playerAnim, FIRE_RECOIL[e.weapon] * settings.effectiveRecoil);
         if (m) this.spawnSlashWind(e.x, e.y, e.aim, m, w.color);
         if (feel) sfx(feel.swingSfx, { rate: feel.swingRate, gain: feel.swingGain });
@@ -3343,12 +3351,20 @@ export class Game {
   private replayMeleeImpact(eid: number, hitX: number, hitY: number, isCrit: boolean) {
     let isLocalBladeHit = false;
     const localHits = this.meleeSwing?.hitList;
-    if (this.animClock <= this.meleeImpactUntil && localHits) {
-      for (const enemy of localHits) {
-        if (typeof enemy !== "number" && enemy.id === eid) {
-          isLocalBladeHit = true;
-          break;
+    if (this.animClock <= this.meleeImpactUntil) {
+      if (localHits) {
+        for (const enemy of localHits) {
+          if (typeof enemy !== "number" && enemy.id === eid) {
+            isLocalBladeHit = true;
+            break;
+          }
         }
+      } else {
+        const expectedX = this.px + Math.cos(this.meleeImpactAim) * this.meleeImpactPuffDist;
+        const expectedY = this.py + Math.sin(this.meleeImpactAim) * this.meleeImpactPuffDist;
+        const dx = hitX - expectedX;
+        const dy = hitY - expectedY;
+        isLocalBladeHit = dx * dx + dy * dy <= 24 * 24;
       }
     }
     const weapon = isLocalBladeHit ? this.meleeImpactWeapon : null;
@@ -3366,10 +3382,13 @@ export class Game {
       this.burstKickDir = dir;
     }
     if (feel?.isHeavy && this.isNearCamera(hitX, hitY)) {
+      const frameBurst = this.meleeShockwaveCount < FX_BURST_FULL
+        ? 1
+        : this.meleeShockwaveCount < FX_BURST_HALF ? 0.5 : 0.25;
       this.meleeShockwaveX += hitX;
       this.meleeShockwaveY += hitY;
       this.meleeShockwaveCount++;
-      this.meleeShockwaveScale = Math.min(this.meleeShockwaveScale, this.burstScale());
+      this.meleeShockwaveScale = Math.min(this.meleeShockwaveScale, this.burstScale(), frameBurst);
       this.meleeShockwaveColor = bladeColor;
     }
     const target = this.enemies.find((en) => en.id === eid);
@@ -4928,6 +4947,7 @@ export class Game {
   private render() {
     const { ctx, canvas } = this;
     if (this.isAwaitingOnlineWorld()) { this.renderConnectingVeil(); return; }
+    this.flushMeleeShockwave();
     // Sample the camera on the render clock ONCE for the whole frame: the sim-rate `cam`
     // interpolated between its last two steps by the same alpha the player body uses. Every
     // world-space pass below (tiles, props, pickups, hazards, enemies, fx, player) subtracts
