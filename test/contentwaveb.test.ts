@@ -129,7 +129,7 @@ section("catalog v2, typed hooks, and additive migration");
     check(`${id} is a three-level normal blessing`,
       item !== undefined && item.isPremiumOnly !== true && item.descs.length === 3);
   }
-  check("Wave B remains a valid additive catalog (Wave C is now current)",
+  check("Wave B remains a valid additive catalog",
     CURRENT_CONTENT_CATALOG_VERSION === WAVE_C_CONTENT_CATALOG_VERSION
     && contentCatalogFor(WAVE_B_CONTENT_CATALOG_VERSION).pickupWeapons.length === 45
     && contentCatalogFor(WAVE_B_CONTENT_CATALOG_VERSION).normalBlessingIds.length === 40);

@@ -48,6 +48,11 @@ export const STACK_CATEGORY: Readonly<Record<string, string>> = {
   backtalk: "parry_active",
   lamplighter: "light_edit",
   faultlink: "link",
+  stagger_pulse: "melee_stagger",
+  blade_ward: "melee_ward",
+  cleave_crit: "melee_cleave",
+  momentum_charge: "melee_momentum",
+  finisher: "melee_execute",
 };
 
 export function stackCategoryOf(id: string): string | undefined {

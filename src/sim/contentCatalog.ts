@@ -58,9 +58,10 @@ const WAVE_B_NORMAL_BLESSING_IDS: readonly string[] = [
   "crosscurrent", "last_warm_round", "known_by_touch", "remember_me", "carry_the_light",
 ];
 
-// Wave C is a guns-only wave (+4 pickup weapons); it adds NO new blessings, so the normal
-// blessing pool is identical to Wave B's (program mix stays 8 identity / 2 support).
-const WAVE_C_NORMAL_BLESSING_IDS: readonly string[] = WAVE_B_NORMAL_BLESSING_IDS;
+const WAVE_C_NORMAL_BLESSING_IDS: readonly string[] = [
+  ...WAVE_B_NORMAL_BLESSING_IDS,
+  "stagger_pulse", "blade_ward", "cleave_crit", "momentum_charge", "finisher",
+];
 
 export const CONTENT_CATALOGS: Readonly<Record<ContentCatalogVersion, ContentCatalog>> = {
   0: {

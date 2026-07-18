@@ -67,6 +67,15 @@ export interface PlayerMods {
   lightRadius: number;          // the aura radius (allies +move, downed slower bleed)
   lightFreeMag: number;         // 1 (Lv3) = reviver's fireCd zeroed on revive complete
   lightSoloDashRestore: number; // solo: fraction of max weapon fireCd restored on dash
+  staggerPulseRadius: number;
+  staggerPulseSlowMult: number;
+  bladeWardAbsorb: number;
+  bladeWardWindow: number;
+  cleaveCritArcMult: number;
+  cleaveCritReachMult: number;
+  momentumDamageBonus: number;
+  finisherThreshold: number;
+  finisherEliteThreshold: number;
 }
 
 export function createMods(): PlayerMods {
@@ -117,6 +126,15 @@ export function createMods(): PlayerMods {
     lightRadius: 0,
     lightFreeMag: 0,
     lightSoloDashRestore: 0,
+    staggerPulseRadius: 0,
+    staggerPulseSlowMult: 1,
+    bladeWardAbsorb: 0,
+    bladeWardWindow: 0,
+    cleaveCritArcMult: 1,
+    cleaveCritReachMult: 1,
+    momentumDamageBonus: 0,
+    finisherThreshold: 0,
+    finisherEliteThreshold: 0,
   };
 }
 
@@ -503,6 +521,70 @@ export const ITEMS: readonly ItemDef[] = [
       m.lightRadius = Math.max(m.lightRadius, lv([70, 100, 130], l));
       m.lightFreeMag = Math.max(m.lightFreeMag, lv([0, 0, 1], l));
       m.lightSoloDashRestore = Math.max(m.lightSoloDashRestore, lv([0.08, 0.12, 0.16], l));
+    },
+  },
+  {
+    id: "stagger_pulse", name: "STAGGER PULSE",
+    descs: [
+      "Melee hits pulse through nearby enemies, knocking them back and slowing them to 72% for 0.4s.",
+      "The pulse reaches farther and slows nearby enemies to 68% for 0.4s.",
+      "The pulse reaches farthest and slows nearby enemies to 64% for 0.4s.",
+    ],
+    glyph: "O", tint: "#9fd8ff", rarity: "uncommon",
+    apply: (m, l) => {
+      m.staggerPulseRadius = Math.max(m.staggerPulseRadius, lv([60, 68, 76], l));
+      m.staggerPulseSlowMult = Math.min(m.staggerPulseSlowMult, lv([0.72, 0.68, 0.64], l));
+    },
+  },
+  {
+    id: "blade_ward", name: "BLADE WARD",
+    descs: [
+      "Melee hits grant a 4-damage absorb shield for 1.5s; another hit refreshes it.",
+      "Melee hits grant a 6-damage absorb shield for 1.8s; another hit refreshes it.",
+      "Melee hits grant an 8-damage absorb shield for 2.1s; another hit refreshes it.",
+    ],
+    glyph: ")", tint: "#b9c4d6", rarity: "rare",
+    apply: (m, l) => {
+      m.bladeWardAbsorb = Math.max(m.bladeWardAbsorb, lv([4, 6, 8], l));
+      m.bladeWardWindow = Math.max(m.bladeWardWindow, lv([1.5, 1.8, 2.1], l));
+    },
+  },
+  {
+    id: "cleave_crit", name: "CLEAVE CRIT",
+    descs: [
+      "Critical swings are 40% wider and reach 15% farther.",
+      "Critical swings are 50% wider and reach 15% farther.",
+      "Critical swings are 60% wider and reach 15% farther.",
+    ],
+    glyph: "/", tint: "#fff3c4", rarity: "rare",
+    apply: (m, l) => {
+      m.cleaveCritArcMult = Math.max(m.cleaveCritArcMult, lv([1.4, 1.5, 1.6], l));
+      m.cleaveCritReachMult = Math.max(m.cleaveCritReachMult, 1.15);
+    },
+  },
+  {
+    id: "momentum_charge", name: "MOMENTUM CHARGE",
+    descs: [
+      "Dash or move far within 1s to charge your next melee hit for +40% damage and 1.5x knockback. 2.5s cooldown.",
+      "Dash or move far within 1s to charge your next melee hit for +55% damage and 1.5x knockback. 2.5s cooldown.",
+      "Dash or move far within 1s to charge your next melee hit for +70% damage and 1.5x knockback. 2.5s cooldown.",
+    ],
+    glyph: ">", tint: "#ffb06a", rarity: "rare",
+    apply: (m, l) => {
+      m.momentumDamageBonus = Math.max(m.momentumDamageBonus, lv([0.40, 0.55, 0.70], l));
+    },
+  },
+  {
+    id: "finisher", name: "FINISHER",
+    descs: [
+      "Melee hits execute non-boss enemies at 15% health or lower. Elites are immune.",
+      "Melee hits execute non-boss enemies at 20% health or lower. Elites are immune.",
+      "Melee hits execute non-boss enemies, including elites, at 25% health or lower.",
+    ],
+    glyph: "X", tint: "#ff5a5a", rarity: "rare",
+    apply: (m, l) => {
+      m.finisherThreshold = Math.max(m.finisherThreshold, lv([0.15, 0.20, 0.25], l));
+      m.finisherEliteThreshold = Math.max(m.finisherEliteThreshold, lv([0, 0, 0.25], l));
     },
   },
   // ---- the premium CORE INFUSIONS (shop stock only — never in a blessing offer) ----
