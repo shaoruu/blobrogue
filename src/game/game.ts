@@ -80,7 +80,7 @@ import type { SfxName, SfxOptions } from "./audio.js";
 import { waveAudio } from "./waveAudio.js";
 import type { WaveFramePlayer } from "./waveAudio.js";
 import {
-  BLESSING_PROC_AUDIO, EXPEDITION_BAND_ENTRY_EVENT, ODDSMAKER_OUTCOME_AUDIO,
+  blessingProcCue, EXPEDITION_BAND_ENTRY_EVENT, ODDSMAKER_OUTCOME_AUDIO,
   WAVE_HAZARDS, WEAPON_AUDIO, STATUS_AUDIO,
 } from "./waveSpec.js";
 import { pvpKillCue, pvpMatchOverCue, pvpFragStreakRate, pvpCountTickRate } from "./waveSpec.js";
@@ -2617,8 +2617,13 @@ export class Game {
           if (m && isVisible) this.spawnSlashWind(e.x, e.y, e.aim, m, w.color);
           const entry = this.remoteAnims.get(e.pid);
           if (entry) triggerRecoil(entry.anim);
-          if (feel) this.sfxAt(feel.swingSfx, e.x, e.y, { rate: feel.swingRate, gain: feel.swingGain * 0.4 });
-          else this.sfxAt(SHOOT_SFX[e.weapon], e.x, e.y, { gain: 0.4 });
+          if (feel) {
+            if (!waveAudio.playMeleeSwing(e.weapon, { x: e.x, y: e.y, gain: 0.4 })) {
+              this.sfxAt(feel.swingSfx, e.x, e.y, { rate: feel.swingRate, gain: feel.swingGain * 0.4 });
+            }
+          } else {
+            this.sfxAt(SHOOT_SFX[e.weapon], e.x, e.y, { gain: 0.4 });
+          }
           if (isVisible) this.spawnParticles(e.bx + Math.cos(e.aim) * 14, e.by + Math.sin(e.aim) * 14, 4, w.color);
           break;
         }
@@ -2634,8 +2639,13 @@ export class Game {
         this.meleeImpactPuffDist = m ? m.reach * (m.isThrust ? 0.65 : 0.55) : 0;
         triggerRecoil(this.playerAnim, FIRE_RECOIL[e.weapon] * settings.effectiveRecoil);
         if (m) this.spawnSlashWind(e.x, e.y, e.aim, m, w.color);
-        if (feel) sfx(feel.swingSfx, { rate: feel.swingRate, gain: feel.swingGain });
-        else sfx(SHOOT_SFX[e.weapon]);
+        if (feel) {
+          if (!waveAudio.playMeleeSwing(e.weapon, { x: e.x, y: e.y })) {
+            sfx(feel.swingSfx, { rate: feel.swingRate, gain: feel.swingGain });
+          }
+        } else {
+          sfx(SHOOT_SFX[e.weapon]);
+        }
         this.addTrauma(FIRE_TRAUMA[e.weapon]);
         // Melee kicks the camera INTO the strike (a lunge), not back like gun recoil.
         const kick = FIRE_KICK[e.weapon] * settings.effectiveRecoil;
@@ -2649,14 +2659,20 @@ export class Game {
         this.captureUltMoteOrigin(e.dmgX, e.dmgY, this.isBossEid(e.eid) ? "boss" : "dmg");
         this.spawnDmgNumber(e.dmgX, e.dmgY, e.dmg, { crit: e.crit });
         this.spawnPuff(e.puffX, e.puffY, e.crit ? 9 : 5, e.puffColor);
+        const meleeWeapon = e.melee
+          ? this.replayMeleeImpact(e.eid, e.puffX, e.puffY, e.crit)
+          : null;
         if (e.crit) {
-          sfx("crit", { gain: 0.6 });
+          if (meleeWeapon === null) sfx("crit", { gain: 0.6 });
+          else waveAudio.play("melee.crit", { x: e.puffX, y: e.puffY });
           this.spawnSparkFlash(e.puffX, e.puffY, "#fff3c4");
           if (e.melee) this.burstFreeze = Math.max(this.burstFreeze, 0.03);
           else this.addFreeze(0.03); // a hair of impact-frame so a crit lands harder
         }
         if (e.closeShotgun) this.addFreeze(FREEZE_SHOTGUN);
-        if (e.melee) this.replayMeleeImpact(e.eid, e.puffX, e.puffY, e.crit);
+        if (meleeWeapon !== null && (MELEE_FEEL[meleeWeapon]?.isHeavy === true || e.crit)) {
+          waveAudio.play("melee.cleaveShock", { x: e.puffX, y: e.puffY });
+        }
         // Sunlance hits tick through the wave layer's 120ms-per-target limiter — a held
         // beam at 22Hz must never machine-gun the generic hit sample.
         if (!e.killed) {
@@ -2669,7 +2685,13 @@ export class Game {
             const cue = orbit !== undefined && orbit.kind === "orbit" && orbit.flare > 0 ? "halo.catch" : "halo.hit";
             if (!waveAudio.cueAt(cue, e.puffX, e.puffY, e.eid)) sfx("meleeHit", { gain: 0.9 });
           } else if (e.melee) {
-            sfx("meleeHit", { gain: 0.9 });
+            if (meleeWeapon === null || !waveAudio.playMeleeImpact(meleeWeapon, {
+              x: e.puffX,
+              y: e.puffY,
+              entityId: e.eid,
+            })) {
+              sfx("meleeHit", { gain: 0.9 });
+            }
           } else {
             // The semantic HURT event (bestiary audio contract): kind-resolved where a
             // body owns a hurt identity (a shielder only ever hurts from the flank),
@@ -3158,7 +3180,7 @@ export class Game {
         break;
       }
       case "blessingProc": {
-        const eventId = BLESSING_PROC_AUDIO[e.item];
+        const eventId = blessingProcCue(e.item, e.phase);
         if (eventId !== undefined) waveAudio.cueAt(eventId, e.x, e.y);
         if (this.isSelfPid(e.pid)) {
           const item = itemById(e.item);
@@ -3390,7 +3412,7 @@ export class Game {
   // player through the contact point, a bright flash pops at the blade, and the per-weapon
   // hit-stop/trauma land the blow. Striking an enemy MID-ATTACK (windup/active) reads as a
   // clash — the parry CLANG, a white flash, and a longer stop — rewarding aggressive timing.
-  private replayMeleeImpact(eid: number, hitX: number, hitY: number, isCrit: boolean) {
+  private replayMeleeImpact(eid: number, hitX: number, hitY: number, isCrit: boolean): WeaponId | null {
     let isLocalBladeHit = false;
     const localHits = this.meleeSwing?.hitList;
     if (this.animClock <= this.meleeImpactUntil) {
@@ -3441,6 +3463,7 @@ export class Game {
       this.burstFreeze = Math.max(this.burstFreeze, MELEE_CLASH_FREEZE);
       this.burstTrauma = Math.min(1, this.burstTrauma + 0.08);
     }
+    return weapon;
   }
 
   // Kind-flavored death burst layered over the shared gib/splat kill juice, so each enemy

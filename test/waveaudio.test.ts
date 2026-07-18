@@ -37,7 +37,8 @@ const {
   BURROW_EMITTER, BURROW_THUD_EVENT, DEEP_EMITTER,
   SELECTED_BURROW_TAKES, SELECTED_DEEP_TAKES, takeStemsOf,
   tellCuesFor, isBurrowUnderground, spatialGainFor, isWaveEventId,
-  EXPEDITION_BAND_ENTRY_EVENT,
+  EXPEDITION_BAND_ENTRY_EVENT, MELEE_AUDIO_EVENTS,
+  meleeSwingCue, meleeImpactCue, blessingProcCue,
   PVP_WAVE_EVENTS, pvpKillRole, pvpKillCue, pvpMatchOverCue,
   pvpFragStreakStep, pvpFragStreakRate, pvpCountTickRate,
   PVP_FRAG_STREAK_MAX_STEPS, PVP_FRAG_STREAK_WINDOW_MS,
@@ -420,6 +421,82 @@ section("pvp cue registry + wiring rules");
       && WAVE_SOUNDS[e as WaveEventId].stem !== null
       && !PVP_WAVE_EVENTS.includes(e as WaveEventId)
       && !existsSync(join(AUDIO_ROOT, `${WAVE_SOUNDS[e as WaveEventId].stem}.ogg`))));
+}
+
+section("melee identity and blessing audio");
+{
+  const expected = [
+    ["melee.cutlassSwing", "sfx/melee_cutlass_swing", 0.55, WAVE_PRIORITY.weapon],
+    ["melee.claymoreSwing", "sfx/melee_claymore_swing", 0.8, WAVE_PRIORITY.weapon],
+    ["melee.pikeThrust", "sfx/melee_pike_thrust", 0.58, WAVE_PRIORITY.weapon],
+    ["melee.cutlassHit", "sfx/melee_cutlass_hit", 0.62, WAVE_PRIORITY.impact],
+    ["melee.claymoreHit", "sfx/melee_claymore_hit", 0.88, WAVE_PRIORITY.impact],
+    ["melee.pikeHit", "sfx/melee_pike_hit", 0.62, WAVE_PRIORITY.impact],
+    ["melee.cleaveShock", "sfx/melee_cleave_shock", 0.8, WAVE_PRIORITY.impact],
+    ["melee.crit", "sfx/melee_crit", 0.66, WAVE_PRIORITY.impact],
+    ["melee.staggerPulse", "sfx/melee_stagger_pulse", 0.72, WAVE_PRIORITY.impact],
+    ["melee.bladeWard", "sfx/melee_blade_ward", 0.55, WAVE_PRIORITY.weapon],
+    ["melee.momentumReady", "sfx/melee_momentum_ready", 0.4, WAVE_PRIORITY.weapon],
+    ["melee.momentumPayoff", "sfx/melee_momentum_payoff", 0.85, WAVE_PRIORITY.impact],
+    ["melee.finisher", "sfx/melee_finisher_execute", 0.92, WAVE_PRIORITY.impact],
+  ] as const;
+  check("all 13 selected melee stems are registered and preloaded",
+    expected.length === 13
+    && MELEE_AUDIO_EVENTS.length === 13
+    && expected.every(([event]) => MELEE_AUDIO_EVENTS.includes(event)));
+  check("melee rows match the selected stems, gains, buses, priorities, and single shipped takes",
+    expected.every(([event, stem, gain, priority]) => {
+      const spec = WAVE_SOUNDS[event];
+      return spec.stem === stem && spec.variants === 1 && spec.gain === gain
+        && spec.bus === "sfx" && spec.priority === priority && spec.spatial === true
+        && spec.jitter >= 0.04 && spec.jitter <= 0.05;
+    }));
+  check("every selected melee stem ships both codecs",
+    expected.every(([, stem]) =>
+      existsSync(join(AUDIO_ROOT, `${stem}.ogg`))
+      && existsSync(join(AUDIO_ROOT, `${stem}.mp3`))));
+  check("swing and impact identity select only cutlass, claymore, and pike",
+    meleeSwingCue("sword") === "melee.cutlassSwing"
+    && meleeSwingCue("longsword") === "melee.claymoreSwing"
+    && meleeSwingCue("spear") === "melee.pikeThrust"
+    && meleeImpactCue("sword") === "melee.cutlassHit"
+    && meleeImpactCue("longsword") === "melee.claymoreHit"
+    && meleeImpactCue("spear") === "melee.pikeHit"
+    && meleeSwingCue("crook") === undefined
+    && meleeImpactCue("crook") === undefined);
+  check("blessing phases route stagger, ward, momentum, and execute cues",
+    blessingProcCue("stagger_pulse", "pulse") === "melee.staggerPulse"
+    && blessingProcCue("blade_ward", "refresh") === "melee.bladeWard"
+    && blessingProcCue("momentum_charge", "armed") === "melee.momentumReady"
+    && blessingProcCue("momentum_charge", "payoff") === "melee.momentumPayoff"
+    && blessingProcCue("finisher", "execute") === "melee.finisher"
+    && blessingProcCue("finisher", "other") === undefined);
+  check("cleave and stagger are global coalesced cues with exact cooldowns",
+    WAVE_SOUNDS["melee.cleaveShock"].cooldownMs === 140
+    && WAVE_SOUNDS["melee.cleaveShock"].isPerEntityCooldown === false
+    && WAVE_SOUNDS["melee.staggerPulse"].cooldownMs === 800
+    && WAVE_SOUNDS["melee.staggerPulse"].isPerEntityCooldown === false);
+  check("cleave carries the packet's music duck",
+    WAVE_SOUNDS["melee.cleaveShock"].duck?.[0].bus === "music"
+    && WAVE_SOUNDS["melee.cleaveShock"].duck?.[0].to === 0.8
+    && WAVE_SOUNDS["melee.cleaveShock"].duck?.[0].hold === 0.06
+    && WAVE_SOUNDS["melee.cleaveShock"].duck?.[0].recover === 0.25);
+
+  const eng = new ScriptEngine();
+  const dir = new WaveAudioDirector(eng);
+  check("director routes melee identities and leaves Crook on tether audio",
+    dir.playMeleeSwing("sword", { x: 0, y: 0 })
+    && dir.playMeleeImpact("longsword", { x: 0, y: 0 })
+    && !dir.playMeleeSwing("crook", { x: 0, y: 0 })
+    && !dir.playMeleeImpact("crook", { x: 0, y: 0 }));
+  check("multi-body cleave coalesces globally",
+    dir.play("melee.cleaveShock", { entityId: 1, x: 0, y: 0 })
+    && !dir.play("melee.cleaveShock", { entityId: 2, x: 0, y: 0 }));
+  eng.nowMs += 140;
+  check("cleave re-arms after 140ms", dir.play("melee.cleaveShock", { entityId: 2, x: 0, y: 0 }));
+  check("multi-body stagger coalesces globally",
+    dir.play("melee.staggerPulse", { entityId: 1, x: 0, y: 0 })
+    && !dir.play("melee.staggerPulse", { entityId: 2, x: 0, y: 0 }));
 }
 
 // ---- 4. director policy: cooldowns, variants, jitter, weapons, combat gating ----
@@ -1117,6 +1194,8 @@ section("preload plan");
     && !stems.has("enemy/burrow_underground_thud_v1") && !stems.has("enemy/burrow_track"));
   check("player-driven weapon/co-op cues always preloaded", stems.has("sfx/thumper_fire_v1")
     && stems.has("sfx/sunlance_loop") && stems.has("coop/revive_loop"));
+  check("all melee identity and blessing cues always preload",
+    MELEE_AUDIO_EVENTS.every((event) => stemsOf(WAVE_SOUNDS[event]).every((stem) => stems.has(stem))));
   check("authored fallback samples decoded ahead of the first trigger", samples.has("meleeHit")
     && samples.has("cannon") && samples.has("ricochet"));
   check("UI/pets stay lazy", ![...stems].some((s) => s.startsWith("ui/") || s.startsWith("pet/")));

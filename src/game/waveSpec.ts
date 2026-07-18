@@ -882,6 +882,76 @@ export const WAVE_SOUNDS = {
     stem: "sfx/blessing_shared_rope", variants: 1, takes: [], gain: 0.4, bus: "sfx",
     priority: WAVE_PRIORITY.impact, jitter: 0, spatial: true,
   },
+
+  // Melee identity + native verb kit. The selected manifest ships one canonical take
+  // for each row, so every stem is registered as a single playable variant.
+  "melee.cutlassSwing": {
+    stem: "sfx/melee_cutlass_swing", variants: 1, gain: 0.55, bus: "sfx", priority: WAVE_PRIORITY.weapon,
+    jitter: 0.05, spatial: true,
+    fallback: { sample: "meleeSwing", rate: 1.12 },
+  },
+  "melee.claymoreSwing": {
+    stem: "sfx/melee_claymore_swing", variants: 1, gain: 0.8, bus: "sfx", priority: WAVE_PRIORITY.weapon,
+    jitter: 0.04, spatial: true,
+    fallback: { sample: "heavySwing" },
+  },
+  "melee.pikeThrust": {
+    stem: "sfx/melee_pike_thrust", variants: 1, gain: 0.58, bus: "sfx", priority: WAVE_PRIORITY.weapon,
+    jitter: 0.05, spatial: true,
+    fallback: { sample: "meleeSwing", rate: 1.15, highpassHz: 1000 },
+  },
+  "melee.cutlassHit": {
+    stem: "sfx/melee_cutlass_hit", variants: 1, gain: 0.62, bus: "sfx", priority: WAVE_PRIORITY.impact,
+    jitter: 0.05, spatial: true,
+    fallback: { sample: "meleeHit", rate: 1.1 },
+  },
+  "melee.claymoreHit": {
+    stem: "sfx/melee_claymore_hit", variants: 1, gain: 0.88, bus: "sfx", priority: WAVE_PRIORITY.impact,
+    jitter: 0.04, spatial: true,
+    fallback: { sample: "meleeHit", rate: 0.85, lowpassHz: 3000 },
+  },
+  "melee.pikeHit": {
+    stem: "sfx/melee_pike_hit", variants: 1, gain: 0.62, bus: "sfx", priority: WAVE_PRIORITY.impact,
+    jitter: 0.05, spatial: true,
+    fallback: { sample: "meleeHit", rate: 1.15, highpassHz: 900 },
+  },
+  "melee.cleaveShock": {
+    stem: "sfx/melee_cleave_shock", variants: 1, gain: 0.8, bus: "sfx", priority: WAVE_PRIORITY.impact,
+    jitter: 0.04, spatial: true, cooldownMs: 140, isPerEntityCooldown: false,
+    duck: [dM(0.8, 0.06, 0.25)],
+    fallback: { sample: "heavySwing", rate: 0.85 },
+  },
+  "melee.crit": {
+    stem: "sfx/melee_crit", variants: 1, gain: 0.66, bus: "sfx", priority: WAVE_PRIORITY.impact,
+    jitter: 0.05, spatial: true,
+    fallback: { sample: "crit" },
+  },
+  "melee.staggerPulse": {
+    stem: "sfx/melee_stagger_pulse", variants: 1, gain: 0.72, bus: "sfx", priority: WAVE_PRIORITY.impact,
+    jitter: 0.04, spatial: true, cooldownMs: 800, isPerEntityCooldown: false,
+    fallback: { sample: "heavySwing", rate: 0.9 },
+  },
+  "melee.bladeWard": {
+    stem: "sfx/melee_blade_ward", variants: 1, gain: 0.55, bus: "sfx", priority: WAVE_PRIORITY.weapon,
+    jitter: 0.04, spatial: true, cooldownMs: 1200,
+    fallback: { sample: "parry", rate: 1.1, highpassHz: 1200 },
+  },
+  "melee.momentumReady": {
+    stem: "sfx/melee_momentum_ready", variants: 1, gain: 0.4, bus: "sfx", priority: WAVE_PRIORITY.weapon,
+    jitter: 0.04, spatial: true, cooldownMs: 800,
+    fallback: { sample: "parry", rate: 1.15 },
+  },
+  "melee.momentumPayoff": {
+    stem: "sfx/melee_momentum_payoff", variants: 1, gain: 0.85, bus: "sfx", priority: WAVE_PRIORITY.impact,
+    jitter: 0.04, spatial: true,
+    fallback: { sample: "heavySwing", rate: 0.95 },
+  },
+  "melee.finisher": {
+    stem: "sfx/melee_finisher_execute", variants: 1, gain: 0.92, bus: "sfx", priority: WAVE_PRIORITY.impact,
+    jitter: 0.04, spatial: true, cooldownMs: 200,
+    fallback: { sample: "heavySwing", rate: 0.85 },
+  },
+
   "mortarDetonate": {
     stem: "sfx/thumper_impact_v1", variants: 1, gain: 0.9, bus: "sfx", priority: WAVE_PRIORITY.impact,
     jitter: 0.05, spatial: true,
@@ -1957,6 +2027,26 @@ export function waveSpecOf(event: WaveEventId): WaveSoundSpec {
   return WAVE_SOUNDS[event];
 }
 
+const MELEE_SWING_AUDIO: Readonly<Record<string, WaveEventId>> = {
+  sword: "melee.cutlassSwing",
+  longsword: "melee.claymoreSwing",
+  spear: "melee.pikeThrust",
+};
+
+const MELEE_IMPACT_AUDIO: Readonly<Record<string, WaveEventId>> = {
+  sword: "melee.cutlassHit",
+  longsword: "melee.claymoreHit",
+  spear: "melee.pikeHit",
+};
+
+export function meleeSwingCue(weapon: string): WaveEventId | undefined {
+  return MELEE_SWING_AUDIO[weapon];
+}
+
+export function meleeImpactCue(weapon: string): WaveEventId | undefined {
+  return MELEE_IMPACT_AUDIO[weapon];
+}
+
 // ---- content-wave bindings (PR #31 move/phase grammar -> manifest events) ---------------
 
 // Per-(kind, move) cue set consumed by the tell watcher. Edges over the authoritative
@@ -2180,9 +2270,17 @@ export const HAZARD_WAVE_EVENTS: readonly WaveEventId[] = [
 
 // Weapon + co-op cues reachable on ANY floor (player-driven) — part of every floor's
 // preload plan so a first trigger never races its decode.
+export const MELEE_AUDIO_EVENTS: readonly WaveEventId[] = [
+  "melee.cutlassSwing", "melee.claymoreSwing", "melee.pikeThrust",
+  "melee.cutlassHit", "melee.claymoreHit", "melee.pikeHit",
+  "melee.cleaveShock", "melee.crit", "melee.staggerPulse", "melee.bladeWard",
+  "melee.momentumReady", "melee.momentumPayoff", "melee.finisher",
+];
+
 export const ALWAYS_REACHABLE_EVENTS: readonly WaveEventId[] = [
   "shootMortar", "mortarDetonate", "beamStart", "beamLoop", "beamStop", "beamHit", "beamFire",
   "revive.channelStart", "revive.channelLoop", "revive.cancel",
+  ...MELEE_AUDIO_EVENTS,
 ];
 
 // PR #31 WeaponIds -> wave fire events; beam is EXCLUDED on purpose (its lifecycle is
@@ -2341,7 +2439,19 @@ export const BLESSING_PROC_AUDIO: Readonly<Record<string, WaveEventId>> = {
   known_by_touch: "blessing.knownByTouch",
   remember_me: "blessing.rememberMe",
   carry_the_light: "blessing.carryTheLight",
+  stagger_pulse: "melee.staggerPulse",
+  blade_ward: "melee.bladeWard",
 };
+
+export function blessingProcCue(item: string, phase: string): WaveEventId | undefined {
+  if (item === "momentum_charge") {
+    if (phase === "armed") return "melee.momentumReady";
+    if (phase === "payoff") return "melee.momentumPayoff";
+    return undefined;
+  }
+  if (item === "finisher") return phase === "execute" ? "melee.finisher" : undefined;
+  return BLESSING_PROC_AUDIO[item];
+}
 
 export const BEAM_WEAPON_ID = "beam";
 // Manifest §4 hysteresis: start after >120ms idle; stop when >90ms since the last shot.
