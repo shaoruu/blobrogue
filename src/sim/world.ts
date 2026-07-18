@@ -5224,10 +5224,9 @@ function trackSideChannelAim(p: PlayerSim, aim: number, dt: number): void {
     resetSideChannelState(p, aim);
     return;
   }
-  const wasCoolingDown = p.sideChannelIcdT > 0;
-  p.sideChannelIcdT = Math.max(0, p.sideChannelIcdT - dt);
+  p.sideChannelIcdT = p.sideChannelIcdT > dt ? p.sideChannelIcdT - dt : 0;
   p.sideChannelAimClock += dt;
-  if (wasCoolingDown) {
+  if (p.sideChannelIcdT > 0) {
     p.sideChannelAimSamples = [{ aim, time: p.sideChannelAimClock }];
     return;
   }
@@ -5281,6 +5280,27 @@ function spawnSideChannelGhost(
     isSideChannelGhost: true,
     bornTick: w.tick,
     lagRewind: p.rewindTicks,
+    shotSeq: undefined,
+    grapplePull: undefined,
+    isForkPrimary: undefined,
+    isPenInk: undefined,
+    isPenSnap: undefined,
+    isMarginCopy: undefined,
+    sidewinderArc: undefined,
+    sidewinderTurn: undefined,
+    sidewinderAim: undefined,
+    crosscurrentJumps: undefined,
+    crosscurrentRange: undefined,
+    crosscurrentCoef: undefined,
+    crosscurrentPreferNew: undefined,
+    crosscurrentTax: undefined,
+    isHushSlug: undefined,
+    isBacktalkReturn: undefined,
+    isLampShot: undefined,
+    lampLitDist: undefined,
+    lampLit: undefined,
+    isFaultPrimary: undefined,
+    isFaultEcho: undefined,
     prevX: undefined,
     prevY: undefined,
     hitPids: undefined,
@@ -5289,7 +5309,6 @@ function spawnSideChannelGhost(
     ghost.phaseFireX = x;
     ghost.phaseFireY = y;
   }
-  if (ghost.sidewinderArc !== undefined) ghost.sidewinderAim = aim;
   w.bullets.push(ghost);
   p.sideChannelArmedAim = null;
   p.sideChannelIcdT = SIDE_CHANNEL.icd;
