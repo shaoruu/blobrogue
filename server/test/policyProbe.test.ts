@@ -79,6 +79,7 @@ async function sendProbe(url: string, ticket: string): Promise<ProbeResult> {
             act: false,
             ult: false,
             pulse: false,
+            pet: false,
             ackEv: 0,
             ackSnap: 0,
           }));

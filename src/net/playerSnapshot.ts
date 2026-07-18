@@ -70,6 +70,13 @@ export interface AuthoritativePlayerSnapshot {
   phaseSpeed: number;
   ultInvuln: number;
   passiveState: number;
+  // PET ABILITY authoritative state (PROTOCOL 45; server-owned, reconciled so the CD pip + active
+  // effect VFX are reconnect-safe). The pet ID itself is server-ONLY (not here) — the owner knows
+  // its own pet from its session, so only the timers ride SelfWire.
+  petCdReadyAtTick: number;
+  petTellT: number;
+  petLightT: number;
+  petFetchT: number;
   // pvp respawn countdown (ticks; 0 = alive). Server-owned + reconciled so client prediction
   // gates movement/shooting on the local player's dead-awaiting-respawn state. Always 0 in co-op.
   respawnT: number;
@@ -101,7 +108,10 @@ type ServerOwnedField = keyof AuthoritativePlayerSnapshot;
 // - isPulseRequested: per-tick input derivative (the Mender pulse key) — re-derived from the
 //                  consumed input every stepPlayerPhase (server + prediction), never wired, so a
 //                  client can only REQUEST a pulse; the server alone validates + resolves it.
-type ClientOwnedField = "id" | "pr" | "aimAngle" | "shotSeq" | "rewindTicks" | "meleeSwing" | "isInteracting" | "isAbsent" | "isUltRequested" | "isPulseRequested";
+// - isPetAbilityRequested: per-tick input derivative (the pet-ability key) — re-derived from the
+//                  consumed input every stepPlayerPhase, never wired, so a client can only REQUEST
+//                  a pet ability; the server alone validates + resolves it (like isUltRequested).
+type ClientOwnedField = "id" | "pr" | "aimAngle" | "shotSeq" | "rewindTicks" | "meleeSwing" | "isInteracting" | "isAbsent" | "isUltRequested" | "isPulseRequested" | "isPetAbilityRequested";
 // Server-only revive/down bookkeeping, off the reconcile snapshot entirely:
 // - downsThisFloor: the per-floor down count behind the OUT state — the client consumes
 //                   the derived out flag on the wire, never the counter
@@ -128,6 +138,10 @@ type ClientOwnedField = "id" | "pr" | "aimAngle" | "shotSeq" | "rewindTicks" | "
 //              The server sends the validated offer itself; prediction never rolls an online pick.
 type ServerOnlyField =
   | "offerIdentity"
+  // The OWNER-BOUND equipped pet id (PROTOCOL 45): the ability SOURCE, set at spawn from the join
+  // identity. The owner knows its own pet from its session and remotes ride PlayerWire.pt for the
+  // cosmetic follow, so the id itself never needs to ride the reconcile wire — only its timers do.
+  | "pet"
   | "lastGrappleShotSeq"
   // Content Wave B transient combat state: all sub-8s, rebuilt from live inputs after a
   // resume, so it never rides the reconcile wire (like lastGrappleShotSeq).
@@ -249,6 +263,10 @@ export function projectPlayer(p: PlayerSim): AuthoritativePlayerSnapshot {
     phaseSpeed: p.phaseSpeed,
     ultInvuln: p.ultInvuln,
     passiveState: p.passiveState,
+    petCdReadyAtTick: p.petCdReadyAtTick,
+    petTellT: p.petTellT,
+    petLightT: p.petLightT,
+    petFetchT: p.petFetchT,
     respawnT: p.respawnT,
     spawnGraceT: p.spawnGraceT,
     spawnShieldT: p.spawnShieldT,
@@ -312,6 +330,10 @@ export function applyPlayerSnapshot(p: PlayerSim, s: AuthoritativePlayerSnapshot
   p.phaseSpeed = s.phaseSpeed;
   p.ultInvuln = s.ultInvuln;
   p.passiveState = s.passiveState;
+  p.petCdReadyAtTick = s.petCdReadyAtTick;
+  p.petTellT = s.petTellT;
+  p.petLightT = s.petLightT;
+  p.petFetchT = s.petFetchT;
   p.respawnT = s.respawnT;
   p.spawnGraceT = s.spawnGraceT;
   p.spawnShieldT = s.spawnShieldT;

@@ -9,7 +9,7 @@
 // the fixed step, so a client can neither buy extra time (no client dt) nor gain advantage by its
 // frame rate (fixed-cadence consumption).
 
-import { beginWorldTick, createWorld, refreshWarmthDrain, stepPlayerPhase, stepWorldPhase, spawnPlayerInWorld, removePlayerFromWorld, setPlayerAbsence, setPlayerKit, switchWeaponInWorld, reorderWeaponsInWorld, dropWeaponInWorld, swapWeaponInWorld, buyFromShopInWorld, chooseBlessingInWorld, dismissBlessingOfferInWorld, rollBlessingChoicesInWorld, resetRunInWorld, devSpawnEnemy, isPvp, isPvpDraftRuntime } from "../../src/sim/world.js";
+import { beginWorldTick, createWorld, refreshWarmthDrain, stepPlayerPhase, stepWorldPhase, spawnPlayerInWorld, removePlayerFromWorld, setPlayerAbsence, setPlayerKit, setPlayerPet, switchWeaponInWorld, reorderWeaponsInWorld, dropWeaponInWorld, swapWeaponInWorld, buyFromShopInWorld, chooseBlessingInWorld, dismissBlessingOfferInWorld, rollBlessingChoicesInWorld, resetRunInWorld, devSpawnEnemy, isPvp, isPvpDraftRuntime } from "../../src/sim/world.js";
 import type { KitId } from "../../src/sim/kits.js";
 import { PVP, pvpDraftSeed } from "../../src/sim/pvp.js";
 import type { WorldMode } from "../../src/sim/pvp.js";
@@ -51,7 +51,7 @@ function rewindTicksFor(conn: Conn): number {
 }
 
 function intentToInput(i: InputIntent): InputCmd {
-  return { seq: i.seq, moveX: i.mx, moveY: i.my, aim: i.aim, firing: i.fire, dash: i.dash, interact: i.act, ult: i.ult, pulse: i.pulse };
+  return { seq: i.seq, moveX: i.mx, moveY: i.my, aim: i.aim, firing: i.fire, dash: i.dash, interact: i.act, ult: i.ult, pulse: i.pulse, petAbility: i.pet };
 }
 
 export class GameWorld implements RoomRuntime {
@@ -142,7 +142,7 @@ export class GameWorld implements RoomRuntime {
     return this.state.players.size;
   }
 
-  addPlayer(pid: PlayerId, kit: KitId = "none", offerIdentity: string = pid): void {
+  addPlayer(pid: PlayerId, kit: KitId = "none", offerIdentity: string = pid, pet: string | null = null): void {
     spawnPlayerInWorld(this.state, pid, offerIdentity);
     this.joinedAtTick.set(pid, this.state.tick);
     this.joinedAtFloor.set(pid, this.state.floor);
@@ -153,6 +153,10 @@ export class GameWorld implements RoomRuntime {
     // symmetric (spawnPlayerInWorld already set the neutral kit + fixed HP pool), so the chosen
     // kit is intentionally ignored — everyone plays identical.
     if (kit !== "none" && !isPvp(this.state)) setPlayerKit(this.state, pid, kit);
+    // Bind the OWNER-BOUND pet (PROTOCOL 45) from the verified identity — the ability source. The
+    // cosmetic follow stays client-only; the sim keeps only the id to resolve the verb. In pvp
+    // the id is still bound (harmless) but abilities never tick, so no verb can fire in the arena.
+    setPlayerPet(this.state, pid, pet);
   }
 
   removePlayer(pid: PlayerId): void {

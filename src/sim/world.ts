@@ -85,6 +85,7 @@ import {
   KIT_START_WEAPON, ticksToSec, TICKS_PER_SECOND,
 } from "./kits.js";
 import type { KitId, UltSource } from "./kits.js";
+import { PET_ABILITY, petVerbFor, isFetchablePickup } from "./petAbilities.js";
 import {
   PVP, buildPvpArena, createMatchState, pvpHitDamage, pvpPerHitCap, arePvpFoes, farthestSpawnIndex, pvpRespawnIndex,
   pvpRespawnDelayTicks, pvpCountdownTicks, pvpMatchTimeTicks, pvpFragLimit,
@@ -473,6 +474,28 @@ export interface PlayerSim {
   // contract as isUltRequested: re-derived from the consumed input, resolved + cleared in the
   // authoritative updateUlts, never wired — a client can request, the server alone resolves.
   isPulseRequested: boolean;
+  // ---- PET ABILITY (PROTOCOL 45; see src/sim/petAbilities.ts) ----
+  // The OWNER-BOUND equipped pet id (the ability source). Distinct from the cosmetic FOLLOW body,
+  // which stays client-only: the sim carries the id purely to resolve the verb (petVerbFor). Set
+  // at spawn from the verified join identity (setPlayerPet); null = no pet / no ability. Never
+  // wired (the owner knows its own pet from its session; remotes ride PlayerWire.pt cosmetically).
+  pet: string | null;
+  // Server-owned CD gate (mirrors ultReadyAtTick): the world tick before which a pet ability is
+  // refused. Reconciled via SelfWire so the client's CD pip is reconnect-safe. 0 = ready.
+  petCdReadyAtTick: number;
+  // The active 0.30s TELL countdown (seconds). Opened on a valid request; the verb FIRES when it
+  // elapses. Wired for the tell VFX; a fresh full snapshot restores a mid-tell on reconnect.
+  petTellT: number;
+  // Wick PINPRICK active light window (seconds): while > 0 the owner's light radius is bumped.
+  // Server-owned + wired (the client renders the bump reconnect-safe). 0 = no active light.
+  petLightT: number;
+  // Doggie FETCH active pull window (seconds): while > 0 loose non-heart loot is drawn toward the
+  // owner each tick. Server-owned + wired (reconnect-safe). 0 = no active pull.
+  petFetchT: number;
+  // Whether a pet ability was REQUESTED this tick (the client's pet input bit). Same contract as
+  // isUltRequested: re-derived from the consumed input every stepPlayerPhase, resolved + cleared
+  // in the authoritative updatePetAbilities, never wired — a client can request, never resolve.
+  isPetAbilityRequested: boolean;
   // ---- PVP (mode === "pvp") ----
   // FFA team id: 0 = "no team" (every distinct player is a foe). Set at spawn, low-churn — the
   // damage funnel reads it via arePvpFoes so future team modes need no new damage path. Always
@@ -602,6 +625,9 @@ export interface WorldState {
   // Per-tick explosive-barrel detonation count (scratch): caps the chain a dense cluster
   // fires in one tick, so an ignition can't cascade into a whole-frame FX/damage spike.
   barrelExplosionsThisTick: number;
+  // Pet FETCH party throttle (PROTOCOL 45): the world tick before which the NEXT fetch pulse is
+  // refused, so the whole party shares one fetch pulse / 2.0s. Server-owned; never on the wire.
+  petFetchPartyReadyAtTick: number;
   rng: Rng;
   // The per-run weapon deal (see weaponBag.ts): every free weapon roll — pedestals, boss
   // chest alternates, wood chests, owned-claim rerolls — draws from this seeded shuffled
@@ -772,6 +798,12 @@ export function createPlayer(id: PlayerId, x: number, y: number): PlayerSim {
     ultWasted: 0,
     isUltRequested: false,
     isPulseRequested: false,
+    pet: null,
+    petCdReadyAtTick: 0,
+    petTellT: 0,
+    petLightT: 0,
+    petFetchT: 0,
+    isPetAbilityRequested: false,
     team: 0,
     respawnT: 0,
     respawnWaitSafeT: 0,
@@ -858,6 +890,7 @@ export function createWorld(seed: number, floor: number, opts: WorldOptions = {}
     flockScanTick: -1,
     flockScanKind: "",
     barrelExplosionsThisTick: 0,
+    petFetchPartyReadyAtTick: 0,
     rng: new Rng(seed ^ 0x53696d21),
     weaponBag: createWeaponBag(seed, opts.catalogVersion ?? CURRENT_CONTENT_CATALOG_VERSION),
     encounterPlayers: 1,
@@ -1468,6 +1501,13 @@ export function setPlayerKit(w: WorldState, pid: PlayerId, kit: KitId): void {
   p.ultWasted = 0;
   p.isUltRequested = false;
   p.isPulseRequested = false;
+  // Pet ability windows are cleared on a loadout (re)apply too — the pet id itself is bound
+  // separately (setPlayerPet) and is intentionally untouched here (it is not a kit choice).
+  p.petCdReadyAtTick = 0;
+  p.petTellT = 0;
+  p.petLightT = 0;
+  p.petFetchT = 0;
+  p.isPetAbilityRequested = false;
   // BULWARK opens with a full OVERSHIELD so the signature is felt in the first 30 seconds; every
   // other kit carries none (the pool is inert for them).
   p.overshield = kit === "bulwark" ? OVERSHIELD.maxChips : 0;
@@ -1480,6 +1520,16 @@ export function setPlayerKit(w: WorldState, pid: PlayerId, kit: KitId): void {
       p.weapon = start;
     }
   }
+}
+
+// Bind a player's OWNER-BOUND pet (PROTOCOL 45) from the verified join identity — the mirror of
+// setPlayerKit for the ability source. The cosmetic FOLLOW stays client-only; the sim keeps only
+// the id so updatePetAbilities can resolve the verb. Idempotent (safe on a resume re-bind); it
+// never touches the CD/effect windows, so a reconnect preserves an in-flight ability.
+export function setPlayerPet(w: WorldState, pid: PlayerId, pet: string | null): void {
+  const p = w.players.get(pid);
+  if (!p) return;
+  p.pet = pet;
 }
 
 // §10 ACCRUE ult charge from one SOURCE, respecting the per-source SHARE cap toward the current
@@ -1629,6 +1679,93 @@ function lowestHpAllyInRange(w: WorldState, p: PlayerSim, range: number): Player
 // prediction never runs, so every ult effect (heal/shield/teleport/invuln + the meter) is
 // server-owned and a client only ever renders the resulting SimEvents/entities. Handles the
 // slow time-trickle FLOOR, the MENDER lifebloom HoT payout, and resolving each pending cast.
+// The authoritative PET ABILITY pass (PROTOCOL 45). Server-owned exactly like updateUlts: online
+// prediction never runs this world phase, so a client can only REQUEST an ability, never resolve
+// one. Hard OFF in pvp — the whole pass returns before any state moves, so a fetch/pinprick can
+// never fire in the arena and the wire fields stay zeroed (abilities OFF; cosmetic follow only).
+function updatePetAbilities(w: WorldState, dt: number): void {
+  if (isPvp(w)) return;
+  for (const p of w.players.values()) {
+    // A fresh request opens the 0.30s tell and BURNS the shared cooldown up front — a later
+    // party-throttle / soft-cap no-op deliberately gets no CD refund (spam is punished).
+    if (p.isPetAbilityRequested) {
+      p.isPetAbilityRequested = false;
+      tryStartPetAbility(w, p);
+    }
+    // The tell resolves into the verb the tick it elapses (never mid-tell). A held bind can't
+    // re-open it: the CD was burned at tell start, so tryStartPetAbility refuses until it lapses.
+    if (p.petTellT > 0) {
+      p.petTellT = p.petTellT > dt ? p.petTellT - dt : 0;
+      if (p.petTellT <= 0) firePetVerb(w, p);
+    }
+    // Active windows decay + apply. FETCH pulls each tick it is live; PINPRICK just counts down
+    // (the light bump is read off petLightT by the client renderer, owner-only).
+    if (p.petFetchT > 0) {
+      applyFetchPull(w, p, dt);
+      p.petFetchT = p.petFetchT > dt ? p.petFetchT - dt : 0;
+    }
+    if (p.petLightT > 0) p.petLightT = p.petLightT > dt ? p.petLightT - dt : 0;
+  }
+}
+
+// Gate + open a pet ability: no ability pet -> silent no-op (no CD); OFF while downed/absent;
+// refused on cooldown or while a tell is already in flight. On success it burns the CD and opens
+// the tell — the verb itself fires when the tell elapses (firePetVerb).
+function tryStartPetAbility(w: WorldState, p: PlayerSim): void {
+  if (petVerbFor(p.pet) === null) return;
+  if (p.isDown || p.hp <= 0 || p.isAbsent) return;
+  if (w.tick < p.petCdReadyAtTick) return;
+  if (p.petTellT > 0) return;
+  p.petCdReadyAtTick = w.tick + PET_ABILITY.cooldownTicks;
+  p.petTellT = PET_ABILITY.tellSec;
+}
+
+// Fire the equipped pet's verb once its tell has elapsed. Fail-soft if the owner went down during
+// the tell (utility OFF while downed — the CD stays burned, nothing fires).
+function firePetVerb(w: WorldState, p: PlayerSim): void {
+  const verb = petVerbFor(p.pet);
+  if (verb === null || p.isDown || p.hp <= 0 || p.isAbsent) return;
+  if (verb === "fetch") firePetFetch(w, p);
+  else firePetPinprick(w, p);
+}
+
+// Doggie FETCH: open a short pull window, gated by the party throttle (1 pulse / party / 2.0s).
+// A throttled fetch is a fail-soft no-op — no pull opens and the CD is NOT refunded.
+function firePetFetch(w: WorldState, p: PlayerSim): void {
+  if (w.tick < w.petFetchPartyReadyAtTick) return;
+  w.petFetchPartyReadyAtTick = w.tick + PET_ABILITY.fetch.partyThrottleTicks;
+  p.petFetchT = PET_ABILITY.fetch.pulseSec;
+}
+
+// Wick PINPRICK: open the owner-only light window, gated by the party soft-cap (<= 2 contributing
+// windows). Capped out -> fail-soft no-op (no light), CD not refunded. Never revives, never damage.
+function firePetPinprick(w: WorldState, p: PlayerSim): void {
+  let active = 0;
+  for (const other of w.players.values()) {
+    if (other !== p && other.petLightT > 0) active++;
+  }
+  if (active >= PET_ABILITY.pinprick.partyMaxWindows) return;
+  p.petLightT = PET_ABILITY.pinprick.lightSec;
+}
+
+// One FETCH pull step: draw every FETCHABLE loose pickup (coins only — hearts/weapons excluded) in
+// range toward the owner, per-axis against walls exactly like the coin magnet, so loot slides
+// around a wall but is never dragged THROUGH one. Collection then happens in updatePickups.
+function applyFetchPull(w: WorldState, p: PlayerSim, dt: number): void {
+  const reach = PET_ABILITY.fetch.radius;
+  const step = PET_ABILITY.fetch.pullSpeed * dt;
+  for (const pk of w.pickups) {
+    if (!isFetchablePickup(pk.kind)) continue;
+    const dx = p.x - pk.x, dy = p.y - pk.y;
+    const d = Math.hypot(dx, dy);
+    if (d <= 0.5 || d > reach) continue;
+    const pull = Math.min(d, step);
+    const sx = (dx / d) * pull, sy = (dy / d) * pull;
+    if (!isWall(w, pk.x + sx, pk.y)) pk.x += sx;
+    if (!isWall(w, pk.x, pk.y + sy)) pk.y += sy;
+  }
+}
+
 function updateUlts(w: WorldState, ev: SimEvent[]): void {
   // PHANTOM dash charge (spec §2.4): credited off this tick's authoritative dashStart events, so
   // the meter never accrues in client prediction (which never runs this world phase).
@@ -2171,8 +2308,14 @@ export function resetRunInWorld(w: WorldState, seed: number): void {
     p.rememberMeArmed = true;
     p.disabledBlessing = null;
     p.lightSoloDashIcd = 0;
+    p.petCdReadyAtTick = 0;
+    p.petTellT = 0;
+    p.petLightT = 0;
+    p.petFetchT = 0;
+    p.isPetAbilityRequested = false;
     resetWaveCState(p);
   }
+  w.petFetchPartyReadyAtTick = 0;
   w.procWindow.clear();
   w.sameTargetWindow.clear();
   w.isRunOver = false;
@@ -16744,6 +16887,7 @@ export function stepPlayerPhase(w: WorldState, p: PlayerSim, input: InputCmd, dt
       || input.interact === true
       || input.ult === true
       || input.pulse === true
+      || input.petAbility === true
       || aimDelta > 0.01;
     if (isMeaningfulInput) {
       telemetry.timeToFirstInputMs = Math.max(
@@ -16762,6 +16906,9 @@ export function stepPlayerPhase(w: WorldState, p: PlayerSim, input: InputCmd, dt
   p.isUltRequested = input.ult === true && !p.isDown && p.hp > 0 && !isSpawnAttackSuppressed;
   // The MENDER heal-pulse intent — same contract as the ult request (resolved in updateUlts).
   p.isPulseRequested = input.pulse === true && !p.isDown && p.hp > 0 && !isSpawnAttackSuppressed;
+  // The PET ABILITY intent — same request-only contract (resolved in the authoritative
+  // updatePetAbilities): utility is OFF while downed, so a downed owner can never trigger it.
+  p.isPetAbilityRequested = input.petAbility === true && !p.isDown && p.hp > 0 && !isSpawnAttackSuppressed;
   // Self-buff ult timers decay per player step (so prediction applies the server-granted buff
   // the server reconciles) alongside the melee-swing timer. Phase invuln is capped at cast.
   if (p.overdriveT > 0) p.overdriveT = p.overdriveT > dt ? p.overdriveT - dt : 0;
@@ -16816,6 +16963,10 @@ export function stepWorldPhase(w: WorldState, dt: number, ev: SimEvent[]): void 
   }
   updateChests(w, dt, ev);
   updateFloorHazards(w, dt, ev);
+  // Pet abilities resolve BEFORE pickup collection so a FETCH pulse can draw coins into reach the
+  // same tick. The resolver is a hard no-op in pvp (abilities OFF in the arena — cosmetic follow
+  // only), so a fetch/pinprick can never fire there and the wire fields stay zeroed.
+  updatePetAbilities(w, dt);
   updatePickups(w, dt, ev);
   if (pvp) {
     // The deathmatch replaces the whole co-op end-of-run loop: NO ult accrual/firing (ults off +

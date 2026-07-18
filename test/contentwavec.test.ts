@@ -158,7 +158,7 @@ section("catalog v3, typed hooks, and additive migration");
   try {
     jsonCodec.decodeClient(JSON.stringify({
       t: "input", seq: 1, mx: 0, my: 0, aim: 0, fire: false, dash: false,
-      act: false, ult: false, pulse: false, ackEv: 0, ackSnap: 0, catalogVersion: 3,
+      act: false, ult: false, pulse: false, pet: false, ackEv: 0, ackSnap: 0, catalogVersion: 3,
     }));
   } catch { isForged = true; }
   check("browser input cannot author or downgrade the catalog", isForged);

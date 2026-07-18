@@ -19,6 +19,7 @@ export interface InputIntent {
   act: boolean; // interact key held (the revive channel); the sim validates everything else
   ult: boolean; // the "ult requested" intent; the server validates charge + the 8s lockout
   pulse: boolean; // the Mender heal-pulse intent; the server validates the pulse cooldown
+  pet: boolean; // the pet-ability intent; the server validates mode/downed/cooldown + resolves
 }
 
 // Per-class inbound rate windows (sliding 1s). Segmenting the buckets means a high-refresh
@@ -186,6 +187,6 @@ export function newConnState(now: number): Pick<Conn,
   };
 }
 
-export function inputToIntent(m: { seq: number; mx: number; my: number; aim: number; fire: boolean; dash: boolean; act: boolean; ult: boolean; pulse: boolean }): InputIntent {
-  return { seq: m.seq, mx: m.mx, my: m.my, aim: m.aim, fire: m.fire, dash: m.dash, act: m.act, ult: m.ult, pulse: m.pulse };
+export function inputToIntent(m: { seq: number; mx: number; my: number; aim: number; fire: boolean; dash: boolean; act: boolean; ult: boolean; pulse: boolean; pet: boolean }): InputIntent {
+  return { seq: m.seq, mx: m.mx, my: m.my, aim: m.aim, fire: m.fire, dash: m.dash, act: m.act, ult: m.ult, pulse: m.pulse, pet: m.pet };
 }

@@ -237,7 +237,7 @@ section("canonical roadmap and additive catalog migration");
   try {
     jsonCodec.decodeClient(JSON.stringify({
       t: "input", seq: 1, mx: 0, my: 0, aim: 0, fire: false, dash: false,
-      act: false, ult: false, pulse: false, ackEv: 0, ackSnap: 0, catalogVersion: 0,
+      act: false, ult: false, pulse: false, pet: false, ackEv: 0, ackSnap: 0, catalogVersion: 0,
     }));
   } catch {
     isForgedClientFieldRejected = true;

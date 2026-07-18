@@ -60,7 +60,7 @@ export interface RoomRuntime {
   readonly conns: Map<number, Conn>;
   readonly playerCount: number;
 
-  addPlayer(pid: PlayerId, kit?: KitId, offerIdentity?: string): void;
+  addPlayer(pid: PlayerId, kit?: KitId, offerIdentity?: string, pet?: string | null): void;
   removePlayer(pid: PlayerId): void;
   // Flip a player's network-absence (silent-link soft absence, seat reservation, resume).
   setPlayerAbsent(pid: PlayerId, isAbsent: boolean): void;

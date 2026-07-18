@@ -886,7 +886,7 @@ export class WSTransport implements Transport {
         const stamped: InputCmd = { ...cmd, seq };
         this.pending.push({ seq, cmd: stamped, sentAt: this.now() });
         while (this.pending.length > MAX_PENDING) this.pending.shift();
-        this.sendMsg({ t: "input", seq, mx: cmd.moveX, my: cmd.moveY, aim: cmd.aim, fire: cmd.firing, dash: cmd.dash, act: cmd.interact === true, ult: cmd.ult === true, pulse: cmd.pulse === true, ackEv: this.lastEventId, ackSnap: Math.max(0, this.lastSnapSseq) });
+        this.sendMsg({ t: "input", seq, mx: cmd.moveX, my: cmd.moveY, aim: cmd.aim, fire: cmd.firing, dash: cmd.dash, act: cmd.interact === true, ult: cmd.ult === true, pulse: cmd.pulse === true, pet: cmd.petAbility === true, ackEv: this.lastEventId, ackSnap: Math.max(0, this.lastSnapSseq) });
         stepPlayerPhase(this.predState, p, stamped, FIXED_DT, scratch);
         this.capturePredictedPvpEvents(seq, scratch);
       } else {

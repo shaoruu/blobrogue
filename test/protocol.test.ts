@@ -77,7 +77,7 @@ function clientRoundTripTests(): void {
   section("client messages round-trip losslessly through the strict decoder");
   const msgs: ClientMsg[] = [
     { t: "join", ticket: "v1.abc.def", protocol: PROTOCOL_VERSION },
-    { t: "input", seq: 41, mx: -1, my: 0.5, aim: 2.25, fire: true, dash: false, act: true, ult: true, pulse: true, ackEv: 17, ackSnap: 12 },
+    { t: "input", seq: 41, mx: -1, my: 0.5, aim: 2.25, fire: true, dash: false, act: true, ult: true, pulse: true, pet: true, ackEv: 17, ackSnap: 12 },
     { t: "pong", id: 3 },
     { t: "equip", weapon: "shotgun", cseq: 5 },
     { t: "reorder", from: 0, to: 3, cseq: 6 },
@@ -123,6 +123,10 @@ function unknownFieldTests(): void {
   try { jsonCodec.decodeClient(JSON.stringify({ t: "input", seq: 1, mx: 1, my: 0, aim: 0, fire: false, dash: false, act: false, ult: false, ackEv: 0, ackSnap: 0 })); }
   catch (err) { v24Input = err instanceof ProtocolError; }
   check("a v24 input (no pulse) is a protocol error — the Mender heal-pulse intent is mandatory (v25)", v24Input);
+  let v44Input = false;
+  try { jsonCodec.decodeClient(JSON.stringify({ t: "input", seq: 1, mx: 1, my: 0, aim: 0, fire: false, dash: false, act: false, ult: false, pulse: false, ackEv: 0, ackSnap: 0 })); }
+  catch (err) { v44Input = err instanceof ProtocolError; }
+  check("a v44 input (no pet) is a protocol error — the pet-ability intent is mandatory (v45)", v44Input);
   let specExtra = false;
   try { jsonCodec.decodeClient(JSON.stringify({ t: "spec", target: "p1", x: 5 })); }
   catch (err) { specExtra = err instanceof ProtocolError; }

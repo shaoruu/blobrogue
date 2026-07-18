@@ -63,7 +63,7 @@ export class WorldRegistry implements SessionStore {
   // Bind a connection to a room: add its player + register the conn on the room.
   bind(conn: Conn, roomId: string, pvpPolicy: PvpPolicyId | null): RoomRuntime {
     const room = this.ensureRoom(roomId, pvpPolicy);
-    room.addPlayer(conn.playerId!, conn.kitId, conn.authName ?? conn.playerId!);
+    room.addPlayer(conn.playerId!, conn.kitId, conn.authName ?? conn.playerId!, conn.pet);
     room.conns.set(conn.id, conn);
     conn.worldId = room.id;
     return room;
