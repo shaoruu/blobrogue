@@ -179,6 +179,32 @@ export const PVP = {
   startWeapon: "pistol" as WeaponId,
 };
 
+// ---- PVP WAVE 2 · PILLAR A: CONTESTED HEARTH (HOLD_THE_HEARTH @ arena center) --------------
+// The one objective tuning surface for the contested hearth (Quill FINAL 2026-07-18, PROTOCOL 47).
+// A lone player standing UNCONTESTED on the arena-center hearth accrues Favor; a full stand arms
+// one ember_edge charge (a flat next-gun-hit chip). Contested (>=2 living players in radius)
+// PAUSES Favor; leaving the radius decays unarmed progress and, after a short hold, drops an
+// armed charge. Death clears both. Every number is read only behind isPvp — co-op is inert.
+export const HEARTH = {
+  // Radius (px) of the center hearth ring, measured from the (9,9) centerPickup tile center.
+  radius: 56,
+  // Seconds of UNCONTESTED standing (exactly one living player in radius) per accrued Favor tick.
+  favorTickSec: 0.50,
+  // Favor ticks that ARM one ember_edge charge (2 x 0.50s = 1.0s of uncontested standing).
+  favorTicksToArm: 2,
+  // Unarmed Favor progress clears this long after the player leaves the radius.
+  emptyDecaySec: 0.40,
+  // An ARMED ember_edge charge survives at most this long after the player leaves the radius.
+  armedHoldSec: 1.5,
+  // ember_edge active window after arming — spent by the next gun hit or dropped at expiry.
+  emberWindowSec: 4.0,
+  // Flat PVP damage added to the next single gun hit while ember_edge is live. A flat chip only
+  // (never multiplied by draft blessings / output scale), still clamped by the per-hit cap.
+  emberBonusDamage: 8,
+  // Knockback multiplier applied to that one ember_edge gun hit (still clamped by kbMaxPerHit).
+  emberKbScalar: 1.15,
+} as const;
+
 // The match timers are counted in TICKS (never ms / wall-clock) for determinism; these convert
 // the named second-values at the authoritative tick rate.
 export function pvpRespawnDelayTicks(): number { return Math.round(PVP.respawnDelaySec * TICKS_PER_SECOND); }
@@ -203,6 +229,26 @@ export function pvpChainWindowTicks(): number { return Math.round(PVP.chainWindo
 export function pvpDraftEveryTicks(): number { return Math.round(PVP.draftEverySec * TICKS_PER_SECOND); }
 export function pvpDraftOfferTicks(): number { return Math.round(PVP.draftOfferSec * TICKS_PER_SECOND); }
 export function pvpSuddenDeathFinalTicks(): number { return Math.round(PVP.suddenDeathFinalSec * TICKS_PER_SECOND); }
+
+// Hearth timers in TICKS (deterministic). armTicks is the full uncontested stand that arms a
+// charge; the others are the decay/hold/window windows named in HEARTH.
+export function pvpHearthFavorTickTicks(): number { return Math.round(HEARTH.favorTickSec * TICKS_PER_SECOND); }
+export function pvpHearthArmTicks(): number { return pvpHearthFavorTickTicks() * HEARTH.favorTicksToArm; }
+export function pvpHearthEmptyDecayTicks(): number { return Math.round(HEARTH.emptyDecaySec * TICKS_PER_SECOND); }
+export function pvpHearthArmedHoldTicks(): number { return Math.round(HEARTH.armedHoldSec * TICKS_PER_SECOND); }
+export function pvpHearthEmberWindowTicks(): number { return Math.round(HEARTH.emberWindowSec * TICKS_PER_SECOND); }
+
+// Favor pips (0..favorTicksToArm) earned from raw uncontested standing ticks — the HUD readout.
+export function pvpHearthFavorPips(favorTicks: number): number {
+  const per = pvpHearthFavorTickTicks();
+  return Math.min(HEARTH.favorTicksToArm, Math.floor(Math.max(0, favorTicks) / per));
+}
+
+// Is `point` inside the hearth ring centered at `center`? The ONE geometry predicate the sim's
+// occupancy scan and the client's marker both key off, so radius is defined in exactly one place.
+export function isWithinHearth(point: Vec2, center: Vec2): boolean {
+  return Math.hypot(point.x - center.x, point.y - center.y) <= HEARTH.radius;
+}
 
 function pvpPlayerIdHash(id: PlayerId): number {
   let hash = 0x811c9dc5;
@@ -306,9 +352,12 @@ export interface MatchState {
   isSuddenDeath: boolean;
   // Authored lethal-pit centers used by deterministic, pit-aware spawn selection.
   pits: Vec2[];
+  // The contested-hearth center (tile-center px), reused from the arena centerPickup at (9,9).
+  // Static for the match; the Favor/ember_edge occupancy scan measures every player against it.
+  hearthCenter: Vec2;
 }
 
-export function createMatchState(spawns: Vec2[], pits: Vec2[] = []): MatchState {
+export function createMatchState(spawns: Vec2[], pits: Vec2[] = [], hearthCenter: Vec2 = { x: 0, y: 0 }): MatchState {
   return {
     phase: "lobby",
     phaseEndTick: 0,
@@ -321,6 +370,7 @@ export function createMatchState(spawns: Vec2[], pits: Vec2[] = []): MatchState 
     fragChain: new Map(),
     isSuddenDeath: false,
     pits,
+    hearthCenter,
   };
 }
 

@@ -88,6 +88,10 @@ export interface AuthoritativePlayerSnapshot {
   spawnHardGraceEndsAtTick: number;
   spawnShieldEndsAtTick: number;
   isSpawnOffenseLatched: boolean;
+  // Contested-hearth (PROTOCOL 47): the accrued Favor + the armed ember_edge window. Server-owned
+  // + reconciled so the HUD Favor/ember readout is reconnect-safe; both 0 in co-op.
+  hearthFavorT: number;
+  hearthEmberT: number;
 }
 
 type ServerOwnedField = keyof AuthoritativePlayerSnapshot;
@@ -197,6 +201,10 @@ type ServerOnlyField =
   | "pvpDraftOfferElapsedTicks"
   | "isPvpDraftDeathDelayReported"
   | "isPvpDraftAbsenceDelayReported"
+  // Server-only hearth bookkeeping: ticks since the player left the radius (drives the 0.40s
+  // unarmed clear + the 1.5s armed hold). The client renders only the Favor/ember readouts, so
+  // this never crosses the wire (like overshieldRegenT).
+  | "hearthAwayT"
   | "weaponOfferHistory"
   | "blessingOfferHistory"
   | "blessingOfferOrdinal"
@@ -278,6 +286,8 @@ export function projectPlayer(p: PlayerSim): AuthoritativePlayerSnapshot {
     spawnHardGraceEndsAtTick: p.spawnHardGraceEndsAtTick,
     spawnShieldEndsAtTick: p.spawnShieldEndsAtTick,
     isSpawnOffenseLatched: p.isSpawnOffenseLatched,
+    hearthFavorT: p.hearthFavorT,
+    hearthEmberT: p.hearthEmberT,
   };
 }
 
@@ -347,6 +357,8 @@ export function applyPlayerSnapshot(p: PlayerSim, s: AuthoritativePlayerSnapshot
   p.spawnHardGraceEndsAtTick = s.spawnHardGraceEndsAtTick;
   p.spawnShieldEndsAtTick = s.spawnShieldEndsAtTick;
   p.isSpawnOffenseLatched = s.isSpawnOffenseLatched;
+  p.hearthFavorT = s.hearthFavorT;
+  p.hearthEmberT = s.hearthEmberT;
 }
 
 // Reconstruct a full PlayerMods from a received mods value (a JSON-parse boundary: the input is

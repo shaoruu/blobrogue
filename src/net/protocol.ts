@@ -11,7 +11,7 @@
 // field type-checked before the client trusts it).
 
 import type { PlayerSim, WorldState } from "../sim/world.js";
-import { isFloorCleared, playersAtExit, isPlayerOut } from "../sim/world.js";
+import { isFloorCleared, playersAtExit, isPlayerOut, isPvpHearthContested } from "../sim/world.js";
 import type { EncounterState } from "../sim/encounter.js";
 import { shopSlotForViewer } from "../sim/shop.js";
 import type { ShopSlot, ShopSlotKind, ShopState } from "../sim/shop.js";
@@ -382,7 +382,14 @@ export const FIXED_DT = 1 / TICK_HZ; // 50ms authoritative step
 //   `hzds` list with no new hazard field. EMBERPUFF/RATTLE are one-shot server-side effects
 //   (hazard-life scale / trash wind-up interrupt) with no new wire state. All windows sit at 0 in
 //   a pvp arena (abilities OFF). The bump lets a v45 client cleanly reject the new closed sets.
-export const PROTOCOL_VERSION = 46;
+// v47 (PVP Wave 2 — Contested Hearth): SelfWire grows the two owner-bound hearth timers `hf`
+//   (accrued uncontested-stand Favor, ticks) and `he` (armed ember_edge window, ticks), reconciled
+//   so the HUD Favor/ember pip is reconnect-safe; MatchWire grows `hc` (the hearth-contested bool
+//   for the contested VFX). All sit at 0/false in co-op and on the public path. The hearth is
+//   fully server-resolved (no client input changes). `hf`/`he` are REQUIRED self fields (a v46
+//   server frame lacking them fails strict self validation); `hc` is decode-optional (defaults
+//   false) so a co-op-shaped or older match block still decodes. The bump keeps the ends in lockstep.
+export const PROTOCOL_VERSION = 47;
 
 
 // How long the server reserves a disconnected player's body (their seat) before the
@@ -480,6 +487,11 @@ export interface SelfWire {
   pft: number;                 // FETCH pull window seconds left
   psh: number;                 // PEBBLEBRACE one-hit brace window seconds left (v46)
   pnl: number;                 // NULLWAKE floor-hazard-null window seconds left (v46)
+  // CONTESTED HEARTH (v47) — server-owned + reconciled so the HUD Favor/ember pip is reconnect-
+  // safe. Both TICKS (like rsp/sgr): `hf` accrued uncontested-stand progress (0..armTicks; the
+  // pip = floor(hf / favorTickTicks)); `he` remaining ember_edge window (0 = no charge). 0 in co-op.
+  hf: number;
+  he: number;
 }
 
 // Another player as seen by this client (rendered via interpolation, never predicted).
@@ -686,6 +698,11 @@ export interface MatchWire {
   end: number;           // absolute tick the current TIMED phase ends (0 = untimed)
   sc: MatchScoreWire[];  // per-player frags + alive (the authoritative scoreboard)
   win: PlayerId | null;  // winner id once phase === "over" (null otherwise)
+  // CONTESTED HEARTH (v47): whether the center hearth is contested RIGHT NOW (>= 2 living bodies
+  // in the ring) — a pure presentation read driving the HUD contested VFX. Decode-OPTIONAL with a
+  // safe `false` default (like the PlayerWire cosmetic fields) so an older frame — or a
+  // co-op-shaped match block — still decodes. toMatchWire always sets it.
+  hc?: boolean;
 }
 
 // ---- messages ----
@@ -1352,6 +1369,8 @@ function validateSelfWire(v: unknown): SelfWire {
     pft: num(o, "pft", 0, 1e4),
     psh: num(o, "psh", 0, 1e4),
     pnl: num(o, "pnl", 0, 1e4),
+    hf: intOf(o, "hf", 0, 1e6),
+    he: intOf(o, "he", 0, 1e6),
   };
 }
 
@@ -1563,6 +1582,7 @@ function validateMatchWire(v: unknown): MatchWire {
     end: intOf(o, "end", 0, Number.MAX_SAFE_INTEGER),
     sc,
     win: win as PlayerId | null,
+    hc: o.hc === undefined ? false : boolOf(o, "hc"),
   };
 }
 
@@ -1851,6 +1871,8 @@ export function selfWireFromSnapshot(s: AuthoritativePlayerSnapshot): SelfWire {
     pft: s.petFetchT,
     psh: s.petShieldT,
     pnl: s.petNullT,
+    hf: s.hearthFavorT,
+    he: s.hearthEmberT,
   };
 }
 
@@ -1886,6 +1908,8 @@ export function snapshotFromSelfWire(w: SelfWire): AuthoritativePlayerSnapshot {
     petFetchT: w.pft,
     petShieldT: w.psh,
     petNullT: w.pnl,
+    hearthFavorT: w.hf,
+    hearthEmberT: w.he,
   };
 }
 
@@ -1949,7 +1973,7 @@ export function toMatchWire(m: MatchState, w: WorldState): MatchWire {
     // standing. Mirrors the sim's canDamagePlayer/present-roster contract.
     sc.push({ id, f: m.scores.get(id) ?? 0, a: p !== undefined && !p.isAbsent && p.hp > 0 && p.respawnT === 0 });
   }
-  return { ph: m.phase, end: m.phaseEndTick, sc, win: m.winner };
+  return { ph: m.phase, end: m.phaseEndTick, sc, win: m.winner, hc: isPvpHearthContested(w) };
 }
 
 export function toEnemyWire(e: Enemy): EnemyWire {
