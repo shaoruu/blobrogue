@@ -3181,7 +3181,10 @@ export class Game {
       }
       case "blessingProc": {
         const eventId = blessingProcCue(e.item, e.phase);
-        if (eventId !== undefined) waveAudio.cueAt(eventId, e.x, e.y);
+        const isSelfOnlyCue = eventId === "melee.bladeWard";
+        if (eventId !== undefined && (!isSelfOnlyCue || this.isSelfPid(e.pid))) {
+          waveAudio.cueAt(eventId, e.x, e.y);
+        }
         if (this.isSelfPid(e.pid)) {
           const item = itemById(e.item);
           if (item !== undefined) this.spawnWorldLabel(e.x, e.y, item.name, item.tint);
