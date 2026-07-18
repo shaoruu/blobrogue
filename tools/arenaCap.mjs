@@ -16,14 +16,14 @@ import { join } from "node:path";
 const OUT_DIR = process.argv[2] ?? "/workspace/arena-shots";
 const EXTERNAL_URL = process.argv[3] ?? null;
 const SCENES = ["live-hearth", "live-contested", "live-tar", "live-gust", "live-spark"];
-const CHROME = "/usr/local/bin/google-chrome";
+const CHROME = "/usr/bin/google-chrome";
 
 mkdirSync(OUT_DIR, { recursive: true });
 
 function startDevServer() {
   return new Promise((resolve, reject) => {
     const proc = spawn("npm", ["run", "dev", "--", "--host", "127.0.0.1"], {
-      cwd: "/workspace",
+      cwd: "/workspace/blobrogue",
       env: process.env,
     });
     let settled = false;
