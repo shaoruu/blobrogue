@@ -2807,16 +2807,25 @@ export class Game {
         }
         if (!this.isNearCamera(e.x, e.y)) break;
         const s = this.burstScale();
+        // ODDSMAKER's BLAST payload is a SMALL (r=52), RAPID-fire boom (a ~2.5/s gamble). Giving
+        // every one a barrel/thumper's full treatment — heavy hitstop, big trauma, a full debris
+        // field, and a whole-screen flash — strobes the view, stutters the frame with back-to-back
+        // hitstop, and floods the particle pool under sustained fire (the confirmed playtest lag).
+        // A small rapid blast earns a proportionately lean pop: half the debris, a kill-weight
+        // (not heavy) hitstop, softer shake, and the local light pulse INSTEAD of a screen flash.
+        // Still a punchy, readable boom — the gamble fantasy is intact; big set-pieces are untouched.
+        const isRapidBlast = e.src === "oddsmaker";
+        const debris = isRapidBlast ? 0.5 : 1;
         this.lighting.addPulse(e.x, e.y, Math.min(EXPLOSION_LIGHT_MAX, e.r * 2), 0.85 * settings.flashFactor, "#ffb43b", EXPLOSION_LIGHT_DUR);
-        this.burstFreeze = Math.max(this.burstFreeze, FREEZE_HEAVY);
-        this.burstTrauma += 0.6;
-        this.spawnGibs(e.x, e.y, Math.round(18 * s), "#ff8a3b");
-        this.spawnSparks(e.x, e.y, Math.round(16 * s), Math.random() * 6.28);
-        this.spawnParticles(e.x, e.y, Math.round(20 * s), "#ffb43b");
+        this.burstFreeze = Math.max(this.burstFreeze, isRapidBlast ? FREEZE_KILL : FREEZE_HEAVY);
+        this.burstTrauma += isRapidBlast ? 0.28 : 0.6;
+        this.spawnGibs(e.x, e.y, Math.round(18 * s * debris), "#ff8a3b");
+        this.spawnSparks(e.x, e.y, Math.round(16 * s * debris), Math.random() * 6.28);
+        this.spawnParticles(e.x, e.y, Math.round(20 * s * debris), "#ffb43b");
         this.addDecal(e.x, e.y, "#ff7a2a", e.r * 0.6, "splat");
         this.shockwaves.spawn(e.x, e.y, 14, e.r * 1.6, 0.38, "#ffb43b", 5);
-        this.spawnSparkleBurst(e.x, e.y, Math.round(10 * s), "#ff8a3b");
-        this.flashScreen(255, 150, 60, 0.13, 3.2);
+        this.spawnSparkleBurst(e.x, e.y, Math.round(10 * s * debris), "#ff8a3b");
+        if (!isRapidBlast) this.flashScreen(255, 150, 60, 0.13, 3.2);
         break;
       }
       case "implosion":
@@ -3898,14 +3907,22 @@ export class Game {
   }
 
   private updateParticles(dt: number) {
-    for (const p of this.particles) {
+    // Advance + drop-dead in ONE in-place compaction pass (live particles slide to the front,
+    // the tail is truncated). The old filter() re-allocated the whole array every frame — with
+    // a dense FX weapon (Oddsmaker blasts push the pool into the hundreds) that was steady GC
+    // churn on the hot path. This reuses the array, so a busy screen no longer feeds the GC.
+    const arr = this.particles;
+    let w = 0;
+    for (let i = 0; i < arr.length; i++) {
+      const p = arr[i];
       p.x += p.vx * dt; p.y += p.vy * dt;
       if (p.gravity !== 0) p.vy += p.gravity * dt;
       p.vx *= p.drag; p.vy *= p.drag;
       if (p.vr !== 0) p.rot += p.vr * dt;
       p.life -= dt;
+      if (p.life > 0) { if (w !== i) arr[w] = p; w++; }
     }
-    this.particles = this.particles.filter((p) => p.life > 0);
+    arr.length = w;
   }
 
   private updateDecals(dt: number) {
@@ -6063,6 +6080,10 @@ export class Game {
     for (const p of this.particles) {
       const a = p.life / p.maxLife;
       if (a <= 0) continue;
+      // Particles are pure cosmetic dressing (never a fairness cue), so an off-screen one
+      // is skipped outright — a dense boss burst that throws flecks across a big arena
+      // pays only for what the camera can actually see.
+      if (!this.isNearCamera(p.x, p.y, 24)) continue;
       if (p.kind === "gib" || p.kind === "shell") {
         ctx.save();
         ctx.globalAlpha = a > 1 ? 1 : a;
@@ -8470,6 +8491,10 @@ export class Game {
     const { ctx, renderCam: cam } = this;
     for (const b of this.bullets) {
       const bx = b.x - cam.x, by = b.y - cam.y;
+      // Off-screen rounds draw nothing visible; skip their (multi-layer) FX entirely so a
+      // spray weapon's rounds flying past the view cost nothing. Margin covers the glow/streak
+      // reach so a round about to enter frame is never clipped early.
+      if (!this.isNearCamera(b.x, b.y, 48)) continue;
       if (b.friendly) {
         // Layered additive sprite FX per weapon; falls back to the plain circle if the
         // recipe's core sprite hasn't loaded yet, so a bullet always renders.

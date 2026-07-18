@@ -127,6 +127,12 @@ export function renderDungeonTiles<Img>(ctx: TileRenderContext<Img>, scene: Tile
   // Dedicated per-biome floor art (BIOME_TILE_SOURCES) wins when registered; otherwise
   // the shared set carries the biome through the grade below.
   const detailDensity = biome.detailDensity;
+  // Walkability outline accumulator: every wall-adjacent floor tile contributes its
+  // boundary segments into ONE path, stroked once after the floor pass instead of a
+  // begin/stroke per tile. The segments are non-overlapping and share one style, so the
+  // single stroke is pixel-identical to the old per-tile strokes — it just collapses the
+  // frame's biggest cluster of stroke() calls (a room perimeter's worth) into one.
+  ctx.beginPath();
   for (let ty = y0; ty < y1; ty++) {
     for (let tx = x0; tx < x1; tx++) {
       if (d.tiles[ty * d.w + tx] !== 0) continue;
@@ -145,12 +151,13 @@ export function renderDungeonTiles<Img>(ctx: TileRenderContext<Img>, scene: Tile
       // The biome wash later shifts hue across both, so this per-floor dim preserves a
       // grayscale walkable-vs-solid distinction independent of palette. Alpha is biome
       // data, calibrated per band against its authored art (see Biome.floorDim).
-      ctx.save();
-      ctx.globalCompositeOperation = "source-over";
+      // The composite op is already source-over across the whole floor pass, so instead
+      // of a save/restore per tile (the dominant per-frame cost on dense/deep floors) we
+      // set alpha, fill, and reset alpha — pixel-identical, no state-stack churn.
       ctx.globalAlpha = biome.floorDim;
       ctx.fillStyle = "#05030b";
       ctx.fillRect(sx, sy, TILE, TILE);
-      ctx.restore();
+      ctx.globalAlpha = 1;
       const rd = tileHash(tx, ty, 2);
       if (rd < detailDensity) {
         const t = rd / detailDensity;
@@ -166,10 +173,9 @@ export function renderDungeonTiles<Img>(ctx: TileRenderContext<Img>, scene: Tile
           if (biome.detailTint && detail === "floor_moss") {
             const tinted = tiles.tinted(detail, biome.detailTint);
             if (tinted) {
-              ctx.save();
               ctx.globalAlpha = 0.45;
               ctx.drawImage(tinted, sx, sy, TILE, TILE);
-              ctx.restore();
+              ctx.globalAlpha = 1;
             }
           }
         }
@@ -185,21 +191,20 @@ export function renderDungeonTiles<Img>(ctx: TileRenderContext<Img>, scene: Tile
       // Walkability outline: trace the exact floor/wall collision boundary ON the floor
       // side. This is structural navigation guidance, visible in grayscale and blur, so
       // it draws ABOVE the cast shadow — under it, every north boundary loses its line.
-      if (wallN || wallS || wallW || wallE) {
-        ctx.save();
-        ctx.globalAlpha = 0.72;
-        ctx.strokeStyle = biome.accent;
-        ctx.lineWidth = 1.5;
-        ctx.beginPath();
-        if (wallN) { ctx.moveTo(sx, sy + 1); ctx.lineTo(sx + TILE, sy + 1); }
-        if (wallS) { ctx.moveTo(sx, sy + TILE - 1); ctx.lineTo(sx + TILE, sy + TILE - 1); }
-        if (wallW) { ctx.moveTo(sx + 1, sy); ctx.lineTo(sx + 1, sy + TILE); }
-        if (wallE) { ctx.moveTo(sx + TILE - 1, sy); ctx.lineTo(sx + TILE - 1, sy + TILE); }
-        ctx.stroke();
-        ctx.restore();
-      }
+      // Only the segments are recorded here; the single stroke lands after the pass. All
+      // floor tiles draw within their own rect, so no later tile can paint over a segment.
+      if (wallN) { ctx.moveTo(sx, sy + 1); ctx.lineTo(sx + TILE, sy + 1); }
+      if (wallS) { ctx.moveTo(sx, sy + TILE - 1); ctx.lineTo(sx + TILE, sy + TILE - 1); }
+      if (wallW) { ctx.moveTo(sx + 1, sy); ctx.lineTo(sx + 1, sy + TILE); }
+      if (wallE) { ctx.moveTo(sx + TILE - 1, sy); ctx.lineTo(sx + TILE - 1, sy + TILE); }
     }
   }
+  // One stroke for every walkability boundary segment gathered above.
+  ctx.globalAlpha = 0.72;
+  ctx.strokeStyle = biome.accent;
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
+  ctx.globalAlpha = 1;
 
   // Room flourishes: per-archetype floor lighting drawn between floors and walls, so
   // wall tiles crop the edges naturally. Arenas get a fighting-pit spotlight, vaults a
@@ -233,12 +238,12 @@ export function renderDungeonTiles<Img>(ctx: TileRenderContext<Img>, scene: Tile
         // Lift the authored wall cap as a material plane; floor is darkened separately.
         // Alpha is biome data (Biome.wallLift): bands whose authored wall art sits at
         // floor luminance need a stronger lift to stay readable as solid.
-        ctx.save();
         ctx.globalCompositeOperation = "screen";
         ctx.globalAlpha = biome.wallLift;
         ctx.fillStyle = biome.wallCap;
         ctx.fillRect(sx, sy, TILE, TILE);
-        ctx.restore();
+        ctx.globalCompositeOperation = "source-over";
+        ctx.globalAlpha = 1;
       } else if (tiles.ready("wall_top")) {
         ctx.drawImage(tiles.get("wall_top"), sx, sy, TILE, TILE);
       } else {
@@ -250,7 +255,9 @@ export function renderDungeonTiles<Img>(ctx: TileRenderContext<Img>, scene: Tile
       // Universal material hierarchy over every authored/fallback wall: a pale top lip and
       // hard dark floor-facing edge make collision/walkability readable even in grayscale.
       // Biome art supplies material; this supplies structural depth.
-      ctx.save();
+      // No save/restore here (or in the front-face/pillar blocks below): the wall pass
+      // runs source-over throughout, so we set alpha inline and reset it — the state-stack
+      // churn was pure overhead on the frame's hottest (per-tile) loop.
       ctx.globalAlpha = 0.72;
       ctx.fillStyle = biome.wallCap;
       ctx.fillRect(sx + 2, sy + 1, TILE - 4, 2);
@@ -259,18 +266,17 @@ export function renderDungeonTiles<Img>(ctx: TileRenderContext<Img>, scene: Tile
       if (belowFloor) ctx.fillRect(sx, sy + TILE - 6, TILE, 6);
       if (leftFloor) ctx.fillRect(sx, sy, 3, TILE);
       if (rightFloor) ctx.fillRect(sx + TILE - 3, sy, 3, TILE);
-      ctx.restore();
+      ctx.globalAlpha = 1;
       // Front face (darkest): a real sprite if present, then reinforce the inner edge.
       if (belowFloor && tiles.ready("wall_face")) {
         ctx.drawImage(tiles.get("wall_face"), sx, sy, TILE, TILE);
-        ctx.save();
         ctx.globalAlpha = 0.72;
         ctx.fillStyle = "#05030b";
         ctx.fillRect(sx, sy + TILE - 5, TILE, 5);
         ctx.globalAlpha = 0.65;
         ctx.fillStyle = biome.wallCap;
         ctx.fillRect(sx + 2, sy + 2, TILE - 4, 2);
-        ctx.restore();
+        ctx.globalAlpha = 1;
       }
       // Side faces: a translucent gradient strip fading inward from the exposed edge.
       if (leftFloor && sideL) {
@@ -296,7 +302,6 @@ export function renderDungeonTiles<Img>(ctx: TileRenderContext<Img>, scene: Tile
       // Isolated in-room wall cells are pillars/cover, not floor patches. Give them a
       // compact raised-block silhouette: dark cast shadow/face, inset lit cap, hard outline.
       if (aboveFloor && belowFloor && leftFloor && rightFloor) {
-        ctx.save();
         ctx.globalAlpha = 0.55;
         ctx.fillStyle = "#05030b";
         ctx.fillRect(sx + 5, sy + 8, TILE - 4, TILE - 3);
@@ -311,7 +316,7 @@ export function renderDungeonTiles<Img>(ctx: TileRenderContext<Img>, scene: Tile
         ctx.globalAlpha = 0.5;
         ctx.fillStyle = "#ffffff";
         ctx.fillRect(sx + 7, sy + 5, TILE - 16, 1);
-        ctx.restore();
+        ctx.globalAlpha = 1;
       }
     }
   }
