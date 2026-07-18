@@ -3907,14 +3907,22 @@ export class Game {
   }
 
   private updateParticles(dt: number) {
-    for (const p of this.particles) {
+    // Advance + drop-dead in ONE in-place compaction pass (live particles slide to the front,
+    // the tail is truncated). The old filter() re-allocated the whole array every frame — with
+    // a dense FX weapon (Oddsmaker blasts push the pool into the hundreds) that was steady GC
+    // churn on the hot path. This reuses the array, so a busy screen no longer feeds the GC.
+    const arr = this.particles;
+    let w = 0;
+    for (let i = 0; i < arr.length; i++) {
+      const p = arr[i];
       p.x += p.vx * dt; p.y += p.vy * dt;
       if (p.gravity !== 0) p.vy += p.gravity * dt;
       p.vx *= p.drag; p.vy *= p.drag;
       if (p.vr !== 0) p.rot += p.vr * dt;
       p.life -= dt;
+      if (p.life > 0) { if (w !== i) arr[w] = p; w++; }
     }
-    this.particles = this.particles.filter((p) => p.life > 0);
+    arr.length = w;
   }
 
   private updateDecals(dt: number) {
