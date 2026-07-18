@@ -261,20 +261,20 @@ SHEETS["sever_anchor.idle"] = { src: "/sprites/sever_anchor.png", fps: 2 };
 SHEETS["choirmaster.idle"] = { src: "/sprites/choir_idle.png", fps: 6 };
 SHEETS["choirmaster.attack"] = { src: "/sprites/choir_attack.png", fps: 10 };
 SHEETS["choir_pillar.idle"] = { src: "/sprites/choir.png", fps: 2 };
-// UNDERTOW F65 — placeholder Weaver/Choir art (hooks only; no generation this batch).
+// UNDERTOW F65 — bespoke fal flux→birefnet→pixelize resin-eel body + relief_vent prop.
 // Display-facing signature THE RIVER COMES BACK; stems use undertow.river* pattern.
-registerDirectionalSet("undertow", { walkFps: 6, fileBase: "weaver2_px" });
+registerDirectionalSet("undertow", { walkFps: 6 });  // bespoke fal Undertow body (was weaver2_px placeholder)
 SHEETS["warm_pulse.idle"] = { src: "/sprites/choir.png", fps: 4 };
-SHEETS["relief_vent.idle"] = { src: "/sprites/weaver2_px.png", fps: 2 };
+SHEETS["relief_vent.idle"] = { src: "/sprites/relief_vent.png", fps: 2 };
 SHEETS["flood_front.idle"] = { src: "/sprites/choir.png", fps: 2 };
-// CLAIMANT F70 — PLACEHOLDER art hooks (Weaver/Choir sheets); display name ALL THINGS OWED.
-registerDirectionalSet("claimant", { walkFps: 6, fileBase: "weaver2_px" });
+// CLAIMANT F70 — bespoke fal gilded-debt crown + claim_socket prop; display name ALL THINGS OWED.
+registerDirectionalSet("claimant", { walkFps: 6 });  // bespoke fal Claimant body (was weaver2_px placeholder)
 SHEETS["claim_token.idle"] = { src: "/sprites/choir.png", fps: 4 };
-SHEETS["claim_socket.idle"] = { src: "/sprites/weaver2_px.png", fps: 2 };
-// THE WAKE F80 — PLACEHOLDER art hooks (Weaver/Choir sheets); display name THE LAST PROCESSION.
-registerDirectionalSet("wake", { walkFps: 6, fileBase: "weaver2_px" });
+SHEETS["claim_socket.idle"] = { src: "/sprites/claim_socket.png", fps: 2 };
+// THE WAKE F80 — bespoke fal dusk procession front + convoy_blocker; display name THE LAST PROCESSION.
+registerDirectionalSet("wake", { walkFps: 6 });  // bespoke fal Wake body (was weaver2_px placeholder)
 SHEETS["warm_bier.idle"] = { src: "/sprites/choir.png", fps: 4 };
-SHEETS["convoy_blocker.idle"] = { src: "/sprites/weaver2_px.png", fps: 2 };
+SHEETS["convoy_blocker.idle"] = { src: "/sprites/convoy_blocker.png", fps: 2 };
 SHEETS["shadow_front.idle"] = { src: "/sprites/choir.png", fps: 2 };
 
 // PALE THRONE (F75 GIANT #2 — AD-LOCKED committed COLD-material art, wire never regenerate): three
@@ -439,16 +439,16 @@ const SOURCES: Record<SpriteName, string> = {
   sever_anchor: "/sprites/sever_anchor.png",
   choirmaster: "/sprites/choir.png",
   choir_pillar: "/sprites/choir.png",
-  undertow: "/sprites/weaver2_px.png",
+  undertow: "/sprites/undertow.png",
   warm_pulse: "/sprites/choir.png",
-  relief_vent: "/sprites/weaver2_px.png",
+  relief_vent: "/sprites/relief_vent.png",
   flood_front: "/sprites/choir.png",
-  claimant: "/sprites/weaver2_px.png",
+  claimant: "/sprites/claimant.png",
   claim_token: "/sprites/choir.png",
-  claim_socket: "/sprites/weaver2_px.png",
-  wake: "/sprites/weaver2_px.png",
+  claim_socket: "/sprites/claim_socket.png",
+  wake: "/sprites/wake.png",
   warm_bier: "/sprites/choir.png",
-  convoy_blocker: "/sprites/weaver2_px.png",
+  convoy_blocker: "/sprites/convoy_blocker.png",
   shadow_front: "/sprites/choir.png",
   // PALE THRONE (F75 GIANT — AD-LOCKED committed art): the cold shell states the renderer swaps
   // off boss.phase (base "pale" = the stone/dormant shell), plus the small cold weak-point chunk.
