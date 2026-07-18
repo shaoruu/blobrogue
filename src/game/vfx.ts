@@ -10,6 +10,7 @@ export interface Shockwave {
   r0: number; r1: number;
   color: string;
   width: number;
+  alpha: number;
 }
 
 const MAX_SHOCKWAVES = 12;
@@ -17,9 +18,9 @@ const MAX_SHOCKWAVES = 12;
 export class ShockwaveField {
   private list: Shockwave[] = [];
 
-  spawn(x: number, y: number, r0: number, r1: number, dur: number, color: string, width = 4): void {
+  spawn(x: number, y: number, r0: number, r1: number, dur: number, color: string, width = 4, alpha = 1): void {
     if (this.list.length >= MAX_SHOCKWAVES) this.list.shift();
-    this.list.push({ x, y, t: 0, dur, r0, r1, color, width });
+    this.list.push({ x, y, t: 0, dur, r0, r1, color, width, alpha });
   }
 
   clear(): void {
@@ -28,8 +29,12 @@ export class ShockwaveField {
 
   update(dt: number): void {
     if (this.list.length === 0) return;
-    for (const s of this.list) s.t += dt;
-    this.list = this.list.filter((s) => s.t < s.dur);
+    let live = 0;
+    for (const s of this.list) {
+      s.t += dt;
+      if (s.t < s.dur) this.list[live++] = s;
+    }
+    this.list.length = live;
   }
 
   render(ctx: CanvasRenderingContext2D, camX: number, camY: number): void {
@@ -40,7 +45,7 @@ export class ShockwaveField {
       const k = s.t / s.dur; // 0..1
       const ease = 1 - (1 - k) * (1 - k); // ease-out: rings burst fast then coast
       const r = s.r0 + (s.r1 - s.r0) * ease;
-      ctx.globalAlpha = (1 - k) * 0.7;
+      ctx.globalAlpha = (1 - k) * 0.7 * s.alpha;
       ctx.strokeStyle = s.color;
       ctx.lineWidth = Math.max(1, s.width * (1 - k * 0.6));
       ctx.beginPath();
