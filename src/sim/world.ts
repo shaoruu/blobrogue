@@ -4410,7 +4410,15 @@ function openBossWindow(e: Enemy, seconds: number, ev: SimEvent[]): void {
 // arcs, thorns and barrels alike — and its transition beat can reduce/floor/queue uniformly.
 // `isOverflow` marks a transition beat's queued damage being released: it already passed
 // every reduction when it first landed, so it must not be chipped a second time.
-function damageEnemy(w: WorldState, by: PlayerId | null, e: Enemy, dmg: number, ev: SimEvent[], isOverflow = false): void {
+function damageEnemy(
+  w: WorldState,
+  by: PlayerId | null,
+  e: Enemy,
+  dmg: number,
+  ev: SimEvent[],
+  isOverflow = false,
+  isExecute = false,
+): void {
   // QUORUM husks: damage routes to the shared pool (the core), gated by role kill-order —
   // full only against the highest-priority living husk (shield → heal → dmg); a lower one is
   // chipped, so 4P crossfire that nukes the pool evenly makes no progress. The husk's own
@@ -4418,7 +4426,9 @@ function damageEnemy(w: WorldState, by: PlayerId | null, e: Enemy, dmg: number, 
   if (isQuorumHusk(e.kind)) { quorumDamageHusk(w, by, e, dmg, ev); return; }
   if (!e.boss) {
     // The elite's brace: ≤25% reduction through its 0.9s defensive slide — never immunity.
-    if (e.attack.move === "brace" && e.attack.phase === "windup") dmg *= 1 - ELITE_BRACE.damageReduction;
+    if (!isExecute && e.attack.move === "brace" && e.attack.phase === "windup") {
+      dmg *= 1 - ELITE_BRACE.damageReduction;
+    }
     e.hp -= dmg;
     return;
   }
@@ -4706,7 +4716,7 @@ function strikeEnemy(w: WorldState, p: PlayerSim | null, e: Enemy, hit: StrikeIn
       y: e.y,
     });
   }
-  damageEnemy(w, hit.ownerId, e, dmg, ev);
+  damageEnemy(w, hit.ownerId, e, dmg, ev, false, isExecuted);
   // Kit hooks (ult meter charge from damage dealt, GUNNER momentum ramp, MENDER lifebloom
   // credit). Inert for the neutral baseline, so shipped combat is byte-identical.
   onKitDamageDealt(w, p, dmg);
@@ -18201,6 +18211,14 @@ export function stepPlayerPhase(w: WorldState, p: PlayerSim, input: InputCmd, dt
 export function stepWorldPhase(w: WorldState, dt: number, ev: SimEvent[]): void {
   w.waveBClock += dt; // Content Wave B: monotonic real-seconds clock for the proc window
   for (const player of w.players.values()) {
+    if (player.mods.bladeWardAbsorb <= 0) {
+      player.bladeWardT = 0;
+      player.bladeWardAbsorb = 0;
+    }
+    if (player.mods.momentumDamageBonus <= 0) {
+      player.isMomentumArmed = false;
+      player.momentumMoveSamples = [];
+    }
     if (player.staggerPulseIcdT > 0) {
       player.staggerPulseIcdT = player.staggerPulseIcdT > dt ? player.staggerPulseIcdT - dt : 0;
     }

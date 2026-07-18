@@ -3158,16 +3158,6 @@ export class Game {
       case "blessingProc": {
         const eventId = BLESSING_PROC_AUDIO[e.item];
         if (eventId !== undefined) waveAudio.cueAt(eventId, e.x, e.y);
-        if (e.item === "stagger_pulse" && e.phase === "pulse") {
-          this.shockwaves.spawn(e.x, e.y, 8, 76, 0.28, "#9fd8ff", 3);
-        } else if (e.item === "blade_ward" && e.phase === "refresh") {
-          this.shockwaves.spawn(e.x, e.y, this.pr + 5, this.pr + 9, 0.32, "#b9c4d6", 2);
-        } else if (e.item === "finisher" && e.phase === "execute") {
-          this.spawnSparkFlash(e.x, e.y, "#fff3c4");
-          this.addFreeze(0.06);
-        } else if (e.item === "momentum_charge" && e.phase === "payoff") {
-          this.spawnSparkFlash(e.x, e.y, "#ffb06a");
-        }
         if (this.isSelfPid(e.pid)) {
           const item = itemById(e.item);
           if (item !== undefined) this.spawnWorldLabel(e.x, e.y, item.name, item.tint);
