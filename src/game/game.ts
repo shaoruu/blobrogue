@@ -847,6 +847,9 @@ export class Game {
   private isChargeCancelPending = false;
   // Dev sandbox: a one-frame ult-request pulse the panel's "Cast ult" button arms.
   private devUltPulse = false;
+  // PVP WAVE 3: the pending arena ult kit CLAIM (ult skin), sent on the input frame until the
+  // server reflects it (SelfWire.auk) or the match goes live (the claim locks at the whistle).
+  private pendingArenaKit = "";
   // ---- the semantic weapon-audio state machine (client-side edges over authoritative
   // state; every cue is a WEAPON_AUDIO contract state, never a file name) ----
   private audioPrevWeapon: WeaponId | null = null;
@@ -1204,6 +1207,9 @@ export class Game {
         if (this.isRunning) this.openFocusedShopStation();
         break;
       case "selectWeapon":
+        // PVP WAVE 3: during the pre-live arena freeze the 1-4 keys CLAIM the arena ult kit (an ult
+        // skin only). The weapon hotbar is inert off-live (the sim freezes it), so the keys are free.
+        if (this.claimArenaUltKit(a.index)) break;
         if (this.isRunning) this.equipSlot(a.index);
         break;
       case "cycleWeapon":
@@ -1897,25 +1903,44 @@ export class Game {
   // context (hotbar drag / open drawer) samples idle, so HUD interaction never leaks into
   // combat — and the "spectate" context (downed) samples idle too, so a spectator sends no
   // gameplay intents at the source (the authoritative sim ignores them anyway).
+  // PVP WAVE 3: claim the arena ult kit from a 1-4 key during the pre-live arena freeze. Returns
+  // whether the key was consumed as a claim (so it does not also fall through to weapon-equip).
+  private claimArenaUltKit(index: number): boolean {
+    if (this.mode !== "online" || !this.wsTransport) return false;
+    const match = this.wsTransport.getLatestSnapshot()?.match ?? null;
+    if (match === null || match.ph === "live" || match.ph === "over") return false;
+    const order = ["gunner", "mender", "bulwark", "phantom"] as const;
+    const kit = order[index];
+    if (kit === undefined) return false;
+    this.pendingArenaKit = kit;
+    return true;
+  }
+
   private buildInput(): InputCmd {
     const s = this.input.sample();
     const wx = this.input.mouseX + this.cam.x, wy = this.input.mouseY + this.cam.y;
     const aim = Math.atan2(wy - this.py, wx - this.px);
     // Dev sandbox: a one-frame ult request armed by the panel button (OR'd with the held key).
     const devUlt = this.devUltPulse; this.devUltPulse = false;
+    // Stop resending the arena ult claim once the server reflects it, or once the match locks it.
+    if (this.pendingArenaKit && this.wsTransport) {
+      const snap = this.wsTransport.getLatestSnapshot();
+      if (snap?.self?.auk === this.pendingArenaKit || snap?.match?.ph === "live") this.pendingArenaKit = "";
+    }
+    const arenaUltKit = this.pendingArenaKit;
     // Pending charge cancel: send the sim's explicit cancel intent (dash with zero
     // movement neither dashes nor fires — see updateChargeShooting) until the
     // authoritative charge reads empty. Movement is zeroed so a resume with a held
     // movement key can't turn the cancel frame into a real dash.
     if (this.isChargeCancelPending) {
       if (this.p.chargeT > 0) {
-        return { seq: ++this.inputSeq, moveX: 0, moveY: 0, aim, firing: false, dash: true, interact: false, ult: false, pulse: false, petAbility: false };
+        return { seq: ++this.inputSeq, moveX: 0, moveY: 0, aim, firing: false, dash: true, interact: false, ult: false, pulse: false, petAbility: false, arenaUltKit };
       }
       this.isChargeCancelPending = false;
     }
     // Pets auto-cast (server-owned smart AI); there is no player bind, so the request bit is
     // always false on the wire (it survives only as a debug force-cast the sim can honor).
-    return { seq: ++this.inputSeq, moveX: s.moveX, moveY: s.moveY, aim, firing: s.firing, dash: s.dash, interact: s.interact, ult: s.ult || devUlt, pulse: s.pulse, petAbility: false };
+    return { seq: ++this.inputSeq, moveX: s.moveX, moveY: s.moveY, aim, firing: s.firing, dash: s.dash, interact: s.interact, ult: s.ult || devUlt, pulse: s.pulse, petAbility: false, arenaUltKit };
   }
 
   // Co-op teammate positions fed to the sim as extra enemy-aggro targets (Stage A keeps
@@ -3006,6 +3031,21 @@ export class Game {
         this.sfxAt("homing", e.x, e.y, { rate: 1.3, gain: 0.6 });
         this.addTrauma(0.14);
         break;
+      // PVP WAVE 3 ARENA ULTS: one cast event for all four; `kind` picks the tell/VFX flavor. The
+      // effects themselves (salvo hits, triage heal, shove KB, slip blink) ride state/playerHurt.
+      case "ultArena": {
+        if (this.isSelfPid(e.pid)) this.isUltCasting = true;
+        const arenaColor = e.kind === "salvo" ? "#ffd166"
+          : e.kind === "triage" ? "#7fe6a8"
+          : e.kind === "shove" ? "#bcd4ff"
+          : "#a8e6ff"; // slip
+        this.spawnPuff(e.x, e.y, 12, arenaColor);
+        // A short directional tell streak along the committed aim (the >= 0.40s telegraph read).
+        this.remoteTracers.push({ x: e.x, y: e.y, angle: e.aim, life: 0.14, color: arenaColor, len: 40, isArc: false });
+        this.sfxAt(e.kind === "triage" ? "heart" : e.kind === "shove" ? "parry" : "weapon", e.x, e.y, { rate: 1.2, gain: 0.6 });
+        this.addTrauma(0.1);
+        break;
+      }
       case "tetherLatch": {
         // Whiff and latch are different sounds; the INVERTED latch adds the danger tell
         // (a heavy body is about to reel the wielder in).
