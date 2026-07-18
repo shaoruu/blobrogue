@@ -2807,16 +2807,25 @@ export class Game {
         }
         if (!this.isNearCamera(e.x, e.y)) break;
         const s = this.burstScale();
+        // ODDSMAKER's BLAST payload is a SMALL (r=52), RAPID-fire boom (a ~2.5/s gamble). Giving
+        // every one a barrel/thumper's full treatment — heavy hitstop, big trauma, a full debris
+        // field, and a whole-screen flash — strobes the view, stutters the frame with back-to-back
+        // hitstop, and floods the particle pool under sustained fire (the confirmed playtest lag).
+        // A small rapid blast earns a proportionately lean pop: half the debris, a kill-weight
+        // (not heavy) hitstop, softer shake, and the local light pulse INSTEAD of a screen flash.
+        // Still a punchy, readable boom — the gamble fantasy is intact; big set-pieces are untouched.
+        const isRapidBlast = e.src === "oddsmaker";
+        const debris = isRapidBlast ? 0.5 : 1;
         this.lighting.addPulse(e.x, e.y, Math.min(EXPLOSION_LIGHT_MAX, e.r * 2), 0.85 * settings.flashFactor, "#ffb43b", EXPLOSION_LIGHT_DUR);
-        this.burstFreeze = Math.max(this.burstFreeze, FREEZE_HEAVY);
-        this.burstTrauma += 0.6;
-        this.spawnGibs(e.x, e.y, Math.round(18 * s), "#ff8a3b");
-        this.spawnSparks(e.x, e.y, Math.round(16 * s), Math.random() * 6.28);
-        this.spawnParticles(e.x, e.y, Math.round(20 * s), "#ffb43b");
+        this.burstFreeze = Math.max(this.burstFreeze, isRapidBlast ? FREEZE_KILL : FREEZE_HEAVY);
+        this.burstTrauma += isRapidBlast ? 0.28 : 0.6;
+        this.spawnGibs(e.x, e.y, Math.round(18 * s * debris), "#ff8a3b");
+        this.spawnSparks(e.x, e.y, Math.round(16 * s * debris), Math.random() * 6.28);
+        this.spawnParticles(e.x, e.y, Math.round(20 * s * debris), "#ffb43b");
         this.addDecal(e.x, e.y, "#ff7a2a", e.r * 0.6, "splat");
         this.shockwaves.spawn(e.x, e.y, 14, e.r * 1.6, 0.38, "#ffb43b", 5);
-        this.spawnSparkleBurst(e.x, e.y, Math.round(10 * s), "#ff8a3b");
-        this.flashScreen(255, 150, 60, 0.13, 3.2);
+        this.spawnSparkleBurst(e.x, e.y, Math.round(10 * s * debris), "#ff8a3b");
+        if (!isRapidBlast) this.flashScreen(255, 150, 60, 0.13, 3.2);
         break;
       }
       case "implosion":
