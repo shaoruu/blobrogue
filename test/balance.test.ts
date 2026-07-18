@@ -259,7 +259,7 @@ function bossLadderGates(): void {
       ["smg", row.highRollBuild],
       ["smg", [...row.highRollBuild, ...L3("hair_trigger")]],
       ["beam", row.highRollBuild],
-      ["smg", [...L3("glass_cannon"), ...L3("hair_trigger"), ...L3("deadeye"), ...L3("split_shot")]],
+      ["smg", [...L3("glass_cannon"), ...L3("hair_trigger"), ...L3("deadeye"), ...L3("full_metal")]],
     ];
     const runs = ladder.map(([wpn, picks]) => measureBossTtk(wpn, picks, { kind: row.kind, floor: row.floor }));
     const sortedTtk = runs.map((r) => (r.killed ? r.seconds : Infinity)).sort((a, b) => a - b);
@@ -1341,7 +1341,14 @@ function godBuildGates(): void {
 
   section("balancer god-build gate: the strongest estimator build proves every sim floor");
   // The top family from the report: smg carrying max fire-rate/damage/crit stacking.
-  const godPicks = [...L3("hair_trigger"), ...L3("glass_cannon"), ...L3("deadeye"), ...L3("split_shot")];
+  const godPicks = [
+    ...L3("hair_trigger"),
+    ...L3("glass_cannon"),
+    ...L3("deadeye"),
+    "coin_magnet",
+    "coin_magnet",
+    "coin_magnet",
+  ];
   for (const [kind, floor] of [["boss", 5], ["marrow", 15], ["weaver", 20], ["gilded", 25], ["choir", 30]] as Array<[EnemyKind, number]>) {
     const r = measureBossTtk("smg", godPicks, { kind, floor });
     record(`${kind}.godBuild`, r.seconds);
@@ -1417,7 +1424,7 @@ function fixtureGates(): void {
         median: "pistol + Hair Trigger Lv3 (+ Glass Cannon stack at depth)",
         highRoll: "smg + Deadeye Lv3 + Glass Cannon stack",
         percentiles: "nine-build deterministic ladder per boss (see percentile ladder in bossLadderGates); P10 = fastest decile",
-        godBuild: "smg + Glass Cannon/Hair Trigger/Deadeye/Split Shot all Lv3 (12 picks) through the remediated boss-facing damage model",
+        godBuild: "smg + Glass Cannon/Hair Trigger/Deadeye/Full Metal all Lv3 (12 picks) through the remediated boss-facing damage model",
       },
       measurements: MEASURED,
     };

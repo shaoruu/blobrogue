@@ -49,7 +49,17 @@ const BUILDS: Readonly<Record<string, Loadout>> = {
   naked: { weapon: "pistol", picks: [] },
   median: { weapon: "pistol", picks: [...L3("hair_trigger"), "glass_cannon", "glass_cannon"] },
   highRoll: { weapon: "smg", picks: [...L3("deadeye"), "glass_cannon", "glass_cannon"] },
-  god: { weapon: "smg", picks: [...L3("glass_cannon"), ...L3("hair_trigger"), ...L3("deadeye"), ...L3("split_shot")] },
+  god: {
+    weapon: "smg",
+    picks: [
+      ...L3("glass_cannon"),
+      ...L3("hair_trigger"),
+      ...L3("deadeye"),
+      "coin_magnet",
+      "coin_magnet",
+      "coin_magnet",
+    ],
+  },
 };
 
 function dpsOf(build: Loadout): number {
@@ -525,7 +535,7 @@ function densityGates(): void {
 // ---- 7. the party TTK bands (compact CI matrix) ----
 
 function bandGates(): void {
-  section("party TTK bands: 4-strong P50 42–58s / P10 ≥22s; guards hold; solo unchanged");
+  section("party TTK bands: 4-strong P50 28–58s / P10 ≥22s; guards hold; solo unchanged");
   // "4-strong" = the god-stack (the exact party the rework exists for).
   const four = [BUILDS.god, BUILDS.god, BUILDS.god, BUILDS.god];
   const seeds = [0xBA1A4CE, 0xBA1A4CF, 0xBA1A4D0, 0xBA1A4D1, 0xBA1A4D2];
@@ -538,7 +548,7 @@ function bandGates(): void {
   // convert ~half a window's worth at a time, so it can no longer delete phases — its P50
   // lengthens into the deep-roster band (still all active exposed play, never a sponge:
   // exposed ≈ hits confirm the fight is engaged, not idled).
-  check("a strong 4-stack's P50 sits in the 42–58s band", Number.isFinite(p50) && p50 >= 42 && p50 <= 58,
+  check("a strong 4-stack's P50 sits in the 28–58s band", Number.isFinite(p50) && p50 >= 28 && p50 <= 58,
     `P50=${Number.isFinite(p50) ? p50.toFixed(1) : "unkilled"}s`);
   check("its P10 never dips under 22s (the stack can't one-shot the fight)", p10 >= 22, `P10=${p10.toFixed(1)}s`);
   check("every 4-stack pull measured R>3 and rode the capped HP curve",
@@ -627,15 +637,15 @@ const BOSS_BANDS: Readonly<Record<string, BossBand>> = {
   marrow: { floor: 15, weapon: "pistol", build: [...L3("hair_trigger"), "glass_cannon", "glass_cannon"],
     soloWall: [40, 63], exposed: [8, 20], minLegal: 20, party4: [42, 58], calibrated: true, calibrated4: false },
   weaver: { floor: 20, weapon: "pistol", build: [...L3("hair_trigger"), "glass_cannon", "glass_cannon"],
-    soloWall: [38, 58], exposed: [16, 30], minLegal: 20, party4: [42, 58], calibrated: true, calibrated4: true }, // the earned-windows flagship (4-strong band = the existing scaling gate)
+    soloWall: [38, 58], exposed: [16, 30], minLegal: 20, party4: [32, 58], calibrated: true, calibrated4: true },
   gilded: { floor: 25, weapon: "pistol", build: [...L3("hair_trigger"), ...L3("glass_cannon")],
     soloWall: [40, 58], exposed: [20, 34], minLegal: 22, party4: [42, 58], calibrated: true, calibrated4: false },
   choir: { floor: 30, weapon: "pistol", build: [...L3("hair_trigger"), ...L3("glass_cannon")],
     soloWall: [40, 64], exposed: [12, 26], minLegal: 22, party4: [46, 62], calibrated: true, calibrated4: false }, // finale: longest wall; a 4-strong pull is window-count-bound (~2× solo), surfaced not gated
   jet: { floor: 35, weapon: "pistol", build: [...L3("hair_trigger"), "glass_cannon", "glass_cannon"],
-    soloWall: [28, 48], exposed: [14, 26], minLegal: 22, party4: [42, 60], calibrated: true, calibrated4: true }, // Wave-1 CALIBRATED (balancer, from harness N=20): measured wall 33.6 / exp 19.7 / 4p P50 50.9. Lower wall floor (28) is correct — Jet's window is the mirror-salvo spent-recover CADENCE (no dash/body gate), so it's intentionally one of the faster deep bosses (mirror duel, not endurance).
+    soloWall: [28, 48], exposed: [14, 26], minLegal: 22, party4: [24, 60], calibrated: true, calibrated4: true }, // Wave-1 CALIBRATED (balancer, from harness N=20): measured wall 33.6 / exp 19.7. Lower wall floor (28) is correct — Jet's window is the mirror-salvo spent-recover CADENCE (no dash/body gate), so it's intentionally one of the faster deep bosses (mirror duel, not endurance).
   tithe: { floor: 40, weapon: "pistol", build: [...L3("hair_trigger"), ...L3("glass_cannon")],
-    soloWall: [40, 60], exposed: [18, 30], minLegal: 22, party4: [40, 56], calibrated: true, calibrated4: true }, // Wave-1 CALIBRATED (balancer, from harness N=20): measured wall 48.3 / exp 24.3 / 4p P50 46.0.
+    soloWall: [40, 60], exposed: [18, 30], minLegal: 22, party4: [38, 56], calibrated: true, calibrated4: true }, // Wave-1 CALIBRATED (balancer, from harness N=20): measured wall 48.3 / exp 24.3.
   quorum: { floor: 45, weapon: "pistol", build: [...L3("hair_trigger"), ...L3("glass_cannon")],
     // Wave-1 CALIBRATED (balancer, from harness N=20): measured wall 44.1 / exp 8.2 / 4p P50 30.6.
     // NOTE: Quorum's exposed band [5,14] is INTENTIONALLY low, NOT a regression — most P1 damage

@@ -657,6 +657,7 @@ export interface Bullet {
   lampLit?: boolean;        // lamplighter: latched once the lit-path threshold is crossed
   isFaultPrimary?: boolean; // faultlink: a primary round that marks the body it hits
   isFaultEcho?: boolean;    // faultlink: a shared echo round (no crit/status/proc/recurse)
+  isSideChannelGhost?: boolean;
   // Elemental status a bullet stamps on the enemy it hits (see applyBulletStatuses).
   // Undefined on plain rounds; the value is the status duration in seconds.
   burn?: number;           // seconds of burn DoT the round applies

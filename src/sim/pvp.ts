@@ -42,6 +42,7 @@ export const pvpBlessingBlacklist = [
   "carry_the_light",
   "blade_ward",
   "finisher",
+  "side_channel",
 ] as const;
 
 export type PvpDraftTrigger = "none" | "frag" | "time" | "dedup";
@@ -129,8 +130,6 @@ export const PVP = {
   // sustain, low-HP, economy, dash-cooldown, and flat-EHP blessing stay out.
   blessingBlacklist: pvpBlessingBlacklist,
   blessingPool: [
-    "split_shot",
-    "scattergun",
     "full_metal",
     "big_iron",
     "deadeye",

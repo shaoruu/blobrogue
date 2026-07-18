@@ -6,7 +6,7 @@
 //
 // Purity: sim-only imports (this module is part of the isomorphic core).
 
-import { WEAPONS, MAX_ORBIT_BLADES } from "./weapons.js";
+import { WEAPONS, MAX_ORBIT_BLADES, isSideChannelProjectileWeapon } from "./weapons.js";
 import type { Weapon } from "./weapons.js";
 import type { WeaponId, WeaponRarity } from "./types.js";
 import type { PlayerMods } from "./items.js";
@@ -276,7 +276,10 @@ function mechanicsOf(w: Weapon, mods: PlayerMods): WeaponMechanic[] {
 // boss-grade bodies; burn counts its flat bounded DoT), times the balancer's 0.72
 // practical factor (the 12s-moving-target model behind the DPS ceilings). Pure and
 // deterministic over (weapon, mods): the pull's R sample derives from exactly this.
-export function expectedBossDps(id: WeaponId, mods: PlayerMods): number {
+export function expectedBossDps(
+  id: WeaponId,
+  mods: PlayerMods,
+): number {
   const w = WEAPONS[id];
   const isMelee = w.melee !== undefined;
   const pellets = isMelee ? 1 : w.pellets + mods.extraPellets;
@@ -288,7 +291,15 @@ export function expectedBossDps(id: WeaponId, mods: PlayerMods): number {
   const vuln = (1 - mods.critChance) + mods.critChance * Math.min(BOSS_VULN_CAP, mods.critMult);
   const rate = (1 / w.fireCd) * mods.fireRateMult;
   const burnDot = mods.burnChance > 0 ? 3 : 0;
-  return w.damage * mods.damageMult * effPellets * wepCoef * rate * vuln * POWER.practicalFactor + burnDot;
+  const perProjectile = w.damage * mods.damageMult * wepCoef * vuln;
+  const primaryDps = perProjectile * effPellets * rate * POWER.practicalFactor;
+  const hasSideChannel = isSideChannelProjectileWeapon(id)
+    && mods.sideChannelBossDamageMult > 0
+    && mods.sideChannelIcd > 0;
+  const ghostRate = hasSideChannel ? Math.min(rate, 1 / mods.sideChannelIcd) : 0;
+  const ghostDps = w.damage * mods.damageMult * wepCoef
+    * mods.sideChannelBossDamageMult * ghostRate * POWER.practicalFactor;
+  return primaryDps + ghostDps + burnDot;
 }
 
 export function weaponDisplayStats(id: WeaponId, mods: PlayerMods, lowHp: number): WeaponDisplayStats {

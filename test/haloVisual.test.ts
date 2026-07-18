@@ -44,7 +44,11 @@ function main(): void {
   );
   check(
     "one extra blade reaches charged tier 1",
-    tierFor(["split_shot"]) === 1,
+    haloVisualTier(
+      HALO_VISUAL_BASE.blades + 1,
+      HALO_VISUAL_BASE.bladeRadius,
+      HALO_VISUAL_BASE.speed,
+    ) === 1,
   );
   check(
     "a first Marksman speed upgrade reaches charged tier 1",
@@ -55,8 +59,12 @@ function main(): void {
     tierFor(["frostbite"]) === 1,
   );
   check(
-    "Split Shot II reaches the formidable blade cap",
-    tierFor(["split_shot", "split_shot"]) === 2,
+    "two extra blades reach the formidable blade cap",
+    haloVisualTier(
+      HALO_VISUAL_BASE.blades + 2,
+      HALO_VISUAL_BASE.bladeRadius,
+      HALO_VISUAL_BASE.speed,
+    ) === 2,
   );
   check(
     "Big Iron reaches the formidable visual size cap",

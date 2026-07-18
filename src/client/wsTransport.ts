@@ -936,6 +936,7 @@ export class WSTransport implements Transport {
     applyPlayerSnapshot(rp, pp);
     rp.aimAngle = pp.aimAngle;
     rp.meleeSwing = pp.meleeSwing;
+    rp.sideChannelArmedAim = pp.sideChannelArmedAim;
     // Render-extrapolate the local player between 20Hz fixed steps so movement stays smooth at any
     // FPS: advance from the last fixed position toward the current one by the leftover accumulator
     // fraction. Extrapolation naturally rests when the player stops (prev == cur). Any small

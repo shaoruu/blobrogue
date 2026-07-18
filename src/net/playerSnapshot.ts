@@ -175,6 +175,11 @@ type ServerOnlyField =
   | "isMomentumArmed"
   | "momentumIcdT"
   | "momentumMoveSamples"
+  | "sideChannelAimClock"
+  | "sideChannelAimSamples"
+  | "sideChannelArmedAim"
+  | "sideChannelArmedT"
+  | "sideChannelIcdT"
   // Content Wave C transient combat state: sub-10s, rebuilt from live inputs after a resume.
   | "hushStacks"
   | "hushStillT"

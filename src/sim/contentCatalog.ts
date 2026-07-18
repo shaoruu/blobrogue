@@ -40,7 +40,7 @@ const WAVE_C_PICKUP_WEAPONS: readonly WeaponId[] = [
 ];
 
 const LEGACY_NORMAL_BLESSING_IDS: readonly string[] = [
-  "glass_cannon", "hair_trigger", "split_shot", "scattergun", "full_metal",
+  "glass_cannon", "hair_trigger", "side_channel", "full_metal",
   "swift_boots", "big_iron", "vampire_fang", "adrenaline", "berserk",
   "second_wind", "thorns", "coin_magnet", "greed", "deadeye", "vitality",
   "incendiary_rounds", "cryo_coating", "static_charge", "elementalist",

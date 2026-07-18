@@ -61,7 +61,7 @@ import {
 import {
   WEAPONS, DEFAULT_WEAPON, MAX_WIRES, MAX_WIRES_PARTY, MAX_ORBIT_BLADES, fire,
   rollWeaponRarity, rollMysteryTwist, WEAPON_RARITY_COLOR, MYSTERY_COLOR,
-  createWeaponCycles,
+  createWeaponCycles, isSideChannelEligibleLoadout, isSideChannelProjectileWeapon,
 } from "./weapons.js";
 import type {
   ShotSpec, Weapon, WeaponCycles, WeaponFireCooldowns,
@@ -75,6 +75,7 @@ import {
   isPvpBlessingId,
   normalItemsForCatalog,
   rollItemChoicesWith,
+  canonicalItemId,
 } from "./items.js";
 import {
   ULT, OVERDRIVE, SANCTUARY, LIFEBLOOM, AEGIS, PHASE, MOMENTUM, OVERHEAT, HARDENED, OVERSHIELD,
@@ -138,7 +139,7 @@ import {
   phaseTimerFor,
   ELITE_COMMANDER, ELITE_BULWARK, ELITE_VOLATILE, ELITE_ECHOED, MARSHAL, TOLL,
   ROLL_AFFIX, BOSS_AFFIX,
-  WEAPON_BOSS_COEF, WIPE_HOLD_SECONDS, PU_DPS, PERSISTENT_BOSS_DPS_FRAC,
+  WEAPON_BOSS_COEF, SIDE_CHANNEL, WIPE_HOLD_SECONDS, PU_DPS, PERSISTENT_BOSS_DPS_FRAC,
   LIVE_CAPS, activeMoverCapFor, pedestalWeaponRolls, bossWeaponChoices, KING_REWARD_TABLE,
   MYSTERY, LEGENDARY_MIN_FLOOR,
   PREMIUM, CAPS, PHASE_NO_LOS_DAMAGE_MULT, coinChanceTaper, coopCoinGainMult, premiumMysteryLegendaryWeight,
@@ -295,6 +296,7 @@ interface StrikeInfo {
   // budget (PERSISTENT_BOSS_DPS_FRAC of partySize x PU_DPS per rolling second) and the
   // overflow is deterministically truncated. Rooms are never budgeted.
   isPersistent?: boolean;
+  isPlainGhost?: boolean;
   // Immutable actor identity for status attribution (burn DoT). Survives the actor's disconnect
   // — a burn lit by a departed player keeps crediting THAT id (which then resolves to no one),
   // never a different live player.
@@ -308,6 +310,11 @@ interface StrikeInfo {
 // is uncapped (the floor) so it is not tracked here.
 export interface UltSourceCharge { dmg: number; kill: number; taken: number; heal: number; dash: number }
 function freshUltSources(): UltSourceCharge { return { dmg: 0, kill: 0, taken: 0, heal: 0, dash: 0 }; }
+
+interface SideChannelAimSample {
+  aim: number;
+  time: number;
+}
 
 export interface PlayerSim {
   id: PlayerId;
@@ -366,6 +373,11 @@ export interface PlayerSim {
   isMomentumArmed: boolean;
   momentumIcdT: number;
   momentumMoveSamples: Array<{ at: number; distance: number }>;
+  sideChannelAimClock: number;
+  sideChannelAimSamples: SideChannelAimSample[];
+  sideChannelArmedAim: number | null;
+  sideChannelArmedT: number;
+  sideChannelIcdT: number;
   // ---- Content Wave C server-owned transient combat state (never on the reconcile wire;
   // all sub-10s, rebuilt from live inputs after a resume) ----
   hushStacks: number;        // hushiron: current stance stacks (0..maxStacks)
@@ -860,6 +872,8 @@ export function createPlayer(id: PlayerId, x: number, y: number): PlayerSim {
     staggerPulseIcdT: 0, staggerPulseAppliedTick: -1,
     bladeWardT: 0, bladeWardAbsorb: 0, bladeWardAppliedTick: -1,
     isMomentumArmed: false, momentumIcdT: 0, momentumMoveSamples: [],
+    sideChannelAimClock: 0, sideChannelAimSamples: [], sideChannelArmedAim: null,
+    sideChannelArmedT: 0, sideChannelIcdT: 0,
     hushStacks: 0, hushStillT: 0, hushStackT: 0, hushVentT: 0,
     backtalkHoldT: 0, backtalkWindowT: 0, backtalkCd: 0, backtalkReturnT: 0,
     backtalkCaughtDmg: 0, backtalkLock: 0, lampPatches: [],
@@ -1145,7 +1159,10 @@ function refreshMaxedShopBlessings(w: WorldState, p: PlayerSim): void {
     if (slot.buyers.includes(p.id)) continue;
     if (slot.kind !== "blessing" && slot.kind !== "rare_blessing" && slot.kind !== "core_infusion") continue;
     const item = itemById(shopSlotForViewer(w.shop, slot, p.id).itemId ?? "");
-    if (item && (levels.get(item.id) ?? 0) >= itemMaxLevel(item)) invalid.add(slot.id);
+    if (item && (
+      (levels.get(item.id) ?? 0) >= itemMaxLevel(item)
+      || (item.id === "side_channel" && !isSideChannelEligibleLoadout(p.ownedWeapons))
+    )) invalid.add(slot.id);
   }
   if (invalid.size > 0) stockCurrentShopForPlayer(w, p, invalid);
 }
@@ -2330,7 +2347,9 @@ export function setPlayerAbsence(w: WorldState, id: PlayerId, isAbsent: boolean)
 // guard rails (weak-player floor, solo gear cap, [1, 6] clamp).
 function sampleEncounterPower(w: WorldState): number {
   const contributions: number[] = [];
-  for (const p of w.players.values()) contributions.push(expectedBossDps(p.weapon, p.mods));
+  for (const p of w.players.values()) {
+    contributions.push(expectedBossDps(p.weapon, p.mods));
+  }
   return powerRatioFor(contributions, w.floor);
 }
 
@@ -2468,6 +2487,7 @@ export function loadFloorIntoWorld(w: WorldState, floor: number, playerCountAtLo
     p.isMomentumArmed = false;
     p.momentumIcdT = 0;
     p.momentumMoveSamples = [];
+    resetSideChannelState(p);
     p.rememberMeArmed = true;
     p.disabledBlessing = null;
     resetWaveCState(p);
@@ -2629,6 +2649,7 @@ export function resetRunInWorld(w: WorldState, seed: number): void {
     p.isMomentumArmed = false;
     p.momentumIcdT = 0;
     p.momentumMoveSamples = [];
+    resetSideChannelState(p);
     p.petCdReadyAtTick = 0;
     p.petTellT = 0;
     p.petLightT = 0;
@@ -3415,6 +3436,7 @@ export function dropWeaponInWorld(w: WorldState, pid: PlayerId, id: WeaponId, ev
   const [x, y] = spot;
   w.pickups.push({ id: w.nextPickupId++, kind: "weapon", x, y, radius: 16, weapon: id });
   ev.push({ t: "weaponDrop", weapon: id, x, y });
+  refreshMaxedShopBlessings(w, p);
   return true;
 }
 
@@ -3471,6 +3493,7 @@ export function swapWeaponInWorld(w: WorldState, pid: PlayerId, pickupId: number
   ev.push({ t: "weaponDrop", weapon: dropId, x, y });
   acquireWeapon(w, p, grant);
   delete p.weaponFireCooldowns[dropId];
+  refreshMaxedShopBlessings(w, p);
   // The twist lands AFTER the equip (equipWeapon resets fireCd — a cursed jam must stick).
   if (mysteryTwist !== null) applyMysteryTwist(p, mysteryTwist, ev);
   ev.push({ t: "pickup", pid, kind: "weapon", x: pk.x, y: pk.y });
@@ -3715,6 +3738,9 @@ export function rollBlessingChoicesInWorld(
 ): ItemDef[] {
   const p = w.players.get(pid);
   if (!p || isPvp(w)) return [];
+  const excludedIds = isSideChannelEligibleLoadout(p.ownedWeapons)
+    ? undefined
+    : new Set<string>(["side_channel"]);
   const draw = (): ItemDef[] => {
     const rng = new Rng(
       (w.seed ^ 0x0b1e55)
@@ -3729,6 +3755,7 @@ export function rollBlessingChoicesInWorld(
         isRareOnly,
         history: p.blessingOfferHistory,
         eligibleItems: normalItemsForCatalog(w.catalogVersion),
+        excludedIds,
       },
     );
   };
@@ -3852,6 +3879,7 @@ export function buyFromShopInWorld(w: WorldState, pid: PlayerId, slotId: number,
       const idx = p.ownedWeapons.indexOf(p.weapon);
       p.ownedWeapons.splice(idx, 1);
       acquireWeapon(w, p, reforged);
+      refreshMaxedShopBlessings(w, p);
       ev.push({ t: "mysteryReveal", pid, weapon: reforged, twist: "plain", x: slot.x, y: slot.y });
       break;
     }
@@ -4729,7 +4757,7 @@ function strikeEnemy(w: WorldState, p: PlayerSim | null, e: Enemy, hit: StrikeIn
   damageEnemy(w, hit.ownerId, e, dmg, ev, false, isExecuted);
   // Kit hooks (ult meter charge from damage dealt, GUNNER momentum ramp, MENDER lifebloom
   // credit). Inert for the neutral baseline, so shipped combat is byte-identical.
-  onKitDamageDealt(w, p, dmg);
+  if (hit.isPlainGhost !== true) onKitDamageDealt(w, p, dmg);
   applyKnockbackDir(
     p ? p.weapon : hit.fxWeapon ?? "pistol",
     e,
@@ -4737,8 +4765,8 @@ function strikeEnemy(w: WorldState, p: PlayerSim | null, e: Enemy, hit: StrikeIn
     hit.kbDirY,
     isMomentumPayoff ? MOMENTUM_KB_SCALE : 1,
   );
-  applyHitStatuses(w, p, e, hit, ev);
-  if (p !== null && hit.isMelee) {
+  if (hit.isPlainGhost !== true) applyHitStatuses(w, p, e, hit, ev);
+  if (hit.isPlainGhost !== true && p !== null && hit.isMelee) {
     pulseMeleeStagger(w, p, e, hit, ev);
     refreshBladeWard(w, p, hit, ev);
   }
@@ -4750,7 +4778,7 @@ function strikeEnemy(w: WorldState, p: PlayerSim | null, e: Enemy, hit: StrikeIn
     t: "enemyHit", eid: e.id, dmgX: e.x, dmgY: e.y - e.radius, dmg, crit: isCritPresentation,
     puffX: hit.puffX, puffY: hit.puffY, puffColor, melee: hit.isMelee, closeShotgun, killed,
   });
-  if (isExecuted && p !== null) {
+  if (hit.isPlainGhost !== true && isExecuted && p !== null) {
     ev.push({
       t: "blessingProc",
       pid: p.id,
@@ -4760,11 +4788,11 @@ function strikeEnemy(w: WorldState, p: PlayerSim | null, e: Enemy, hit: StrikeIn
       y: e.y,
     });
   }
-  if (e.shock > 0) shockArc(w, p, e, ev);
+  if (hit.isPlainGhost !== true && e.shock > 0) shockArc(w, p, e, ev);
   // Known by Touch: a melee hit is a reveal trigger (shared ICD; weaponSkill hits trigger
   // at their own sites). Only the owner's OWN melee reveals.
   if (p !== null && hit.isMelee && p.mods.revealRadius > 0) triggerKnownByTouch(w, p, ev);
-  if (killed) killEnemy(w, p, e, ev);
+  if (killed) killEnemy(w, p, e, ev, hit.isPlainGhost === true);
 }
 
 // Summon-only fake/mechanic bodies (never kills, never loot): the echojack's echo, The
@@ -4791,26 +4819,33 @@ function isQuorumHusk(kind: Enemy["kind"]): boolean {
 
 // `p` null = the killing actor has left: the kill still resolves (death, loot, boss chest) but
 // grants no personal reward (kills/combo/lifesteal) and never credits another live player.
-function killEnemy(w: WorldState, p: PlayerSim | null, e: Enemy, ev: SimEvent[]): void {
+function killEnemy(
+  w: WorldState,
+  p: PlayerSim | null,
+  e: Enemy,
+  ev: SimEvent[],
+  isPlainGhost = false,
+): void {
   e.dead = true;
   // Decoys and mechanic bodies are plays, not kills: no credit, no combo fuel — popping
   // the echojack's echo, silencing a knell, breaking a Weaver knot or bursting a sac
   // is counterplay, never an economy.
   const isDecoy = isDecoyKind(e.kind);
   if (p && !isDecoy) {
-    const previousComboTier = comboTierIndex(p.combo);
     p.kills++;
-    p.combo++;
-    p.comboTimer = C.COMBO_WINDOW + p.mods.comboWindowBonus;
-    const nextComboTier = comboTierIndex(p.combo);
-    if (p.mods.beatFireRatePerTier > 0 && nextComboTier > previousComboTier) {
-      ev.push({
-        t: "blessingProc", pid: p.id, item: "on_the_beat",
-        phase: "tierUp", x: p.x, y: p.y,
-      });
+    if (!isPlainGhost) {
+      const previousComboTier = comboTierIndex(p.combo);
+      p.combo++;
+      p.comboTimer = C.COMBO_WINDOW + p.mods.comboWindowBonus;
+      const nextComboTier = comboTierIndex(p.combo);
+      if (p.mods.beatFireRatePerTier > 0 && nextComboTier > previousComboTier) {
+        ev.push({
+          t: "blessingProc", pid: p.id, item: "on_the_beat",
+          phase: "tierUp", x: p.x, y: p.y,
+        });
+      }
+      accrueUlt(p, "kill", ultChargeFromKill());
     }
-    // Kill bonus to the ult meter (all kits — spec §3), share-capped. Inert for the baseline.
-    accrueUlt(p, "kill", ultChargeFromKill());
   }
   const big = isBossKind(e.kind);
   ev.push({
@@ -4858,13 +4893,13 @@ function killEnemy(w: WorldState, p: PlayerSim | null, e: Enemy, ev: SimEvent[])
   }
   // Vampire Fang: one heart per proc, on a shared 1.25s cooldown, never off summoned adds —
   // sustain comes from scarcity decisions, not add-farming.
-  if (p && !e.isSummoned && p.mods.lifestealChance > 0 && p.fangCd === 0
+  if (!isPlainGhost && p && !e.isSummoned && p.mods.lifestealChance > 0 && p.fangCd === 0
     && p.hp < p.maxHp && w.rng.next() < p.mods.lifestealChance) {
     p.hp++;
     p.fangCd = FANG_PROC_COOLDOWN;
     ev.push({ t: "heal", pid: p.id, x: e.x, y: e.y });
   }
-  dropLoot(w, p, e, ev);
+  dropLoot(w, isPlainGhost ? null : p, e, ev);
 }
 
 // Boss death ends danger immediately (spec §5): every remaining enemy and queued
@@ -4983,7 +5018,14 @@ function makePickup(w: WorldState, kind: "heart" | "coin", x: number, y: number,
 
 // ---- per-tick systems ----
 
-function updatePlayer(w: WorldState, p: PlayerSim, input: InputCmd, dt: number, ev: SimEvent[]): void {
+function updatePlayer(
+  w: WorldState,
+  p: PlayerSim,
+  input: InputCmd,
+  dt: number,
+  ev: SimEvent[],
+  previousAim: number,
+): void {
   let ix = input.moveX;
   let iy = input.moveY;
   const len = Math.hypot(ix, iy) || 1;
@@ -5023,6 +5065,7 @@ function updatePlayer(w: WorldState, p: PlayerSim, input: InputCmd, dt: number, 
   if (input.dash && p.dashCd <= dashBankHeadroom && p.dashTime <= 0 && (ix || iy)) {
     const dashCdAdded = dashCooldown(p) * dashProfile.cdMult;
     p.dashTime = PLAYER.dashActive * dashProfile.activeMult; p.dashCd += dashCdAdded; p.dashDx = ix; p.dashDy = iy;
+    armSideChannelFromDash(w, p, previousAim);
     p.isMuddyRefundSpent = false;
     // The dash iframe is its own window (0.18s, covering the 0.16s active dash + tail):
     // SET, never max'd against post-hit protection, so the two can neither refresh nor
@@ -5184,6 +5227,128 @@ function normalizeAngle(a: number): number {
   return a;
 }
 
+function hasOwnedSideChannel(w: WorldState, p: PlayerSim): boolean {
+  if (isPvp(w)) return false;
+  if (canonicalItemId(p.disabledBlessing?.id ?? "") === "side_channel") return false;
+  return p.ownedItemIds.some((id) => canonicalItemId(id) === "side_channel");
+}
+
+function hasActiveSideChannel(w: WorldState, p: PlayerSim): boolean {
+  return hasOwnedSideChannel(w, p) && isSideChannelProjectileWeapon(p.weapon);
+}
+
+function resetSideChannelState(p: PlayerSim, aim?: number): void {
+  p.sideChannelAimClock = 0;
+  p.sideChannelAimSamples = aim === undefined ? [] : [{ aim, time: 0 }];
+  p.sideChannelArmedAim = null;
+  p.sideChannelArmedT = 0;
+  p.sideChannelIcdT = 0;
+}
+
+function trackSideChannelAim(w: WorldState, p: PlayerSim, aim: number, dt: number): void {
+  if (!hasOwnedSideChannel(w, p)) {
+    resetSideChannelState(p, aim);
+    return;
+  }
+  p.sideChannelIcdT = p.sideChannelIcdT > dt ? p.sideChannelIcdT - dt : 0;
+  if (p.sideChannelArmedAim !== null) {
+    p.sideChannelArmedT = p.sideChannelArmedT > dt ? p.sideChannelArmedT - dt : 0;
+    if (p.sideChannelArmedT === 0) p.sideChannelArmedAim = null;
+  } else {
+    p.sideChannelArmedT = 0;
+  }
+  p.sideChannelAimClock += dt;
+  if (!isSideChannelProjectileWeapon(p.weapon) || p.sideChannelIcdT > 0) {
+    p.sideChannelArmedAim = null;
+    p.sideChannelArmedT = 0;
+    p.sideChannelAimSamples = [{ aim, time: p.sideChannelAimClock }];
+    return;
+  }
+  const cutoff = p.sideChannelAimClock - SIDE_CHANNEL.aimWindow;
+  while (p.sideChannelAimSamples[0]?.time < cutoff) p.sideChannelAimSamples.shift();
+  const last = p.sideChannelAimSamples.at(-1);
+  const isAimChange = last === undefined
+    || Math.abs(normalizeAngle(aim - last.aim)) > SIDE_CHANNEL.meaningfulAimDelta;
+  if (isAimChange) {
+    let prior: SideChannelAimSample | undefined;
+    for (let index = p.sideChannelAimSamples.length - 1; index >= 0; index--) {
+      const sample = p.sideChannelAimSamples[index];
+      if (Math.abs(normalizeAngle(aim - sample.aim)) >= SIDE_CHANNEL.aimDelta) {
+        prior = sample;
+        break;
+      }
+    }
+    if (prior !== undefined) {
+      p.sideChannelArmedAim = prior.aim;
+      p.sideChannelArmedT = p.mods.sideChannelArmedWindow;
+    }
+    p.sideChannelAimSamples.push({ aim, time: p.sideChannelAimClock });
+    if (p.sideChannelAimSamples.length > 64) p.sideChannelAimSamples.shift();
+  } else if (last !== undefined) {
+    last.time = p.sideChannelAimClock;
+  }
+}
+
+function armSideChannelFromDash(w: WorldState, p: PlayerSim, previousAim: number): void {
+  if (!hasActiveSideChannel(w, p) || p.sideChannelIcdT > 0) return;
+  p.sideChannelArmedAim = previousAim;
+  p.sideChannelArmedT = p.mods.sideChannelArmedWindow;
+}
+
+function spawnSideChannelGhost(
+  w: WorldState,
+  p: PlayerSim,
+  parent: Bullet | undefined,
+  ev: SimEvent[],
+): void {
+  const aim = p.sideChannelArmedAim;
+  if (parent === undefined
+    || parent.isSideChannelGhost === true
+    || aim === null
+    || p.sideChannelArmedT <= 0
+    || p.sideChannelIcdT > 0
+    || !hasActiveSideChannel(w, p)) return;
+  const normalDamageMult = p.mods.sideChannelNormalDamageMult;
+  const bossDamageMult = p.mods.sideChannelBossDamageMult;
+  if (normalDamageMult <= 0 || bossDamageMult <= 0) return;
+  const speed = Math.hypot(parent.vx, parent.vy);
+  const x = p.x + Math.cos(aim) * 18;
+  const y = p.y + Math.sin(aim) * 18;
+  const parentDirectDamage = parent.isCrit
+    ? parent.damage / (parent.critX ?? 1)
+    : parent.damage;
+  const parentBossCoef = parent.bossCoef ?? WEAPON_BOSS_COEF[p.weapon] ?? 1;
+  const ghost: Bullet = {
+    x,
+    y,
+    vx: Math.cos(aim) * speed,
+    vy: Math.sin(aim) * speed,
+    radius: parent.radius,
+    life: parent.life,
+    friendly: true,
+    owner: p.id,
+    damage: parentDirectDamage * normalDamageMult,
+    color: parent.color,
+    pierce: 0,
+    hitList: null,
+    isCrit: false,
+    critX: 1,
+    bossCoef: parentBossCoef
+      * bossDamageMult
+      / normalDamageMult,
+    fx: parent.fx,
+    enemyHits: 0,
+    isSideChannelGhost: true,
+    bornTick: w.tick,
+    lagRewind: p.rewindTicks,
+  };
+  w.bullets.push(ghost);
+  p.sideChannelArmedAim = null;
+  p.sideChannelArmedT = 0;
+  p.sideChannelIcdT = p.mods.sideChannelIcd;
+  ev.push({ t: "blessingProc", pid: p.id, item: "side_channel", phase: "ghost", x, y });
+}
+
 function isBossGradeKind(e: Enemy): boolean {
   return isBossKind(e.kind) || e.captainPhase !== undefined || isMinibossKind(e.kind);
 }
@@ -5305,12 +5470,15 @@ function fireRedPen(w: WorldState, p: PlayerSim, wep: Weapon, ev: SimEvent[]): v
   const shot = resolveShot(w, p, "red_pen");
   const muzzleX = p.x + Math.cos(p.aimAngle) * 18;
   const muzzleY = p.y + Math.sin(p.aimAngle) * 18;
+  let parent: Bullet | undefined;
   for (const b of fire(shot, muzzleX, muzzleY, p.aimAngle, w.rng, p.id)) {
     b.isPenInk = true;
     b.bornTick = w.tick;
     b.lagRewind = p.rewindTicks;
     w.bullets.push(b);
+    parent ??= b;
   }
+  spawnSideChannelGhost(w, p, parent, ev);
   captureMarginStore(p, wep, shot);
   setActiveWeaponFireCooldown(p, wep.fireCd / currentFireRate(p));
   p.shotSeq++;
@@ -5327,8 +5495,9 @@ function fireMarginCall(w: WorldState, p: PlayerSim, wep: Weapon, ev: SimEvent[]
   const muzzleX = p.x + Math.cos(p.aimAngle) * 18;
   const muzzleY = p.y + Math.sin(p.aimAngle) * 18;
   const store = p.marginStore;
+  let parent: Bullet | undefined;
   if (store !== null && store.life > 0) {
-    spawnMarginCopies(w, p, spec, store, muzzleX, muzzleY);
+    parent = spawnMarginCopies(w, p, spec, store, muzzleX, muzzleY);
     setActiveWeaponFireCooldown(p, spec.loadedFireCd / currentFireRate(p));
   } else {
     const shot = resolveShot(w, p, "margin_call"); // base damage 1.2 == stub damage
@@ -5336,9 +5505,11 @@ function fireMarginCall(w: WorldState, p: PlayerSim, wep: Weapon, ev: SimEvent[]
       b.bornTick = w.tick;
       b.lagRewind = p.rewindTicks;
       w.bullets.push(b);
+      parent ??= b;
     }
     setActiveWeaponFireCooldown(p, spec.stubFireCd / currentFireRate(p));
   }
+  spawnSideChannelGhost(w, p, parent, ev);
   p.shotSeq++;
   ev.push({
     t: "shot", pid: p.id, weapon: "margin_call", x: muzzleX, y: muzzleY, aim: p.aimAngle,
@@ -5350,7 +5521,7 @@ function fireMarginCall(w: WorldState, p: PlayerSim, wep: Weapon, ev: SimEvent[]
 function spawnMarginCopies(
   w: WorldState, p: PlayerSim, spec: NonNullable<Weapon["margin"]>,
   store: MarginStore, muzzleX: number, muzzleY: number,
-): void {
+): Bullet | undefined {
   const pellets = store.category === "spread"
     ? Math.min(spec.maxCopyPellets, Math.min(3, store.pellets))
     : Math.min(spec.maxCopyPellets, store.pellets);
@@ -5360,6 +5531,7 @@ function spawnMarginCopies(
   const homing = store.category === "seeker" ? store.homing * 0.60 : undefined;
   const statusMult = store.category === "status" ? 0.70 : 0;
   const dmg = store.damage * spec.outputCoef;
+  let parent: Bullet | undefined;
   for (let i = 0; i < Math.max(1, pellets); i++) {
     const t = pellets <= 1 ? 0 : (i / (pellets - 1)) - 0.5;
     const a = p.aimAngle + t * spread;
@@ -5383,7 +5555,9 @@ function spawnMarginCopies(
     };
     applyCrosscurrentStamp(p, b);
     w.bullets.push(b);
+    parent ??= b;
   }
+  return parent;
 }
 
 // Store exactly one payload CLASS off a committed shot from another owned weapon.
@@ -5423,7 +5597,8 @@ function marginCategoryOf(wep: Weapon, spec: ShotSpec): MarginCategory | null {
 
 // Sidewinder — ENCIRCLE / FLANK. A fixed two-arc volley; extra-pellet mods never add arcs.
 function fireSidewinder(w: WorldState, p: PlayerSim, wep: Weapon, ev: SimEvent[]): void {
-  spawnSidewinderArc(w, p, 0, p.aimAngle);
+  const parent = spawnSidewinderArc(w, p, 0, p.aimAngle);
+  spawnSideChannelGhost(w, p, parent, ev);
   p.sidewinderArcT = wep.sidewinder!.arcDelay;
   p.sidewinderArcAim = p.aimAngle;
   setActiveWeaponFireCooldown(p, wep.fireCd / currentFireRate(p));
@@ -5436,7 +5611,7 @@ function fireSidewinder(w: WorldState, p: PlayerSim, wep: Weapon, ev: SimEvent[]
   applyWeaponKick(w, p, ev);
 }
 
-function spawnSidewinderArc(w: WorldState, p: PlayerSim, index: number, aim: number): void {
+function spawnSidewinderArc(w: WorldState, p: PlayerSim, index: number, aim: number): Bullet {
   const wep = WEAPONS.sidewinder;
   const spec = wep.sidewinder!;
   const sign = index === 0 ? 1 : -1;
@@ -5460,6 +5635,7 @@ function spawnSidewinderArc(w: WorldState, p: PlayerSim, index: number, aim: num
   };
   applyCrosscurrentStamp(p, b);
   w.bullets.push(b);
+  return b;
 }
 
 // Crosscurrent rides the custom-fire Wave B rounds too (it stamps every round the player
@@ -5701,6 +5877,7 @@ function fireBacktalk(w: WorldState, p: PlayerSim, wep: Weapon, ev: SimEvent[]):
   if (p.backtalkLock > 0) return;
   const muzzleX = p.x + Math.cos(p.aimAngle) * 18;
   const muzzleY = p.y + Math.sin(p.aimAngle) * 18;
+  let parent: Bullet | undefined;
   if (p.backtalkReturnT > 0 && p.backtalkCaughtDmg > 0) {
     const dmg = Math.min(spec.returnMax, Math.max(spec.returnMin, p.backtalkCaughtDmg * spec.returnCoef));
     const b: Bullet = {
@@ -5715,6 +5892,7 @@ function fireBacktalk(w: WorldState, p: PlayerSim, wep: Weapon, ev: SimEvent[]):
       bornTick: w.tick, lagRewind: p.rewindTicks,
     };
     w.bullets.push(b);
+    parent = b;
     p.backtalkReturnT = 0;
     p.backtalkCaughtDmg = 0;
     ev.push({ t: "cue", name: "backtalk.return", x: muzzleX, y: muzzleY, rate: 1, gain: 0.7, trauma: 0.02 });
@@ -5724,9 +5902,11 @@ function fireBacktalk(w: WorldState, p: PlayerSim, wep: Weapon, ev: SimEvent[]):
       b.bornTick = w.tick;
       b.lagRewind = p.rewindTicks;
       w.bullets.push(b);
+      parent ??= b;
     }
     captureMarginStore(p, wep, shot);
   }
+  spawnSideChannelGhost(w, p, parent, ev);
   setActiveWeaponFireCooldown(p, wep.fireCd / currentFireRate(p));
   p.shotSeq++;
   ev.push({
@@ -5915,6 +6095,7 @@ function updateShooting(w: WorldState, p: PlayerSim, input: InputCmd, dt: number
       b.lagRewind = p.rewindTicks;
       w.bullets.push(b);
     }
+    spawnSideChannelGhost(w, p, fired[0], ev);
     // Margin Call stores exactly one payload class off ANY other weapon's committed shot.
     captureMarginStore(p, wep, spec);
     setActiveWeaponFireCooldown(p, wep.fireCd / currentFireRate(p));
@@ -5961,13 +6142,15 @@ function updateChargeShooting(w: WorldState, p: PlayerSim, wep: Weapon, input: I
   shot.life = dist / shot.speed;
   const muzzleX = p.x + Math.cos(p.aimAngle) * 18;
   const muzzleY = p.y + Math.sin(p.aimAngle) * 18;
-  for (const b of fire(shot, muzzleX, muzzleY, p.aimAngle, w.rng, p.id)) {
+  const fired = fire(shot, muzzleX, muzzleY, p.aimAngle, w.rng, p.id);
+  for (const b of fired) {
     b.isLob = true;
     b.lobT = t;
     b.bornTick = w.tick;
     b.lagRewind = p.rewindTicks;
     w.bullets.push(b);
   }
+  spawnSideChannelGhost(w, p, fired[0], ev);
   setActiveWeaponFireCooldown(p, wep.fireCd / currentFireRate(p));
   p.shotSeq++;
   advanceWeaponCycle(p, p.weapon);
@@ -7464,6 +7647,7 @@ function updateEnemies(w: WorldState, dt: number, ev: SimEvent[]): void {
           damage: strikeDmg, isCrit: b.isCrit, critX: b.critX ?? 1, bossCoef: b.bossCoef ?? 1, puffX: sweptHit.x, puffY: sweptHit.y, kbDirX: b.vx, kbDirY: b.vy,
           burn: b.burn, chill: b.chill, shock: b.shock, isMelee: false,
           isPersistent: b.isPersistent,
+          isPlainGhost: b.isSideChannelGhost,
           ownerId: b.owner, fxWeapon: b.fx ?? null,
         }, ev);
         // Red Pen ink marks the body it hits (refreshes the mark + its snap-scaling damage).
@@ -18141,6 +18325,7 @@ export function stepPlayerPhase(w: WorldState, p: PlayerSim, input: InputCmd, dt
     p.isInteracting = false;
     return;
   }
+  const previousAim = p.aimAngle;
   const telemetry = p.pvpRespawnTelemetry;
   if (isPvp(w)
     && w.match?.phase === "live"
@@ -18207,8 +18392,11 @@ export function stepPlayerPhase(w: WorldState, p: PlayerSim, input: InputCmd, dt
   // (the server owns the freeze; the client mirrors it via reconciliation to the authoritative pose).
   const isPvpFrozen = isPvp(w) && w.isShared && (w.match === null || w.match.phase !== "live");
   if (!p.isDown && p.respawnT === 0 && !isPvpFrozen) {
-    updatePlayer(w, p, input, dt, ev);
+    trackSideChannelAim(w, p, p.aimAngle, dt);
+    updatePlayer(w, p, input, dt, ev, previousAim);
     updateShooting(w, p, input, dt, ev);
+  } else {
+    resetSideChannelState(p, p.aimAngle);
   }
   if (p.meleeSwing) {
     p.meleeSwing.timer -= dt;

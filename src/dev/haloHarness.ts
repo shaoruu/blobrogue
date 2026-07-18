@@ -31,11 +31,10 @@ function grant(game: Game, itemId: string, count: number): void {
 
 function applyScene(game: Game, scene: HaloHarnessScene): void {
   if (scene === "mid") {
-    grant(game, "split_shot", 1);
+    grant(game, "marksman", 1);
     return;
   }
   if (scene === "high") {
-    grant(game, "split_shot", 2);
     grant(game, "frostbite", 3);
     grant(game, "marksman", 3);
   }

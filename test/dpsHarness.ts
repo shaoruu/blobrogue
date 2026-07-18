@@ -21,7 +21,7 @@ import {
   itemById, createMods, recomputeMods, normalItemsForCatalog, rollItemChoicesWith,
 } from "../src/sim/items.js";
 import type { PlayerMods } from "../src/sim/items.js";
-import { WEAPONS } from "../src/sim/weapons.js";
+import { WEAPONS, isSideChannelProjectileWeapon } from "../src/sim/weapons.js";
 import { Rng } from "../src/sim/rng.js";
 import { OVERDRIVE, ULT, ticksToSec } from "../src/sim/kits.js";
 import type { KitId } from "../src/sim/kits.js";
@@ -229,7 +229,10 @@ export function practicalAccuracy(id: WeaponId, spreadTotal: number, speed: numb
   return base * spreadPenalty * speedPenalty;
 }
 
-export function practicalBossDps(id: WeaponId, mods: PlayerMods): number {
+export function practicalBossDps(
+  id: WeaponId,
+  mods: PlayerMods,
+): number {
   const wep = WEAPONS[id];
   const isMelee = wep.melee !== undefined;
   const pellets = isMelee ? 1 : wep.pellets + mods.extraPellets;
@@ -247,8 +250,16 @@ export function practicalBossDps(id: WeaponId, mods: PlayerMods): number {
   // The Midas models its FED damage: a stocked purse is no brake inside a boss window, so the
   // estimator assumes every shot eats a coin (the honest worst case).
   const coinFed = wep.coinBoost ?? 1;
-  return wep.damage * coinFed * mods.damageMult * effPellets * wepCoef * rate * vuln
-    * practicalAccuracy(id, spreadTotal, isMelee ? 0 : wep.speed * mods.bulletSpeedMult) + burnDot;
+  const accuracy = practicalAccuracy(id, spreadTotal, isMelee ? 0 : wep.speed * mods.bulletSpeedMult);
+  const perProjectile = wep.damage * coinFed * mods.damageMult * wepCoef * vuln;
+  const primaryDps = perProjectile * effPellets * rate * accuracy;
+  const hasSideChannel = isSideChannelProjectileWeapon(id)
+    && mods.sideChannelBossDamageMult > 0
+    && mods.sideChannelIcd > 0;
+  const ghostRate = hasSideChannel ? Math.min(rate, 1 / mods.sideChannelIcd) : 0;
+  const ghostDps = wep.damage * coinFed * mods.damageMult * wepCoef
+    * mods.sideChannelBossDamageMult * ghostRate * accuracy;
+  return primaryDps + ghostDps + burnDot;
 }
 
 // ---- the deterministic 100k legal-build set ----

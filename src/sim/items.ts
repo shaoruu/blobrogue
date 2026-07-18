@@ -4,7 +4,7 @@
 // then clamped to the raw caps — no irreversible incremental applies, no cap escapes. The
 // authoritative sim (solo LocalTransport and the server) runs the identical recompute.
 
-import { CAPS } from "./balance.js";
+import { CAPS, SIDE_CHANNEL } from "./balance.js";
 import { applyKitStatLean } from "./kits.js";
 import type { KitId } from "./kits.js";
 import { PVP, PVP_COUNTER_BRACE, PVP_COUNTER_SIGHT, PVP_COUNTER_RIP } from "./pvp.js";
@@ -45,6 +45,10 @@ export interface PlayerMods {
   chillChance: number;     // 0..1 chance a hit also chills (slow → freeze)
   shockChance: number;     // 0..1 chance a hit also shocks (+dmg amp + arc)
   selfKnockbackMult: number;
+  sideChannelNormalDamageMult: number;
+  sideChannelBossDamageMult: number;
+  sideChannelArmedWindow: number;
+  sideChannelIcd: number;
   reclaimedBounceDamage: number;
   muddyDashRefund: number;
   comboWindowBonus: number;
@@ -105,6 +109,10 @@ export function createMods(): PlayerMods {
     chillChance: 0,
     shockChance: 0,
     selfKnockbackMult: 1,
+    sideChannelNormalDamageMult: 0,
+    sideChannelBossDamageMult: 0,
+    sideChannelArmedWindow: 0,
+    sideChannelIcd: 0,
     reclaimedBounceDamage: 0,
     muddyDashRefund: 0,
     comboWindowBonus: 0,
@@ -214,16 +222,31 @@ export const ITEMS: readonly ItemDef[] = [
     apply: (m, l) => { m.fireRateMult += lv([0.35, 0.55, 0.70], l); },
   },
   {
-    id: "split_shot", name: "Split Shot",
-    descs: ["+1 projectile per shot.", "+2 projectiles per shot.", "+3 projectiles per shot."],
-    glyph: "Y", tint: "#5ab6ff", rarity: "uncommon",
-    apply: (m, l) => { m.extraPellets += lv([1, 2, 3], l); m.spreadAdd += lv([0.10, 0.16, 0.22], l); },
-  },
-  {
-    id: "scattergun", name: "Scattergun",
-    descs: ["+2 projectiles, wider spread, -10% damage.", "+3 projectiles, wider spread, -10% damage.", "+4 projectiles, wider spread, -10% damage."],
-    glyph: "W", tint: "#ffb43b", rarity: "uncommon",
-    apply: (m, l) => { m.extraPellets += lv([2, 3, 4], l); m.spreadAdd += lv([0.22, 0.26, 0.30], l); m.damageMult -= 0.10; },
+    id: "side_channel", name: "Side Channel",
+    descs: [
+      "A dash or hard aim flick arms your previous aim for 2 seconds. Your next projectile shot fires one plain ghost at 55% damage, or 30% against bosses. 1.2s cooldown.",
+      "A dash or hard aim flick arms your previous aim for 2.3 seconds. Your next projectile shot fires one plain ghost at 65% damage, or 34% against bosses. 1.05s cooldown.",
+      "A dash or hard aim flick arms your previous aim for 2.6 seconds. Your next projectile shot fires one plain ghost at 75% damage, or 38% against bosses. 0.9s cooldown.",
+    ],
+    glyph: "/", tint: "#5ab6ff", rarity: "uncommon",
+    apply: (m, l) => {
+      m.sideChannelNormalDamageMult = Math.max(
+        m.sideChannelNormalDamageMult,
+        lv(SIDE_CHANNEL.normalDamageByLevel, l),
+      );
+      m.sideChannelBossDamageMult = Math.max(
+        m.sideChannelBossDamageMult,
+        lv(SIDE_CHANNEL.bossDamageByLevel, l),
+      );
+      m.sideChannelArmedWindow = Math.max(
+        m.sideChannelArmedWindow,
+        lv(SIDE_CHANNEL.armedWindowByLevel, l),
+      );
+      m.sideChannelIcd = Math.max(
+        m.sideChannelIcd,
+        lv(SIDE_CHANNEL.icdByLevel, l),
+      );
+    },
   },
   {
     id: "full_metal", name: "Full Metal",
@@ -659,6 +682,14 @@ export const ITEMS: readonly ItemDef[] = [
 // see shopSlotPriceFor's dashCorePriceMult).
 export const CORE_ITEM_IDS: readonly string[] = ["core_damage", "core_fire", "core_move", "core_dash"];
 
+const LEGACY_ITEM_ID_MIGRATIONS: Readonly<Record<string, string>> = {
+  split_shot: "side_channel",
+};
+
+export function canonicalItemId(id: string): string {
+  return LEGACY_ITEM_ID_MIGRATIONS[id] ?? id;
+}
+
 export function normalItemsForCatalog(
   catalogVersion: ContentCatalogVersion = CURRENT_CONTENT_CATALOG_VERSION,
 ): readonly ItemDef[] {
@@ -669,8 +700,11 @@ export function normalItemsForCatalog(
 // A player's cumulative levels from their pick history (an id's count IS its level).
 export function itemLevelsOf(ownedItemIds: readonly string[]): Map<string, number> {
   const levels = new Map<string, number>();
-  for (const id of ownedItemIds) {
-    levels.set(id, Math.min(MAX_ITEM_LEVEL, (levels.get(id) ?? 0) + 1));
+  for (const legacyId of ownedItemIds) {
+    const id = canonicalItemId(legacyId);
+    const item = itemById(id);
+    if (item === undefined) continue;
+    levels.set(id, Math.min(itemMaxLevel(item), (levels.get(id) ?? 0) + 1));
   }
   return levels;
 }
@@ -771,7 +805,8 @@ const PVP_BLESSING_IDS = new Set(PVP.blessingPool);
 const PVP_BLACKLIST_IDS = new Set<string>(PVP.blessingBlacklist);
 
 export function isPvpBlessingId(id: string): boolean {
-  return PVP_BLESSING_IDS.has(id) && !PVP_BLACKLIST_IDS.has(id);
+  const canonicalId = canonicalItemId(id);
+  return PVP_BLESSING_IDS.has(canonicalId) && !PVP_BLACKLIST_IDS.has(canonicalId);
 }
 
 export function rollPvpDraftChoicesWith(
@@ -832,7 +867,8 @@ export function rollPvpDraftChoicesWith(
 // Look up an item definition by id (the server validates a client's blessing pick against the
 // offered ids, then applies the corresponding ItemDef).
 export function itemById(id: string): ItemDef | undefined {
-  return ITEMS.find((it) => it.id === id);
+  const canonicalId = canonicalItemId(id);
+  return ITEMS.find((it) => it.id === canonicalId);
 }
 
 // The card/HUD text for a blessing at a cumulative level (1–3).
