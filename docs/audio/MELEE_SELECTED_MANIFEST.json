@@ -1,0 +1,86 @@
+{
+  "batch": "melee-juice-verbs-v1",
+  "model": "fal-ai/elevenlabs/sound-effects/v2",
+  "influence": 0.35,
+  "peak_ceiling_db": -2.5,
+  "selected": [
+    {
+      "stem": "melee_cutlass_swing",
+      "ship_ogg": "public/audio/sfx/melee_cutlass_swing.ogg",
+      "ship_mp3": "public/audio/sfx/melee_cutlass_swing.mp3",
+      "src_take": "melee_cutlass_swing_take3"
+    },
+    {
+      "stem": "melee_claymore_swing",
+      "ship_ogg": "public/audio/sfx/melee_claymore_swing.ogg",
+      "ship_mp3": "public/audio/sfx/melee_claymore_swing.mp3",
+      "src_take": "melee_claymore_swing_take1"
+    },
+    {
+      "stem": "melee_pike_thrust",
+      "ship_ogg": "public/audio/sfx/melee_pike_thrust.ogg",
+      "ship_mp3": "public/audio/sfx/melee_pike_thrust.mp3",
+      "src_take": "melee_pike_thrust_take2"
+    },
+    {
+      "stem": "melee_cutlass_hit",
+      "ship_ogg": "public/audio/sfx/melee_cutlass_hit.ogg",
+      "ship_mp3": "public/audio/sfx/melee_cutlass_hit.mp3",
+      "src_take": "melee_cutlass_hit_take1"
+    },
+    {
+      "stem": "melee_claymore_hit",
+      "ship_ogg": "public/audio/sfx/melee_claymore_hit.ogg",
+      "ship_mp3": "public/audio/sfx/melee_claymore_hit.mp3",
+      "src_take": "melee_claymore_hit_take2"
+    },
+    {
+      "stem": "melee_pike_hit",
+      "ship_ogg": "public/audio/sfx/melee_pike_hit.ogg",
+      "ship_mp3": "public/audio/sfx/melee_pike_hit.mp3",
+      "src_take": "melee_pike_hit_take2"
+    },
+    {
+      "stem": "melee_cleave_shock",
+      "ship_ogg": "public/audio/sfx/melee_cleave_shock.ogg",
+      "ship_mp3": "public/audio/sfx/melee_cleave_shock.mp3",
+      "src_take": "melee_cleave_shock_take1"
+    },
+    {
+      "stem": "melee_crit",
+      "ship_ogg": "public/audio/sfx/melee_crit.ogg",
+      "ship_mp3": "public/audio/sfx/melee_crit.mp3",
+      "src_take": "melee_crit_take1"
+    },
+    {
+      "stem": "melee_stagger_pulse",
+      "ship_ogg": "public/audio/sfx/melee_stagger_pulse.ogg",
+      "ship_mp3": "public/audio/sfx/melee_stagger_pulse.mp3",
+      "src_take": "melee_stagger_pulse_take1"
+    },
+    {
+      "stem": "melee_blade_ward",
+      "ship_ogg": "public/audio/sfx/melee_blade_ward.ogg",
+      "ship_mp3": "public/audio/sfx/melee_blade_ward.mp3",
+      "src_take": "melee_blade_ward_take1"
+    },
+    {
+      "stem": "melee_momentum_ready",
+      "ship_ogg": "public/audio/sfx/melee_momentum_ready.ogg",
+      "ship_mp3": "public/audio/sfx/melee_momentum_ready.mp3",
+      "src_take": "melee_momentum_ready_take1"
+    },
+    {
+      "stem": "melee_momentum_payoff",
+      "ship_ogg": "public/audio/sfx/melee_momentum_payoff.ogg",
+      "ship_mp3": "public/audio/sfx/melee_momentum_payoff.mp3",
+      "src_take": "melee_momentum_payoff_take1"
+    },
+    {
+      "stem": "melee_finisher_execute",
+      "ship_ogg": "public/audio/sfx/melee_finisher_execute.ogg",
+      "ship_mp3": "public/audio/sfx/melee_finisher_execute.mp3",
+      "src_take": "melee_finisher_execute_take1"
+    }
+  ]
+}
