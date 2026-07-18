@@ -4,6 +4,7 @@ import {
   haloVisualStrength,
   haloVisualTier,
 } from "../src/game/haloVisual.js";
+import { createMods, recomputeMods } from "../src/sim/items.js";
 
 let passed = 0;
 let failed = 0;
@@ -20,6 +21,16 @@ function check(name: string, condition: boolean, detail = ""): void {
   process.stdout.write(`  FAIL ${name}${detail ? ` — ${detail}` : ""}\n`);
 }
 
+function tierFor(items: readonly string[]): number {
+  const mods = createMods();
+  recomputeMods(mods, items);
+  return haloVisualTier(
+    Math.min(HALO_VISUAL_CAP.blades, HALO_VISUAL_BASE.blades + mods.extraPellets),
+    HALO_VISUAL_BASE.bladeRadius * mods.bulletSizeMult,
+    HALO_VISUAL_BASE.speed * mods.bulletSpeedMult,
+  );
+}
+
 function main(): void {
   process.stdout.write("\n[Razor Halo visual tier derivation]\n");
 
@@ -33,47 +44,27 @@ function main(): void {
   );
   check(
     "one extra blade reaches charged tier 1",
-    haloVisualTier(5, HALO_VISUAL_BASE.bladeRadius, HALO_VISUAL_BASE.speed) === 1,
+    tierFor(["split_shot"]) === 1,
   );
   check(
     "a first Marksman speed upgrade reaches charged tier 1",
-    haloVisualTier(
-      HALO_VISUAL_BASE.blades,
-      HALO_VISUAL_BASE.bladeRadius,
-      HALO_VISUAL_BASE.speed * 1.12,
-    ) === 1,
+    tierFor(["marksman"]) === 1,
   );
   check(
     "Frostbite blade growth reaches charged tier 1",
-    haloVisualTier(
-      HALO_VISUAL_BASE.blades,
-      HALO_VISUAL_BASE.bladeRadius * 1.4,
-      HALO_VISUAL_BASE.speed,
-    ) === 1,
+    tierFor(["frostbite"]) === 1,
   );
   check(
-    "the legal blade cap reaches formidable tier 2",
-    haloVisualTier(
-      HALO_VISUAL_CAP.blades,
-      HALO_VISUAL_BASE.bladeRadius,
-      HALO_VISUAL_BASE.speed,
-    ) === 2,
+    "Split Shot II reaches the formidable blade cap",
+    tierFor(["split_shot", "split_shot"]) === 2,
   );
   check(
-    "maximum legal size reaches formidable tier 2",
-    haloVisualTier(
-      HALO_VISUAL_BASE.blades,
-      HALO_VISUAL_CAP.bladeRadius,
-      HALO_VISUAL_BASE.speed,
-    ) === 2,
+    "Big Iron reaches the formidable visual size cap",
+    tierFor(["big_iron"]) === 2,
   );
   check(
-    "maximum legal speed reaches formidable tier 2",
-    haloVisualTier(
-      HALO_VISUAL_BASE.blades,
-      HALO_VISUAL_BASE.bladeRadius,
-      HALO_VISUAL_CAP.speed,
-    ) === 2,
+    "Marksman III reaches the formidable speed cap",
+    tierFor(["marksman", "marksman", "marksman"]) === 2,
   );
 
   process.stdout.write("\n[Razor Halo visual input caps]\n");
