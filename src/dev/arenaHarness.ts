@@ -1,9 +1,8 @@
 // ?dev=arena — the LOCAL-ONLY arena capture harness. Boots the REAL online client
 // (the exact WSTransport netcode + presentation the arena ships) against an in-page scripted
-// socket that replays authoritative snapshots we author from the pure sim. Nothing here touches
-// the production kill switch: the client selects arena presentation off the authoritative world
-// id (pvp:) + snapshot, never off PVP_PUBLIC_ENABLED. Reachable only behind ?dev, which is
-// code-split out of the play bundle.
+// socket that replays authoritative snapshots we author from the pure sim. The client selects
+// arena presentation from the authoritative world id (pvp:) + snapshot. Reachable only behind
+// ?dev, which is code-split out of the play bundle.
 //
 // Scenes (?scene=): live-hearth, live-contested, live-tar, live-gust, live-spark,
 // live-ult-salvo, live-ult-triage, live-ult-shove, live-ult-slip.
