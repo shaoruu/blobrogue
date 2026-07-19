@@ -109,6 +109,11 @@ try {
     await waitUntil(() => ianBot.transport.isReady() && ansonBot.transport.isReady(), 4_000));
 
   const liveWorld = first.server.getWorld(worldId)!;
+  check("both clients confirm possession of their reconnect credentials",
+    await waitUntil(() => (
+      [...liveWorld.conns.values()].length === 2
+      && [...liveWorld.conns.values()].every((conn) => conn.isResumeTokenConfirmed)
+    ), 2_000));
   check("admin setup reaches the deep floor", liveWorld.adminWarpToFloor(55));
   const ianPid = [...liveWorld.conns.values()].find((conn) => conn.authName === "ian-account")!.playerId!;
   const ansonPid = [...liveWorld.conns.values()].find((conn) => conn.authName === "anson-account")!.playerId!;
