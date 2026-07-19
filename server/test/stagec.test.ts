@@ -11,7 +11,7 @@ import { jsonCodec, PROTOCOL_VERSION } from "../../src/net/protocol.js";
 import { acquireWeaponInWorld, devSpawnEnemy } from "../../src/sim/world.js";
 import type { RoomRuntime } from "../src/ports.js";
 import { TILE } from "../../src/sim/types.js";
-import { MAX_OWNED_WEAPONS } from "../../src/sim/constants.js";
+import { MAX_OWNED_WEAPONS, WEAPON_PICKUP_RADIUS } from "../../src/sim/constants.js";
 import { WebSocket as WsClient } from "ws";
 
 // Spawn a controlled boss near the dungeon spawn (where bots enter) so boss-combat tests are
@@ -404,7 +404,7 @@ async function main(): Promise<void> {
 
       // A new weapon lands underfoot: the full bar must NOT auto-collect it.
       const pkId = world.state.nextPickupId++;
-      world.state.pickups.push({ id: pkId, kind: "weapon", x: ap.x, y: ap.y, radius: 16, weapon: "flamer" });
+      world.state.pickups.push({ id: pkId, kind: "weapon", x: ap.x, y: ap.y, radius: WEAPON_PICKUP_RADIUS, weapon: "flamer" });
       await sleep(400);
       check("a full hotbar never auto-collects (pickup still standing)",
         world.state.pickups.some((p) => p.id === pkId) && !ap.ownedWeapons.includes("flamer"));
@@ -448,7 +448,7 @@ async function main(): Promise<void> {
       cheatP.y = exit.y * TILE + TILE / 2;
       const rej0 = s.server.health().counters.rejectedInputs;
       const cheatPk = world.state.nextPickupId++;
-      world.state.pickups.push({ id: cheatPk, kind: "weapon", x: cheatP.x, y: cheatP.y, radius: 16, weapon: "mortar" });
+      world.state.pickups.push({ id: cheatPk, kind: "weapon", x: cheatP.x, y: cheatP.y, radius: WEAPON_PICKUP_RADIUS, weapon: "mortar" });
       // Below the cap the walk-over collects (that is the design) — so pin the cheater at
       // one weapon and aim the swap at the ALREADY-COLLECTED pickup: a stale/forged swap.
       await waitUntil(() => cheatP.ownedWeapons.includes("mortar"), 2000);
@@ -458,7 +458,7 @@ async function main(): Promise<void> {
         cheatP.ownedWeapons.join(",") === "pistol,mortar" && s.server.health().counters.rejectedInputs > rej0);
       fillToCap(cheatId);
       const cheatPk2 = world.state.nextPickupId++;
-      world.state.pickups.push({ id: cheatPk2, kind: "weapon", x: cheatP.x, y: cheatP.y, radius: 16, weapon: "beam" });
+      world.state.pickups.push({ id: cheatPk2, kind: "weapon", x: cheatP.x, y: cheatP.y, radius: WEAPON_PICKUP_RADIUS, weapon: "beam" });
       await sleep(300);
       check("the capped cheater cannot auto-collect either", !cheatP.ownedWeapons.includes("beam"));
       raw.send(jsonCodec.encodeClient({ t: "swap", pickup: cheatPk2, drop: "mortar", cseq: 2 }));

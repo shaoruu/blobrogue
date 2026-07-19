@@ -454,6 +454,8 @@ function hudIntegrationTests(): void {
   check("the prompt names the state and the incoming weapon",
     swapEl.querySelector(".hs-tag")?.textContent === "HOTBAR FULL"
     && swapEl.querySelector(".hs-name")?.textContent === "SWAP FOR FLAMER?");
+  check("the prompt names the one-tap equipped-slot shortcut",
+    swapEl.querySelector(".hs-hint")?.textContent === "E SWAPS EQUIPPED \u00b7 CLICK A SLOT TO REPLACE \u00b7 ESC LEAVES IT");
   const swapSlots = [...swapEl.querySelectorAll<HTMLButtonElement>(".hs-slot")];
   check("one swap button per current slot, keyed like the hotbar",
     swapSlots.length === MAX_OWNED_WEAPONS

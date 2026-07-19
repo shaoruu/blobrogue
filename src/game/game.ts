@@ -1297,7 +1297,7 @@ export class Game {
         this.togglePause();
         break;
       case "interact":
-        if (this.isRunning) this.openFocusedShopStation();
+        if (this.isRunning) this.handleInteractPress();
         break;
       case "selectWeapon":
         // PVP WAVE 3: during the pre-live arena freeze the 1-4 keys CLAIM the arena ult kit (an ult
@@ -4892,12 +4892,16 @@ export class Game {
     return nearestShopSlot(this.world, this.px, this.py, SHOP_FOCUS_RANGE);
   }
 
-  // The semantic interact PRESS resolved against the world: open the focused station's
-  // compact panel. A revivable teammate in range owns E (the hold channel), so the shop
-  // yields; away from every station the press does nothing. Stepping/touching never
-  // reaches any purchase path — only the panel's BUY sends the buy command.
-  private openFocusedShopStation() {
+  // Resolve E by the same priority as the world prompt: revive, blocked weapon, then shop.
+  // A blocked weapon trades through the existing authoritative swap command, replacing
+  // the equipped slot; clicking a prompt slot remains available for an explicit choice.
+  private handleInteractPress() {
     if (this.contextualAction()?.action === "revive") return;
+    if (this.swapTarget !== null) {
+      const equippedIndex = this.p.ownedWeapons.indexOf(this.weapon);
+      if (equippedIndex >= 0) this.swapSlot(equippedIndex);
+      return;
+    }
     const slot = this.focusedShopSlot();
     if (slot === null) return;
     this.shopPanel.open(

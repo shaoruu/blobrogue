@@ -7,6 +7,9 @@
 //
 // Run: npm run test:inventory
 
+import "./harness/domShim.js";
+import { domCanvas, domMinimap, domOverlay, fireWindowEvent } from "./harness/domShim.js";
+import { Game } from "../src/game/game.js";
 import {
   createWorld, spawnPlayerInWorld, acquireWeaponInWorld, switchWeaponInWorld,
   reorderWeaponsInWorld, dropWeaponInWorld, swapWeaponInWorld, stepWorld, devSpawnProp, devSpawnChest,
@@ -19,7 +22,10 @@ import { TILE } from "../src/sim/types.js";
 import type { WeaponId } from "../src/sim/types.js";
 import { toSelfWire, applySelfWire } from "../src/net/protocol.js";
 import { LocalTransport } from "../src/client/transport.js";
-import { PROP_RADIUS, WEAPON_DROP_RADII, CHEST_LOOT_WALL_MARGIN, MAX_OWNED_WEAPONS, WEAPON_SWAP_RANGE } from "../src/sim/constants.js";
+import {
+  PROP_RADIUS, WEAPON_PICKUP_RADIUS, WEAPON_DROP_RADII, CHEST_LOOT_WALL_MARGIN,
+  MAX_OWNED_WEAPONS, WEAPON_SWAP_RANGE,
+} from "../src/sim/constants.js";
 
 let passed = 0, failed = 0;
 const failures: string[] = [];
@@ -253,8 +259,21 @@ function fillToCap(w: WorldState, pid: PlayerId): void {
 
 function dropPickup(w: WorldState, x: number, y: number, weapon: WeaponId, isBossChoice = false): number {
   const id = w.nextPickupId++;
-  w.pickups.push({ id, kind: "weapon", x, y, radius: 16, weapon, isBossChoice: isBossChoice || undefined });
+  w.pickups.push({ id, kind: "weapon", x, y, radius: WEAPON_PICKUP_RADIUS, weapon, isBossChoice: isBossChoice || undefined });
   return id;
+}
+
+function pickupRadiusTests(): void {
+  section("weapon pickup range matches the 38px visual footprint");
+  const { w, p } = sharedWorld();
+  const edgeDistance = 37.5;
+  const pkId = dropPickup(w, p.x + edgeDistance, p.y, "flamer");
+  const inputs = new Map<PlayerId, InputCmd>([[p.id, IDLE_INPUT]]);
+  check("the shared weapon pickup radius is 20px", WEAPON_PICKUP_RADIUS === 20);
+  stepWorld(w, inputs, 1 / 60);
+  check("an unowned gun near the visual edge collects into an empty slot",
+    p.ownedWeapons.includes("flamer") && !w.pickups.some((q) => q.id === pkId),
+    `distance=${edgeDistance}, range=${p.pr + WEAPON_PICKUP_RADIUS}`);
 }
 
 function capTests(): void {
@@ -499,17 +518,49 @@ function localTransportParityTests(): void {
   check("a stale solo swap is a no-op (pickup already consumed)", p.ownedWeapons.length === MAX_OWNED_WEAPONS && p.weapon === "flamer");
 }
 
+function keyboardSwapTests(): void {
+  section("keyboard interact: E swaps a blocked floor gun into the equipped slot");
+  const noop = (): void => {};
+  const game = new Game(
+    domCanvas as object as HTMLCanvasElement,
+    domMinimap as object as HTMLCanvasElement,
+    domOverlay as object as HTMLElement,
+    noop,
+    noop,
+  );
+  game.devStartSandbox();
+  const w = game.devWorld();
+  const p = w.players.get(LOCAL_ID)!;
+  fillToCap(w, LOCAL_ID);
+  const equipped = p.ownedWeapons[2];
+  switchWeaponInWorld(w, LOCAL_ID, equipped);
+  const pkId = dropPickup(w, p.x, p.y, "flamer");
+
+  (game as object as { updateHud(): void }).updateHud();
+  fireWindowEvent("keydown", { key: "e", repeat: false });
+  fireWindowEvent("keyup", { key: "e" });
+
+  check("E claims the armed full-hotbar pickup", p.ownedWeapons.includes("flamer") && !w.pickups.some((q) => q.id === pkId));
+  check("E replaces the currently equipped weapon", !p.ownedWeapons.includes(equipped) && p.weapon === "flamer");
+  check("the keyboard path preserves the cap", p.ownedWeapons.length === MAX_OWNED_WEAPONS);
+  check("the replaced equipped weapon becomes a floor pickup",
+    w.pickups.some((q) => q.kind === "weapon" && q.weapon === equipped));
+  game.stop();
+}
+
 function main(): void {
   reorderTests();
   dropRuleTests();
   dropPlacementTests();
   dropCollectionTests();
+  pickupRadiusTests();
   capTests();
   duplicatePickupTests();
   swapTests();
   slotSelectabilityTests();
   swapDeterminismTests();
   localTransportParityTests();
+  keyboardSwapTests();
   process.stdout.write(`\n${passed} checks passed, ${failed} failed\n`);
   if (failed > 0) { process.stdout.write(`FAILURES:\n${failures.map((f) => "  - " + f).join("\n")}\n`); process.exit(1); }
   process.stdout.write("\nAll inventory command assertions passed.\n");

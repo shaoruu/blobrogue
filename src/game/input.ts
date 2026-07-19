@@ -42,8 +42,8 @@ export type GameAction =
   // The full-hotbar swap prompt: trade the slot at `index` for the blocked pickup underfoot.
   | { kind: "swapSlot"; index: number }
   // The semantic interact PRESS (E edge; a controller's A button later): the game resolves
-  // it against the world — today that is "open the focused shop station's panel". Distinct
-  // from the revive channel, which is the HELD `interact` bit on the gameplay sample.
+  // it against the world (revive, full-hotbar swap, then shop). Distinct from the revive
+  // channel, which is the HELD `interact` bit on the gameplay sample.
   | { kind: "interact" }
   | { kind: "cycleSpectate"; dir: 1 | -1 }
   // Spectate follow toggle (F): watched teammate <-> your own body (see who's coming).
@@ -206,10 +206,9 @@ export class InputController {
       // contract): every slot that can exist has a key, and no key names a dead slot.
       if (k >= "1" && k <= String(MAX_OWNED_WEAPONS)) this.emit({ kind: "selectWeapon", index: parseInt(k, 10) - 1 });
       if (k === "q") this.emit({ kind: "dropWeapon" }); // Q drops the equipped weapon
-      // E is ONE physical key, three semantic meanings, disambiguated purely by context +
-      // world state: the interact PRESS below (gameplay — the game opens the focused shop
-      // station), the revive HOLD (the level `interact` bit on the gameplay sample), and
-      // the spectate step (downed). The context gate makes exactly one reachable.
+      // E is ONE physical key with meanings disambiguated by context + world state: the
+      // interact PRESS below, the revive HOLD (the level `interact` bit on the gameplay
+      // sample), and the spectate step (downed). The context gate makes exactly one reachable.
       if (k === "e") this.emit({ kind: "interact" });
       // Downed: Q/E and the arrows step the spectated teammate instead (the context gate
       // keeps these dead everywhere else, and gameplay keys dead here). A controller's

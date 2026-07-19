@@ -310,7 +310,7 @@ function mysteryDeterminismGates(): void {
     acquireWeaponInWorld(w, LOCAL_ID, "shotgun");
     const plant = (twist: "plain" | "blessed" | "cursed", weapon: WeaponId): SimEvent[] => {
       w.pickups.push({
-        id: w.nextPickupId++, kind: "weapon", x: p.x, y: p.y, radius: 16,
+        id: w.nextPickupId++, kind: "weapon", x: p.x, y: p.y, radius: C.WEAPON_PICKUP_RADIUS,
         weapon, isMystery: true, twist,
       });
       return step(w, idle(w.tick + 1));
@@ -580,7 +580,7 @@ function shopGates(): void {
 function wireGates(): void {
   section("wire: a mystery pickup's identity NEVER rides the snapshot");
   const pickup: Pickup = {
-    id: 7, kind: "weapon", x: 100, y: 200, radius: 16,
+    id: 7, kind: "weapon", x: 100, y: 200, radius: C.WEAPON_PICKUP_RADIUS,
     weapon: "reaper", isMystery: true, twist: "blessed",
   };
   const wire = toPickupWire(pickup);
@@ -588,7 +588,7 @@ function wireGates(): void {
   const back = pickupFromWire(wire);
   check("pickupFromWire keeps the mystery flag without fabricating an identity",
     back.isMystery === true && back.weapon === null && back.twist === undefined);
-  const identified: Pickup = { id: 8, kind: "weapon", x: 1, y: 2, radius: 16, weapon: "reaper" };
+  const identified: Pickup = { id: 8, kind: "weapon", x: 1, y: 2, radius: C.WEAPON_PICKUP_RADIUS, weapon: "reaper" };
   check("an identified legendary rides the wire openly", toPickupWire(identified).wpn === "reaper");
 
   section("wire: a full snapshot with legendaries + mysteries encodes/decodes cleanly");
@@ -620,7 +620,7 @@ function determinismGates(): void {
       const e = devSpawnEnemy(w, i % 2 === 0 ? "slime" : "bat", p.x + 120 + (i % 4) * 50, p.y + (i % 3) * 40 - 40);
       e.hp = 2;
     }
-    w.pickups.push({ id: 900, kind: "weapon", x: p.x - 30, y: p.y, radius: 16, weapon: "midas", isMystery: true, twist: "cursed" });
+    w.pickups.push({ id: 900, kind: "weapon", x: p.x - 30, y: p.y, radius: C.WEAPON_PICKUP_RADIUS, weapon: "midas", isMystery: true, twist: "cursed" });
     const trace: string[] = [];
     for (let t = 0; t < 240; t++) {
       const evs = stepWorld(w, new Map<PlayerId, InputCmd>([[LOCAL_ID, {
@@ -643,7 +643,7 @@ function determinismGates(): void {
     const pa = spawnPlayerInWorld(w, "pa");
     const pb = spawnPlayerInWorld(w, "pb");
     w.enemies = []; w.pendingSpawns = [];
-    w.pickups.push({ id: 55, kind: "weapon", x: pa.x, y: pa.y, radius: 16, weapon: "swarm", isMystery: true, twist: "plain" });
+    w.pickups.push({ id: 55, kind: "weapon", x: pa.x, y: pa.y, radius: C.WEAPON_PICKUP_RADIUS, weapon: "swarm", isMystery: true, twist: "plain" });
     pb.x = pa.x; pb.y = pa.y; // both standing on it: exactly one may collect
     const evs = stepWorld(w, new Map(), DT);
     const reveals = evs.filter((e) => e.t === "mysteryReveal");

@@ -1858,7 +1858,7 @@ export class Hud {
     leave.addEventListener("pointerdown", (e) => e.stopPropagation());
     leave.addEventListener("click", (e) => { e.stopPropagation(); this.hotbarActions?.onSwapDismiss(); });
     row.appendChild(leave);
-    const hint = el("span", "", "CLICK THE SLOT IT REPLACES \u00b7 ESC LEAVES IT");
+    const hint = el("span", "", "E SWAPS EQUIPPED \u00b7 CLICK A SLOT TO REPLACE \u00b7 ESC LEAVES IT");
     hint.className = "hs-hint";
     this.swapEl.append(head, row, hint);
   }

@@ -38,10 +38,11 @@ if (mode === "before") {
   await page.waitForTimeout(1600); // the equip-confirm tooltip flash fades first
   await page.screenshot({ path: `${outDir}/after-full-hotbar.png` });
   // A new weapon lands underfoot: the sim refuses the auto-collect and the prompt raises.
-  await page.evaluate(() => {
+  await page.evaluate(async () => {
+    const { WEAPON_PICKUP_RADIUS } = await import("/src/sim/constants.ts");
     const w = window.__game.devWorld();
     const p = w.players.get("local");
-    w.pickups.push({ id: w.nextPickupId++, kind: "weapon", x: p.x, y: p.y, radius: 16, weapon: "flamer" });
+    w.pickups.push({ id: w.nextPickupId++, kind: "weapon", x: p.x, y: p.y, radius: WEAPON_PICKUP_RADIUS, weapon: "flamer" });
   });
   await page.waitForTimeout(600);
   await page.waitForSelector(".hb-swap.show");

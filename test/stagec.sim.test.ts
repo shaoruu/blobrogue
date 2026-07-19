@@ -1236,7 +1236,7 @@ function lootOwnershipTests(): void {
   section("loot ownership: a weapon pickup goes to the collector's inventory only");
   {
     const { w, a, b } = twoPlayerArena();
-    w.pickups.push({ kind: "weapon", x: a.x, y: a.y, radius: 16, weapon: "tesla" });
+    w.pickups.push({ kind: "weapon", x: a.x, y: a.y, radius: C.WEAPON_PICKUP_RADIUS, weapon: "tesla" });
     stepWorldPhase(w, 1 / 20, []);
     check("collector (A) acquired the weapon", a.ownedWeapons.includes("tesla"));
     check("the other player (B) did not", !b.ownedWeapons.includes("tesla"));

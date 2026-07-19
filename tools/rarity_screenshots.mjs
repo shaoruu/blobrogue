@@ -28,7 +28,8 @@ await page.evaluate(() => {
 await page.waitForTimeout(1200);
 
 // ---- shot 1: the rarity pickup treatment (common / rare / legendary / mystery) ----
-await page.evaluate(() => {
+await page.evaluate(async () => {
+  const { WEAPON_PICKUP_RADIUS } = await import("/src/sim/constants.ts");
   const { game } = window.__blobdev;
   const w = game.world;
   const p = w.players.get("local");
@@ -42,7 +43,7 @@ await page.evaluate(() => {
   drops.forEach((d, i) => {
     w.pickups.push({
       id: w.nextPickupId++, kind: "weapon", x: p.x - 190 + i * 120, y: p.y - 110,
-      radius: 16, weapon: d.weapon, isMystery: d.isMystery, twist: d.twist,
+      radius: WEAPON_PICKUP_RADIUS, weapon: d.weapon, isMystery: d.isMystery, twist: d.twist,
     });
   });
 });
@@ -63,13 +64,14 @@ await page.screenshot({ path: `${OUT}/2_hotbar_tints_legendary_tooltip.png`, cli
 await page.mouse.move(20, 20); // drop the hover so no tooltip lingers into later shots
 
 // ---- shot 3: the mystery reveal moment ----
-await page.evaluate(() => {
+await page.evaluate(async () => {
+  const { WEAPON_PICKUP_RADIUS } = await import("/src/sim/constants.ts");
   const { game } = window.__blobdev;
   const w = game.world;
   const p = w.players.get("local");
   w.pickups.push({
     id: w.nextPickupId++, kind: "weapon", x: p.x + 60, y: p.y,
-    radius: 16, weapon: "phase", isMystery: true, twist: "blessed",
+    radius: WEAPON_PICKUP_RADIUS, weapon: "phase", isMystery: true, twist: "blessed",
   });
   game.devTeleport(p.x + 60, p.y);
 });
