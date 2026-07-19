@@ -479,7 +479,7 @@ function swapDeterminismTests(): void {
 interface PickupSwapGameAccess {
   devStartSandbox(): void;
   devWorld(): WorldState;
-  tick(dt: number): void;
+  tickSwapPrompt(): void;
   stop(): void;
   input: {
     keyDown(key: string, isRepeat?: boolean): boolean;
@@ -505,7 +505,7 @@ function keyboardSwapInputTests(): void {
   switchWeaponInWorld(w, LOCAL_ID, equipped);
   const pkId = dropPickup(w, p.x + 37, p.y, "flamer");
 
-  game.tick(1 / 60);
+  game.tickSwapPrompt();
   check("full hotbar leaves the in-range floor gun available for a swap", w.pickups.some((q) => q.id === pkId));
   game.input.keyDown("e");
   game.input.keyUp("e");

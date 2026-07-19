@@ -891,16 +891,18 @@ function curriculumTests(): void {
     check("the final clear drops the premium boss chest with the gauntlet signature",
       isFloorCleared(w) && w.chests.some((c) => c.kind === "boss" && c.weapon === GAUNTLET.chestWeapon));
 
-    // The premium chest behaves like every boss chest: the min(max(3,P+1),5) personal
-    // choices + rare offer.
+    // The premium chest behaves like every boss chest: choices plus a rare offer. From the
+    // exact chest center, the nearest choice at 36px is inside the visual pickup footprint.
     const chest = w.chests.find((c) => c.kind === "boss")!;
     const p = w.players.get(LOCAL_ID)!;
     p.x = chest.x; p.y = chest.y;
     const evs = step(w, idle(9999));
-    check("opening it raises the rare blessing offer and the boss choice set (no blessing before the full clear)",
+    check("opening it raises the rare blessing offer and collects the nearest boss choice at 36px",
       evs.some((e) => e.t === "offerBlessing" && e.rare)
-      && w.pickups.filter((k) => k.isBossChoice).length === bossWeaponChoices(1)
-      && w.pickups.some((k) => k.isBossChoice && k.weapon === GAUNTLET.chestWeapon));
+      && evs.some((e) => e.t === "pickup" && e.kind === "weapon")
+      && p.hasClaimedBossChoice
+      && p.ownedWeapons.includes(GAUNTLET.chestWeapon)
+      && !w.pickups.some((k) => k.isBossChoice));
   }
 
   section("corrected gate §3: the captain two-phase contract (no floor, non-invulnerable)");
