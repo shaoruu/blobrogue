@@ -972,6 +972,11 @@ export class Game {
   private arenaBurstKickY = 0;
   private isHaloActiveForBurst = false;
   private isHaloFlaredForBurst = false;
+  private haloBurstAngle = 0;
+  private haloBurstRing = 0;
+  private haloBurstBlades = 0;
+  private haloBurstX = 0;
+  private haloBurstY = 0;
   private haloImpactCount = 0;
   private haloImpactSampleCount = 0;
   private haloImpactTrauma = 0;
@@ -2536,15 +2541,21 @@ export class Game {
     this.burstKick = 0;
     this.burstKickDir = 0;
     this.resetArenaUltBurst();
-    this.isHaloActiveForBurst = this.weapon === "halo";
+    this.isHaloActiveForBurst = false;
     this.isHaloFlaredForBurst = false;
     this.haloImpactCount = 0;
     this.haloImpactSampleCount = 0;
     this.haloImpactTrauma = 0;
-    if (this.isHaloActiveForBurst) {
+    if (this.weapon === "halo") {
       for (const effect of this.effects) {
         if (effect.kind !== "orbit" || effect.owner !== LOCAL_ID) continue;
+        this.isHaloActiveForBurst = true;
         this.isHaloFlaredForBurst = effect.flare > 0;
+        this.haloBurstAngle = effect.angle;
+        this.haloBurstRing = effect.ring;
+        this.haloBurstBlades = effect.blades;
+        this.haloBurstX = this.p.x;
+        this.haloBurstY = this.p.y;
         break;
       }
     }
@@ -2823,7 +2834,10 @@ export class Game {
         const localMeleeWeapon = e.melee
           ? this.meleeImpactWeaponFor(e.eid, e.puffX, e.puffY)
           : null;
-        const isHaloImpact = e.melee && this.isHaloActiveForBurst && localMeleeWeapon === null;
+        const isHaloImpact = e.melee
+          && this.isHaloActiveForBurst
+          && localMeleeWeapon === null
+          && this.isHaloImpactPoint(e.puffX, e.puffY);
         let meleeWeapon: WeaponId | null = null;
         if (isHaloImpact) {
           const isSampled = this.queueHaloImpact(e.puffX, e.puffY, e.dmgX, e.dmgY, e.dmg, e.puffColor, e.crit);
@@ -3624,6 +3638,16 @@ export class Game {
     this.haloImpactCrit[index] = isCrit ? 1 : 0;
     this.haloImpactColor[index] = color;
     return true;
+  }
+
+  private isHaloImpactPoint(x: number, y: number): boolean {
+    for (let i = 0; i < this.haloBurstBlades; i++) {
+      const angle = this.haloBurstAngle + (i / this.haloBurstBlades) * Math.PI * 2;
+      const dx = x - (this.haloBurstX + Math.cos(angle) * this.haloBurstRing);
+      const dy = y - (this.haloBurstY + Math.sin(angle) * this.haloBurstRing);
+      if (dx * dx + dy * dy <= 16) return true;
+    }
+    return false;
   }
 
   private flushHaloImpacts(): void {
