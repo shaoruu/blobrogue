@@ -510,7 +510,7 @@ describe("Convex run authority", () => {
     }
   });
 
-  test("PVP admission requires exact durable policy and remains dark", async () => {
+  test("PVP admission requires the exact durable policy", async () => {
     const { t, playerId, roomId } = await seedGeneration();
     await t.run(async (ctx) => {
       await ctx.db.patch(roomId, {
@@ -529,8 +529,8 @@ describe("Convex run authority", () => {
       petId: null,
     };
     await expect(t.query(generationAdmission, args)).resolves.toEqual({
-      isAllowed: false,
-      code: "private_disabled",
+      isAllowed: true,
+      code: "ok",
     });
     await expect(t.query(generationAdmission, {
       ...args,
@@ -566,7 +566,7 @@ describe("Convex run authority", () => {
     });
   });
 
-  test("browser PVP intent cannot choose policy or bypass either dark rollout flag", async () => {
+  test("browser PVP intent cannot choose policy or bypass the public rollout flag", async () => {
     const { t } = await seedGeneration();
     const args = {
       clientId: "browser-a",
@@ -578,15 +578,13 @@ describe("Convex run authority", () => {
       isKitChoiceMade: true,
       isPetChoiceMade: true,
     };
-    await expect(t.mutation(createRoom, args)).rejects.toMatchObject({
-      data: { code: "private_disabled" },
-    });
+    const created = await t.mutation(createRoom, args);
     await expect(t.mutation(quickPlayRoom, args)).rejects.toMatchObject({
       data: { code: "public_disabled" },
     });
     const rooms = await t.run(async (ctx) => await ctx.db.query("rooms").collect());
-    expect(rooms).toHaveLength(1);
-    expect(rooms[0].pvpPolicy).toBeUndefined();
+    expect(rooms).toHaveLength(2);
+    expect(rooms.find((room) => room._id === created.roomId)?.pvpPolicy).toBe(PRIVATE_DRAFT_PVP_POLICY);
   });
 
   test("arena confirms an unowned cosmetic pet while co-op keeps the rescue gate", async () => {
