@@ -12744,12 +12744,14 @@ function updateSever(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void 
     return;
   }
 
-  // Sev-0 fail-safe FIRST: the hunt can never softlock a run. Once it has resolved to a soft
+  severAfterInterceptWindow(w, e, ev);
+
+  // Sev-0 fail-safe: the hunt can never softlock a run. Once it has resolved to a soft
   // escape (escape meter maxed, or a stall watchdog), the exit is already open and Sever
   // disengages — the party can descend even if they never found a single anchor.
   if (severFailsafe(w, e, dt, ev)) { if (a.phase !== "none") enterIdle(e); return; }
 
-  // Anchor intercept loop (parallel): both anchors dead → open window + advance checkpoint.
+  // Anchor intercept loop (parallel): both anchors dead → open window.
   severAnchorLoop(w, e, ev);
 
   if (a.phase === "windup") { severWorldsplitWindup(w, e, dt, ev); return; }
@@ -12882,10 +12884,12 @@ function severHuntStep(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): voi
             enc.flags.interceptState = "escaped";
           }
         }
-        // Advance checkpoint when reaching an objective room ahead.
+        // Plant at the active checkpoint after the hunt reaches it.
         const idx = cps.indexOf(newRoom);
         if (idx > enc.checkpoint) {
           enc.checkpoint = Math.min(2, idx);
+        }
+        if (idx === enc.checkpoint && Number(enc.flags.anchorsPlantedCp ?? -1) < enc.checkpoint) {
           severPlantAnchors(w, e, ev);
           enc.flags.interceptState = "trap";
         }
@@ -12953,6 +12957,23 @@ function severPlantAnchors(w: WorldState, e: Enemy, ev: SimEvent[]): void {
   ev.push({ t: "cue", name: "bossSpawn", x: e.x, y: e.y, rate: 1.1, gain: 0.45, trauma: 0.03 });
 }
 
+function severAfterInterceptWindow(w: WorldState, e: Enemy, ev: SimEvent[]): void {
+  const boss = e.boss!;
+  const enc = severEnc(w);
+  if (!enc || enc.flags.interceptState !== "exposed" || boss.exposed > 0 || boss.windowAddIds.length > 0) return;
+  const checkpointCount = Math.min(3, w.dungeon.blueprint?.objectiveRoomIds.length ?? 0);
+  const finalCheckpoint = Math.max(0, checkpointCount - 1);
+  enc.flags.interceptState = "hunt";
+  if (enc.checkpoint >= finalCheckpoint) {
+    enc.objectiveProgress = 1;
+    completeEncounter(enc);
+    ev.push({ t: "cue", name: "bossSpawn", x: e.x, y: e.y, rate: 0.5, gain: 0.8, trauma: 0.1 });
+    return;
+  }
+  enc.checkpoint++;
+  enc.objectiveProgress = Math.min(1, enc.checkpoint / Math.max(1, checkpointCount));
+}
+
 // Sev-0 fail-safe (the hunt can NEVER softlock a run). Two independent catches funnel into ONE
 // soft-escape completion that opens the exit WITHOUT the boss reward: (1) the escape meter
 // reaching its max (the documented "route worsened" loss), and (2) a stall watchdog — the
@@ -12965,7 +12986,9 @@ function severFailsafe(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): boo
   if (Number(enc.flags.escapeMeter) >= SEVER.escapeMeterMax) { severSoftEscapeComplete(w, e, ev); return true; }
   const prevHp = enc.flags.stallHp == null ? e.hp : Number(enc.flags.stallHp);
   const prevCp = enc.flags.stallCp == null ? enc.checkpoint : Number(enc.flags.stallCp);
-  const isProgress = e.hp < prevHp - 0.5 || enc.checkpoint > prevCp || enc.flags.interceptState === "exposed";
+  const isProgress = e.hp < prevHp - 0.5
+    || enc.checkpoint > prevCp
+    || (enc.flags.interceptState === "exposed" && e.boss!.exposed > 0);
   const stall = isProgress ? 0 : Number(enc.flags.stallSec ?? 0) + dt;
   enc.flags.stallSec = stall;
   enc.flags.stallHp = e.hp;
@@ -13002,10 +13025,8 @@ function severAnchorLoop(w: WorldState, e: Enemy, ev: SimEvent[]): void {
       if (!best || d < best.d) best = { id: p.id, d };
     }
     if (best) setEncounterCarrier(enc, best.id);
-    const next = Math.min(2, enc.checkpoint + 1);
-    enc.checkpoint = next;
-    enc.objectiveProgress = Math.min(1, (next + 1) / 3);
-    if (next >= 2 && e.hp <= e.maxHp * 0.2) {
+    enc.objectiveProgress = Math.min(1, (enc.checkpoint + 1) / 3);
+    if (enc.checkpoint >= 2 && e.hp <= e.maxHp * 0.2) {
       // Final chamber pressure — completion still via boss death OR full objective.
       enc.objectiveProgress = 1;
     }

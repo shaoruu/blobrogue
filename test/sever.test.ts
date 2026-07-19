@@ -225,6 +225,79 @@ function anchorsAndWindow(): void {
   check("carrier pip assigned on intercept", w.encounter.carrierPlayerId !== null);
 }
 
+function severAnchorLoopCompletes(): void {
+  section("Anchor loop resumes after exposure and completes all checkpoints");
+  const w = createWorld(0xA4C4, 55, {});
+  loadFloorIntoWorld(w, 55);
+  const boss = w.enemies.find((e) => e.kind === "sever");
+  if (!boss || !boss.boss || !w.encounter) { check("sever for full anchor loop", false); return; }
+  const p = w.players.get(LOCAL_ID)!;
+  p.x = boss.x + 40;
+  p.y = boss.y;
+  p.invuln = 999;
+  boss.spawnTimer = 0;
+  boss.attack.cooldown = 999;
+  step(w, 3);
+
+  const liveAnchors = () => w.enemies.filter((e) =>
+    e.kind === "sever_anchor" && !e.dead && boss.boss!.windowAddIds.indexOf(e.id) >= 0);
+  const breakAnchors = (): number => {
+    const anchors = liveAnchors();
+    for (const anchor of anchors) {
+      anchor.hp = 0;
+      anchor.dead = true;
+    }
+    return anchors.length;
+  };
+  const expireWindow = (): void => {
+    const ticks = Math.ceil(SEVER.interceptWindow / DT) + 2;
+    for (let i = 0; i < ticks; i++) {
+      p.x = boss.x + 40;
+      p.y = boss.y;
+      p.invuln = 999;
+      step(w, 1);
+    }
+  };
+  const driveToAnchors = (checkpoint: number): boolean => {
+    for (let i = 0; i < 1200; i++) {
+      p.x = boss.x + 40;
+      p.y = boss.y;
+      p.invuln = 999;
+      p.isDown = false;
+      p.hp = Math.max(p.hp, 1);
+      step(w, 1);
+      if (w.encounter!.checkpoint === checkpoint
+        && Number(w.encounter!.flags.anchorsPlantedCp) === checkpoint
+        && liveAnchors().length === SEVER.anchorsPerCheckpoint) return true;
+    }
+    return false;
+  };
+
+  check("checkpoint 0 starts with two anchors", breakAnchors() === SEVER.anchorsPerCheckpoint);
+  step(w, 2);
+  check("checkpoint stays put during its earned window",
+    w.encounter.checkpoint === 0 && w.encounter.flags.interceptState === "exposed");
+  expireWindow();
+  check("expired window resumes hunt at checkpoint 1",
+    w.encounter.checkpoint === 1 && w.encounter.flags.interceptState === "hunt"
+    && boss.boss.exposed === 0);
+  const isCheckpointOneReplanted = driveToAnchors(1);
+  check("Sever reaches checkpoint 1 and plants a new anchor pair", isCheckpointOneReplanted);
+
+  check("checkpoint 1 anchors can be broken", breakAnchors() === SEVER.anchorsPerCheckpoint);
+  step(w, 2);
+  expireWindow();
+  const isCheckpointTwoReplanted = driveToAnchors(2);
+  check("Sever reaches checkpoint 2 and plants a new anchor pair", isCheckpointTwoReplanted);
+
+  check("final checkpoint anchors can be broken", breakAnchors() === SEVER.anchorsPerCheckpoint);
+  step(w, 2);
+  expireWindow();
+  check("final window completes the hunt and opens the exit",
+    w.encounter.completed === true && w.encounter.failed === false && isFloorCleared(w));
+  check("full anchor objective completes without killing Sever", !boss.dead && boss.hp > 0);
+}
+
 function lateJoinCheckpoint(): void {
   section("Soft: late-join spawns at current checkpoint");
   const w = createWorld(0x1A7E, 55, { isShared: true, skipLocalPlayer: true });
@@ -481,6 +554,7 @@ interceptIndependentOfWorldsplit();
 fleeAcrossEdges();
 severNoSoftlock();
 anchorsAndWindow();
+severAnchorLoopCompletes();
 lateJoinCheckpoint();
 carrierHudPip();
 anchorReadability();
