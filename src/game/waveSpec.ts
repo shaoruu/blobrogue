@@ -755,35 +755,35 @@ export const WAVE_SOUNDS = {
     jitter: 0.04, spatial: true, duck: [dM(0.75, 0.08, 0.25)], fallback: { sample: "cannon", rate: 0.85, lowpassHz: 900 },
   },
   "shootMooringNail": {
-    stem: "sfx/mooring_nail_fire", variants: 1, takes: [], gain: 0.7, bus: "sfx",
+    stem: "sfx/mooring_nail_fire", variants: 1, takes: ["sfx/mooring_nail_fire"], gain: 0.7, bus: "sfx",
     priority: WAVE_PRIORITY.weapon, jitter: 0, spatial: true,
   },
   "shootSluicegate": {
-    stem: "sfx/sluicegate_fire", variants: 1, takes: [], gain: 0.7, bus: "sfx",
+    stem: "sfx/sluicegate_fire", variants: 1, takes: ["sfx/sluicegate_fire"], gain: 0.7, bus: "sfx",
     priority: WAVE_PRIORITY.weapon, jitter: 0, spatial: true,
   },
   "shootOddsmaker": {
-    stem: "sfx/oddsmaker_fire", variants: 1, takes: [], gain: 0.7, bus: "sfx",
+    stem: "sfx/oddsmaker_fire", variants: 1, takes: ["sfx/oddsmaker_fire"], gain: 0.7, bus: "sfx",
     priority: WAVE_PRIORITY.weapon, jitter: 0, spatial: true,
   },
   "shootPathmaker": {
-    stem: "sfx/pathmaker_fire", variants: 1, takes: [], gain: 0.55, bus: "sfx",
+    stem: "sfx/pathmaker_fire", variants: 1, takes: ["sfx/pathmaker_fire"], gain: 0.55, bus: "sfx",
     priority: WAVE_PRIORITY.weapon, jitter: 0, spatial: true,
   },
   "shootResonantFork": {
-    stem: "sfx/resonant_fork_fire", variants: 1, takes: [], gain: 0.65, bus: "sfx",
+    stem: "sfx/resonant_fork_fire", variants: 1, takes: ["sfx/resonant_fork_fire"], gain: 0.65, bus: "sfx",
     priority: WAVE_PRIORITY.weapon, jitter: 0, spatial: true,
   },
   "shootRedPen": {
-    stem: "sfx/red_pen_fire", variants: 1, takes: [], gain: 0.6, bus: "sfx",
+    stem: "sfx/red_pen_fire", variants: 1, takes: ["sfx/red_pen_fire"], gain: 0.6, bus: "sfx",
     priority: WAVE_PRIORITY.weapon, jitter: 0, spatial: true,
   },
   "shootMarginCall": {
-    stem: "sfx/margin_call_fire", variants: 1, takes: [], gain: 0.7, bus: "sfx",
+    stem: "sfx/margin_call_fire", variants: 1, takes: ["sfx/margin_call_fire"], gain: 0.7, bus: "sfx",
     priority: WAVE_PRIORITY.weapon, jitter: 0, spatial: true,
   },
   "shootSidewinder": {
-    stem: "sfx/sidewinder_fire", variants: 1, takes: [], gain: 0.6, bus: "sfx",
+    stem: "sfx/sidewinder_fire", variants: 1, takes: ["sfx/sidewinder_fire"], gain: 0.6, bus: "sfx",
     priority: WAVE_PRIORITY.weapon, jitter: 0, spatial: true,
   },
   "shootHushiron": {
@@ -819,11 +819,11 @@ export const WAVE_SOUNDS = {
     priority: WAVE_PRIORITY.impact, jitter: 0, spatial: true,
   },
   "red_pen.snap": {
-    stem: "sfx/red_pen_snap", variants: 1, takes: [], gain: 0.75, bus: "sfx",
+    stem: "sfx/red_pen_snap", variants: 1, takes: ["sfx/red_pen_snap"], gain: 0.75, bus: "sfx",
     priority: WAVE_PRIORITY.weapon, jitter: 0, spatial: true,
   },
   "resonant_fork.link": {
-    stem: "sfx/resonant_fork_link", variants: 1, takes: [], gain: 0.5, bus: "sfx",
+    stem: "sfx/resonant_fork_link", variants: 1, takes: ["sfx/resonant_fork_link"], gain: 0.5, bus: "sfx",
     priority: WAVE_PRIORITY.impact, jitter: 0, spatial: true,
   },
   "blessing.crosscurrent": {

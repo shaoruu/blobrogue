@@ -1,0 +1,19 @@
+{
+  "batch": "wave-bc-gunfire-v1",
+  "model": "fal-ai/elevenlabs/sound-effects/v2",
+  "influence": 0.35,
+  "peak_ceiling_dbtp": -2.5,
+  "shipped": [
+    {"event":"shootMooringNail","stem":"sfx/mooring_nail_fire","wire":"takes:[\"sfx/mooring_nail_fire\"] variants:1"},
+    {"event":"shootSluicegate","stem":"sfx/sluicegate_fire","wire":"takes:[\"sfx/sluicegate_fire\"] variants:1"},
+    {"event":"shootOddsmaker","stem":"sfx/oddsmaker_fire","wire":"takes:[\"sfx/oddsmaker_fire\"] variants:1"},
+    {"event":"shootPathmaker","stem":"sfx/pathmaker_fire","wire":"takes:[\"sfx/pathmaker_fire\"] variants:1"},
+    {"event":"shootResonantFork","stem":"sfx/resonant_fork_fire","wire":"takes:[\"sfx/resonant_fork_fire\"] variants:1"},
+    {"event":"shootRedPen","stem":"sfx/red_pen_fire","wire":"takes:[\"sfx/red_pen_fire\"] variants:1"},
+    {"event":"shootMarginCall","stem":"sfx/margin_call_fire","wire":"takes:[\"sfx/margin_call_fire\"] variants:1"},
+    {"event":"shootSidewinder","stem":"sfx/sidewinder_fire","wire":"takes:[\"sfx/sidewinder_fire\"] variants:1"},
+    {"event":"red_pen.snap","stem":"sfx/red_pen_snap","wire":"takes:[\"sfx/red_pen_snap\"] variants:1"},
+    {"event":"resonant_fork.link","stem":"sfx/resonant_fork_link","wire":"takes:[\"sfx/resonant_fork_link\"] variants:1"},
+    {"event":"margin_call.echo","stem":"sfx/margin_call_echo","wire":"NEW row + trigger on COPY-ONE echo/stub fire (Helix)"}
+  ]
+}
