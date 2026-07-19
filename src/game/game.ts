@@ -220,8 +220,7 @@ export interface DevSnapshot {
 interface RemoteTracer { x: number; y: number; angle: number; life: number; color: string; len?: number; width?: number; isArc?: boolean; }
 interface Corpse { sprite: SpriteName; x: number; y: number; size: number; facing: number; t: number; dur: number; }
 type MeleeRenderSwing = Pick<MeleeSwing, "timer" | "duration" | "aim" | "arc" | "reach" | "isThrust" | "color">;
-// Per-teammate render bookkeeping: the walk/idle anim plus the dash-FX clocks (edge
-// detection for the takeoff juice, spacing for the afterimage trail and the dust motes).
+// Per-teammate render bookkeeping: walk/idle, dash FX, and an independent melee sweep.
 interface RemoteAnimEntry {
   anim: Anim;
   lastX: number;
@@ -4518,8 +4517,6 @@ export class Game {
     this.corpses = this.corpses.filter((c) => c.t < 1);
   }
 
-  // Advance every teammate's client-side cosmetics from whichever remote source is active
-  // (legacy co-op presence OR the authoritative server): walk/idle anim + the remote dash FX.
   private remoteAnimEntry(playerId: string, x: number, y: number): RemoteAnimEntry {
     let entry = this.remoteAnims.get(playerId);
     if (entry) return entry;
