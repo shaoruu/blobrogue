@@ -16700,7 +16700,8 @@ function updatePickups(w: WorldState, dt: number, ev: SimEvent[]): void {
           if (!isWall(w, p.x, p.y + sy)) p.y += sy;
         }
       }
-      if (!player.isDown && Math.hypot(player.x - p.x, player.y - p.y) < player.pr + p.radius) {
+      const pickupRadius = p.isBossChoice ? C.BOSS_CHOICE_CLAIM_RADIUS : p.radius;
+      if (!player.isDown && Math.hypot(player.x - p.x, player.y - p.y) < player.pr + pickupRadius) {
         if (p.kind === "coin") { player.coins += p.value ?? coinGain(w, player); ev.push({ t: "pickup", pid: player.id, kind: "coin", x: p.x, y: p.y }); collected = true; break; }
         if (p.kind === "heart") {
           // At full HP the heart is consumed and converts to coins (§2) — no backtracking
