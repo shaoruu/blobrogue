@@ -1,9 +1,10 @@
 import { createHmac } from "node:crypto";
-import { mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { Bot, idle, startTestServer, waitUntil, type TestServer } from "../harness/lib.js";
+import { RunSnapshotStore } from "../src/runSnapshot.js";
 
 let passed = 0;
 let failed = 0;
@@ -233,6 +234,20 @@ try {
     restore.status === 200
     && restore.body.fidelity === "build+floor"
     && restoredWorld.playerCount === 2);
+
+  const invalidWorldId = "room:BAD1:g1";
+  const invalidSnapshot = readFileSync(snapshotPath, "utf8")
+    .replace(`"worldId":"${worldId}"`, `"worldId":"${invalidWorldId}"`)
+    .replace(/"weapon":"[^"]+"/, '"weapon":"removed_weapon"');
+  writeFileSync(join(snapshotDirectory, `${invalidWorldId}.json`), invalidSnapshot);
+  const invalidSnapshots: string[] = [];
+  const recoveredSnapshots = new RunSnapshotStore(snapshotDirectory).loadAll((invalidId) => {
+    invalidSnapshots.push(invalidId);
+  });
+  check("an incompatible snapshot is skipped without blocking valid recovery",
+    invalidSnapshots.includes(invalidWorldId)
+    && recoveredSnapshots.some((saved) => saved.worldId === worldId)
+    && recoveredSnapshots.every((saved) => saved.worldId !== invalidWorldId));
 } finally {
   ian?.stop();
   anson?.stop();

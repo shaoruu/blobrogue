@@ -7,6 +7,9 @@ import type { BlessingOfferHistory, WeaponOfferHistory } from "../../src/sim/off
 import type { PlayerId } from "../../src/sim/input.js";
 import type { WeaponBag } from "../../src/sim/weaponBag.js";
 import { isKitId, type KitId } from "../../src/sim/kits.js";
+import { createMods, itemById } from "../../src/sim/items.js";
+import { WEAPONS } from "../../src/sim/weapons.js";
+import { contentCatalogFor, LEGACY_CONTENT_CATALOG_VERSION } from "../../src/sim/contentCatalog.js";
 import { writeJsonAtomic } from "./durableJson.js";
 
 export const RUN_SNAPSHOT_FIDELITY = "build+floor" as const;
@@ -68,9 +71,23 @@ const PLAYER_BOOLEAN_FIELDS: ReadonlyArray<keyof AuthoritativePlayerSnapshot> = 
   "isMuddyRefundSpent", "isDown", "isWarmthChilled", "hasClaimedBossChoice",
   "isAmberCacheArmed", "isBlessingRerollArmed", "isSpawnOffenseLatched",
 ];
+const PLAYER_MOD_FIELDS = Object.keys(createMods());
 
 function isSnapshotToken(value: string): boolean {
   return /^[A-Za-z0-9_-]{16,128}$/.test(value);
+}
+
+function isWeaponId(value: string): boolean {
+  return Object.hasOwn(WEAPONS, value);
+}
+
+function isSupportedCatalogVersion(value: WeaponBag["catalogVersion"]): boolean {
+  try {
+    contentCatalogFor(value ?? LEGACY_CONTENT_CATALOG_VERSION);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function isPlayerSnapshot(value: AuthoritativePlayerSnapshot): boolean {
@@ -83,10 +100,12 @@ function isPlayerSnapshot(value: AuthoritativePlayerSnapshot): boolean {
   }
   return value.maxHp > 0
     && typeof value.weapon === "string"
+    && isWeaponId(value.weapon)
     && Array.isArray(value.ownedWeapons)
-    && value.ownedWeapons.every((weapon) => typeof weapon === "string")
+    && value.ownedWeapons.every((weapon) => typeof weapon === "string" && isWeaponId(weapon))
     && typeof value.weaponFireCooldowns === "object"
     && value.weaponFireCooldowns !== null
+    && Object.keys(value.weaponFireCooldowns).every(isWeaponId)
     && Object.values(value.weaponFireCooldowns).every((cooldown) => (
       typeof cooldown === "number" && Number.isFinite(cooldown)
     ))
@@ -95,9 +114,11 @@ function isPlayerSnapshot(value: AuthoritativePlayerSnapshot): boolean {
     && Number.isSafeInteger(value.weaponCycles.sluicegate)
     && Number.isSafeInteger(value.weaponCycles.oddsmaker)
     && Array.isArray(value.ownedItemIds)
-    && value.ownedItemIds.every((item) => typeof item === "string")
+    && value.ownedItemIds.every((item) => typeof item === "string" && itemById(item) !== undefined)
     && typeof value.mods === "object"
     && value.mods !== null
+    && Object.keys(value.mods).length === PLAYER_MOD_FIELDS.length
+    && PLAYER_MOD_FIELDS.every((field) => Object.hasOwn(value.mods, field))
     && Object.values(value.mods).every((modifier) => (
       typeof modifier === "number" && Number.isFinite(modifier)
     ))
@@ -127,12 +148,17 @@ function isRunSnapshot(value: RunSnapshot): boolean {
     || !Number.isSafeInteger(value.weaponBag.seed)
     || !Number.isSafeInteger(value.weaponBag.refills)
     || !Number.isSafeInteger(value.weaponBag.weightedDraws)
+    || !isSupportedCatalogVersion(value.weaponBag.catalogVersion)
     || !Array.isArray(value.weaponBag.order)
-    || !value.weaponBag.order.every((weapon) => typeof weapon === "string")
+    || !value.weaponBag.order.every((weapon) => typeof weapon === "string" && isWeaponId(weapon))
     || !Array.isArray(value.weaponBag.recentWeaponOffers)
-    || !value.weaponBag.recentWeaponOffers.every((weapon) => typeof weapon === "string")
+    || !value.weaponBag.recentWeaponOffers.every((weapon) => typeof weapon === "string" && isWeaponId(weapon))
     || typeof value.weaponBag.weaponSeenCounts !== "object"
-    || value.weaponBag.weaponSeenCounts === null) {
+    || value.weaponBag.weaponSeenCounts === null
+    || !Object.keys(value.weaponBag.weaponSeenCounts).every(isWeaponId)
+    || !Object.values(value.weaponBag.weaponSeenCounts).every((count) => (
+      typeof count === "number" && Number.isSafeInteger(count) && count >= 0
+    ))) {
     return false;
   }
   const playerIds = new Set<string>();
@@ -151,13 +177,29 @@ function isRunSnapshot(value: RunSnapshot): boolean {
       || player.weaponOfferHistory === null
       || typeof player.weaponOfferHistory.weaponSeenCounts !== "object"
       || player.weaponOfferHistory.weaponSeenCounts === null
+      || !Object.keys(player.weaponOfferHistory.weaponSeenCounts).every(isWeaponId)
+      || !Object.values(player.weaponOfferHistory.weaponSeenCounts).every((count) => (
+        typeof count === "number" && Number.isSafeInteger(count) && count >= 0
+      ))
       || !Array.isArray(player.weaponOfferHistory.recentWeaponOffers)
+      || !player.weaponOfferHistory.recentWeaponOffers.every(isWeaponId)
       || typeof player.blessingOfferHistory !== "object"
       || player.blessingOfferHistory === null
       || typeof player.blessingOfferHistory.blessingSeenCounts !== "object"
       || player.blessingOfferHistory.blessingSeenCounts === null
+      || !Object.keys(player.blessingOfferHistory.blessingSeenCounts).every((item) => itemById(item) !== undefined)
+      || !Object.values(player.blessingOfferHistory.blessingSeenCounts).every((count) => (
+        typeof count === "number" && Number.isSafeInteger(count) && count >= 0
+      ))
       || !Array.isArray(player.blessingOfferHistory.recentBlessingOffers)
-      || !player.blessingOfferHistory.recentBlessingOffers.every((offer) => Array.isArray(offer))
+      || !player.blessingOfferHistory.recentBlessingOffers.every((offer) => (
+        Array.isArray(offer)
+        && offer.every((item) => typeof item === "string" && itemById(item) !== undefined)
+      ))
+      || !Number.isSafeInteger(player.blessingOfferOrdinal)
+      || !Number.isSafeInteger(player.shopWeaponOfferOrdinal)
+      || !Number.isSafeInteger(player.shopBlessingOfferOrdinal)
+      || !Number.isSafeInteger(player.premiumWeaponOfferOrdinal)
       || typeof player.seat !== "object"
       || player.seat === null
       || player.seat.pid !== player.pid
