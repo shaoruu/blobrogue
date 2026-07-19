@@ -1,5 +1,5 @@
-// Headless capture of the REAL running arena client (vite dev server + Chrome) for the PVP
-// Wave 2 visuals. Drives ?dev=arena, which boots the shipping online client against an in-page
+// Headless capture of the REAL running arena client (vite dev server + Chrome) for PVP arena
+// visuals. Drives ?dev=arena, which boots the shipping online client against an in-page
 // scripted socket replaying authoritative snapshots (see src/dev/arenaHarness.ts). The public
 // kill switch is never touched — arena presentation selects off the authoritative pvp: world id.
 //
@@ -15,7 +15,23 @@ import { join } from "node:path";
 
 const OUT_DIR = process.argv[2] ?? "/workspace/arena-shots";
 const EXTERNAL_URL = process.argv[3] ?? null;
-const SCENES = ["live-hearth", "live-contested", "live-tar", "live-gust", "live-spark"];
+const SCENES = [
+  "live-hearth",
+  "live-contested",
+  "live-tar",
+  "live-gust",
+  "live-spark",
+  "live-ult-salvo",
+  "live-ult-triage",
+  "live-ult-shove",
+  "live-ult-slip",
+];
+const ULT_SCENES = new Map([
+  ["live-ult-salvo", { auk: "gunner", kind: "salvo" }],
+  ["live-ult-triage", { auk: "mender", kind: "triage" }],
+  ["live-ult-shove", { auk: "bulwark", kind: "shove" }],
+  ["live-ult-slip", { auk: "phantom", kind: "slip" }],
+]);
 const CHROME = "/usr/bin/google-chrome";
 
 mkdirSync(OUT_DIR, { recursive: true });
@@ -23,16 +39,19 @@ mkdirSync(OUT_DIR, { recursive: true });
 function startDevServer() {
   return new Promise((resolve, reject) => {
     const proc = spawn("npm", ["run", "dev", "--", "--host", "127.0.0.1"], {
-      cwd: "/workspace/blobrogue",
+      cwd: new URL("..", import.meta.url),
       env: process.env,
+      detached: true,
     });
     let settled = false;
+    let timeout = null;
     const onData = (buf) => {
       const text = buf.toString();
       process.stdout.write(`[vite] ${text}`);
       const match = text.match(/Local:\s+(http:\/\/[^\s]+)/);
       if (match && !settled) {
         settled = true;
+        if (timeout !== null) clearTimeout(timeout);
         resolve({ proc, url: match[1].replace(/\/$/, "") });
       }
     };
@@ -41,7 +60,7 @@ function startDevServer() {
     proc.on("exit", (code) => {
       if (!settled) reject(new Error(`vite exited before ready (code ${code})`));
     });
-    setTimeout(() => {
+    timeout = setTimeout(() => {
       if (!settled) reject(new Error("vite did not report a Local URL in time"));
     }, 60000);
   });
@@ -79,7 +98,16 @@ async function main() {
       await page.waitForTimeout(2600);
       const active = await page.evaluate(() => window.__arena.currentScene());
       if (active !== scene) throw new Error(`scene mismatch: asked ${scene}, got ${active}`);
-      const path = join(OUT_DIR, `wave2-${scene}.png`);
+      const expectedUlt = ULT_SCENES.get(scene);
+      if (expectedUlt !== undefined) {
+        const debug = await page.evaluate(() => window.__arena.debug());
+        if (debug.auk !== expectedUlt.auk || debug.ultArena !== expectedUlt.kind || debug.ultT <= 0) {
+          throw new Error(`ult state mismatch for ${scene}: ${JSON.stringify(debug)}`);
+        }
+        console.log(`  [${scene}] auk=${debug.auk} ultArena=${debug.ultArena} ultT=${debug.ultT}`);
+      }
+      const wave = scene.startsWith("live-ult-") ? "wave3" : "wave2";
+      const path = join(OUT_DIR, `${wave}-${scene}.png`);
       await page.screenshot({ path });
       captured.push(path);
       if (errors.length > 0) console.warn(`  [${scene}] page errors: ${errors.join(" | ")}`);
@@ -88,10 +116,16 @@ async function main() {
     }
   } finally {
     await browser.close();
-    if (devProc !== null) devProc.kill("SIGTERM");
+    if (devProc !== null) {
+      try {
+        process.kill(-devProc.pid, "SIGTERM");
+      } catch {
+        devProc.kill("SIGTERM");
+      }
+    }
   }
 
-  console.log(`\ncaptured ${captured.length} Wave 2 arena screenshots:`);
+  console.log(`\ncaptured ${captured.length} arena screenshots:`);
   for (const path of captured) console.log(`  ${path}`);
 }
 

@@ -1,36 +1,54 @@
-// ?dev=arena — the LOCAL-ONLY Wave 2 arena capture harness. Boots the REAL online client
+// ?dev=arena — the LOCAL-ONLY arena capture harness. Boots the REAL online client
 // (the exact WSTransport netcode + presentation the arena ships) against an in-page scripted
-// socket that replays authoritative snapshots we author from the pure sim. Nothing here touches
-// the production kill switch: the client selects arena presentation off the authoritative world
-// id (pvp:) + snapshot, never off PVP_PUBLIC_ENABLED — so this renders Wave 2 visuals with the
-// public path still OFF. Reachable only behind ?dev, which is code-split out of the play bundle.
+// socket that replays authoritative snapshots we author from the pure sim. The client selects
+// arena presentation from the authoritative world id (pvp:) + snapshot. Reachable only behind
+// ?dev, which is code-split out of the play bundle.
 //
-// Scenes (?scene=): live-hearth, live-contested, live-tar, live-gust, live-spark.
+// Scenes (?scene=): live-hearth, live-contested, live-tar, live-gust, live-spark,
+// live-ult-salvo, live-ult-triage, live-ult-shove, live-ult-slip.
 
 import { Game } from "../game/game.js";
 import { createWorld, spawnPlayerInWorld } from "../sim/world.js";
 import type { WorldState, PlayerSim } from "../sim/world.js";
 import { TILE } from "../sim/types.js";
 import { buildSnapshot, jsonCodec } from "../net/protocol.js";
-import type { RosterWire, ServerMsg } from "../net/protocol.js";
+import type { RosterWire, ServerMsg, WireEvent } from "../net/protocol.js";
 import { pvpWorldIdForRoomCode } from "../net/worldId.js";
 import type { SocketLike } from "../client/wsTransport.js";
 import {
-  WEATHER,
+  ARENA_SALVO, ARENA_SHOVE, ARENA_SLIP, ARENA_TRIAGE, WEATHER,
+  arenaUltCastSpacingTicks, arenaUltTellTicks,
   pvpHearthArmTicks, pvpHearthEmberWindowTicks, pvpMatchTimeTicks,
   pvpWeatherGustActiveTicks, pvpWeatherTarLifeTicks, pvpWeatherSparkTellTicks,
 } from "../sim/pvp.js";
+import type { ArenaUltKind, ArenaUltKit } from "../sim/pvp.js";
 
 export type ArenaScene =
   | "live-hearth"
   | "live-contested"
   | "live-tar"
   | "live-gust"
-  | "live-spark";
+  | "live-spark"
+  | "live-ult-salvo"
+  | "live-ult-triage"
+  | "live-ult-shove"
+  | "live-ult-slip";
 
 export const ARENA_SCENES: readonly ArenaScene[] = [
   "live-hearth", "live-contested", "live-tar", "live-gust", "live-spark",
+  "live-ult-salvo", "live-ult-triage", "live-ult-shove", "live-ult-slip",
 ];
+
+interface ArenaDebug {
+  hazards: string[];
+  wk: string;
+  wp: string;
+  wd: number;
+  hc: boolean;
+  auk: string;
+  ultArena: string;
+  ultT: number;
+}
 
 const ROOM_CODE = "ARENA";
 const WORLD_ID = pvpWorldIdForRoomCode(ROOM_CODE);
@@ -89,6 +107,27 @@ function settleBody(p: PlayerSim, tick: number): void {
   p.hearthAwayT = 0;
 }
 
+function resetArenaUlt(p: PlayerSim): void {
+  p.arenaUltKit = "gunner";
+  p.arenaUlt = {
+    tellT: 0,
+    kind: null,
+    aim: 0,
+    salvoShotsLeft: 0,
+    salvoShotT: 0,
+    glassT: 0,
+    shoveT: 0,
+    shoveAim: 0,
+    endlagT: 0,
+    slowImmuneT: 0,
+  };
+  p.ultCharge = 0;
+  p.ultReadyAtTick = 0;
+  p.ultInvuln = 0;
+  p.fireCd = 0;
+  delete p.weaponFireCooldowns[p.weapon];
+}
+
 function idleWeather(world: WorldState): void {
   const m = world.match;
   if (m === null) return;
@@ -115,12 +154,18 @@ class ArenaHarness {
   private rival: PlayerSim;
   private socket: HarnessSocket | null = null;
   private sseq = 1;
+  private eventId = 1;
+  private evTo = 0;
   private scene: ArenaScene = "live-hearth";
   private lastSnap: ServerMsg | null = null;
   isReady = false;
 
   constructor(canvas: HTMLCanvasElement, minimap: HTMLCanvasElement, overlay: HTMLElement) {
-    (globalThis as { WebSocket?: unknown }).WebSocket = HarnessSocket;
+    Object.defineProperty(globalThis, "WebSocket", {
+      value: HarnessSocket,
+      configurable: true,
+      writable: true,
+    });
 
     this.world = createWorld(SEED, 1, { isShared: true, skipLocalPlayer: true, mode: "pvp" });
     this.self = spawnPlayerInWorld(this.world, SELF_ID);
@@ -179,6 +224,7 @@ class ArenaHarness {
     const tick = world.tick;
     settleBody(this.self, tick);
     settleBody(this.rival, tick);
+    resetArenaUlt(this.self);
     idleWeather(world);
     const hc = this.hearth();
     // Default: self settled on the hearth, rival parked well outside the ring.
@@ -235,15 +281,89 @@ class ArenaHarness {
         pushHazard(world, "spark", hc.x, hc.y - dist, WEATHER.sparkBlastRadius, maxLife * 0.15, maxLife);
         break;
       }
+      case "live-ult-salvo": {
+        const aim = -Math.PI / 2;
+        this.self.x = hc.x;
+        this.self.y = 5 * TILE + TILE / 2;
+        this.rival.x = this.self.x;
+        this.rival.y = this.self.y - 3 * TILE;
+        this.armArenaUlt("gunner", "salvo", aim);
+        this.self.arenaUlt.salvoShotsLeft = ARENA_SALVO.shots;
+        this.self.arenaUlt.salvoShotT = 0;
+        this.self.arenaUlt.glassT = ARENA_SALVO.volleySec;
+        break;
+      }
+      case "live-ult-triage": {
+        this.armArenaUlt("mender", "triage", -Math.PI / 2);
+        this.self.arenaUlt.kind = null;
+        this.self.arenaUlt.slowImmuneT = ARENA_TRIAGE.cleanseSec;
+        const hpBefore = this.self.maxHp - ARENA_TRIAGE.healSelf * 2;
+        this.self.hp = Math.min(this.self.maxHp, hpBefore + ARENA_TRIAGE.healSelf);
+        break;
+      }
+      case "live-ult-shove": {
+        const aim = -Math.PI / 2;
+        this.self.x = hc.x;
+        this.self.y = 5 * TILE + TILE / 2;
+        this.rival.x = this.self.x;
+        this.rival.y = this.self.y - 40;
+        this.armArenaUlt("bulwark", "shove", aim);
+        this.self.arenaUlt.shoveT = ARENA_SHOVE.wallLifeSec;
+        this.self.arenaUlt.shoveAim = aim;
+        break;
+      }
+      case "live-ult-slip": {
+        const aim = -Math.PI / 2;
+        this.self.x = hc.x;
+        this.self.y = 5 * TILE + TILE / 2 - ARENA_SLIP.blinkPx;
+        this.armArenaUlt("phantom", "slip", aim);
+        this.self.arenaUlt.kind = null;
+        this.self.arenaUlt.endlagT = ARENA_SLIP.endlagSec;
+        this.self.ultInvuln = ARENA_SLIP.iframeSec;
+        this.self.fireCd = ARENA_SLIP.endlagSec;
+        this.self.weaponFireCooldowns[this.self.weapon] = this.self.fireCd;
+        break;
+      }
     }
     this.deliver();
+  }
+
+  private armArenaUlt(kit: ArenaUltKit, kind: ArenaUltKind, aim: number): void {
+    this.self.arenaUltKit = kit;
+    this.self.ultCharge = 0;
+    this.self.ultReadyAtTick = this.world.tick + arenaUltCastSpacingTicks();
+    this.self.aimAngle = aim;
+    this.self.arenaUlt.kind = kind;
+    this.self.arenaUlt.aim = aim;
+  }
+
+  private arenaUltEvent(): WireEvent | null {
+    let kind: ArenaUltKind;
+    switch (this.scene) {
+      case "live-ult-salvo": kind = "salvo"; break;
+      case "live-ult-triage": kind = "triage"; break;
+      case "live-ult-shove": kind = "shove"; break;
+      case "live-ult-slip": kind = "slip"; break;
+      default: return null;
+    }
+    const aim = this.self.arenaUlt.aim;
+    const isSlip = kind === "slip";
+    const x = this.self.x - (isSlip ? Math.cos(aim) * ARENA_SLIP.blinkPx : 0);
+    const y = this.self.y - (isSlip ? Math.sin(aim) * ARENA_SLIP.blinkPx : 0);
+    const id = this.eventId++;
+    this.evTo = id;
+    return {
+      id,
+      e: { t: "ultArena", pid: SELF_ID, kind, x, y, aim, tellTicks: arenaUltTellTicks() },
+    };
   }
 
   private deliver(): void {
     const socket = HarnessSocket.latest;
     if (socket === null) return;
     this.socket = socket;
-    const snap = buildSnapshot(this.world, SELF_ID, 0, [], 0, true, {
+    const event = this.arenaUltEvent();
+    const snap = buildSnapshot(this.world, SELF_ID, 0, event === null ? [] : [event], this.evTo, true, {
       worldId: WORLD_ID,
       roster: ROSTER,
       sseq: this.sseq++,
@@ -253,19 +373,30 @@ class ArenaHarness {
     this.isReady = true;
   }
 
-  // The authoritative weather/hazard readout on the wire this frame (harness self-check: proves
-  // the Wave 2 state the client renders, independent of how subtle a dark tar patch looks).
-  debug(): { hazards: string[]; wk: string; wp: string; wd: number; hc: boolean } {
+  // The authoritative weather/hazard/ult readout this frame. `auk` and `ultArena` prove the wire
+  // state; `ultT` proves the held server-only active window that authored the frame.
+  debug(): ArenaDebug {
     const snap = this.lastSnap;
     if (snap === null || snap.t !== "snap") {
-      return { hazards: [], wk: "", wp: "", wd: 0, hc: false };
+      return { hazards: [], wk: "", wp: "", wd: 0, hc: false, auk: "", ultArena: "", ultT: 0 };
     }
+    const ultEvent = snap.events.find((event) => event.e.t === "ultArena");
+    const ultArena = ultEvent?.e.t === "ultArena" ? ultEvent.e.kind : "";
+    const a = this.self.arenaUlt;
+    const ultT = this.scene === "live-ult-salvo" ? a.glassT
+      : this.scene === "live-ult-triage" ? a.slowImmuneT
+      : this.scene === "live-ult-shove" ? a.shoveT
+      : this.scene === "live-ult-slip" ? Math.max(a.endlagT, this.self.ultInvuln)
+      : 0;
     return {
       hazards: snap.hzds.map((h) => h.k),
       wk: snap.match?.wk ?? "",
       wp: snap.match?.wp ?? "",
       wd: snap.match?.wd ?? 0,
       hc: snap.match?.hc ?? false,
+      auk: snap.self?.auk ?? "",
+      ultArena,
+      ultT,
     };
   }
 
@@ -288,7 +419,7 @@ declare global {
       currentScene: () => ArenaScene;
       setScene: (scene: ArenaScene) => void;
       isReady: () => boolean;
-      debug: () => { hazards: string[]; wk: string; wp: string; wd: number; hc: boolean };
+      debug: () => ArenaDebug;
     };
   }
 }
