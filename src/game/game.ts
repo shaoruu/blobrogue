@@ -2820,15 +2820,16 @@ export class Game {
       }
       case "enemyHit": {
         triggerFlash(this.animForId(e.eid));
-        this.captureUltMoteOrigin(e.dmgX, e.dmgY, this.isBossEid(e.eid) ? "boss" : "dmg");
         const localMeleeWeapon = e.melee
           ? this.meleeImpactWeaponFor(e.eid, e.puffX, e.puffY)
           : null;
         const isHaloImpact = e.melee && this.isHaloActiveForBurst && localMeleeWeapon === null;
         let meleeWeapon: WeaponId | null = null;
         if (isHaloImpact) {
-          this.queueHaloImpact(e.puffX, e.puffY, e.dmgX, e.dmgY, e.dmg, e.puffColor, e.crit);
+          const isSampled = this.queueHaloImpact(e.puffX, e.puffY, e.dmgX, e.dmgY, e.dmg, e.puffColor, e.crit);
+          if (isSampled) this.captureUltMoteOrigin(e.dmgX, e.dmgY, this.isBossEid(e.eid) ? "boss" : "dmg");
         } else {
+          this.captureUltMoteOrigin(e.dmgX, e.dmgY, this.isBossEid(e.eid) ? "boss" : "dmg");
           this.spawnDmgNumber(e.dmgX, e.dmgY, e.dmg, { crit: e.crit });
           this.spawnPuff(e.puffX, e.puffY, e.crit ? 9 : 5, e.puffColor);
           if (e.melee) meleeWeapon = this.replayMeleeImpact(e.eid, e.puffX, e.puffY, e.crit, localMeleeWeapon);
@@ -3603,7 +3604,7 @@ export class Game {
     dmg: number,
     color: string,
     isCrit: boolean,
-  ): void {
+  ): boolean {
     const scale = this.haloImpactCount < FX_BURST_FULL
       ? 1
       : this.haloImpactCount < FX_BURST_HALF ? 0.5 : 0.25;
@@ -3613,7 +3614,7 @@ export class Game {
       HALO_IMPACT_TRAUMA_CAP,
       this.haloImpactTrauma + MELEE_HIT_TRAUMA * scale,
     );
-    if (this.haloImpactSampleCount >= HALO_IMPACT_SAMPLES || !this.isNearCamera(puffX, puffY)) return;
+    if (this.haloImpactSampleCount >= HALO_IMPACT_SAMPLES || !this.isNearCamera(puffX, puffY)) return false;
     const index = this.haloImpactSampleCount++;
     this.haloImpactPuffX[index] = puffX;
     this.haloImpactPuffY[index] = puffY;
@@ -3622,6 +3623,7 @@ export class Game {
     this.haloImpactDmg[index] = dmg;
     this.haloImpactCrit[index] = isCrit ? 1 : 0;
     this.haloImpactColor[index] = color;
+    return true;
   }
 
   private flushHaloImpacts(): void {
@@ -3634,7 +3636,7 @@ export class Game {
       const color = this.haloImpactColor[i];
       this.spawnDmgNumber(this.haloImpactDmgX[i], this.haloImpactDmgY[i], this.haloImpactDmg[i], { crit: isCrit });
       this.spawnPuff(puffX, puffY, Math.max(1, Math.round((isCrit ? 9 : 5) * scale)), color);
-      const dir = Math.atan2(puffY - this.py, puffX - this.px) + HALF_PI;
+      const dir = Math.atan2(puffY - this.py, puffX - this.px);
       this.spawnSparks(
         puffX,
         puffY,
@@ -3642,9 +3644,10 @@ export class Game {
         dir,
         isCrit ? 1.125 : 0.9,
         isCrit ? "#fff3c4" : undefined,
-        0.8,
+        1,
       );
       this.spawnSparkFlash(puffX, puffY, "#fff3c4");
+      if (isCrit) this.spawnSparkFlash(puffX, puffY, "#fff3c4");
     }
   }
 
@@ -4287,8 +4290,10 @@ export class Game {
   }
 
   private isBossEid(eid: number): boolean {
-    const kind = this.world.enemies.find((en) => en.id === eid)?.kind;
-    return kind !== undefined && isBossKind(kind);
+    for (const enemy of this.world.enemies) {
+      if (enemy.id === eid) return isBossKind(enemy.kind);
+    }
+    return false;
   }
 
   // Drive the client-side ult legibility layer once per client step: advance the flying motes +
