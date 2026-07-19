@@ -1,5 +1,5 @@
-// Headless capture of the REAL running arena client (vite dev server + Chrome) for the PVP
-// Wave 2 visuals. Drives ?dev=arena, which boots the shipping online client against an in-page
+// Headless capture of the REAL running arena client (vite dev server + Chrome) for PVP arena
+// visuals. Drives ?dev=arena, which boots the shipping online client against an in-page
 // scripted socket replaying authoritative snapshots (see src/dev/arenaHarness.ts). The public
 // kill switch is never touched — arena presentation selects off the authoritative pvp: world id.
 //
@@ -15,7 +15,17 @@ import { join } from "node:path";
 
 const OUT_DIR = process.argv[2] ?? "/workspace/arena-shots";
 const EXTERNAL_URL = process.argv[3] ?? null;
-const SCENES = ["live-hearth", "live-contested", "live-tar", "live-gust", "live-spark"];
+const SCENES = [
+  "live-hearth",
+  "live-contested",
+  "live-tar",
+  "live-gust",
+  "live-spark",
+  "live-ult-salvo",
+  "live-ult-triage",
+  "live-ult-shove",
+  "live-ult-slip",
+];
 const CHROME = "/usr/bin/google-chrome";
 
 mkdirSync(OUT_DIR, { recursive: true });
@@ -23,7 +33,7 @@ mkdirSync(OUT_DIR, { recursive: true });
 function startDevServer() {
   return new Promise((resolve, reject) => {
     const proc = spawn("npm", ["run", "dev", "--", "--host", "127.0.0.1"], {
-      cwd: "/workspace/blobrogue",
+      cwd: new URL("..", import.meta.url),
       env: process.env,
     });
     let settled = false;
@@ -79,7 +89,8 @@ async function main() {
       await page.waitForTimeout(2600);
       const active = await page.evaluate(() => window.__arena.currentScene());
       if (active !== scene) throw new Error(`scene mismatch: asked ${scene}, got ${active}`);
-      const path = join(OUT_DIR, `wave2-${scene}.png`);
+      const wave = scene.startsWith("live-ult-") ? "wave3" : "wave2";
+      const path = join(OUT_DIR, `${wave}-${scene}.png`);
       await page.screenshot({ path });
       captured.push(path);
       if (errors.length > 0) console.warn(`  [${scene}] page errors: ${errors.join(" | ")}`);
@@ -91,7 +102,7 @@ async function main() {
     if (devProc !== null) devProc.kill("SIGTERM");
   }
 
-  console.log(`\ncaptured ${captured.length} Wave 2 arena screenshots:`);
+  console.log(`\ncaptured ${captured.length} arena screenshots:`);
   for (const path of captured) console.log(`  ${path}`);
 }
 
