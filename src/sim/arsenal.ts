@@ -559,7 +559,7 @@ export const ARSENAL: Record<WeaponId, WeaponManifestEntry> = {
   },
   scrapper: {
     role: "body-steered crossfire: aim one lane while your shoulder holds another",
-    metrics: ["brawl"],
+    metrics: ["lane"],
     novelty: {
       nearest: "smg",
       axes: ["geometry", "positioning"],
