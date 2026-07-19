@@ -301,16 +301,25 @@ export class GameServer {
       const path = this.runSnapshots.save(snapshot);
       return this.worldActionSuccess(room, path);
     }
+    let loadoutResults: Extract<ControlWorldActionResult, { isApplied: true }>["loadouts"];
     const isApplied = action.action === "warp"
-      ? room.adminWarpToFloor(action.floor)
+      ? action.loadouts === undefined
+        ? room.adminWarpToFloor(action.floor)
+        : (() => {
+          const result = room.adminWarpToFloorWithLoadouts(action.floor, action.loadouts);
+          loadoutResults = result.loadouts;
+          this.logSkippedAdminLoadouts(room.id, result.loadouts);
+          return result.isApplied;
+        })()
       : room.adminForceOpenExit();
     if (!isApplied) return { isApplied: false, reason: "pvp_forbidden" };
-    return this.worldActionSuccess(room, null);
+    return this.worldActionSuccess(room, null, loadoutResults);
   }
 
   private worldActionSuccess(
     room: RoomRuntime,
     snapshotPath: string | null,
+    loadouts?: Extract<ControlWorldActionResult, { isApplied: true }>["loadouts"],
   ): Extract<ControlWorldActionResult, { isApplied: true }> {
     return {
       isApplied: true,
@@ -319,7 +328,37 @@ export class GameServer {
       players: room.playerCount,
       fidelity: snapshotPath === null ? undefined : "build+floor",
       snapshotPath: snapshotPath ?? undefined,
+      loadouts,
     };
+  }
+
+  private logSkippedAdminLoadouts(
+    worldId: string,
+    results: NonNullable<Extract<ControlWorldActionResult, { isApplied: true }>["loadouts"]>,
+  ): void {
+    for (const result of results) {
+      if (!result.isApplied) {
+        this.log.warn("admin loadout target skipped", {
+          worldId,
+          player: result.player,
+          reason: result.reason,
+        });
+        continue;
+      }
+      const grant = result.grant;
+      if (grant.skippedWeapons.length === 0
+        && grant.skippedBlessings.length === 0
+        && grant.skippedKitId === undefined) {
+        continue;
+      }
+      this.log.warn("admin loadout entries skipped", {
+        worldId,
+        player: result.player,
+        weapons: grant.skippedWeapons.join(","),
+        blessings: grant.skippedBlessings.join(","),
+        kitId: grant.skippedKitId ?? "",
+      });
+    }
   }
 
   private reserveConnectionIdsPast(room: RoomRuntime): void {

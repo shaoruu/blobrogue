@@ -10,11 +10,13 @@ import type { HealthReport } from "./metrics.js";
 import { PROTOCOL_VERSION } from "../../src/net/protocol.js";
 import { GENERATION_ADMISSION_PREFIX } from "../../src/net/generationAdmission.js";
 import { PRIVATE_DRAFT_PVP_POLICY } from "../../src/net/pvpPolicy.js";
+import type { AdminPlayerLoadout } from "../../src/sim/world.js";
 import {
   verifyControlWorldAction,
   MAX_CONTROL_FLOOR,
   type ControlWorldAction,
 } from "./controlAuth.js";
+import type { AdminPlayerLoadoutResult } from "./ports.js";
 
 // One live world, as exposed to the control panel: which world exists, how many players it
 // holds, its tick, WHO is connected (display names, ordered by join), and whose seats are
@@ -37,6 +39,7 @@ export type ControlWorldActionResult =
     players: number;
     fidelity?: "build+floor";
     snapshotPath?: string;
+    loadouts?: AdminPlayerLoadoutResult[];
   }
   | {
     isApplied: false;
@@ -148,7 +151,7 @@ async function handleControlWorldAction(
   req: IncomingMessage,
   res: ServerResponse,
 ): Promise<void> {
-  const body = await readBody(req, 1024);
+  const body = await readBody(req, 12 * 1024);
   if (body === null) {
     res.writeHead(413).end();
     return;
@@ -195,11 +198,13 @@ function parseControlWorldAction(body: string): ControlWorldAction | null {
   }
   if (value === null || typeof value !== "object") return null;
   if (value.action === "warp") {
-    if (Object.keys(value).length !== 3
+    const keys = Object.keys(value);
+    if ((keys.length !== 3 && keys.length !== 4)
       || !isValidWorldId(value.worldId)
       || !Number.isSafeInteger(value.floor)
       || value.floor < 1
-      || value.floor > MAX_CONTROL_FLOOR) {
+      || value.floor > MAX_CONTROL_FLOOR
+      || !isAdminLoadouts(value.loadouts)) {
       return null;
     }
     return value;
@@ -213,6 +218,63 @@ function parseControlWorldAction(body: string): ControlWorldAction | null {
     return value;
   }
   return null;
+}
+
+function isAdminLoadouts(loadouts: AdminPlayerLoadout[] | undefined): boolean {
+  if (loadouts === undefined) return true;
+  if (!Array.isArray(loadouts) || loadouts.length > 4) return false;
+  const players = new Set<string>();
+  for (const loadout of loadouts) {
+    if (typeof loadout !== "object" || loadout === null) return false;
+    const keys = Object.keys(loadout);
+    if (keys.length < 1
+      || keys.some((key) => !["player", "weapons", "blessings", "kitId", "hp"].includes(key))
+      || typeof loadout.player !== "string"
+      || loadout.player.length < 1
+      || loadout.player.length > 48
+      || players.has(loadout.player)) {
+      return false;
+    }
+    players.add(loadout.player);
+    if (loadout.weapons !== undefined) {
+      if (!Array.isArray(loadout.weapons)
+        || loadout.weapons.length > 9
+        || loadout.weapons.some((id) => typeof id !== "string" || !/^[a-z0-9_]{1,32}$/.test(id))
+        || new Set(loadout.weapons).size !== loadout.weapons.length) {
+        return false;
+      }
+    }
+    if (loadout.blessings !== undefined) {
+      if (!Array.isArray(loadout.blessings) || loadout.blessings.length > 64) return false;
+      const blessingIds = new Set<string>();
+      for (const blessing of loadout.blessings) {
+        if (typeof blessing !== "object"
+          || blessing === null
+          || Object.keys(blessing).length !== 2
+          || typeof blessing.id !== "string"
+          || !/^[a-z0-9_]{1,48}$/.test(blessing.id)
+          || blessingIds.has(blessing.id)
+          || !Number.isSafeInteger(blessing.lvl)
+          || blessing.lvl < 1
+          || blessing.lvl > 3) {
+          return false;
+        }
+        blessingIds.add(blessing.id);
+      }
+    }
+    if (loadout.kitId !== undefined
+      && (typeof loadout.kitId !== "string" || !/^[a-z0-9_]{1,24}$/.test(loadout.kitId))) {
+      return false;
+    }
+    if (loadout.hp !== undefined
+      && (typeof loadout.hp !== "number"
+        || !Number.isFinite(loadout.hp)
+        || loadout.hp <= 0
+        || loadout.hp > 1000)) {
+      return false;
+    }
+  }
+  return true;
 }
 
 function readBody(req: IncomingMessage, maxBytes: number): Promise<string | null> {

@@ -139,6 +139,51 @@ export async function suite(t: TestRunner): Promise<void> {
       t.check("signed warp preserves player loadouts",
         JSON.stringify(room.state.players.get("ian")?.ownedWeapons) === ianWeapons);
 
+      const loadoutWarp = await probe.mutateWorld({
+        action: "warp",
+        worldId: room.id,
+        floor: 56,
+        loadouts: [
+          {
+            player: "ian-account",
+            kitId: "phantom",
+            hp: 2.5,
+            weapons: ["pistol", "shotgun", "tesla", "nailer", "margin_call", "red_pen", "umbra"],
+            blessings: [
+              { id: "glass_cannon", lvl: 3 },
+              { id: "hair_trigger", lvl: 2 },
+              { id: "missing_blessing", lvl: 1 },
+            ],
+          },
+          {
+            player: "coop-account",
+            kitId: "mender",
+            hp: 3,
+            weapons: ["pistol", "halo"],
+            blessings: [{ id: "swift_boots", lvl: 2 }],
+          },
+        ],
+      });
+      const warpedIan = room.state.players.get("ian")!;
+      const warpedCoop = room.state.players.get("coop")!;
+      t.check("signed warp applies distinct co-op hotbars and kits",
+        loadoutWarp.isApplied
+        && room.state.floor === 56
+        && warpedIan.kitId === "phantom"
+        && JSON.stringify(warpedIan.ownedWeapons) === JSON.stringify([
+          "pistol", "shotgun", "tesla", "nailer", "margin_call", "red_pen",
+        ])
+        && warpedCoop.kitId === "mender"
+        && JSON.stringify(warpedCoop.ownedWeapons) === JSON.stringify(["pistol", "halo"]));
+      t.check("signed warp applies leveled blessings and reports unknown ids",
+        warpedIan.ownedItemIds.filter((id) => id === "glass_cannon").length === 3
+        && warpedIan.ownedItemIds.filter((id) => id === "hair_trigger").length === 2
+        && warpedCoop.ownedItemIds.filter((id) => id === "swift_boots").length === 2
+        && loadoutWarp.isApplied
+        && loadoutWarp.loadouts?.[0]?.isApplied === true
+        && loadoutWarp.loadouts[0].grant.skippedWeapons.includes("umbra")
+        && loadoutWarp.loadouts[0].grant.skippedBlessings.includes("missing_blessing"));
+
       if (room.state.encounter !== null) {
         room.state.encounter.completed = false;
         room.state.encounter.failed = true;

@@ -11,6 +11,7 @@ import type {
   MetricsSnapshot,
   OperationRecord,
   Readiness,
+  GameServerPlayerLoadout,
   GameServerWorldActionResult,
   Release,
   VerifyOutcome,
@@ -47,7 +48,11 @@ export interface GameServerAdmin {
   readiness(): Promise<Readiness>;
   metrics(): Promise<MetricsSnapshot>;
   worlds(): Promise<WorldSummary[]>;
-  warpWorld(worldId: string, floor: number): Promise<GameServerWorldActionResult>;
+  warpWorld(
+    worldId: string,
+    floor: number,
+    loadouts?: GameServerPlayerLoadout[],
+  ): Promise<GameServerWorldActionResult>;
   forceOpenWorldExit(worldId: string): Promise<GameServerWorldActionResult>;
   snapshotWorld(worldId: string): Promise<GameServerWorldActionResult>;
   restoreWorld(worldId: string): Promise<GameServerWorldActionResult>;

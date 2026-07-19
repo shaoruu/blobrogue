@@ -3,9 +3,15 @@ import { createHmac, timingSafeEqual } from "node:crypto";
 import { decodeCanonicalBase64Url } from "../../src/net/base64url.js";
 import { isStrictJsonObject } from "../../src/net/strictJson.js";
 import { isValidWorldId } from "../../src/net/worldId.js";
+import type { AdminPlayerLoadout } from "../../src/sim/world.js";
 
 export type ControlWorldAction =
-  | { action: "warp"; worldId: string; floor: number }
+  | {
+    action: "warp";
+    worldId: string;
+    floor: number;
+    loadouts?: AdminPlayerLoadout[];
+  }
   | { action: "force-open-exit"; worldId: string }
   | { action: "snapshot"; worldId: string }
   | { action: "restore"; worldId: string };
@@ -16,6 +22,7 @@ interface ControlActionClaims {
   action: ControlWorldAction["action"];
   worldId: string;
   floor?: number;
+  loadouts?: AdminPlayerLoadout[];
   iat: number;
   exp: number;
   jti: string;
@@ -35,11 +42,11 @@ export function verifyControlWorldAction(
     return { isValid: false };
   }
   const token = authorization.slice(7);
-  if (token.length < 1 || token.length > 512) return { isValid: false };
+  if (token.length < 1 || token.length > 12_000) return { isValid: false };
   const parts = token.split(".");
   if (parts.length !== 3 || parts[0] !== "brc1") return { isValid: false };
   const payloadBytes = decodeCanonicalBase64Url(parts[1], {
-    maxEncodedLength: 400,
+    maxEncodedLength: 11_000,
     isNonEmpty: true,
   });
   const signatureBytes = decodeCanonicalBase64Url(parts[2], {
@@ -83,10 +90,11 @@ export function verifyControlWorldAction(
     if (claims.floor !== action.floor
       || !Number.isSafeInteger(claims.floor)
       || claims.floor < 1
-      || claims.floor > MAX_CONTROL_FLOOR) {
+      || claims.floor > MAX_CONTROL_FLOOR
+      || JSON.stringify(claims.loadouts ?? null) !== JSON.stringify(action.loadouts ?? null)) {
       return { isValid: false };
     }
-  } else if (claims.floor !== undefined) {
+  } else if (claims.floor !== undefined || claims.loadouts !== undefined) {
     return { isValid: false };
   }
   return { isValid: true, action, jti: claims.jti, exp: claims.exp };

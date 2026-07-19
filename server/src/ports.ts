@@ -6,7 +6,11 @@
 // its schema/StateView delta implements SnapshotPublisher — while our custom prediction/
 // reconciliation/interp/lag-comp stays untouched.
 
-import type { WorldState } from "../../src/sim/world.js";
+import type {
+  AdminLoadoutGrantResult,
+  AdminPlayerLoadout,
+  WorldState,
+} from "../../src/sim/world.js";
 import type { WeaponId } from "../../src/sim/types.js";
 import type { PlayerId } from "../../src/sim/input.js";
 import type { KitId } from "../../src/sim/kits.js";
@@ -52,6 +56,24 @@ export type TakeSeatResult =
   | { ok: true; seat: Seat; isViaPrevToken: boolean }
   | { ok: false; reason: "none" | "expired" | "token_mismatch" };
 
+export type AdminPlayerLoadoutResult =
+  | {
+    isApplied: true;
+    player: string;
+    playerId: PlayerId;
+    grant: AdminLoadoutGrantResult;
+  }
+  | {
+    isApplied: false;
+    player: string;
+    reason: "player_not_found" | "player_ambiguous";
+  };
+
+export interface AdminWarpWithLoadoutsResult {
+  isApplied: boolean;
+  loadouts: AdminPlayerLoadoutResult[];
+}
+
 // The authoritative simulation runtime for ONE room/world. Owns the WorldState + its connected
 // players and advances it one fixed tick. GameWorld implements it; a Colyseus Room could too.
 export interface RoomRuntime {
@@ -85,6 +107,10 @@ export interface RoomRuntime {
   // empties, so runs are party-scoped: the next group never inherits a half-played dungeon.
   resetRun(): void;
   adminWarpToFloor(floor: number): boolean;
+  adminWarpToFloorWithLoadouts(
+    floor: number,
+    loadouts: readonly AdminPlayerLoadout[],
+  ): AdminWarpWithLoadoutsResult;
   adminForceOpenExit(): boolean;
   captureRunSnapshot(nowMs: number): RunSnapshot | null;
   restoreRunSnapshot(snapshot: RunSnapshot, nowMs: number, ttlMs: number): void;

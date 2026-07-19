@@ -10,7 +10,7 @@ import {
   createWorld, loadFloorIntoWorld, spawnPlayerInWorld, isFloorCleared,
   restoreEncounterInWorld, completeEncounter, initSmokeEncounter, cloneEncounter,
   encounterEqual, grantEncounterCompletionReward, isPvp, setPlayerKit,
-  adminWarpToFloorInWorld, adminForceOpenExitInWorld,
+  adminGrantPlayerLoadoutInWorld, adminWarpToFloorInWorld, adminForceOpenExitInWorld,
 } from "../src/sim/world.js";
 import { buildSnapshot, validateSnap, jsonCodec, PROTOCOL_VERSION, toEncounterWire } from "../src/net/protocol.js";
 import { diffSnapshot, applySnapshotDelta, snapshotToWire, type WorldLiveIds } from "../src/net/snapshotDelta.js";
@@ -161,6 +161,30 @@ function encounterStateTests(): void {
   const spawnY = rescue.dungeon.spawn.y * TILE + TILE / 2;
   check("admin warp advances every player in the room together",
     [...rescue.players.values()].every((player) => player.x === spawnX && player.y === spawnY));
+
+  const loadout = adminGrantPlayerLoadoutInWorld(rescue, "ian", {
+    player: "Ian",
+    kitId: "phantom",
+    hp: 2.5,
+    weapons: ["pistol", "shotgun", "tesla", "nailer", "margin_call", "red_pen", "umbra"],
+    blessings: [
+      { id: "glass_cannon", lvl: 3 },
+      { id: "hair_trigger", lvl: 2 },
+      { id: "missing_blessing", lvl: 1 },
+    ],
+  });
+  check("admin warp loadout replaces the hotbar through the capped acquire path",
+    JSON.stringify(ian.ownedWeapons) === JSON.stringify([
+      "pistol", "shotgun", "tesla", "nailer", "margin_call", "red_pen",
+    ])
+    && ian.weapon === "red_pen"
+    && loadout?.result.skippedWeapons.includes("umbra") === true);
+  check("admin warp loadout applies leveled blessings through the normal pickup path",
+    ian.ownedItemIds.filter((id) => id === "glass_cannon").length === 3
+    && ian.ownedItemIds.filter((id) => id === "hair_trigger").length === 2
+    && loadout?.result.skippedBlessings.includes("missing_blessing") === true);
+  check("admin warp loadout applies the requested kit and clamps starting hearts",
+    ian.kitId === "phantom" && ian.hp === 2.5 && loadout?.result.isKitApplied === true);
 
   if (rescue.encounter !== null) {
     rescue.encounter.failed = true;

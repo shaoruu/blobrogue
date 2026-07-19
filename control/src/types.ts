@@ -134,8 +134,49 @@ export interface WorldSummary {
   away: string[];
 }
 
+export interface GameServerBlessingGrant {
+  id: string;
+  lvl: number;
+}
+
+export interface GameServerPlayerLoadout {
+  player: string;
+  weapons?: string[];
+  blessings?: GameServerBlessingGrant[];
+  kitId?: string;
+  hp?: number;
+}
+
+export interface GameServerLoadoutGrant {
+  grantedWeapons: string[];
+  skippedWeapons: string[];
+  appliedBlessings: GameServerBlessingGrant[];
+  skippedBlessings: string[];
+  isKitApplied: boolean;
+  skippedKitId?: string;
+  hp: number;
+}
+
+export type GameServerPlayerLoadoutResult =
+  | {
+    isApplied: true;
+    player: string;
+    playerId: string;
+    grant: GameServerLoadoutGrant;
+  }
+  | {
+    isApplied: false;
+    player: string;
+    reason: "player_not_found" | "player_ambiguous";
+  };
+
 export type GameServerWorldAction =
-  | { action: "warp"; worldId: string; floor: number }
+  | {
+    action: "warp";
+    worldId: string;
+    floor: number;
+    loadouts?: GameServerPlayerLoadout[];
+  }
   | { action: "force-open-exit"; worldId: string }
   | { action: "snapshot"; worldId: string }
   | { action: "restore"; worldId: string };
@@ -148,6 +189,7 @@ export type GameServerWorldActionResult =
     players: number;
     fidelity?: "build+floor";
     snapshotPath?: string;
+    loadouts?: GameServerPlayerLoadoutResult[];
   }
   | {
     isApplied: false;

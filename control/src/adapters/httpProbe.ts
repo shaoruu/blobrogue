@@ -14,6 +14,8 @@ import type { GameServerLifecycleAction, GameServerProbe } from "../ports.js";
 import { mintGameServerControlToken } from "./gameServerControlAuth.js";
 import type {
   AdminEffectResult,
+  GameServerBlessingGrant,
+  GameServerPlayerLoadoutResult,
   GameServerWorldAction,
   GameServerWorldActionResult,
   GameServerStatus,
@@ -264,6 +266,10 @@ export class HttpGameServerProbe implements GameServerProbe {
         && Number.isSafeInteger(result.floor)
         && typeof result.players === "number"
         && Number.isSafeInteger(result.players)) {
+        const loadouts = parseLoadoutResults(result.loadouts);
+        if (result.loadouts !== undefined && loadouts === null) {
+          return { isApplied: false, reason: "unavailable" };
+        }
         return {
           isApplied: true,
           worldId: result.worldId,
@@ -271,6 +277,7 @@ export class HttpGameServerProbe implements GameServerProbe {
           players: result.players,
           fidelity: result.fidelity === "build+floor" ? result.fidelity : undefined,
           snapshotPath: typeof result.snapshotPath === "string" ? result.snapshotPath : undefined,
+          loadouts: loadouts ?? undefined,
         };
       }
       if (result.reason === "world_not_found"
@@ -495,6 +502,83 @@ export class HttpGameServerProbe implements GameServerProbe {
       return null;
     }
   }
+}
+
+function parseLoadoutResults(value: ProbeJson | undefined): GameServerPlayerLoadoutResult[] | null {
+  if (value === undefined) return [];
+  if (!Array.isArray(value)) return null;
+  const results: GameServerPlayerLoadoutResult[] = [];
+  for (const entry of value) {
+    if (entry === null || typeof entry !== "object" || Array.isArray(entry)
+      || typeof entry.player !== "string"
+      || typeof entry.isApplied !== "boolean") {
+      return null;
+    }
+    if (!entry.isApplied) {
+      if (entry.reason !== "player_not_found" && entry.reason !== "player_ambiguous") return null;
+      results.push({ isApplied: false, player: entry.player, reason: entry.reason });
+      continue;
+    }
+    if (typeof entry.playerId !== "string"
+      || entry.grant === null
+      || typeof entry.grant !== "object"
+      || Array.isArray(entry.grant)) {
+      return null;
+    }
+    const grant = entry.grant;
+    const grantedWeapons = stringArray(grant.grantedWeapons);
+    const skippedWeapons = stringArray(grant.skippedWeapons);
+    const appliedBlessings = blessingGrants(grant.appliedBlessings);
+    const skippedBlessings = stringArray(grant.skippedBlessings);
+    if (grantedWeapons === null
+      || skippedWeapons === null
+      || appliedBlessings === null
+      || skippedBlessings === null
+      || typeof grant.isKitApplied !== "boolean"
+      || typeof grant.hp !== "number"
+      || !Number.isFinite(grant.hp)
+      || (grant.skippedKitId !== undefined && typeof grant.skippedKitId !== "string")) {
+      return null;
+    }
+    results.push({
+      isApplied: true,
+      player: entry.player,
+      playerId: entry.playerId,
+      grant: {
+        grantedWeapons,
+        skippedWeapons,
+        appliedBlessings,
+        skippedBlessings,
+        isKitApplied: grant.isKitApplied,
+        skippedKitId: typeof grant.skippedKitId === "string" ? grant.skippedKitId : undefined,
+        hp: grant.hp,
+      },
+    });
+  }
+  return results;
+}
+
+function stringArray(value: ProbeJson | undefined): string[] | null {
+  return Array.isArray(value) && value.every((entry) => typeof entry === "string")
+    ? value
+    : null;
+}
+
+function blessingGrants(value: ProbeJson | undefined): GameServerBlessingGrant[] | null {
+  if (!Array.isArray(value)) return null;
+  const grants: GameServerBlessingGrant[] = [];
+  for (const entry of value) {
+    if (entry === null
+      || typeof entry !== "object"
+      || Array.isArray(entry)
+      || typeof entry.id !== "string"
+      || typeof entry.lvl !== "number"
+      || !Number.isSafeInteger(entry.lvl)) {
+      return null;
+    }
+    grants.push({ id: entry.id, lvl: entry.lvl });
+  }
+  return grants;
 }
 
 function numField(o: Record<string, LogValue>, k: string): number {

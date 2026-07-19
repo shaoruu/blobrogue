@@ -189,12 +189,25 @@ export async function suite(t: TestRunner): Promise<void> {
 
       const warp = await api(bed.base, "POST", "/v1/worlds/warp", {
         token: adminToken(bed.clock),
-        body: { worldId: "arena-1", floor: 55 },
+        body: {
+          worldId: "arena-1",
+          floor: 55,
+          loadouts: [{
+            player: "Ian",
+            kitId: "phantom",
+            hp: 2.5,
+            weapons: ["nailer", "umbra"],
+            blessings: [{ id: "glass_cannon", lvl: 3 }],
+          }],
+        },
       });
+      const warpCall = bed.probe.worldActionCalls[0];
       t.check("admin warp reaches the named world", warp.status === 200
         && warp.body.isApplied === true
         && warp.body.floor === 55
-        && bed.probe.worldActionCalls[0]?.action === "warp");
+        && warpCall?.action === "warp"
+        && warpCall.loadouts?.[0]?.player === "Ian"
+        && warpCall.loadouts[0].weapons?.includes("umbra") === true);
 
       const force = await api(bed.base, "POST", "/v1/worlds/force-open-exit", {
         token: adminToken(bed.clock),
@@ -231,6 +244,16 @@ export async function suite(t: TestRunner): Promise<void> {
         body: { worldId: "arena-1", floor: 1001 },
       });
       t.check("invalid floor is rejected before the game server", malformed.status === 400);
+      const malformedLoadout = await api(bed.base, "POST", "/v1/worlds/warp", {
+        token: adminToken(bed.clock),
+        body: {
+          worldId: "arena-1",
+          floor: 55,
+          loadouts: [{ player: "Ian", blessings: [{ id: "glass_cannon", lvl: 99 }] }],
+        },
+      });
+      t.check("invalid loadout structure is rejected before the game server",
+        malformedLoadout.status === 400);
 
       const audits = await api(bed.base, "GET", "/v1/audit", {
         token: adminToken(bed.clock),
