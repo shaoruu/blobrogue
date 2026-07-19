@@ -2643,7 +2643,7 @@ export class Game {
             x: cast.x + Math.cos(cast.aim) * ARENA_SLIP.blinkPx * k,
             y: cast.y + Math.sin(cast.aim) * ARENA_SLIP.blinkPx * k,
             facing,
-            t: isLanding ? 0.5 + i * 0.1 : i * 0.08,
+            t: isLanding ? 0.25 + i * 0.1 : i * 0.08,
             color: ARENA_ULT_HUE.slip,
             base,
           });
