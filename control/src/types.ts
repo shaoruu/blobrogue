@@ -125,6 +125,7 @@ export interface WorldSummary {
   id: string;
   players: number;
   tick: number;
+  floor: number;
   // Who is actually connected to this world (display names) — the ops answer to "did the
   // whole room land in ONE world?" during a multiplayer incident.
   names: string[];
@@ -132,6 +133,14 @@ export interface WorldSummary {
   // currently dropped and inside their grace window?".
   away: string[];
 }
+
+export type GameServerWorldAction =
+  | { action: "warp"; worldId: string; floor: number }
+  | { action: "force-open-exit"; worldId: string };
+
+export type GameServerWorldActionResult =
+  | { isApplied: true; worldId: string; floor: number; players: number }
+  | { isApplied: false; reason: "world_not_found" | "pvp_forbidden" | "unavailable" };
 
 // A single redacted structured log line. Values are primitives only (already sanitized).
 export type LogValue = string | number | boolean | null;

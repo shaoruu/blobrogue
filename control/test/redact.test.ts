@@ -27,7 +27,7 @@ export async function suite(t: TestRunner): Promise<void> {
   await t.suite("redact: gs log tail is redacted before return", async () => {
     const line = JSON.stringify({ time: "t", level: "info", msg: "join", playerId: "p1", token: "v1.header.signature", note: "bearer " + "Z".repeat(48) });
     const probe = new HttpGameServerProbe(
-      { baseUrl: "http://127.0.0.1:1", wsUrl: "ws://127.0.0.1:1/ws", logOutFile: "/tmp/does-not-matter.log", syntheticTicketSecret: null, logTailMax: 100 },
+      { baseUrl: "http://127.0.0.1:1", wsUrl: "ws://127.0.0.1:1/ws", logOutFile: "/tmp/does-not-matter.log", syntheticTicketSecret: null, controlSecret: null, logTailMax: 100 },
       new StubTail([line]),
     );
     const logs = await probe.logs({ limit: 10, level: null });

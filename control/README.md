@@ -24,6 +24,7 @@ Internet ──TLS 443──▶ nginx ──▶ admin.create.town panel proxy (o
                                     ▼
                        blobrogue-control (127.0.0.1:8091)
                                     ├─ HTTP  ─▶ blobrogue-gs /healthz /metrics (127.0.0.1:8090)
+                                    ├─ signed HTTP ─▶ blobrogue-gs /admin/world-action
                                     ├─ WS    ─▶ blobrogue-gs /ws  (synthetic-join verify)
                                     ├─ pm2   ─▶ reload blobrogue-gs   (fixed app + argv)
                                     └─ fs    ─▶ releases/<id> + atomic current symlink
@@ -47,7 +48,7 @@ Mutations should carry an `Idempotency-Key`.
 | `GET /v1/status` | `{ status, uptimeSec, worlds, players, connections, tickMs_p50/p95/max }` |
 | `GET /v1/readiness` | `{ live, ready, detail }` |
 | `GET /v1/version` | `{ releaseId, version, commit, builtAt }` of the current release |
-| `GET /v1/worlds` | `{ worlds: [{ id, players, tick }] }` |
+| `GET /v1/worlds` | `{ worlds: [{ id, players, tick, floor, names, away }] }` |
 | `GET /v1/metrics` | flat `{ <counter>: number }` (redacted) |
 | `GET /v1/logs?limit=N&level=L` | `{ logs: [{ time, level, msg, fields }] }` (bounded, redacted) |
 | `GET /v1/releases` | `{ releases: [{ releaseId, version, commit, builtAt, isCurrent, isStaging, isRetained }] }` |
@@ -57,9 +58,9 @@ Mutations should carry an `Idempotency-Key`.
 
 ### Mutate
 
-Request bodies accept only `releaseId` (validated grammar, looked up) and, for `/confirm`, an
-`action` enum. Any body carrying a forbidden key (`target`, `app`, `cmd`, `path`, `env`, `ref`,
-`url`, `args`, `town`, …) is rejected `400` before dispatch.
+Every route has an exact body schema. Release routes accept only `releaseId`; live-world rescue
+routes accept only a validated `worldId` and, for warp, a positive integer `floor`. Any extra
+field is rejected before dispatch. Warp floors are bounded to `1..1000`.
 
 | Method + path | Body | Confirm? | Effect |
 |---|---|---|---|
@@ -68,11 +69,44 @@ Request bodies accept only `releaseId` (validated grammar, looked up) and, for `
 | `POST /v1/deploy` | `{ releaseId }` | **yes** | run the deploy state machine to make `releaseId` current |
 | `POST /v1/drain` | `{}` | no | ask gs to stop accepting new joins |
 | `POST /v1/resume` | `{}` | no | ask gs to resume |
+| `POST /v1/worlds/warp` | `{ worldId, floor }` | no | move the named live co-op room to a freshly generated floor while preserving every player's loadout |
+| `POST /v1/worlds/force-open-exit` | `{ worldId }` | no | clear stuck combat/encounter blockers and open the named co-op room's exit |
 | `POST /v1/restart` | `{}` | **yes** | reload exactly `blobrogue-gs`, verify |
 | `POST /v1/rollback` | `{ releaseId }` | **yes** | switch current back to a retained release, reload, verify |
 
-Every mutate returns `{ operationId, kind, state, result, ... }`; poll `GET /v1/operations/:id`
-for progress. `releaseId` grammar: `<commitShort>-<version>-<checksum12>`.
+Deploy-class mutates return `{ operationId, kind, state, result, ... }`; poll
+`GET /v1/operations/:id` for progress. `releaseId` grammar:
+`<commitShort>-<version>-<checksum12>`.
+
+The rescue routes return `{ isApplied, worldId, floor, players }` immediately and write an audit
+record. They require the same short-lived, scoped, replay-rejected admin token as every control
+route. The control service then signs the exact action, world, and floor with a separate
+five-second `brc1` envelope before calling the loopback-only game-server endpoint. Game tickets,
+WebSocket messages, and direct unsigned HTTP requests cannot invoke either action. PVP rooms are
+rejected.
+
+```sh
+curl -H "Authorization: Bearer $BRC_ADMIN_TOKEN" \
+  http://127.0.0.1:8091/v1/worlds
+
+curl -X POST -H "Authorization: Bearer $BRC_ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"worldId":"room:ABCD","floor":55}' \
+  http://127.0.0.1:8091/v1/worlds/warp
+
+curl -X POST -H "Authorization: Bearer $BRC_ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"worldId":"room:ABCD"}' \
+  http://127.0.0.1:8091/v1/worlds/force-open-exit
+```
+
+Both actions affect the single authoritative room state, so every connected or reconnect-reserved
+player advances together. Warp keeps each player's kit, inventory, blessings, and health; downed
+players receive the normal descent rescue before the fresh floor is generated. Force-open removes
+active and pending enemies, transient combat hazards, encounter failure, gauntlet completion gates,
+and locked-route blockers without granting encounter rewards. A warp marks the run ineligible for
+account progression receipts, so jumping to a deep floor cannot mint deepest-floor, Mastery, or
+Amber progress. Force-open does not taint progression because it is the live softlock rescue path.
 
 ### Two-step confirm flow (deploy/restart/rollback)
 
@@ -177,9 +211,11 @@ and `pm2 save`. See `ops/`:
 See [`.env.example`](.env.example). Notably: `BRC_ADMIN_TOKEN_SECRET` and
 `BRC_CONFIRM_TOKEN_SECRET` (required in production — the service refuses to start without them),
 `BRC_TOKEN_AUDIENCE`, `BRC_RELEASES_ROOT`, `BRC_STATE_DIR`, `BRC_GS_BASE_URL`/`BRC_GS_WS_URL`, and
-the optional `BRC_GS_SYNTHETIC_TICKET_SECRET` (enables full synthetic-join verify; loopback only,
+the production-required `BRC_GS_SYNTHETIC_TICKET_SECRET` (enables full synthetic-join verify; loopback only,
 never used to accept inbound control requests). These are **separate** from the game server's
-`GS_AUTH_SECRET`.
+`GS_AUTH_SECRET` for normal game authentication. `BRC_GS_CONTROL_SECRET` is a required, dedicated
+production secret matching `GS_CONTROL_SECRET`; it signs only short-lived loopback world-rescue
+calls and is never accepted by the public control API.
 
 ## Module map
 

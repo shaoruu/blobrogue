@@ -2610,6 +2610,48 @@ export function grantEncounterCompletionReward(w: WorldState): void {
   });
 }
 
+export const ADMIN_WARP_MAX_FLOOR = 1000;
+
+export function adminWarpToFloorInWorld(w: WorldState, floor: number): boolean {
+  if (isPvp(w) || !Number.isSafeInteger(floor) || floor < 1 || floor > ADMIN_WARP_MAX_FLOOR) return false;
+  if (w.floor === floor) return true;
+  w.isRunOver = false;
+  for (const p of w.players.values()) {
+    p.combo = 0;
+    p.comboTimer = 0;
+    if (p.isDown) p.hp = Math.max(p.hp, REVIVE.hp);
+    p.isDown = false;
+    p.reviveProgress = 0;
+    p.reviveBy = null;
+    p.downsThisFloor = 0;
+  }
+  loadFloorIntoWorld(w, floor);
+  return true;
+}
+
+export function adminForceOpenExitInWorld(w: WorldState): boolean {
+  if (isPvp(w)) return false;
+  if (w.encounter !== null) {
+    completeEncounter(w.encounter);
+    w.encounter.failed = false;
+  }
+  w.enemies = [];
+  w.pendingSpawns = [];
+  w.bullets = [];
+  w.hazards = [];
+  w.effects = [];
+  w.warmthDrain = null;
+  w.persistentBossWindows.clear();
+  for (const edge of w.dungeon.edges) edge.locked = false;
+  for (const p of w.players.values()) resetPlayerWarmth(p);
+  if (w.gauntlet !== null) {
+    w.gauntlet.stage = GAUNTLET.rounds.length;
+    w.gauntlet.breath = 0;
+    w.gauntlet.isRewarded = true;
+  }
+  return true;
+}
+
 // Reset a live world to a FRESH run: new seed, new RNG stream, floor 1, cleared terminal state.
 // The authoritative server calls this when a room empties (party wiped or everyone left), so the
 // next group starts a new run rather than inheriting a half-played dungeon. tick keeps counting

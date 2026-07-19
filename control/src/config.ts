@@ -27,6 +27,7 @@ export interface ControlConfig {
   gsWsUrl: string;
   gsLogOutFile: string | null;
   gsSyntheticTicketSecret: string | null; // required in production; null permits diagnostics only
+  gsControlSecret: string | null;
 }
 
 function intEnv(env: NodeJS.ProcessEnv, key: string, def: number): number {
@@ -53,6 +54,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ControlConfig 
   if (isProd && gsSyntheticTicketSecret === null) {
     throw new Error("policy_probe_secret_missing");
   }
+  const gsControlSecret = optEnv(env, "BRC_GS_CONTROL_SECRET");
+  if (isProd && gsControlSecret === null) {
+    throw new Error("game_server_control_secret_missing");
+  }
   return {
     host: strEnv(env, "BRC_HOST", "127.0.0.1"),
     port: intEnv(env, "BRC_PORT", 8091),
@@ -77,5 +82,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ControlConfig 
     gsWsUrl: strEnv(env, "BRC_GS_WS_URL", "ws://127.0.0.1:8090/ws"),
     gsLogOutFile: optEnv(env, "BRC_GS_LOG_OUT_FILE"),
     gsSyntheticTicketSecret,
+    gsControlSecret,
   };
 }

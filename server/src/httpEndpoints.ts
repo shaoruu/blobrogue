@@ -10,6 +10,11 @@ import type { HealthReport } from "./metrics.js";
 import { PROTOCOL_VERSION } from "../../src/net/protocol.js";
 import { GENERATION_ADMISSION_PREFIX } from "../../src/net/generationAdmission.js";
 import { PRIVATE_DRAFT_PVP_POLICY } from "../../src/net/pvpPolicy.js";
+import {
+  verifyControlWorldAction,
+  MAX_CONTROL_FLOOR,
+  type ControlWorldAction,
+} from "./controlAuth.js";
 
 // One live world, as exposed to the control panel: which world exists, how many players it
 // holds, its tick, WHO is connected (display names, ordered by join), and whose seats are
@@ -19,21 +24,32 @@ export interface WorldReport {
   id: string;
   players: number;
   tick: number;
+  floor: number;
   names: string[];
   away: string[];
 }
+
+export type ControlWorldActionResult =
+  | { isApplied: true; worldId: string; floor: number; players: number }
+  | { isApplied: false; reason: "world_not_found" | "pvp_forbidden" };
 
 export interface HttpDeps {
   config: ServerConfig;
   health: () => HealthReport;
   worlds: () => WorldReport[];
   lifecycle: (action: "drain" | "flush" | "resume") => void;
+  controlWorld: (action: ControlWorldAction) => ControlWorldActionResult;
 }
 
 export function createHttpHandler(deps: HttpDeps): (req: IncomingMessage, res: ServerResponse) => void {
+  const usedControlJtis = new Map<string, number>();
   return (req, res) => {
     const url = new URL(req.url ?? "/", "http://localhost");
     if (req.method === "POST") {
+      if (url.pathname === "/admin/world-action") {
+        void handleControlWorldAction(deps, usedControlJtis, req, res);
+        return;
+      }
       const match = /^\/admin\/(drain|flush|resume)$/.exec(url.pathname);
       if (match) {
         deps.lifecycle(match[1] as "drain" | "flush" | "resume");
@@ -108,4 +124,84 @@ export function createHttpHandler(deps: HttpDeps): (req: IncomingMessage, res: S
 
     res.writeHead(404).end();
   };
+}
+
+async function handleControlWorldAction(
+  deps: HttpDeps,
+  usedJtis: Map<string, number>,
+  req: IncomingMessage,
+  res: ServerResponse,
+): Promise<void> {
+  const body = await readBody(req, 1024);
+  if (body === null) {
+    res.writeHead(413).end();
+    return;
+  }
+  const action = parseControlWorldAction(body);
+  if (action === null) {
+    res.writeHead(400).end();
+    return;
+  }
+  const auth = verifyControlWorldAction(
+    deps.config.controlSecret,
+    typeof req.headers.authorization === "string" ? req.headers.authorization : undefined,
+    action,
+  );
+  if (!auth.isValid) {
+    res.writeHead(401).end();
+    return;
+  }
+  const nowSec = Math.floor(Date.now() / 1000);
+  for (const [jti, exp] of usedJtis) if (exp <= nowSec) usedJtis.delete(jti);
+  if (usedJtis.has(auth.jti)) {
+    res.writeHead(409).end();
+    return;
+  }
+  usedJtis.set(auth.jti, auth.exp);
+  const result = deps.controlWorld(action);
+  const status = result.isApplied ? 200 : result.reason === "world_not_found" ? 404 : 409;
+  res.writeHead(status, {
+    "content-type": "application/json",
+    "cache-control": "no-store",
+  }).end(JSON.stringify(result));
+}
+
+function parseControlWorldAction(body: string): ControlWorldAction | null {
+  let value: ControlWorldAction | null;
+  try {
+    value = JSON.parse(body) as ControlWorldAction | null;
+  } catch {
+    return null;
+  }
+  if (value === null || typeof value !== "object") return null;
+  if (value.action === "warp") {
+    if (Object.keys(value).length !== 3
+      || !isValidWorldId(value.worldId)
+      || !Number.isSafeInteger(value.floor)
+      || value.floor < 1
+      || value.floor > MAX_CONTROL_FLOOR) {
+      return null;
+    }
+    return value;
+  }
+  if (value.action === "force-open-exit") {
+    if (Object.keys(value).length !== 2 || !isValidWorldId(value.worldId)) return null;
+    return value;
+  }
+  return null;
+}
+
+function readBody(req: IncomingMessage, maxBytes: number): Promise<string | null> {
+  return new Promise((resolve) => {
+    const chunks: Buffer[] = [];
+    let size = 0;
+    let isOverLimit = false;
+    req.on("data", (chunk: Buffer) => {
+      size += chunk.length;
+      if (size > maxBytes) isOverLimit = true;
+      else chunks.push(chunk);
+    });
+    req.on("end", () => resolve(isOverLimit ? null : Buffer.concat(chunks).toString("utf8")));
+    req.on("error", () => resolve(null));
+  });
 }

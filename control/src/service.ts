@@ -37,6 +37,7 @@ export function buildProductionDeps(cfg: ControlConfig, log: Logger, clock: Cloc
       wsUrl: cfg.gsWsUrl,
       logOutFile: cfg.gsLogOutFile,
       syntheticTicketSecret: cfg.gsSyntheticTicketSecret,
+      controlSecret: cfg.gsControlSecret,
       logTailMax: cfg.logTailMax,
     },
     new NodeTailReader(),

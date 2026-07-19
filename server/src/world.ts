@@ -9,7 +9,7 @@
 // the fixed step, so a client can neither buy extra time (no client dt) nor gain advantage by its
 // frame rate (fixed-cadence consumption).
 
-import { beginWorldTick, createWorld, refreshWarmthDrain, stepPlayerPhase, stepWorldPhase, spawnPlayerInWorld, removePlayerFromWorld, setPlayerAbsence, setPlayerKit, setPlayerPet, switchWeaponInWorld, reorderWeaponsInWorld, dropWeaponInWorld, swapWeaponInWorld, buyFromShopInWorld, chooseBlessingInWorld, dismissBlessingOfferInWorld, rollBlessingChoicesInWorld, resetRunInWorld, devSpawnEnemy, isPvp, isPvpDraftRuntime } from "../../src/sim/world.js";
+import { adminForceOpenExitInWorld, adminWarpToFloorInWorld, beginWorldTick, createWorld, refreshWarmthDrain, stepPlayerPhase, stepWorldPhase, spawnPlayerInWorld, removePlayerFromWorld, setPlayerAbsence, setPlayerKit, setPlayerPet, switchWeaponInWorld, reorderWeaponsInWorld, dropWeaponInWorld, swapWeaponInWorld, buyFromShopInWorld, chooseBlessingInWorld, dismissBlessingOfferInWorld, rollBlessingChoicesInWorld, resetRunInWorld, devSpawnEnemy, isPvp, isPvpDraftRuntime } from "../../src/sim/world.js";
 import type { KitId } from "../../src/sim/kits.js";
 import { PVP, pvpDraftSeed } from "../../src/sim/pvp.js";
 import type { WorldMode } from "../../src/sim/pvp.js";
@@ -84,6 +84,7 @@ export class GameWorld implements RoomRuntime {
   private joinedAtFloor = new Map<PlayerId, number>();
   private bossKillsByPlayer = new Map<PlayerId, Set<string>>();
   private authIdentityByPlayer = new Map<PlayerId, string>();
+  private isAdminWarped = false;
   constructor(
     id: string,
     seed: number = randomSeed(),
@@ -127,6 +128,25 @@ export class GameWorld implements RoomRuntime {
     this.joinedAtFloor.clear();
     this.bossKillsByPlayer.clear();
     this.authIdentityByPlayer.clear();
+    this.isAdminWarped = false;
+  }
+
+  adminWarpToFloor(floor: number): boolean {
+    const previousFloor = this.state.floor;
+    const pendingOfferPlayers = [...this.state.pendingBlessings.keys()];
+    const isApplied = adminWarpToFloorInWorld(this.state, floor);
+    if (!isApplied) return false;
+    if (previousFloor === floor) return true;
+    for (const pid of this.state.players.keys()) this.clearOfferFor(pid);
+    for (const pid of pendingOfferPlayers) this.injectedEvents.push({ t: "blessingExpired", pid });
+    this.offerThisTick = [];
+    this.expiredOffersThisTick = [];
+    this.isAdminWarped = true;
+    return true;
+  }
+
+  adminForceOpenExit(): boolean {
+    return adminForceOpenExitInWorld(this.state);
   }
 
   private seedArenaEnemies(): void {
@@ -371,6 +391,7 @@ export class GameWorld implements RoomRuntime {
     return `${this.id}:${this.state.seed}:${this.state.rev}`;
   }
   runReceiptParticipants(): RunReceiptParticipant[] {
+    if (this.isAdminWarped) return [];
     const participants: RunReceiptParticipant[] = [];
     for (const [pid, player] of this.state.players) {
       const conn = [...this.conns.values()].find((candidate) => candidate.playerId === pid);

@@ -13,6 +13,7 @@ export interface ServerConfig {
   port: number;
   wsPath: string;
   auth: AuthConfig;
+  controlSecret: string | null;
   receiptSecret: string | null;
   receiptEndpoint: string | null;
   admissionEndpoint: string | null;
@@ -81,6 +82,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     port: intEnv(env, "PORT", 8090, 0, 65535),
     wsPath: env.GS_WS_PATH ?? "/ws",
     auth: authConfigFromEnv(env),
+    controlSecret: env.GS_CONTROL_SECRET && env.GS_CONTROL_SECRET.length > 0
+      ? env.GS_CONTROL_SECRET
+      : null,
     receiptSecret: env.GS_RECEIPT_SECRET && env.GS_RECEIPT_SECRET.length > 0
       ? env.GS_RECEIPT_SECRET
       : null,

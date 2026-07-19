@@ -173,4 +173,54 @@ export async function suite(t: TestRunner): Promise<void> {
       await bed.close();
     }
   });
+
+  await t.suite("api: live-world rescue actions are admin-gated and audited", async () => {
+    const bed = await makeTestBed();
+    try {
+      const noAuth = await api(bed.base, "POST", "/v1/worlds/warp", {
+        body: { worldId: "arena-1", floor: 55 },
+      });
+      t.check("warp without admin token is rejected", noAuth.status === 401);
+      t.check("rejected warp never reaches the game server", bed.probe.worldActionCalls.length === 0);
+
+      const warp = await api(bed.base, "POST", "/v1/worlds/warp", {
+        token: adminToken(bed.clock),
+        body: { worldId: "arena-1", floor: 55 },
+      });
+      t.check("admin warp reaches the named world", warp.status === 200
+        && warp.body.isApplied === true
+        && warp.body.floor === 55
+        && bed.probe.worldActionCalls[0]?.action === "warp");
+
+      const force = await api(bed.base, "POST", "/v1/worlds/force-open-exit", {
+        token: adminToken(bed.clock),
+        body: { worldId: "arena-1" },
+      });
+      t.check("admin force-open reaches the named world", force.status === 200
+        && force.body.isApplied === true
+        && bed.probe.worldActionCalls[1]?.action === "force-open-exit");
+
+      const missing = await api(bed.base, "POST", "/v1/worlds/warp", {
+        token: adminToken(bed.clock),
+        body: { worldId: "missing", floor: 55 },
+      });
+      t.check("missing world is explicit", missing.status === 404 && missing.body.error === "world_not_found");
+
+      const malformed = await api(bed.base, "POST", "/v1/worlds/warp", {
+        token: adminToken(bed.clock),
+        body: { worldId: "arena-1", floor: 1001 },
+      });
+      t.check("invalid floor is rejected before the game server", malformed.status === 400);
+
+      const audits = await api(bed.base, "GET", "/v1/audit", {
+        token: adminToken(bed.clock),
+      });
+      const serialized = JSON.stringify(audits.body);
+      t.check("warp and force-open attempts are audited", serialized.includes("warp_world")
+        && serialized.includes("force_open_exit")
+        && serialized.includes("world=arena-1"));
+    } finally {
+      await bed.close();
+    }
+  });
 }

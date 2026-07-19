@@ -37,6 +37,8 @@ import type {
   MetricsSnapshot,
   Readiness,
   ReleaseGates,
+  GameServerWorldAction,
+  GameServerWorldActionResult,
   VerifyResult,
   WorldSummary,
 } from "../src/types.js";
@@ -191,17 +193,28 @@ export class FakeGameServerProbe implements GameServerProbe {
   statusValue: GameServerStatus = { status: "ok", uptimeSec: 10, worlds: 1, players: 0, connections: 0, tickMs_p50: 1, tickMs_p95: 2, tickMs_max: 3 };
   readyValue: Readiness = { live: true, ready: true, detail: null };
   metricsValue: MetricsSnapshot = { msgsIn: 0, msgsOut: 0 };
-  worldsValue: WorldSummary[] = [{ id: "arena-1", players: 0, tick: 0, names: [], away: [] }];
+  worldsValue: WorldSummary[] = [{ id: "arena-1", players: 0, tick: 0, floor: 1, names: [], away: [] }];
   logsValue: LogRecord[] = [];
   verifyDiagnosticValue: VerifyResult = { ok: true, depth: "ws_liveness", detail: null };
   verifyForDeployValue: VerifyResult = { ok: true, depth: "policy_v2_parser+synthetic_join", detail: null };
   verifyDelayMs = 0; // hold the deploy across a real timer (makes lock contention deterministic)
   lifecycleCalls: GameServerLifecycleAction[] = [];
+  worldActionCalls: GameServerWorldAction[] = [];
 
   async status(): Promise<GameServerStatus> { return this.statusValue; }
   async readiness(): Promise<Readiness> { return this.readyValue; }
   async metrics(): Promise<MetricsSnapshot> { return this.metricsValue; }
   async worlds(): Promise<WorldSummary[]> { return this.worldsValue; }
+  async mutateWorld(action: GameServerWorldAction): Promise<GameServerWorldActionResult> {
+    this.worldActionCalls.push(action);
+    if (!this.worldsValue.some((world) => world.id === action.worldId)) {
+      return { isApplied: false, reason: "world_not_found" };
+    }
+    const floor = action.action === "warp"
+      ? action.floor
+      : this.worldsValue.find((world) => world.id === action.worldId)?.floor ?? 0;
+    return { isApplied: true, worldId: action.worldId, floor, players: 0 };
+  }
   async logs(_q: LogQuery): Promise<LogRecord[]> { return this.logsValue; }
   async verifyDiagnostic(): Promise<VerifyResult> {
     return this.verifyDiagnosticValue;

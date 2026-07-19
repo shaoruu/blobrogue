@@ -12,11 +12,11 @@ import type { RateLimiter } from "./auth/rateLimiter.js";
 import type { ControlConfig } from "./config.js";
 import { DeployController, type OperationContext } from "./deployController.js";
 import { LockedError, PreconditionError } from "./errors.js";
-import { randomId } from "./ids.js";
+import { isValidWorldId, MAX_ADMIN_FLOOR, randomId } from "./ids.js";
 import type { ArtifactVerifier, AuditSink, GameServerAdmin, OperationStore, ReleaseStore } from "./interfaces.js";
 import type { Logger } from "./logger.js";
 import type { Clock } from "./ports.js";
-import type { OperationRecord } from "./types.js";
+import type { GameServerWorldActionResult, OperationRecord } from "./types.js";
 import { findForbiddenKey, parseConfirmBody, parseJsonObject, parseReleaseIdBody } from "./validation.js";
 
 export interface ControlDeps {
@@ -124,6 +124,8 @@ export class ControlHttpServer {
         case "/v1/deploy": return this.handleDeploy(body, rc, res);
         case "/v1/drain": return this.handleLifecycle("drain", rc, res);
         case "/v1/resume": return this.handleLifecycle("resume", rc, res);
+        case "/v1/worlds/warp": return this.handleWorldWarp(body, rc, res);
+        case "/v1/worlds/force-open-exit": return this.handleForceOpenExit(body, rc, res);
         case "/v1/restart": return this.handleRestart(body, rc, res);
         case "/v1/rollback": return this.handleRollback(body, rc, res);
       }
@@ -203,6 +205,68 @@ export class ControlHttpServer {
       operationId: null, tokenJti: rc.tokenJti, confirmJti: null, result: effect.mode, detail: effect.detail,
     });
     return this.send(res, 200, { action, mode: effect.mode, detail: effect.detail });
+  }
+
+  private async handleWorldWarp(body: string, rc: RouteCtx, res: ServerResponse): Promise<void> {
+    const parsed = this.mustObject(body, res);
+    if (this.wasSent(res)) return;
+    if (Object.keys(parsed).length !== 2
+      || typeof parsed.worldId !== "string"
+      || !isValidWorldId(parsed.worldId)
+      || typeof parsed.floor !== "number"
+      || !Number.isSafeInteger(parsed.floor)
+      || parsed.floor < 1
+      || parsed.floor > MAX_ADMIN_FLOOR) {
+      return this.send(res, 400, { error: "world_warp_invalid" });
+    }
+    const result = await this.d.gameServer.warpWorld(parsed.worldId, parsed.floor);
+    await this.auditWorldAction("warp_world", parsed.worldId, parsed.floor, result, rc);
+    if (!result.isApplied) return this.sendWorldActionError(res, result.reason);
+    return this.send(res, 200, result);
+  }
+
+  private async handleForceOpenExit(body: string, rc: RouteCtx, res: ServerResponse): Promise<void> {
+    const parsed = this.mustObject(body, res);
+    if (this.wasSent(res)) return;
+    if (Object.keys(parsed).length !== 1
+      || typeof parsed.worldId !== "string"
+      || !isValidWorldId(parsed.worldId)) {
+      return this.send(res, 400, { error: "world_force_open_invalid" });
+    }
+    const result = await this.d.gameServer.forceOpenWorldExit(parsed.worldId);
+    await this.auditWorldAction("force_open_exit", parsed.worldId, null, result, rc);
+    if (!result.isApplied) return this.sendWorldActionError(res, result.reason);
+    return this.send(res, 200, result);
+  }
+
+  private async auditWorldAction(
+    action: "warp_world" | "force_open_exit",
+    worldId: string,
+    floor: number | null,
+    result: GameServerWorldActionResult,
+    rc: RouteCtx,
+  ): Promise<void> {
+    await this.d.audit.append({
+      at: new Date(this.d.clock.now()).toISOString(),
+      actor: rc.actor,
+      action,
+      releaseId: null,
+      prevReleaseId: null,
+      requestId: rc.requestId,
+      operationId: null,
+      tokenJti: rc.tokenJti,
+      confirmJti: null,
+      result: result.isApplied ? "applied" : result.reason,
+      detail: `world=${worldId}${floor === null ? "" : ` floor=${floor}`}`,
+    });
+  }
+
+  private sendWorldActionError(
+    res: ServerResponse,
+    reason: "world_not_found" | "pvp_forbidden" | "unavailable",
+  ): void {
+    const status = reason === "world_not_found" ? 404 : reason === "pvp_forbidden" ? 409 : 503;
+    this.send(res, status, { error: reason });
   }
 
   private async runOperation(res: ServerResponse, idemKey: string | null, run: () => Promise<OperationRecord>): Promise<void> {

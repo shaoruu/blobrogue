@@ -11,6 +11,7 @@ export async function suite(t: TestRunner): Promise<void> {
       try {
         loadConfig({
           NODE_ENV: "production",
+          BRC_GS_CONTROL_SECRET: "control-secret",
           ...(value === undefined ? {} : { BRC_GS_SYNTHETIC_TICKET_SECRET: value }),
         });
       } catch (error) {
@@ -22,9 +23,21 @@ export async function suite(t: TestRunner): Promise<void> {
     const production = loadConfig({
       NODE_ENV: "production",
       BRC_GS_SYNTHETIC_TICKET_SECRET: "configured-secret",
+      BRC_GS_CONTROL_SECRET: "control-secret",
     });
     t.check("production accepts configured probe secret",
       production.gsSyntheticTicketSecret === "configured-secret");
+    let controlMessage = "";
+    try {
+      loadConfig({
+        NODE_ENV: "production",
+        BRC_GS_SYNTHETIC_TICKET_SECRET: "configured-secret",
+      });
+    } catch (error) {
+      controlMessage = error instanceof Error ? error.message : String(error);
+    }
+    t.check("production requires a dedicated game-server control secret",
+      controlMessage === "game_server_control_secret_missing");
     const development = loadConfig({});
     t.check("development may omit secret for diagnostic-only liveness",
       development.gsSyntheticTicketSecret === null);

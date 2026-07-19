@@ -11,8 +11,11 @@ import { WebSocket } from "ws";
 
 import { redactFields } from "../redact.js";
 import type { GameServerLifecycleAction, GameServerProbe } from "../ports.js";
+import { mintGameServerControlToken } from "./gameServerControlAuth.js";
 import type {
   AdminEffectResult,
+  GameServerWorldAction,
+  GameServerWorldActionResult,
   GameServerStatus,
   LogQuery,
   LogRecord,
@@ -165,6 +168,7 @@ export interface HttpProbeConfig {
   wsUrl: string;
   logOutFile: string | null;
   syntheticTicketSecret: string | null;
+  controlSecret: string | null;
   logTailMax: number;
 }
 
@@ -219,6 +223,7 @@ export class HttpGameServerProbe implements GameServerProbe {
           id: typeof e.id === "string" ? e.id : "unnamed",
           players: typeof e.players === "number" && Number.isFinite(e.players) ? e.players : 0,
           tick: typeof e.tick === "number" && Number.isFinite(e.tick) ? e.tick : 0,
+          floor: typeof e.floor === "number" && Number.isSafeInteger(e.floor) ? e.floor : 0,
           names: Array.isArray(e.names) ? e.names.filter((n): n is string => typeof n === "string") : [],
           away: Array.isArray(e.away) ? e.away.filter((n): n is string => typeof n === "string") : [],
         });
@@ -227,7 +232,54 @@ export class HttpGameServerProbe implements GameServerProbe {
     }
     const h = await this.getJson(`${this.cfg.baseUrl}/healthz`);
     if (h === null) return [];
-    return [{ id: "gs-aggregate", players: numField(h, "players"), tick: 0, names: [], away: [] }];
+    return [{ id: "gs-aggregate", players: numField(h, "players"), tick: 0, floor: 0, names: [], away: [] }];
+  }
+
+  async mutateWorld(action: GameServerWorldAction): Promise<GameServerWorldActionResult> {
+    const secret = this.cfg.controlSecret;
+    if (secret === null) return { isApplied: false, reason: "unavailable" };
+    const body = JSON.stringify(action);
+    const token = mintGameServerControlToken(secret, action);
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 3000);
+    try {
+      const response = await fetch(`${this.cfg.baseUrl}/admin/world-action`, {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${token}`,
+          "content-type": "application/json",
+        },
+        body,
+        signal: ctrl.signal,
+      });
+      const text = await response.text();
+      if (text.length === 0) return { isApplied: false, reason: "unavailable" };
+      const result = JSON.parse(text) as ProbeJson;
+      if (result === null || typeof result !== "object" || Array.isArray(result)) {
+        return { isApplied: false, reason: "unavailable" };
+      }
+      if (result.isApplied === true
+        && typeof result.worldId === "string"
+        && typeof result.floor === "number"
+        && Number.isSafeInteger(result.floor)
+        && typeof result.players === "number"
+        && Number.isSafeInteger(result.players)) {
+        return {
+          isApplied: true,
+          worldId: result.worldId,
+          floor: result.floor,
+          players: result.players,
+        };
+      }
+      if (result.reason === "world_not_found" || result.reason === "pvp_forbidden") {
+        return { isApplied: false, reason: result.reason };
+      }
+      return { isApplied: false, reason: "unavailable" };
+    } catch {
+      return { isApplied: false, reason: "unavailable" };
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   async logs(q: LogQuery): Promise<LogRecord[]> {

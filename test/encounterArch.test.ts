@@ -9,11 +9,13 @@ import { generateDungeon, roomIdAt, neighbors, edgeBetween } from "../src/sim/du
 import {
   createWorld, loadFloorIntoWorld, spawnPlayerInWorld, isFloorCleared,
   restoreEncounterInWorld, completeEncounter, initSmokeEncounter, cloneEncounter,
-  encounterEqual, grantEncounterCompletionReward, isPvp,
+  encounterEqual, grantEncounterCompletionReward, isPvp, setPlayerKit,
+  adminWarpToFloorInWorld, adminForceOpenExitInWorld,
 } from "../src/sim/world.js";
 import { buildSnapshot, validateSnap, jsonCodec, PROTOCOL_VERSION, toEncounterWire } from "../src/net/protocol.js";
 import { diffSnapshot, applySnapshotDelta, snapshotToWire, type WorldLiveIds } from "../src/net/snapshotDelta.js";
 import { isBossFloor, bossKindForFloor } from "../src/sim/enemies.js";
+import { TILE } from "../src/sim/types.js";
 
 let passed = 0, failed = 0;
 const failures: string[] = [];
@@ -132,6 +134,55 @@ function encounterStateTests(): void {
   check("same-run reconnect restores exact encounter progress", encounterEqual(rejoin.encounter, frozen));
   check("co-op lock players unchanged", rejoin.encounterPlayers === host.encounterPlayers);
   check("pvp flag untouched (still coop)", !isPvp(rejoin) && rejoin.mode === "coop");
+
+  section("Admin rescue overrides preserve authority and player loadouts");
+  const rescue = createWorld(0x5E7E, 3, { isShared: true, skipLocalPlayer: true });
+  spawnPlayerInWorld(rescue, "ian");
+  spawnPlayerInWorld(rescue, "coop");
+  setPlayerKit(rescue, "ian", "bulwark");
+  const ian = rescue.players.get("ian")!;
+  ian.ownedWeapons = ["pistol", "sword", "halo"];
+  ian.weapon = "halo";
+  ian.ownedItemIds = ["it_dmg"];
+  ian.isDown = true;
+  ian.hp = 0;
+  const kitBefore = ian.kitId;
+  const weaponsBefore = JSON.stringify(ian.ownedWeapons);
+  const blessingsBefore = JSON.stringify(ian.ownedItemIds);
+  const warped = adminWarpToFloorInWorld(rescue, 55);
+  check("admin warp lands the authoritative room on floor 55", warped && rescue.floor === 55);
+  check("admin warp preserves kit, weapons, and blessings",
+    ian.kitId === kitBefore
+    && JSON.stringify(ian.ownedWeapons) === weaponsBefore
+    && JSON.stringify(ian.ownedItemIds) === blessingsBefore);
+  check("admin warp rescues downed players onto the fresh floor",
+    [...rescue.players.values()].every((player) => !player.isDown && player.hp > 0));
+  const spawnX = rescue.dungeon.spawn.x * TILE + TILE / 2;
+  const spawnY = rescue.dungeon.spawn.y * TILE + TILE / 2;
+  check("admin warp advances every player in the room together",
+    [...rescue.players.values()].every((player) => player.x === spawnX && player.y === spawnY));
+
+  if (rescue.encounter !== null) {
+    rescue.encounter.failed = true;
+    rescue.encounter.completed = false;
+  }
+  if (rescue.dungeon.edges.length > 0) rescue.dungeon.edges[0].locked = true;
+  const forced = adminForceOpenExitInWorld(rescue);
+  check("admin force-open clears stuck combat and opens the exit",
+    forced
+    && isFloorCleared(rescue)
+    && rescue.enemies.length === 0
+    && rescue.pendingSpawns.length === 0);
+  check("admin force-open resolves encounter and route blockers",
+    rescue.encounter?.completed === true
+    && rescue.encounter.failed === false
+    && rescue.dungeon.edges.every((edge) => !edge.locked));
+
+  const pvp = createWorld(0xA11C, 1, { mode: "pvp", isShared: true, skipLocalPlayer: true });
+  check("admin rescue overrides reject PVP worlds",
+    !adminWarpToFloorInWorld(pvp, 55)
+    && !adminForceOpenExitInWorld(pvp)
+    && pvp.floor === 1);
 }
 
 function wireTests(): void {
