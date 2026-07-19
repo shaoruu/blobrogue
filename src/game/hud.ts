@@ -365,6 +365,10 @@ export function renderTipInto(tip: HTMLElement, w: HudState["weapons"][number], 
   }
 }
 
+function slotAriaLabel(w: HudState["weapons"][number], index: number): string {
+  return `${w.name}, slot ${index + 1}${w.card.rarity === "common" ? "" : `, ${w.card.rarity}`}${w.isCurrent ? ", equipped" : ""}`;
+}
+
 // One hotbar slot: select key in the corner, weapon icon, name underneath. The inventory
 // is capped at MAX_OWNED_WEAPONS (<= 9 by contract), so EVERY slot that can exist carries
 // its number key — no unreachable slots. Fixed width so switching never resizes anything.
@@ -381,7 +385,7 @@ export function buildSlot(w: HudState["weapons"][number], index: number): HTMLEl
   slot.className = "hb-slot" + (w.isCurrent ? " on" : "") + (w.card.rarity !== "common" ? ` r-${w.card.rarity}` : "");
   slot.tabIndex = 0;
   slot.setAttribute("role", "button");
-  slot.setAttribute("aria-label", `${w.name}, slot ${index + 1}${w.card.rarity === "common" ? "" : `, ${w.card.rarity}`}${w.isCurrent ? ", equipped" : ""}`);
+  slot.setAttribute("aria-label", slotAriaLabel(w, index));
   const key = el("span", "", String(index + 1));
   key.className = "hb-key keycap";
   slot.appendChild(key);
@@ -1558,13 +1562,13 @@ export class Hud {
       this.mutatorsEl.classList.toggle("has-mutators", mutatorCopy.length > 0);
     }
     // Hotbar: one slot per owned weapon (icon + name + select key), equipped slot lit.
-    // Only rebuild when the set/order or selection changes (cheap string key). A rebuild
+    // Only rebuild when the set/order or card changes (cheap string key). A rebuild
     // mid-drag would strand the pointer capture, so a set/order change UNDER a live drag
     // (a drop resolving, an online correction) cancels the drag first — the drag's indices
     // are stale against authority and must never be committed. Tooltip stats ride the same
     // key so live mod changes (blessing picks, low-HP scalers) refresh the numbers.
     const slotsKey = s.weapons
-      .map((w) => (w.isCurrent ? "*" : "") + w.id + ":" + JSON.stringify(w.card))
+      .map((w) => w.id + ":" + JSON.stringify(w.card))
       .join("|");
     if (slotsKey !== this.prevSlotsKey) {
       if (this.drag) {
@@ -1604,6 +1608,11 @@ export class Hud {
         // HOVER/slot-focus affordance only (UI-designer spec); a switch must never flash it.
       }
     }
+    this.slotEls().forEach((slot, i) => {
+      const weapon = s.weapons[i];
+      slot.classList.toggle("on", !!weapon?.isCurrent);
+      if (weapon) slot.setAttribute("aria-label", slotAriaLabel(weapon, i));
+    });
     // The interaction hint matters once there is something to switch/reorder/drop. At the
     // cap it leads with the state itself — a full bar is a fact the player must act on
     // (swap or drop), never a silent no-op.
