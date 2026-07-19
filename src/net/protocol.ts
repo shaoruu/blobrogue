@@ -22,7 +22,7 @@ import type {
 } from "../sim/types.js";
 import type { EnemyTier, ShopMode } from "../sim/balance.js";
 import type { PlayerMods } from "../sim/items.js";
-import { PROP_RADIUS } from "../sim/constants.js";
+import { PROP_RADIUS, WEAPON_PICKUP_RADIUS } from "../sim/constants.js";
 import { WEAPONS } from "../sim/weapons.js";
 import { ENEMY_ARCHETYPES, isBossKind } from "../sim/enemies.js";
 import type { SimEvent } from "../sim/events.js";
@@ -2260,13 +2260,13 @@ export function effectFromWire(w: EffectWire): Effect {
 }
 
 // Radius reconstructed from kind so the wire stays tiny. Matches the sim's placement radii
-// (constants.PROP_RADIUS for props; pickups 13/16; chests 16/18) so client collision +
+// (constants for props/weapons; pickups 13 otherwise; chests 16/18) so client collision +
 // pickup ranges agree with the server.
 export function propFromWire(w: PropWire): Prop {
   return { id: w.id, kind: w.kind, x: w.x, y: w.y, radius: PROP_RADIUS, hp: 1, dead: w.brk >= 0, breakT: w.brk < 0 ? undefined : w.brk };
 }
 export function pickupFromWire(w: PickupWire): Pickup {
-  const radius = w.kind === "weapon" ? 16 : 13;
+  const radius = w.kind === "weapon" ? WEAPON_PICKUP_RADIUS : 13;
   return {
     id: w.id, kind: w.kind, x: w.x, y: w.y, radius, weapon: w.wpn,
     value: w.val < 0 ? undefined : w.val, isBossChoice: w.bch || undefined,

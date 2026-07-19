@@ -590,9 +590,12 @@ function wireGates(): void {
   check("toPickupWire hides wpn and flags myst", wire.wpn === null && wire.myst);
   const back = pickupFromWire(wire);
   check("pickupFromWire keeps the mystery flag without fabricating an identity",
-    back.isMystery === true && back.weapon === null && back.twist === undefined);
+    back.isMystery === true && back.weapon === null && back.twist === undefined
+    && back.radius === C.WEAPON_PICKUP_RADIUS);
   const identified: Pickup = { id: 8, kind: "weapon", x: 1, y: 2, radius: C.WEAPON_PICKUP_RADIUS, weapon: "reaper" };
   check("an identified legendary rides the wire openly", toPickupWire(identified).wpn === "reaper");
+  check("weapon pickup radius reconstructs from the shared constant without a wire field",
+    pickupFromWire(toPickupWire(identified)).radius === C.WEAPON_PICKUP_RADIUS);
 
   section("wire: a full snapshot with legendaries + mysteries encodes/decodes cleanly");
   const w = createWorld(0x3A11, 1, { isSandbox: true });
