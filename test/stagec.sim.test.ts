@@ -573,7 +573,7 @@ function blessingSafetyTests(): void {
   section("blessing safety: a player mid-pick is paused and cannot be damaged");
   {
     const w = createWorld(0xB1E55, 1, { isShared: true, skipLocalPlayer: true });
-    const { a } = partyAtExit(w);
+    const { a, b } = partyAtExit(w);
     const ev: SimEvent[] = [];
     stepWorldPhase(w, DT, ev);
     check("offers raised at the cleared exit", ev.filter((e) => e.t === "offerBlessing").length === 2);
@@ -625,8 +625,12 @@ function blessingSafetyTests(): void {
     // The encounter snapshot the floor would carry had it been built with both present
     // (P is snapshotted at floor build; these harness worlds spawn after createWorld).
     w.encounterPlayers = 2;
-    // The boss chest (dropped on the boss kill; the floor is already cleared by then). A
-    // real boss drop carries its signature weapon, which seeds the min(P+1,5) personal
+    // Full hotbars keep the 36px pedestals standing so the complete generated set is observable.
+    for (const id of ["shotgun", "railgun", "tesla", "smg", "cannon"] as const) {
+      acquireWeaponInWorld(w, a.id, id);
+      acquireWeaponInWorld(w, b.id, id);
+    }
+    // A real boss drop carries its signature weapon, which seeds the min(P+1,5) personal
     // choice pedestals on open (gate §4 — see openChest/updatePickups).
     w.chests.push({ id: w.nextChestId++, kind: "boss", x: a.x, y: a.y, radius: 18, opened: false, weapon: "mortar" });
     const ev: SimEvent[] = [];
