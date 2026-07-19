@@ -200,6 +200,11 @@ export interface FaultlinkSpec {
   echoRatePerSec: number; // hard clamp on echoes per second (aligns the global proc clamp)
 }
 
+export interface GhostLaneSpec {
+  bodyOffset: number;
+  damageMult: number;
+}
+
 export const WEAPON_CYCLE_IDS = ["sluicegate", "oddsmaker"] as const;
 export type WeaponCycleId = typeof WEAPON_CYCLE_IDS[number];
 export type WeaponCycles = Record<WeaponCycleId, number>;
@@ -259,6 +264,7 @@ export interface Weapon {
   parry?: ParrySpec;
   relight?: RelightSpec;
   faultlink?: FaultlinkSpec;
+  ghostLane?: GhostLaneSpec;
   // Legendary signature mechanics — one per legendary, never shared, never a stat reskin.
   // Each stamps one field onto its bullets (or gates the trigger pull, for the Midas) and
   // switches an isolated branch in the update loop, exactly like the Tier B fields above.
@@ -528,11 +534,13 @@ export const WEAPONS: Record<WeaponId, Weapon> = {
     basePierce: 5,
     special: "A slow saw disc shreds through a whole line of bodies.",
   },
-  // HOSE A CROWD WIDE: a twin-pellet full-auto that fronts a spread across a soft crowd —
-  // wider and faster than the Hornet, softer per hit than the Triplet.
+  // STEER A SECOND LANE: the main pellet follows aim while one plain ghost lane stays
+  // fixed to the player's shoulder, rewarding body orientation instead of fan coverage.
   scrapper: {
-    id: "scrapper", name: "Scrapper", rarity: "common", fireCd: 0.12, speed: 600, life: 0.85,
-    damage: 1.0, pellets: 2, spread: 0.2, bulletRadius: 4, color: "#b6d36a", muzzle: 2,
+    id: "scrapper", name: "Shoulderfire", rarity: "common", fireCd: 0.14, speed: 600, life: 0.85,
+    damage: 1.3, pellets: 1, spread: 0, bulletRadius: 4, color: "#b6d36a", muzzle: 2,
+    ghostLane: { bodyOffset: 80 * Math.PI / 180, damageMult: 0.6 },
+    special: "GHOST LANE — aim the main round while your body steers a second lane at 60% damage.",
   },
   // WORK THE CORNERS UP CLOSE: a bouncing buckshot — the fan banks off walls, so a corner
   // shot fills a room. A close-range ricochet pack tool, distinct from the single-round banks.

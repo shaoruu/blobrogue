@@ -1,8 +1,8 @@
 // Content-wave coverage: the eight new guns and ten new blessings, exercised on the pure
 // authoritative sim. Locks (1) every new weapon carries a COMPLETE contract (WEAPONS +
 // ARSENAL + resonance + KB/knockback records + pickup pool + sprite hook), (2) each new
-// weapon's signature behavior actually resolves through a real trigger pull (pierce, twin
-// pellets, bounce, shock, chill, blast+burn, homing, and the legendary's two-stage
+// weapon's signature behavior actually resolves through a real trigger pull (pierce, ghost
+// lane, bounce, shock, chill, blast+burn, homing, and the legendary's two-stage
 // implosion→nova), (3) every new blessing applies cleanly at all three levels with finite,
 // capped mods and a real effect, and (4) the new content stays DETERMINISTIC (byte-stable
 // replay, no wall-clock / Math.random in the sim path).
@@ -89,12 +89,10 @@ function contractGates(): void {
     check(`${id} resolves a non-empty display card`,
       card.role.length > 0 && card.impact.band.length > 0 && card.cadence.band.length > 0 && card.reach.band.length > 0);
   }
-  // Every new weapon with a signature MECHANIC carries canonical `special` copy (the pure-
-  // data Scrapper is a plain twin-pellet stream, like the Triplet — no special, by design).
-  for (const id of NEW_WEAPONS.filter((w) => w !== "scrapper")) {
+  // Every new weapon with a signature MECHANIC carries canonical `special` copy.
+  for (const id of NEW_WEAPONS) {
     check(`${id} carries a signature 'special' tooltip line`, typeof WEAPONS[id].special === "string" && WEAPONS[id].special!.length > 8);
   }
-  check("scrapper is intentionally pure-data (no special mechanic string)", WEAPONS.scrapper.special === undefined);
 }
 
 // ---- 2. signature behaviors ----
@@ -111,14 +109,24 @@ function behaviorGates(): void {
     check("cleaver's disc damages an entire line from one volley", line.every((e) => e.hp < 40),
       line.map((e) => e.hp.toFixed(0)).join("/"));
   }
-  // Scrapper: a twin-pellet volley (two friendly rounds per shot).
+  // Shoulderfire: one aimed round plus a body-steered ghost lane.
   {
     const { w, p } = arena(0x5C2A);
     acquireWeaponInWorld(w, LOCAL_ID, "scrapper");
+    p.facing = 1;
     p.fireCd = 0;
     fire(w, p, 0);
-    check("scrapper fires exactly two pellets per shot", w.bullets.filter((b) => b.friendly).length === 2,
-      `pellets=${w.bullets.filter((b) => b.friendly).length}`);
+    const bullets = w.bullets.filter((bullet) => bullet.friendly);
+    const main = bullets.find((bullet) => bullet.isGhostLane !== true);
+    const ghost = bullets.find((bullet) => bullet.isGhostLane === true);
+    check("Shoulderfire fires one aimed round and one body-steered ghost",
+      bullets.length === 2
+      && main !== undefined
+      && ghost !== undefined
+      && Math.abs(Math.atan2(main.vy, main.vx)) < 1e-9
+      && Math.abs(Math.atan2(ghost.vy, ghost.vx) - 80 * Math.PI / 180) < 1e-9
+      && Math.abs(ghost.damage - main.damage * 0.6) < 1e-9,
+      `bullets=${bullets.length}`);
   }
   // Skipper: buckshot that banks off a wall. Fire point-blank into the west wall so the
   // fan actually reaches geometry and banks (the mechanic, not just the flag).

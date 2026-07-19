@@ -132,7 +132,7 @@ section("catalog v2, typed hooks, and additive migration");
   check("Wave B remains a valid additive catalog",
     CURRENT_CONTENT_CATALOG_VERSION === WAVE_C_CONTENT_CATALOG_VERSION
     && contentCatalogFor(WAVE_B_CONTENT_CATALOG_VERSION).pickupWeapons.length === 45
-    && contentCatalogFor(WAVE_B_CONTENT_CATALOG_VERSION).normalBlessingIds.length === 39);
+    && contentCatalogFor(WAVE_B_CONTENT_CATALOG_VERSION).normalBlessingIds.length === 41);
   check("catalog 1 (Wave A) arrays are never mutated by Wave B",
     contentCatalogFor(WAVE_A_CONTENT_CATALOG_VERSION).pickupWeapons.length === 41
     && WAVE_B_WEAPONS.every((id) => !contentCatalogFor(WAVE_A_CONTENT_CATALOG_VERSION).pickupWeapons.includes(id))

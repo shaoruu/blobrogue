@@ -84,8 +84,8 @@ export const WEAPON_KB: Record<WeaponId, number> = {
   // The vortex's KB is INWARD (implodeBullet aims it at the impact point) — this number
   // is the pull strength, resisted exactly like ordinary knockback.
   reaper: 5, swarm: 3, midas: 4, phase: 6, vortex: 22,
-  // Content wave. The Cleaver's heavy disc shoves hard; the Skipper buckshot and Scrapper
-  // stream stay light; the Firebomb blast and Singularity implosion (inward, like vortex)
+  // Content wave. The Cleaver's heavy disc shoves hard; the Skipper buckshot and Shoulderfire
+  // lanes stay light; the Firebomb blast and Singularity implosion (inward, like vortex)
   // carry their own impulse.
   cleaver: 10, scrapper: 2, skipper: 4, arcbolt: 5, cryobolt: 3, firebomb: 6, tracker: 3,
   singularity: 20,

@@ -5395,29 +5395,26 @@ function armSideChannelFromDash(w: WorldState, p: PlayerSim, previousAim: number
   p.sideChannelArmedT = p.mods.sideChannelArmedWindow;
 }
 
-function spawnSideChannelGhost(
+function spawnPlainGhostLane(
   w: WorldState,
   p: PlayerSim,
   parent: Bullet | undefined,
-  ev: SimEvent[],
-): void {
-  const aim = p.sideChannelArmedAim;
+  aim: number,
+  normalDamageMult: number,
+  bossDamageMult: number,
+  isSideChannelGhost: boolean,
+): Bullet | undefined {
   if (parent === undefined
-    || parent.isSideChannelGhost === true
-    || aim === null
-    || p.sideChannelArmedT <= 0
-    || p.sideChannelIcdT > 0
-    || !hasActiveSideChannel(w, p)) return;
-  const normalDamageMult = p.mods.sideChannelNormalDamageMult;
-  const bossDamageMult = p.mods.sideChannelBossDamageMult;
-  if (normalDamageMult <= 0 || bossDamageMult <= 0) return;
+    || parent.isGhostLane === true
+    || normalDamageMult <= 0
+    || bossDamageMult <= 0) return undefined;
   const speed = Math.hypot(parent.vx, parent.vy);
   const x = p.x + Math.cos(aim) * 18;
   const y = p.y + Math.sin(aim) * 18;
   const parentDirectDamage = parent.isCrit
     ? parent.damage / (parent.critX ?? 1)
     : parent.damage;
-  const parentBossCoef = parent.bossCoef ?? WEAPON_BOSS_COEF[p.weapon] ?? 1;
+  const weaponBossCoef = WEAPON_BOSS_COEF[p.weapon] ?? 1;
   const ghost: Bullet = {
     x,
     y,
@@ -5433,20 +5430,65 @@ function spawnSideChannelGhost(
     hitList: null,
     isCrit: false,
     critX: 1,
-    bossCoef: parentBossCoef
-      * bossDamageMult
-      / normalDamageMult,
+    bossCoef: weaponBossCoef * bossDamageMult / normalDamageMult,
     fx: parent.fx,
     enemyHits: 0,
-    isSideChannelGhost: true,
+    isGhostLane: true,
+    isSideChannelGhost: isSideChannelGhost || undefined,
     bornTick: w.tick,
     lagRewind: p.rewindTicks,
   };
   w.bullets.push(ghost);
+  return ghost;
+}
+
+function spawnWeaponGhostLane(
+  w: WorldState,
+  p: PlayerSim,
+  wep: Weapon,
+  parent: Bullet | undefined,
+): void {
+  const lane = wep.ghostLane;
+  if (lane === undefined) return;
+  const bodyAim = p.facing >= 0 ? 0 : Math.PI;
+  const aim = normalizeAngle(bodyAim + lane.bodyOffset * p.facing);
+  spawnPlainGhostLane(w, p, parent, aim, lane.damageMult, lane.damageMult, false);
+}
+
+function spawnSideChannelGhost(
+  w: WorldState,
+  p: PlayerSim,
+  parent: Bullet | undefined,
+  ev: SimEvent[],
+): void {
+  const aim = p.sideChannelArmedAim;
+  if (aim === null
+    || p.sideChannelArmedT <= 0
+    || p.sideChannelIcdT > 0
+    || !hasActiveSideChannel(w, p)) return;
+  const normalDamageMult = p.mods.sideChannelNormalDamageMult;
+  const bossDamageMult = p.mods.sideChannelBossDamageMult;
+  const ghost = spawnPlainGhostLane(
+    w,
+    p,
+    parent,
+    aim,
+    normalDamageMult,
+    bossDamageMult,
+    true,
+  );
+  if (ghost === undefined) return;
   p.sideChannelArmedAim = null;
   p.sideChannelArmedT = 0;
   p.sideChannelIcdT = p.mods.sideChannelIcd;
-  ev.push({ t: "blessingProc", pid: p.id, item: "side_channel", phase: "ghost", x, y });
+  ev.push({
+    t: "blessingProc",
+    pid: p.id,
+    item: "side_channel",
+    phase: "ghost",
+    x: ghost.x,
+    y: ghost.y,
+  });
 }
 
 function isBossGradeKind(e: Enemy): boolean {
@@ -6195,6 +6237,7 @@ function updateShooting(w: WorldState, p: PlayerSim, input: InputCmd, dt: number
       b.lagRewind = p.rewindTicks;
       w.bullets.push(b);
     }
+    spawnWeaponGhostLane(w, p, wep, fired[0]);
     spawnSideChannelGhost(w, p, fired[0], ev);
     // Margin Call stores exactly one payload class off ANY other weapon's committed shot.
     captureMarginStore(p, wep, spec);
@@ -7747,7 +7790,7 @@ function updateEnemies(w: WorldState, dt: number, ev: SimEvent[]): void {
           damage: strikeDmg, isCrit: b.isCrit, critX: b.critX ?? 1, bossCoef: b.bossCoef ?? 1, puffX: sweptHit.x, puffY: sweptHit.y, kbDirX: b.vx, kbDirY: b.vy,
           burn: b.burn, chill: b.chill, shock: b.shock, isMelee: false,
           isPersistent: b.isPersistent,
-          isPlainGhost: b.isSideChannelGhost,
+          isPlainGhost: b.isGhostLane,
           ownerId: b.owner, fxWeapon: b.fx ?? null,
         }, ev);
         // Red Pen ink marks the body it hits (refreshes the mark + its snap-scaling damage).

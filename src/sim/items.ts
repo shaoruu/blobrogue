@@ -249,6 +249,34 @@ export const ITEMS: readonly ItemDef[] = [
     },
   },
   {
+    id: "split_shot", name: "Split Shot",
+    descs: [
+      "Fire one extra projectile per shot for 8% less damage and wider spread.",
+      "Fire two extra projectiles per shot for 15% less damage and wider spread.",
+      "Fire two extra projectiles per shot for 15% less damage, with a tighter spread than level 2.",
+    ],
+    glyph: "Y", tint: "#5ab6ff", rarity: "uncommon",
+    apply: (m, l) => {
+      m.extraPellets += lv([1, 2, 2], l);
+      m.damageMult -= lv([0.08, 0.15, 0.15], l);
+      m.spreadAdd += lv([0.14, 0.20, 0.14], l);
+    },
+  },
+  {
+    id: "scattergun", name: "Scattergun",
+    descs: [
+      "Fire two extra projectiles per shot for 15% less damage and much wider spread.",
+      "Fire three extra projectiles per shot for 20% less damage and much wider spread.",
+      "Fire three extra projectiles per shot for 22% less damage, with a tighter spread than level 2.",
+    ],
+    glyph: "W", tint: "#ffb43b", rarity: "uncommon",
+    apply: (m, l) => {
+      m.extraPellets += lv([2, 3, 3], l);
+      m.damageMult -= lv([0.15, 0.20, 0.22], l);
+      m.spreadAdd += lv([0.24, 0.28, 0.24], l);
+    },
+  },
+  {
     id: "full_metal", name: "Full Metal",
     descs: ["Bullets punch through +1 enemy.", "Bullets punch through +2 enemies.", "Bullets punch through +3 enemies."],
     glyph: "P", tint: "#e8e0c8", rarity: "uncommon",
@@ -682,9 +710,7 @@ export const ITEMS: readonly ItemDef[] = [
 // see shopSlotPriceFor's dashCorePriceMult).
 export const CORE_ITEM_IDS: readonly string[] = ["core_damage", "core_fire", "core_move", "core_dash"];
 
-const LEGACY_ITEM_ID_MIGRATIONS: Readonly<Record<string, string>> = {
-  split_shot: "side_channel",
-};
+const LEGACY_ITEM_ID_MIGRATIONS: Readonly<Record<string, string>> = {};
 
 export function canonicalItemId(id: string): string {
   return LEGACY_ITEM_ID_MIGRATIONS[id] ?? id;
