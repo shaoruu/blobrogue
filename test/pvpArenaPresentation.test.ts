@@ -319,6 +319,10 @@ async function main(): Promise<void> {
   }], 2, true, {
     worldId: "pvp:room:ABCD",
     roster,
+    identities: new Map([
+      ["p1", { name: "Self", colorIndex: 1 }],
+      ["p2", { name: "Rival", colorIndex: 2 }],
+    ]),
   }));
   game.tick(FIXED_DT);
   canvasLog.meleeTrailFillCalls = 0;
