@@ -142,7 +142,7 @@ export async function suite(t: TestRunner): Promise<void> {
       const loadoutWarp = await probe.mutateWorld({
         action: "warp",
         worldId: room.id,
-        floor: 56,
+        floor: 60,
         loadouts: [
           {
             player: "ian-account",
@@ -168,7 +168,7 @@ export async function suite(t: TestRunner): Promise<void> {
       const warpedCoop = room.state.players.get("coop")!;
       t.check("signed warp applies distinct co-op hotbars and kits",
         loadoutWarp.isApplied
-        && room.state.floor === 56
+        && room.state.floor === 60
         && warpedIan.kitId === "phantom"
         && JSON.stringify(warpedIan.ownedWeapons) === JSON.stringify([
           "pistol", "shotgun", "tesla", "nailer", "margin_call", "red_pen",
