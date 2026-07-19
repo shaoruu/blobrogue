@@ -88,7 +88,12 @@ import type { WaveEventId } from "./waveSpec.js";
 import { ARENA_SALVO, ARENA_SHOVE, ARENA_SLIP, PVP, HEARTH, WEATHER, PVP_WEATHER_CARDINALS, pvpDraftSeed, pvpSpawnHardGraceTicks } from "../sim/pvp.js";
 import type { ArenaUltKind, MatchPhase } from "../sim/pvp.js";
 import { ShockwaveField, ScreenFlash, AmbienceField } from "./vfx.js";
-import { ARENA_ULT_HUE, ArenaUltVfx } from "./arenaUltVfx.js";
+import {
+  ARENA_SALVO_CORE,
+  ARENA_SALVO_GLOW,
+  ARENA_ULT_HUE,
+  ArenaUltVfx,
+} from "./arenaUltVfx.js";
 import type { ArenaUltCastView, ArenaUltMoment } from "./arenaUltVfx.js";
 import { LightingRenderer } from "./lighting.js";
 import type { StaticLightSpec } from "./lighting.js";
@@ -201,7 +206,7 @@ export interface DevSnapshot {
   props: number;
 }
 
-interface RemoteTracer { x: number; y: number; angle: number; life: number; color: string; len?: number; isArc?: boolean; }
+interface RemoteTracer { x: number; y: number; angle: number; life: number; color: string; len?: number; width?: number; isArc?: boolean; }
 interface Corpse { sprite: SpriteName; x: number; y: number; size: number; facing: number; t: number; dur: number; }
 // Per-teammate render bookkeeping: the walk/idle anim plus the dash-FX clocks (edge
 // detection for the takeoff juice, spacing for the afterimage trail and the dust motes).
@@ -2562,6 +2567,20 @@ export class Game {
     if (!isNear) return;
     switch (moment) {
       case "salvo": {
+        const cos = Math.cos(cast.aim);
+        const sin = Math.sin(cast.aim);
+        for (let i = 0; i < ARENA_SALVO.shots; i++) {
+          const side = (i - (ARENA_SALVO.shots - 1) / 2) * 6;
+          this.remoteTracers.push({
+            x: cast.x + cos * 18 - sin * side,
+            y: cast.y + sin * 18 + cos * side,
+            angle: cast.aim,
+            life: 0.2,
+            color: ARENA_ULT_HUE.salvo,
+            len: ARENA_SALVO.rangePx - 18,
+            width: 15,
+          });
+        }
         if (cast.isLocal) {
           const kick = 9;
           this.arenaBurstFreeze = Math.max(this.arenaBurstFreeze, 0.035);
@@ -2572,7 +2591,7 @@ export class Game {
           this.arenaBurstTrauma += 0.1;
         }
         this.lighting.addPulse(cast.x, cast.y, 150, 0.8 * settings.flashFactor, ARENA_ULT_HUE.salvo, 0.24);
-        this.flashScreen(205, 248, 255, 0.11, 4);
+        this.flashScreen(232, 255, 255, 0.11, 4);
         break;
       }
       case "triage":
@@ -2594,10 +2613,16 @@ export class Game {
           settings.flashFactor,
         );
         const scale = this.burstScale();
-        this.spawnDustRing(cast.x, cast.y, ARENA_SHOVE.reachPx, Math.max(3, Math.round(10 * scale)), "#a9b6c5");
+        this.spawnDustRing(
+          cast.x,
+          cast.y,
+          ARENA_SHOVE.reachPx,
+          Math.max(3, Math.round(10 * scale)),
+          ARENA_ULT_HUE.shove,
+        );
         this.arenaBurstFreeze = Math.max(this.arenaBurstFreeze, 0.055);
         this.arenaBurstTrauma += 0.34;
-        this.flashScreen(205, 233, 255, 0.12, 4.2);
+        this.flashScreen(234, 243, 255, 0.12, 4.2);
         break;
       }
       case "slip": {
@@ -9636,13 +9661,26 @@ export class Game {
         }
       }
       ctx.save();
-      ctx.globalAlpha = Math.max(0, tr.life / 0.12) * 0.8;
-      ctx.strokeStyle = tr.color;
-      ctx.lineWidth = 2;
+      const alpha = Math.min(1, Math.max(0, tr.life / 0.12)) * 0.8;
+      const width = tr.width ?? 2;
+      ctx.globalAlpha = alpha;
+      ctx.strokeStyle = width > 2 ? ARENA_SALVO_GLOW : tr.color;
+      ctx.lineWidth = width > 2 ? width + 8 : width;
       ctx.beginPath();
       ctx.moveTo(x, y);
       ctx.lineTo(x + Math.cos(tr.angle) * len, y + Math.sin(tr.angle) * len);
       ctx.stroke();
+      if (width > 2) {
+        ctx.globalCompositeOperation = "lighter";
+        ctx.globalAlpha = alpha * 0.9;
+        ctx.strokeStyle = tr.color;
+        ctx.lineWidth = width;
+        ctx.stroke();
+        ctx.globalAlpha = Math.min(1, alpha * 1.2);
+        ctx.strokeStyle = ARENA_SALVO_CORE;
+        ctx.lineWidth = Math.max(2, width * 0.32);
+        ctx.stroke();
+      }
       ctx.restore();
     }
   }

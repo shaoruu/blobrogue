@@ -4,17 +4,20 @@ import type { ArenaUltKind } from "../sim/pvp.js";
 import type { Sprites } from "./assets.js";
 
 export const ARENA_ULT_HUE: Record<ArenaUltKind, string> = {
-  salvo: "#65e7ff",
+  salvo: "#7fe0ff",
   triage: "#7fe6a8",
-  shove: "#8fb8dc",
-  slip: "#c45cff",
+  shove: "#ddeeff",
+  slip: "#9a5cff",
 };
 
+export const ARENA_SALVO_CORE = "#e8ffff";
+export const ARENA_SALVO_GLOW = "#3fb9d6";
+
 const ARENA_ULT_CORE: Record<ArenaUltKind, string> = {
-  salvo: "#ffffff",
-  triage: "#fff4d6",
-  shove: "#f5fbff",
-  slip: "#ffd8f5",
+  salvo: ARENA_SALVO_CORE,
+  triage: "#eafff0",
+  shove: "#eaf3ff",
+  slip: "#c98bff",
 };
 
 const MAX_CASTS = 8;
@@ -541,7 +544,7 @@ export class ArenaUltVfx {
       const charge = 18 + k * 28;
       ctx.globalCompositeOperation = "lighter";
       ctx.globalAlpha = 0.25 + k * 0.55;
-      ctx.fillStyle = ARENA_ULT_HUE.salvo;
+      ctx.fillStyle = ARENA_SALVO_GLOW;
       ctx.beginPath();
       ctx.arc(x + cos * 20, y + sin * 20, charge, 0, TAU);
       ctx.fill();
@@ -551,40 +554,20 @@ export class ArenaUltVfx {
     const elapsed = cast.t - cast.tell;
     if (elapsed > ARENA_SALVO.volleySec) return;
     ctx.globalCompositeOperation = "lighter";
-    for (let i = 0; i < ARENA_SALVO.shots; i++) {
-      const laneStart = i * 0.02;
-      const laneAge = elapsed - laneStart;
-      const isIgnited = laneAge >= 0;
-      const pulse = isIgnited ? 0.78 + 0.22 * Math.sin(laneAge * 30) : 0.18;
-      const side = (i - (ARENA_SALVO.shots - 1) / 2) * 6;
-      const sx = x - sin * side;
-      const sy = y + cos * side;
-      ctx.globalAlpha = 0.55 * pulse;
-      ctx.strokeStyle = ARENA_ULT_HUE.salvo;
-      ctx.lineWidth = 15;
-      ctx.beginPath();
-      ctx.moveTo(sx + cos * 18, sy + sin * 18);
-      ctx.lineTo(sx + cos * ARENA_SALVO.rangePx, sy + sin * ARENA_SALVO.rangePx);
-      ctx.stroke();
-      ctx.globalAlpha = 0.96 * pulse;
-      ctx.strokeStyle = ARENA_ULT_CORE.salvo;
-      ctx.lineWidth = 5;
-      ctx.stroke();
-      if (this.salvoTint !== null) {
-        ctx.globalAlpha = 0.65 * pulse;
-        ctx.save();
-        ctx.translate(sx, sy);
-        ctx.rotate(cast.aim);
-        ctx.drawImage(this.salvoTint, 12, -9, ARENA_SALVO.rangePx, 18);
-        ctx.restore();
-      }
-    }
     const bloom = Math.max(0, 1 - elapsed / 0.2);
     ctx.globalAlpha = bloom * 0.8;
     ctx.fillStyle = ARENA_ULT_CORE.salvo;
     ctx.beginPath();
     ctx.arc(x + cos * 20, y + sin * 20, 12 + bloom * 24, 0, TAU);
     ctx.fill();
+    if (this.salvoTint !== null && bloom > 0) {
+      ctx.globalAlpha = bloom * 0.6;
+      ctx.save();
+      ctx.translate(x + cos * 20, y + sin * 20);
+      ctx.rotate(cast.aim);
+      ctx.drawImage(this.salvoTint, -36, -12, 72, 24);
+      ctx.restore();
+    }
   }
 
   private renderTriageWorld(
