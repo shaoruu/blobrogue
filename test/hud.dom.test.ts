@@ -459,6 +459,8 @@ function hudIntegrationTests(): void {
     swapSlots.length === MAX_OWNED_WEAPONS
     && swapSlots.map((b) => b.querySelector(".hs-key")?.textContent).join(",") === Array.from({ length: MAX_OWNED_WEAPONS }, (_, i) => String(i + 1)).join(","));
   check("swap buttons say what they trade away", swapSlots[2].getAttribute("aria-label") === "Swap out tesla, slot 3");
+  check("the prompt names the one-tap E swap and its equipped-slot behavior",
+    swapEl.querySelector(".hs-hint")?.textContent === "E REPLACES EQUIPPED \u00b7 CLICK ANOTHER SLOT \u00b7 ESC LEAVES IT");
   swapSlots[2].dispatchEvent(new dom.window.Event("click", { bubbles: true, cancelable: true }));
   check("clicking a slot button routes the swap action with its index", swapCalls.join(",") === "2");
   const leave = swapEl.querySelector<HTMLButtonElement>(".hs-leave")!;
