@@ -79,18 +79,6 @@ try {
     restartedStore.isRetired("room:ABCD:g1", 2000 + 10 * 60_000),
   );
 
-  const preservedPath = join(directory, "preserved-admission.json");
-  const preservedFirst = new GenerationAdmissionStore(preservedPath, 1000);
-  preservedFirst.markActive("room:SAVE:g1", 1000);
-  const preservedRestart = new GenerationAdmissionStore(
-    preservedPath,
-    2000,
-    new Set(["room:SAVE:g1"]),
-  );
-  check("a snapshotted active generation stays admissible across restart",
-    !preservedRestart.isRetired("room:SAVE:g1", 2000)
-    && preservedRestart.recoveredActiveWorldIds().length === 0);
-
   const serverPath = join(directory, "server-admission.json");
   const first = await startTestServer({ generationStatePath: serverPath });
   const live = new Bot({

@@ -177,9 +177,7 @@ export type GameServerWorldAction =
     floor: number;
     loadouts?: GameServerPlayerLoadout[];
   }
-  | { action: "force-open-exit"; worldId: string }
-  | { action: "snapshot"; worldId: string }
-  | { action: "restore"; worldId: string };
+  | { action: "force-open-exit"; worldId: string };
 
 export type GameServerWorldActionResult =
   | {
@@ -187,19 +185,11 @@ export type GameServerWorldActionResult =
     worldId: string;
     floor: number;
     players: number;
-    fidelity?: "build+floor";
-    snapshotPath?: string;
     loadouts?: GameServerPlayerLoadoutResult[];
   }
   | {
     isApplied: false;
-    reason:
-      | "world_not_found"
-      | "pvp_forbidden"
-      | "snapshot_not_found"
-      | "snapshot_unavailable"
-      | "world_active"
-      | "unavailable";
+    reason: "world_not_found" | "pvp_forbidden" | "unavailable";
   };
 
 // A single redacted structured log line. Values are primitives only (already sanitized).

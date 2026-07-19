@@ -18,7 +18,6 @@ export interface ServerConfig {
   receiptEndpoint: string | null;
   admissionEndpoint: string | null;
   generationStatePath: string | null;
-  runSnapshotDir: string | null;
   isProd: boolean;
   // Trusted reverse-proxy CIDRs. Only when the immediate peer matches one of these do we read the
   // real client IP from X-Forwarded-For / X-Real-IP (P0-4). Behind nginx this is loopback;
@@ -78,7 +77,6 @@ function intEnv(env: NodeJS.ProcessEnv, key: string, def: number, min: number, m
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
-  const isProd = env.NODE_ENV === "production";
   const auth = authConfigFromEnv(env);
   const controlSecret = env.GS_CONTROL_SECRET && env.GS_CONTROL_SECRET.length > 0
     ? env.GS_CONTROL_SECRET
@@ -105,10 +103,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     generationStatePath: env.GS_GENERATION_STATE_PATH && env.GS_GENERATION_STATE_PATH.length > 0
       ? env.GS_GENERATION_STATE_PATH
       : null,
-    runSnapshotDir: env.GS_RUN_SNAPSHOT_DIR && env.GS_RUN_SNAPSHOT_DIR.length > 0
-      ? env.GS_RUN_SNAPSHOT_DIR
-      : isProd ? "/var/lib/blobrogue/run-snapshots" : null,
-    isProd,
+    isProd: env.NODE_ENV === "production",
     trustedProxies: (env.GS_TRUSTED_PROXIES ?? "127.0.0.1/32,::1/128").split(",").map((s) => s.trim()).filter((s) => s.length > 0),
     maxConnsPerIp: intEnv(env, "GS_MAX_CONNS_PER_IP", 16, 1, 10000),
     maxMsgsPerSec: intEnv(env, "GS_MAX_MSGS_PER_SEC", 120, 10, 100000),

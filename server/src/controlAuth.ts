@@ -12,14 +12,12 @@ export type ControlWorldAction =
     floor: number;
     loadouts?: AdminPlayerLoadout[];
   }
-  | { action: "force-open-exit"; worldId: string }
-  | { action: "snapshot"; worldId: string }
-  | { action: "restore"; worldId: string };
+  | { action: "force-open-exit"; worldId: string };
 
 export const MAX_CONTROL_FLOOR = 1000;
 
 interface ControlActionClaims {
-  action: ControlWorldAction["action"];
+  action: "warp" | "force-open-exit";
   worldId: string;
   floor?: number;
   loadouts?: AdminPlayerLoadout[];

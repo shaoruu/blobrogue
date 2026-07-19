@@ -47,12 +47,6 @@ export class DefaultGameServerAdmin implements GameServerAdmin {
   forceOpenWorldExit(worldId: string): Promise<GameServerWorldActionResult> {
     return this.probe.mutateWorld({ action: "force-open-exit", worldId });
   }
-  snapshotWorld(worldId: string): Promise<GameServerWorldActionResult> {
-    return this.probe.mutateWorld({ action: "snapshot", worldId });
-  }
-  restoreWorld(worldId: string): Promise<GameServerWorldActionResult> {
-    return this.probe.mutateWorld({ action: "restore", worldId });
-  }
   logs(q: LogQuery): Promise<LogRecord[]> {
     return this.probe.logs(q);
   }

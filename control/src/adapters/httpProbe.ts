@@ -277,17 +277,10 @@ export class HttpGameServerProbe implements GameServerProbe {
           worldId: result.worldId,
           floor: result.floor,
           players: result.players,
-          fidelity: result.fidelity === "build+floor" ? result.fidelity : undefined,
-          snapshotPath: typeof result.snapshotPath === "string" ? result.snapshotPath : undefined,
           loadouts: loadouts ?? undefined,
         };
       }
-      if (result.reason === "world_not_found"
-        || result.reason === "pvp_forbidden"
-        || result.reason === "snapshot_not_found"
-        || result.reason === "snapshot_unavailable"
-        || result.reason === "world_active"
-        || result.reason === "unavailable") {
+      if (result.reason === "world_not_found" || result.reason === "pvp_forbidden") {
         return { isApplied: false, reason: result.reason };
       }
       return { isApplied: false, reason: "unavailable" };
