@@ -730,14 +730,7 @@ export const WAKE_FLOOR = 80;
 export const PALE_FLOOR = 75;
 
 export const BOSS_FLOORS: readonly number[] = [
-  BOSS.baseHpFloor,
-  MARROW.baseHpFloor,
-  WEAVER.baseHpFloor,
-  GILDED.baseHpFloor,
-  CHOIR.baseHpFloor,
-  JET.baseHpFloor,
-  TITHE.baseHpFloor,
-  QUORUM.baseHpFloor,
+  ...AUTHORED_BOSS_LADDER.flatMap((kind, index) => kind === null ? [] : [(index + 1) * BOSS_EVERY]),
   GORGE_FLOOR,
   SEVER_FLOOR,
   CHOIRMASTER_FLOOR,
