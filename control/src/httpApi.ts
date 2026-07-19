@@ -12,11 +12,15 @@ import type { RateLimiter } from "./auth/rateLimiter.js";
 import type { ControlConfig } from "./config.js";
 import { DeployController, type OperationContext } from "./deployController.js";
 import { LockedError, PreconditionError } from "./errors.js";
-import { randomId } from "./ids.js";
+import { isValidWorldId, MAX_ADMIN_FLOOR, randomId } from "./ids.js";
 import type { ArtifactVerifier, AuditSink, GameServerAdmin, OperationStore, ReleaseStore } from "./interfaces.js";
 import type { Logger } from "./logger.js";
 import type { Clock } from "./ports.js";
-import type { OperationRecord } from "./types.js";
+import type {
+  GameServerPlayerLoadout,
+  GameServerWorldActionResult,
+  OperationRecord,
+} from "./types.js";
 import { findForbiddenKey, parseConfirmBody, parseJsonObject, parseReleaseIdBody } from "./validation.js";
 
 export interface ControlDeps {
@@ -124,6 +128,8 @@ export class ControlHttpServer {
         case "/v1/deploy": return this.handleDeploy(body, rc, res);
         case "/v1/drain": return this.handleLifecycle("drain", rc, res);
         case "/v1/resume": return this.handleLifecycle("resume", rc, res);
+        case "/v1/worlds/warp": return this.handleWorldWarp(body, rc, res);
+        case "/v1/worlds/force-open-exit": return this.handleForceOpenExit(body, rc, res);
         case "/v1/restart": return this.handleRestart(body, rc, res);
         case "/v1/rollback": return this.handleRollback(body, rc, res);
       }
@@ -203,6 +209,80 @@ export class ControlHttpServer {
       operationId: null, tokenJti: rc.tokenJti, confirmJti: null, result: effect.mode, detail: effect.detail,
     });
     return this.send(res, 200, { action, mode: effect.mode, detail: effect.detail });
+  }
+
+  private async handleWorldWarp(body: string, rc: RouteCtx, res: ServerResponse): Promise<void> {
+    const parsed = this.mustObject(body, res);
+    if (this.wasSent(res)) return;
+    const keys = Object.keys(parsed);
+    const loadouts = parsed.loadouts === undefined
+      ? undefined
+      : typeof parsed.loadouts === "object" && parsed.loadouts !== null
+        ? parseAdminLoadouts(parsed.loadouts)
+        : null;
+    if ((keys.length !== 2 && keys.length !== 3)
+      || keys.some((key) => !["worldId", "floor", "loadouts"].includes(key))
+      || typeof parsed.worldId !== "string"
+      || !isValidWorldId(parsed.worldId)
+      || typeof parsed.floor !== "number"
+      || !Number.isSafeInteger(parsed.floor)
+      || parsed.floor < 1
+      || parsed.floor > MAX_ADMIN_FLOOR
+      || loadouts === null) {
+      return this.send(res, 400, { error: "world_warp_invalid" });
+    }
+    const result = await this.d.gameServer.warpWorld(
+      parsed.worldId,
+      parsed.floor,
+      loadouts,
+    );
+    await this.auditWorldAction("warp_world", parsed.worldId, parsed.floor, result, rc);
+    if (!result.isApplied) return this.sendWorldActionError(res, result.reason);
+    return this.send(res, 200, result);
+  }
+
+  private async handleForceOpenExit(body: string, rc: RouteCtx, res: ServerResponse): Promise<void> {
+    const parsed = this.mustObject(body, res);
+    if (this.wasSent(res)) return;
+    if (Object.keys(parsed).length !== 1
+      || typeof parsed.worldId !== "string"
+      || !isValidWorldId(parsed.worldId)) {
+      return this.send(res, 400, { error: "world_force_open_invalid" });
+    }
+    const result = await this.d.gameServer.forceOpenWorldExit(parsed.worldId);
+    await this.auditWorldAction("force_open_exit", parsed.worldId, null, result, rc);
+    if (!result.isApplied) return this.sendWorldActionError(res, result.reason);
+    return this.send(res, 200, result);
+  }
+
+  private async auditWorldAction(
+    action: "warp_world" | "force_open_exit",
+    worldId: string,
+    floor: number | null,
+    result: GameServerWorldActionResult,
+    rc: RouteCtx,
+  ): Promise<void> {
+    await this.d.audit.append({
+      at: new Date(this.d.clock.now()).toISOString(),
+      actor: rc.actor,
+      action,
+      releaseId: null,
+      prevReleaseId: null,
+      requestId: rc.requestId,
+      operationId: null,
+      tokenJti: rc.tokenJti,
+      confirmJti: null,
+      result: result.isApplied ? "applied" : result.reason,
+      detail: `world=${worldId}${floor === null ? "" : ` floor=${floor}`}`,
+    });
+  }
+
+  private sendWorldActionError(
+    res: ServerResponse,
+    reason: "world_not_found" | "pvp_forbidden" | "unavailable",
+  ): void {
+    const status = reason === "world_not_found" ? 404 : reason === "pvp_forbidden" ? 409 : 503;
+    this.send(res, status, { error: reason });
   }
 
   private async runOperation(res: ServerResponse, idemKey: string | null, run: () => Promise<OperationRecord>): Promise<void> {
@@ -289,6 +369,67 @@ export class ControlHttpServer {
     const bodyText = JSON.stringify(obj);
     res.writeHead(status, { "content-type": "application/json", "cache-control": "no-store" }).end(bodyText);
   }
+}
+
+function parseAdminLoadouts(value: object): GameServerPlayerLoadout[] | null {
+  if (!Array.isArray(value) || value.length > 4) return null;
+  const parsed: GameServerPlayerLoadout[] = [];
+  const players = new Set<string>();
+  for (const entry of value) {
+    if (entry === null || typeof entry !== "object" || Array.isArray(entry)) return null;
+    const keys = Object.keys(entry);
+    if (keys.length < 1
+      || keys.some((key) => !["player", "weapons", "blessings", "kitId", "hp"].includes(key))) {
+      return null;
+    }
+    const loadout = entry as GameServerPlayerLoadout;
+    if (typeof loadout.player !== "string"
+      || loadout.player.length < 1
+      || loadout.player.length > 48
+      || players.has(loadout.player)) {
+      return null;
+    }
+    players.add(loadout.player);
+    if (loadout.weapons !== undefined
+      && (!Array.isArray(loadout.weapons)
+        || loadout.weapons.length > 9
+        || loadout.weapons.some((id) => typeof id !== "string" || !/^[a-z0-9_]{1,32}$/.test(id))
+        || new Set(loadout.weapons).size !== loadout.weapons.length)) {
+      return null;
+    }
+    if (loadout.blessings !== undefined) {
+      if (!Array.isArray(loadout.blessings) || loadout.blessings.length > 64) return null;
+      const blessingIds = new Set<string>();
+      for (const blessing of loadout.blessings) {
+        if (blessing === null
+          || typeof blessing !== "object"
+          || Array.isArray(blessing)
+          || Object.keys(blessing).length !== 2
+          || typeof blessing.id !== "string"
+          || !/^[a-z0-9_]{1,48}$/.test(blessing.id)
+          || blessingIds.has(blessing.id)
+          || !Number.isSafeInteger(blessing.lvl)
+          || blessing.lvl < 1
+          || blessing.lvl > 3) {
+          return null;
+        }
+        blessingIds.add(blessing.id);
+      }
+    }
+    if (loadout.kitId !== undefined
+      && (typeof loadout.kitId !== "string" || !/^[a-z0-9_]{1,24}$/.test(loadout.kitId))) {
+      return null;
+    }
+    if (loadout.hp !== undefined
+      && (typeof loadout.hp !== "number"
+        || !Number.isFinite(loadout.hp)
+        || loadout.hp <= 0
+        || loadout.hp > 1000)) {
+      return null;
+    }
+    parsed.push(loadout);
+  }
+  return parsed;
 }
 
 interface RouteCtx {

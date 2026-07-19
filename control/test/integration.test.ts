@@ -22,6 +22,7 @@ import {
   validateAuthorityVersion,
   type ProbeJson,
 } from "../src/adapters/httpProbe.js";
+import { mintGameServerControlToken } from "../src/adapters/gameServerControlAuth.js";
 import { NodeTailReader } from "../src/adapters/tail.js";
 import type { WorldSummary } from "../src/types.js";
 import { PROTOCOL_VERSION, jsonCodec } from "../../src/net/protocol.js";
@@ -35,15 +36,18 @@ import { FileAuditSink } from "../src/stores/auditSink.js";
 import { FileOperationStore } from "../src/stores/operationStore.js";
 import { FsReleaseStore } from "../src/stores/releaseStore.js";
 import { GameServer } from "../../server/src/server.js";
+import { GameWorld } from "../../server/src/world.js";
+import { WorldRegistry } from "../../server/src/worldRegistry.js";
 import { loadConfig as loadGsConfig } from "../../server/src/config.js";
 import { createLogger as createGsLogger } from "../../server/src/logger.js";
 import { FakePm2, InMemoryFileSystem, ManualClock, stageRelease, TestRunner } from "./harness.js";
 
 const GS_SECRET = "itest-gs-secret";
+const GS_CONTROL_SECRET = "itest-gs-control-secret";
 const CTX: OperationContext = { actor: "op", requestId: "itest", idempotencyKey: null, tokenJti: "jti", confirmJti: "cf" };
 
 async function bootGs(heartbeatMs: number): Promise<{ port: number; close: () => Promise<void> }> {
-  const cfg = { ...loadGsConfig({}), host: "127.0.0.1", port: 0, auth: { secret: GS_SECRET, allowDev: false }, heartbeatMs, heartbeatMisses: 3 };
+  const cfg = { ...loadGsConfig({}), host: "127.0.0.1", port: 0, auth: { secret: GS_SECRET, allowDev: false }, controlSecret: GS_CONTROL_SECRET, heartbeatMs, heartbeatMisses: 3 };
   const gs = new GameServer(cfg, { logger: createGsLogger({ app: "gs-itest" }, "error") });
   const port = await gs.listen();
   return { port, close: () => gs.close() };
@@ -89,6 +93,126 @@ async function sendPolicyProbeTicket(port: number, ticket: string): Promise<Poli
 }
 
 export async function suite(t: TestRunner): Promise<void> {
+  await t.suite("integration: signed live-world rescue reaches authoritative multiplayer state", async () => {
+    const logger = createGsLogger({ app: "gs-control-itest" }, "error");
+    const registry = new WorldRegistry(
+      (id, policy) => new GameWorld(id, 0x5E7E, false, "coop", policy),
+      logger,
+    );
+    const room = registry.ensureRoom("room:CTRL:g1", null);
+    room.addPlayer("ian", "bulwark", "ian-account");
+    room.addPlayer("coop", "mender", "coop-account");
+    const ianWeapons = JSON.stringify(room.state.players.get("ian")?.ownedWeapons);
+    const cfg = {
+      ...loadGsConfig({}),
+      host: "127.0.0.1",
+      port: 0,
+      auth: { secret: GS_SECRET, allowDev: false },
+      controlSecret: "dedicated-control-secret",
+    };
+    const server = new GameServer(cfg, { logger, sessions: registry });
+    const port = await server.listen();
+    const baseUrl = `http://127.0.0.1:${port}`;
+    const probe = new HttpGameServerProbe(
+      {
+        baseUrl,
+        wsUrl: `ws://127.0.0.1:${port}/ws`,
+        logOutFile: null,
+        syntheticTicketSecret: GS_SECRET,
+        controlSecret: "dedicated-control-secret",
+        logTailMax: 100,
+      },
+      new NodeTailReader(),
+    );
+    try {
+      const unsigned = await fetch(`${baseUrl}/admin/world-action`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action: "warp", worldId: room.id, floor: 55 }),
+      });
+      t.check("unsigned direct game-server mutation is rejected", unsigned.status === 401);
+
+      const warp = await probe.mutateWorld({ action: "warp", worldId: room.id, floor: 55 });
+      t.check("signed warp moves the shared authoritative room", warp.isApplied
+        && room.state.floor === 55
+        && room.state.players.size === 2);
+      t.check("signed warp preserves player loadouts",
+        JSON.stringify(room.state.players.get("ian")?.ownedWeapons) === ianWeapons);
+
+      const loadoutWarp = await probe.mutateWorld({
+        action: "warp",
+        worldId: room.id,
+        floor: 60,
+        loadouts: [
+          {
+            player: "ian-account",
+            kitId: "phantom",
+            hp: 2.5,
+            weapons: ["pistol", "shotgun", "tesla", "nailer", "margin_call", "red_pen", "umbra"],
+            blessings: [
+              { id: "glass_cannon", lvl: 3 },
+              { id: "hair_trigger", lvl: 2 },
+              { id: "missing_blessing", lvl: 1 },
+            ],
+          },
+          {
+            player: "coop-account",
+            kitId: "mender",
+            hp: 3,
+            weapons: ["pistol", "halo"],
+            blessings: [{ id: "swift_boots", lvl: 2 }],
+          },
+        ],
+      });
+      const warpedIan = room.state.players.get("ian")!;
+      const warpedCoop = room.state.players.get("coop")!;
+      t.check("signed warp applies distinct co-op hotbars and kits",
+        loadoutWarp.isApplied
+        && room.state.floor === 60
+        && warpedIan.kitId === "phantom"
+        && JSON.stringify(warpedIan.ownedWeapons) === JSON.stringify([
+          "pistol", "shotgun", "tesla", "nailer", "margin_call", "red_pen",
+        ])
+        && warpedCoop.kitId === "mender"
+        && JSON.stringify(warpedCoop.ownedWeapons) === JSON.stringify(["pistol", "halo"]));
+      t.check("signed warp applies leveled blessings and reports unknown ids",
+        warpedIan.ownedItemIds.filter((id) => id === "glass_cannon").length === 3
+        && warpedIan.ownedItemIds.filter((id) => id === "hair_trigger").length === 2
+        && warpedCoop.ownedItemIds.filter((id) => id === "swift_boots").length === 2
+        && loadoutWarp.isApplied
+        && loadoutWarp.loadouts?.[0]?.isApplied === true
+        && loadoutWarp.loadouts[0].grant.skippedWeapons.includes("umbra")
+        && loadoutWarp.loadouts[0].grant.skippedBlessings.includes("missing_blessing"));
+
+      if (room.state.encounter !== null) {
+        room.state.encounter.completed = false;
+        room.state.encounter.failed = true;
+      }
+      const force = await probe.mutateWorld({ action: "force-open-exit", worldId: room.id });
+      t.check("signed force-open clears a stuck shared floor", force.isApplied
+        && room.state.enemies.length === 0
+        && room.state.pendingSpawns.length === 0
+        && room.state.encounter?.completed === true);
+
+      const replayAction = { action: "force-open-exit", worldId: room.id } as const;
+      const replayToken = mintGameServerControlToken("dedicated-control-secret", replayAction);
+      const replayRequest = (): Promise<Response> => fetch(`${baseUrl}/admin/world-action`, {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${replayToken}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify(replayAction),
+      });
+      const first = await replayRequest();
+      const second = await replayRequest();
+      t.check("signed game-server action tokens are single-use",
+        first.status === 200 && second.status === 409);
+    } finally {
+      await server.close();
+    }
+  });
+
   await t.suite("integration: real gs status + synthetic-join verify", async () => {
     t.check("synthetic join speaks the current game protocol", SYNTHETIC_JOIN_PROTOCOL === PROTOCOL_VERSION,
       `probe=${SYNTHETIC_JOIN_PROTOCOL} game=${PROTOCOL_VERSION}`);
@@ -101,7 +225,7 @@ export async function suite(t: TestRunner): Promise<void> {
       coopTicket: "v1",
       pvpTicket: "v2",
       admission: "a2",
-      pvpPrivateEnabled: false,
+      pvpPrivateEnabled: true,
       pvpPublicEnabled: false,
     };
     t.check("exact canonical policy catalog passes",
@@ -127,7 +251,7 @@ export async function suite(t: TestRunner): Promise<void> {
     const gs = await bootGs(200);
     try {
       const probe = new HttpGameServerProbe(
-        { baseUrl: `http://127.0.0.1:${gs.port}`, wsUrl: `ws://127.0.0.1:${gs.port}/ws`, logOutFile: null, syntheticTicketSecret: GS_SECRET, logTailMax: 100 },
+        { baseUrl: `http://127.0.0.1:${gs.port}`, wsUrl: `ws://127.0.0.1:${gs.port}/ws`, logOutFile: null, syntheticTicketSecret: GS_SECRET, controlSecret: GS_CONTROL_SECRET, logTailMax: 100 },
         new NodeTailReader(),
       );
       const status = await probe.status();
@@ -226,6 +350,7 @@ export async function suite(t: TestRunner): Promise<void> {
           wsUrl: `ws://127.0.0.1:${gs.port}/ws`,
           logOutFile: null,
           syntheticTicketSecret: GS_SECRET,
+          controlSecret: GS_CONTROL_SECRET,
           logTailMax: 100,
         },
         new NodeTailReader(),
@@ -288,7 +413,7 @@ export async function suite(t: TestRunner): Promise<void> {
     const gs = await bootGs(150);
     try {
       const probe = new HttpGameServerProbe(
-        { baseUrl: `http://127.0.0.1:${gs.port}`, wsUrl: `ws://127.0.0.1:${gs.port}/ws`, logOutFile: null, syntheticTicketSecret: null, logTailMax: 100 },
+        { baseUrl: `http://127.0.0.1:${gs.port}`, wsUrl: `ws://127.0.0.1:${gs.port}/ws`, logOutFile: null, syntheticTicketSecret: null, controlSecret: null, logTailMax: 100 },
         new NodeTailReader(),
       );
       const diagnostic = await probe.verifyDiagnostic();
@@ -317,7 +442,7 @@ export async function suite(t: TestRunner): Promise<void> {
       const audit = new FileAuditSink(fs, "/opt/blobrogue-control/state");
       const verifier = new ChecksumArtifactVerifier(fs, root);
       const probe = new HttpGameServerProbe(
-        { baseUrl: `http://127.0.0.1:${gs.port}`, wsUrl: `ws://127.0.0.1:${gs.port}/ws`, logOutFile: null, syntheticTicketSecret: GS_SECRET, logTailMax: 100 },
+        { baseUrl: `http://127.0.0.1:${gs.port}`, wsUrl: `ws://127.0.0.1:${gs.port}/ws`, logOutFile: null, syntheticTicketSecret: GS_SECRET, controlSecret: GS_CONTROL_SECRET, logTailMax: 100 },
         new NodeTailReader(),
       );
       const pm2 = new FakePm2();

@@ -19,7 +19,12 @@ import { parseCidrList, clientIpFrom } from "./net.js";
 import { WorldRegistry } from "./worldRegistry.js";
 import { WsSnapshotPublisher } from "./snapshotPublisher.js";
 import { MessageRouter, DEFAULT_WORLD_ID, OFFER_RESENDS } from "./messageRouter.js";
-import { createHttpHandler, type WorldReport } from "./httpEndpoints.js";
+import {
+  createHttpHandler,
+  type ControlWorldActionResult,
+  type WorldReport,
+} from "./httpEndpoints.js";
+import type { ControlWorldAction } from "./controlAuth.js";
 import type { SessionStore, SnapshotPublisher, RoomRuntime } from "./ports.js";
 import { RunReceiptDispatcher } from "./runReceiptDispatcher.js";
 import { GenerationAdmissionStore } from "./generationAdmissionStore.js";
@@ -58,6 +63,7 @@ const SEATLESS_CLOSE_CODES: ReadonlySet<number> = new Set([4001, 4008, 4009, 401
 
 interface PendingCompletion {
   runId: string;
+  status: "completed" | "abandoned";
   participants: RunReceiptParticipant[];
 }
 
@@ -165,6 +171,7 @@ export class GameServer {
       health: () => this.health(),
       worlds: () => this.worldReports(),
       lifecycle: (action) => this.applyLifecycle(action),
+      controlWorld: (action) => this.applyControlWorldAction(action),
     }));
     this.wss = new WebSocketServer({ server: this.http, path: cfg.wsPath, maxPayload: 8 * 1024 });
     this.wss.on("connection", (ws, req) => this.onConnection(ws, req));
@@ -223,7 +230,7 @@ export class GameServer {
       this.submitCompletion(
         room.id,
         runId,
-        pending ? "completed" : "abandoned",
+        pending?.status ?? "abandoned",
         pending?.participants ?? [],
         isNoActiveSeat,
       );
@@ -231,6 +238,58 @@ export class GameServer {
     this.sessions.sweep(this.clock.now());
   }
 
+  private applyControlWorldAction(action: ControlWorldAction): ControlWorldActionResult {
+    const room = this.sessions.room(action.worldId);
+    if (room === undefined) return { isApplied: false, reason: "world_not_found" };
+    let loadoutResults: Extract<ControlWorldActionResult, { isApplied: true }>["loadouts"];
+    const isApplied = action.action === "warp"
+      ? action.loadouts === undefined
+        ? room.adminWarpToFloor(action.floor)
+        : (() => {
+          const result = room.adminWarpToFloorWithLoadouts(action.floor, action.loadouts);
+          loadoutResults = result.loadouts;
+          this.logSkippedAdminLoadouts(room.id, result.loadouts);
+          return result.isApplied;
+        })()
+      : room.adminForceOpenExit();
+    if (!isApplied) return { isApplied: false, reason: "pvp_forbidden" };
+    return {
+      isApplied: true,
+      worldId: room.id,
+      floor: room.state.floor,
+      players: room.playerCount,
+      loadouts: loadoutResults,
+    };
+  }
+
+  private logSkippedAdminLoadouts(
+    worldId: string,
+    results: NonNullable<Extract<ControlWorldActionResult, { isApplied: true }>["loadouts"]>,
+  ): void {
+    for (const result of results) {
+      if (!result.isApplied) {
+        this.log.warn("admin loadout target skipped", {
+          worldId,
+          player: result.player,
+          reason: result.reason,
+        });
+        continue;
+      }
+      const grant = result.grant;
+      if (grant.skippedWeapons.length === 0
+        && grant.skippedBlessings.length === 0
+        && grant.skippedKitId === undefined) {
+        continue;
+      }
+      this.log.warn("admin loadout entries skipped", {
+        worldId,
+        player: result.player,
+        weapons: grant.skippedWeapons.join(","),
+        blessings: grant.skippedBlessings.join(","),
+        kitId: grant.skippedKitId ?? "",
+      });
+    }
+  }
   // ---- fixed tick loop (drift-corrected accumulator on the monotonic clock) ----
 
   private pump(): void {
@@ -342,6 +401,7 @@ export class GameServer {
     const participants = room.runReceiptParticipants();
     this.pendingCompletions.set(room.id, {
       runId: room.runReceiptId(),
+      status: participants.length > 0 ? "completed" : "abandoned",
       participants,
     });
     for (const pid of gameOverPlayers) {
@@ -353,7 +413,7 @@ export class GameServer {
       if (pending) {
         this.pendingCompletions.delete(room.id);
         this.completedWorlds.add(room.id);
-        this.submitCompletion(room.id, pending.runId, "completed", pending.participants, true);
+        this.submitCompletion(room.id, pending.runId, pending.status, pending.participants, true);
         this.sessions.sweep(this.clock.now());
       }
     }
@@ -363,7 +423,7 @@ export class GameServer {
     const pending = this.pendingCompletions.get(room.id);
     if (pending) {
       this.pendingCompletions.delete(room.id);
-      this.submitCompletion(room.id, pending.runId, "completed", pending.participants, true);
+      this.submitCompletion(room.id, pending.runId, pending.status, pending.participants, true);
       return;
     }
     if (this.completedWorlds.delete(room.id)) return;
@@ -570,7 +630,14 @@ export class GameServer {
       }
       const away: string[] = [];
       for (const seat of room.seats()) away.push(seat.displayName ?? seat.pid);
-      out.push({ id: room.id, players: room.playerCount, tick: room.state.tick, names, away });
+      out.push({
+        id: room.id,
+        players: room.playerCount,
+        tick: room.state.tick,
+        floor: room.state.floor,
+        names,
+        away,
+      });
     }
     return out;
   }

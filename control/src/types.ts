@@ -125,6 +125,7 @@ export interface WorldSummary {
   id: string;
   players: number;
   tick: number;
+  floor: number;
   // Who is actually connected to this world (display names) — the ops answer to "did the
   // whole room land in ONE world?" during a multiplayer incident.
   names: string[];
@@ -132,6 +133,64 @@ export interface WorldSummary {
   // currently dropped and inside their grace window?".
   away: string[];
 }
+
+export interface GameServerBlessingGrant {
+  id: string;
+  lvl: number;
+}
+
+export interface GameServerPlayerLoadout {
+  player: string;
+  weapons?: string[];
+  blessings?: GameServerBlessingGrant[];
+  kitId?: string;
+  hp?: number;
+}
+
+export interface GameServerLoadoutGrant {
+  grantedWeapons: string[];
+  skippedWeapons: string[];
+  appliedBlessings: GameServerBlessingGrant[];
+  skippedBlessings: string[];
+  isKitApplied: boolean;
+  skippedKitId?: string;
+  hp: number;
+}
+
+export type GameServerPlayerLoadoutResult =
+  | {
+    isApplied: true;
+    player: string;
+    playerId: string;
+    grant: GameServerLoadoutGrant;
+  }
+  | {
+    isApplied: false;
+    player: string;
+    reason: "player_not_found" | "player_ambiguous";
+  };
+
+export type GameServerWorldAction =
+  | {
+    action: "warp";
+    worldId: string;
+    floor: number;
+    loadouts?: GameServerPlayerLoadout[];
+  }
+  | { action: "force-open-exit"; worldId: string };
+
+export type GameServerWorldActionResult =
+  | {
+    isApplied: true;
+    worldId: string;
+    floor: number;
+    players: number;
+    loadouts?: GameServerPlayerLoadoutResult[];
+  }
+  | {
+    isApplied: false;
+    reason: "world_not_found" | "pvp_forbidden" | "unavailable";
+  };
 
 // A single redacted structured log line. Values are primitives only (already sanitized).
 export type LogValue = string | number | boolean | null;

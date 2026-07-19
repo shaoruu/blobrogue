@@ -14,6 +14,10 @@ async function main(): Promise<void> {
     log.error("refusing to start: GS_AUTH_SECRET is required in production");
     process.exit(1);
   }
+  if (cfg.isProd && !cfg.controlSecret) {
+    log.error("refusing to start: GS_CONTROL_SECRET is required in production");
+    process.exit(1);
+  }
   if (cfg.isProd && (!cfg.receiptSecret
     || !cfg.receiptEndpoint
     || !cfg.admissionEndpoint

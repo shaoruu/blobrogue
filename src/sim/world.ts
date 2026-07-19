@@ -86,7 +86,7 @@ import {
   ultChargeFromDamageDealt, ultChargeFromDamageTaken, ultChargeFromHealDone, ultChargeFromKill,
   ultChargeFromDash, ultTimeChargePerTick, ultShareCapUnits,
   refEncounterHpForFloor, aegisHpBudgetForFloor,
-  KIT_START_WEAPON, ticksToSec, TICKS_PER_SECOND,
+  KIT_START_WEAPON, ticksToSec, TICKS_PER_SECOND, isKitId,
 } from "./kits.js";
 import type { KitId, UltSource } from "./kits.js";
 import { PET_ABILITY, PET_AUTOCAST, petVerbFor, petCooldownTicks, petVerbNeedsTarget, slimeSlowMul, isFetchablePickup } from "./petAbilities.js";
@@ -2611,6 +2611,163 @@ export function grantEncounterCompletionReward(w: WorldState): void {
     radius: 18,
     opened: false,
   });
+}
+
+export const ADMIN_WARP_MAX_FLOOR = 1000;
+
+export interface AdminBlessingGrant {
+  id: string;
+  lvl: number;
+}
+
+export interface AdminPlayerLoadout {
+  player: string;
+  weapons?: string[];
+  blessings?: AdminBlessingGrant[];
+  kitId?: string;
+  hp?: number;
+}
+
+export interface AdminLoadoutGrantResult {
+  grantedWeapons: string[];
+  skippedWeapons: string[];
+  appliedBlessings: AdminBlessingGrant[];
+  skippedBlessings: string[];
+  isKitApplied: boolean;
+  skippedKitId?: string;
+  hp: number;
+}
+
+export function adminWarpToFloorInWorld(w: WorldState, floor: number): boolean {
+  if (isPvp(w) || !Number.isSafeInteger(floor) || floor < 1 || floor > ADMIN_WARP_MAX_FLOOR) return false;
+  if (w.floor === floor) return true;
+  w.isRunOver = false;
+  for (const p of w.players.values()) {
+    p.combo = 0;
+    p.comboTimer = 0;
+    if (p.isDown) p.hp = Math.max(p.hp, REVIVE.hp);
+    p.isDown = false;
+    p.reviveProgress = 0;
+    p.reviveBy = null;
+    p.downsThisFloor = 0;
+  }
+  loadFloorIntoWorld(w, floor);
+  return true;
+}
+
+export function adminGrantPlayerLoadoutInWorld(
+  w: WorldState,
+  pid: PlayerId,
+  loadout: AdminPlayerLoadout,
+): { result: AdminLoadoutGrantResult; events: SimEvent[] } | null {
+  if (isPvp(w)) return null;
+  const player = w.players.get(pid);
+  if (player === undefined) return null;
+  const events: SimEvent[] = [];
+  let isKitApplied = false;
+  let skippedKitId: string | undefined;
+  if (loadout.kitId !== undefined) {
+    if (isKitId(loadout.kitId)) {
+      setPlayerKit(w, pid, loadout.kitId);
+      isKitApplied = true;
+    } else {
+      skippedKitId = loadout.kitId;
+    }
+  }
+
+  const grantedWeapons: string[] = [];
+  const skippedWeapons: string[] = [];
+  if (loadout.weapons !== undefined) {
+    const validWeapons: WeaponId[] = [];
+    const seenWeapons = new Set<string>();
+    for (const id of loadout.weapons) {
+      if (seenWeapons.has(id)
+        || !Object.prototype.hasOwnProperty.call(WEAPONS, id)) {
+        skippedWeapons.push(id);
+        continue;
+      }
+      seenWeapons.add(id);
+      validWeapons.push(id as WeaponId);
+    }
+    if (validWeapons.length > 0) {
+      player.ownedWeapons = [];
+      player.weaponFireCooldowns = {};
+      for (const id of validWeapons) {
+        if (acquireWeapon(w, player, id)) grantedWeapons.push(id);
+        else skippedWeapons.push(id);
+      }
+    }
+  }
+
+  const appliedBlessings: AdminBlessingGrant[] = [];
+  const skippedBlessings: string[] = [];
+  if (loadout.blessings !== undefined) {
+    player.ownedItemIds = [];
+    recomputeMods(player.mods, player.ownedItemIds, player.kitId);
+    applyMaxHpBonus(player);
+    player.hp = Math.min(player.hp, player.maxHp);
+    const seenBlessings = new Set<string>();
+    for (const grant of loadout.blessings) {
+      const item = itemById(grant.id);
+      if (seenBlessings.has(grant.id)
+        || item === undefined
+        || !Number.isSafeInteger(grant.lvl)
+        || grant.lvl < 1) {
+        skippedBlessings.push(grant.id);
+        continue;
+      }
+      seenBlessings.add(grant.id);
+      let appliedLevel = 0;
+      for (let level = 0; level < grant.lvl; level++) {
+        const itemEvents = applyItemToWorld(w, pid, item);
+        if (itemEvents.length === 0) break;
+        appliedLevel++;
+        events.push(...itemEvents);
+      }
+      if (appliedLevel > 0) appliedBlessings.push({ id: item.id, lvl: appliedLevel });
+      else skippedBlessings.push(grant.id);
+    }
+  }
+
+  if (loadout.hp !== undefined && Number.isFinite(loadout.hp)) {
+    player.hp = Math.max(1, Math.min(loadout.hp, player.maxHp));
+  }
+  return {
+    result: {
+      grantedWeapons,
+      skippedWeapons,
+      appliedBlessings,
+      skippedBlessings,
+      isKitApplied,
+      skippedKitId,
+      hp: player.hp,
+    },
+    events,
+  };
+}
+
+export function adminForceOpenExitInWorld(w: WorldState): boolean {
+  if (isPvp(w)) return false;
+  if (w.encounter !== null) {
+    completeEncounter(w.encounter);
+    w.encounter.failed = false;
+  }
+  w.enemies = [];
+  w.pendingSpawns = [];
+  w.bullets = [];
+  w.hazards = [];
+  w.effects = [];
+  w.warmthDrain = null;
+  w.persistentBossWindows.clear();
+  w.pendingBlessings.clear();
+  for (const edge of w.dungeon.edges) edge.locked = false;
+  for (const p of w.players.values()) resetPlayerWarmth(p);
+  if (w.gauntlet !== null) {
+    w.gauntlet.stage = GAUNTLET.rounds.length;
+    w.gauntlet.breath = 0;
+    w.gauntlet.isRewarded = true;
+  }
+  return true;
 }
 
 // Reset a live world to a FRESH run: new seed, new RNG stream, floor 1, cleared terminal state.

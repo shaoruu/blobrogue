@@ -9,12 +9,12 @@
 // the fixed step, so a client can neither buy extra time (no client dt) nor gain advantage by its
 // frame rate (fixed-cadence consumption).
 
-import { beginWorldTick, createWorld, refreshWarmthDrain, stepPlayerPhase, stepWorldPhase, spawnPlayerInWorld, removePlayerFromWorld, setPlayerAbsence, setPlayerKit, setPlayerPet, switchWeaponInWorld, reorderWeaponsInWorld, dropWeaponInWorld, swapWeaponInWorld, buyFromShopInWorld, chooseBlessingInWorld, dismissBlessingOfferInWorld, rollBlessingChoicesInWorld, resetRunInWorld, devSpawnEnemy, isPvp, isPvpDraftRuntime } from "../../src/sim/world.js";
+import { adminForceOpenExitInWorld, adminGrantPlayerLoadoutInWorld, adminWarpToFloorInWorld, beginWorldTick, createWorld, refreshWarmthDrain, stepPlayerPhase, stepWorldPhase, spawnPlayerInWorld, removePlayerFromWorld, setPlayerAbsence, setPlayerKit, setPlayerPet, switchWeaponInWorld, reorderWeaponsInWorld, dropWeaponInWorld, swapWeaponInWorld, buyFromShopInWorld, chooseBlessingInWorld, dismissBlessingOfferInWorld, rollBlessingChoicesInWorld, resetRunInWorld, devSpawnEnemy, isPvp, isPvpDraftRuntime } from "../../src/sim/world.js";
 import type { KitId } from "../../src/sim/kits.js";
 import { PVP, pvpDraftSeed } from "../../src/sim/pvp.js";
 import type { WorldMode } from "../../src/sim/pvp.js";
 import type { PvpPolicyId } from "../../src/net/pvpPolicy.js";
-import type { WorldState } from "../../src/sim/world.js";
+import type { AdminPlayerLoadout, WorldState } from "../../src/sim/world.js";
 import type { PvpTelemetryEvent, SimEvent } from "../../src/sim/events.js";
 import type { InputCmd, PlayerId } from "../../src/sim/input.js";
 import { TILE, type WeaponId } from "../../src/sim/types.js";
@@ -26,7 +26,14 @@ import { FIXED_DT, TICK_HZ, INTERP_BASE_DELAY_MS, type WireEvent } from "../../s
 import { resumeTokensEqual } from "./auth.js";
 import type { Conn, InputIntent } from "./connection.js";
 import type { ServerConfig } from "./config.js";
-import type { RoomRuntime, BlessingOfferRequest, Seat, TakeSeatResult } from "./ports.js";
+import type {
+  AdminPlayerLoadoutResult,
+  AdminWarpWithLoadoutsResult,
+  RoomRuntime,
+  BlessingOfferRequest,
+  Seat,
+  TakeSeatResult,
+} from "./ports.js";
 import type { RunReceiptParticipant } from "../../src/net/runReceipt.js";
 
 const BLESSING_CHOICES = 3;
@@ -84,6 +91,7 @@ export class GameWorld implements RoomRuntime {
   private joinedAtFloor = new Map<PlayerId, number>();
   private bossKillsByPlayer = new Map<PlayerId, Set<string>>();
   private authIdentityByPlayer = new Map<PlayerId, string>();
+  private isAdminWarped = false;
   constructor(
     id: string,
     seed: number = randomSeed(),
@@ -127,6 +135,83 @@ export class GameWorld implements RoomRuntime {
     this.joinedAtFloor.clear();
     this.bossKillsByPlayer.clear();
     this.authIdentityByPlayer.clear();
+    this.isAdminWarped = false;
+  }
+
+  adminWarpToFloor(floor: number): boolean {
+    const previousFloor = this.state.floor;
+    const pendingOfferPlayers = [...this.state.pendingBlessings.keys()];
+    const isApplied = adminWarpToFloorInWorld(this.state, floor);
+    if (!isApplied) return false;
+    if (previousFloor === floor) return true;
+    this.clearAllOffers(pendingOfferPlayers);
+    this.offerThisTick = [];
+    this.expiredOffersThisTick = [];
+    this.isAdminWarped = true;
+    return true;
+  }
+
+  adminWarpToFloorWithLoadouts(
+    floor: number,
+    loadouts: readonly AdminPlayerLoadout[],
+  ): AdminWarpWithLoadoutsResult {
+    if (!this.adminWarpToFloor(floor)) return { isApplied: false, loadouts: [] };
+    const results: AdminPlayerLoadoutResult[] = [];
+    for (const loadout of loadouts) {
+      const playerIds = this.resolveAdminPlayer(loadout.player);
+      if (playerIds.length !== 1) {
+        results.push({
+          isApplied: false,
+          player: loadout.player,
+          reason: playerIds.length === 0 ? "player_not_found" : "player_ambiguous",
+        });
+        continue;
+      }
+      const playerId = playerIds[0];
+      const granted = adminGrantPlayerLoadoutInWorld(this.state, playerId, loadout);
+      if (granted === null) {
+        results.push({ isApplied: false, player: loadout.player, reason: "player_not_found" });
+        continue;
+      }
+      for (const event of granted.events) this.injectedEvents.push(event);
+      results.push({
+        isApplied: true,
+        player: loadout.player,
+        playerId,
+        grant: granted.result,
+      });
+    }
+    return { isApplied: true, loadouts: results };
+  }
+
+  private resolveAdminPlayer(selector: string): PlayerId[] {
+    const matches = new Set<PlayerId>();
+    for (const conn of this.conns.values()) {
+      if (conn.playerId === null) continue;
+      if (conn.playerId === selector
+        || conn.authName === selector
+        || conn.displayName === selector) {
+        matches.add(conn.playerId);
+      }
+    }
+    for (const seat of this.seatMap.values()) {
+      if (seat.pid === selector
+        || seat.authName === selector
+        || seat.displayName === selector) {
+        matches.add(seat.pid);
+      }
+    }
+    for (const [playerId, authName] of this.authIdentityByPlayer) {
+      if (playerId === selector || authName === selector) matches.add(playerId);
+    }
+    return [...matches];
+  }
+
+  adminForceOpenExit(): boolean {
+    const pendingOfferPlayers = [...this.state.pendingBlessings.keys()];
+    const isApplied = adminForceOpenExitInWorld(this.state);
+    if (isApplied) this.clearAllOffers(pendingOfferPlayers);
+    return isApplied;
   }
 
   private seedArenaEnemies(): void {
@@ -371,6 +456,7 @@ export class GameWorld implements RoomRuntime {
     return `${this.id}:${this.state.seed}:${this.state.rev}`;
   }
   runReceiptParticipants(): RunReceiptParticipant[] {
+    if (this.isAdminWarped) return [];
     const participants: RunReceiptParticipant[] = [];
     for (const [pid, player] of this.state.players) {
       const conn = [...this.conns.values()].find((candidate) => candidate.playerId === pid);
@@ -512,5 +598,10 @@ export class GameWorld implements RoomRuntime {
       if (seat.pid !== pid) continue;
       seat.pendingOffer = null;
     }
+  }
+
+  private clearAllOffers(pendingOfferPlayers: PlayerId[]): void {
+    for (const pid of this.state.players.keys()) this.clearOfferFor(pid);
+    for (const pid of pendingOfferPlayers) this.injectedEvents.push({ t: "blessingExpired", pid });
   }
 }

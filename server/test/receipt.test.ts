@@ -95,6 +95,10 @@ check("receipt participant stats come from authoritative world state",
   && participant.weapons.includes("beam")
   && participant.items.find((item) => item.id === "it_dmg")?.count === 2);
 
+world.adminWarpToFloor(55);
+check("admin-warped runs cannot mint account progression receipts",
+  world.state.floor === 55 && world.runReceiptParticipants().length === 0);
+
 const delivered: string[] = [];
 const fetcher = (async (_url: string | URL | Request, init?: RequestInit) => {
   const body = JSON.parse(String(init?.body)) as { receipt: string };

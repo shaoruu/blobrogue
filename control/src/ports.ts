@@ -11,6 +11,8 @@ import type {
   LogRecord,
   MetricsSnapshot,
   Readiness,
+  GameServerWorldAction,
+  GameServerWorldActionResult,
   VerifyResult,
   WorldSummary,
 } from "./types.js";
@@ -68,6 +70,7 @@ export interface GameServerProbe {
   readiness(): Promise<Readiness>;
   metrics(): Promise<MetricsSnapshot>;
   worlds(): Promise<WorldSummary[]>;
+  mutateWorld(action: GameServerWorldAction): Promise<GameServerWorldActionResult>;
   logs(q: LogQuery): Promise<LogRecord[]>;
   verifyDiagnostic(): Promise<VerifyResult>;
   verifyForDeploy(): Promise<VerifyResult>;

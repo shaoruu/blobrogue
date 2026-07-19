@@ -13,6 +13,7 @@ export interface ServerConfig {
   port: number;
   wsPath: string;
   auth: AuthConfig;
+  controlSecret: string | null;
   receiptSecret: string | null;
   receiptEndpoint: string | null;
   admissionEndpoint: string | null;
@@ -76,14 +77,23 @@ function intEnv(env: NodeJS.ProcessEnv, key: string, def: number, min: number, m
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
+  const auth = authConfigFromEnv(env);
+  const controlSecret = env.GS_CONTROL_SECRET && env.GS_CONTROL_SECRET.length > 0
+    ? env.GS_CONTROL_SECRET
+    : null;
+  const receiptSecret = env.GS_RECEIPT_SECRET && env.GS_RECEIPT_SECRET.length > 0
+    ? env.GS_RECEIPT_SECRET
+    : null;
+  if (controlSecret !== null && (controlSecret === auth.secret || controlSecret === receiptSecret)) {
+    throw new Error("GS_CONTROL_SECRET must be distinct from GS_AUTH_SECRET and GS_RECEIPT_SECRET");
+  }
   return {
     host: env.GS_HOST ?? "127.0.0.1",
     port: intEnv(env, "PORT", 8090, 0, 65535),
     wsPath: env.GS_WS_PATH ?? "/ws",
-    auth: authConfigFromEnv(env),
-    receiptSecret: env.GS_RECEIPT_SECRET && env.GS_RECEIPT_SECRET.length > 0
-      ? env.GS_RECEIPT_SECRET
-      : null,
+    auth,
+    controlSecret,
+    receiptSecret,
     receiptEndpoint: env.GS_CONVEX_RECEIPT_URL && env.GS_CONVEX_RECEIPT_URL.length > 0
       ? env.GS_CONVEX_RECEIPT_URL
       : null,

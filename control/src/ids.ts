@@ -7,9 +7,15 @@ import { randomBytes } from "node:crypto";
 
 // e.g. "a1b2c3d4e5f6-1.4.0-9f8e7d6c5b4a"
 const RELEASE_ID_RE = /^[a-z0-9]+-[0-9]+\.[0-9]+\.[0-9]+-[a-f0-9]{12}$/;
+const WORLD_ID_RE = /^[a-zA-Z0-9:_-]{1,40}$/;
+export const MAX_ADMIN_FLOOR = 1000;
 
 export function isValidReleaseId(id: string): boolean {
   return typeof id === "string" && id.length <= 128 && RELEASE_ID_RE.test(id);
+}
+
+export function isValidWorldId(id: string): boolean {
+  return WORLD_ID_RE.test(id);
 }
 
 export interface ParsedReleaseId {

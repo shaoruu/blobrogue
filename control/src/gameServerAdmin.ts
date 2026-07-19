@@ -12,6 +12,8 @@ import type {
   LogRecord,
   MetricsSnapshot,
   Readiness,
+  GameServerPlayerLoadout,
+  GameServerWorldActionResult,
   VerifyResult,
   WorldSummary,
 } from "./types.js";
@@ -32,6 +34,18 @@ export class DefaultGameServerAdmin implements GameServerAdmin {
   }
   worlds(): Promise<WorldSummary[]> {
     return this.probe.worlds();
+  }
+  warpWorld(
+    worldId: string,
+    floor: number,
+    loadouts?: GameServerPlayerLoadout[],
+  ): Promise<GameServerWorldActionResult> {
+    return this.probe.mutateWorld(loadouts === undefined
+      ? { action: "warp", worldId, floor }
+      : { action: "warp", worldId, floor, loadouts });
+  }
+  forceOpenWorldExit(worldId: string): Promise<GameServerWorldActionResult> {
+    return this.probe.mutateWorld({ action: "force-open-exit", worldId });
   }
   logs(q: LogQuery): Promise<LogRecord[]> {
     return this.probe.logs(q);

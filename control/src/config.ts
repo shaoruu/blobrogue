@@ -27,6 +27,7 @@ export interface ControlConfig {
   gsWsUrl: string;
   gsLogOutFile: string | null;
   gsSyntheticTicketSecret: string | null; // required in production; null permits diagnostics only
+  gsControlSecret: string | null;
 }
 
 function intEnv(env: NodeJS.ProcessEnv, key: string, def: number): number {
@@ -50,16 +51,28 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ControlConfig 
   const isProd = env.NODE_ENV === "production";
   const origins = (env.BRC_ALLOWED_ORIGINS ?? "").split(",").map((s) => s.trim()).filter((s) => s.length > 0);
   const gsSyntheticTicketSecret = optEnv(env, "BRC_GS_SYNTHETIC_TICKET_SECRET");
+  const adminTokenSecret = optEnv(env, "BRC_ADMIN_TOKEN_SECRET");
+  const confirmTokenSecret = optEnv(env, "BRC_CONFIRM_TOKEN_SECRET");
   if (isProd && gsSyntheticTicketSecret === null) {
     throw new Error("policy_probe_secret_missing");
+  }
+  const gsControlSecret = optEnv(env, "BRC_GS_CONTROL_SECRET");
+  if (isProd && gsControlSecret === null) {
+    throw new Error("game_server_control_secret_missing");
+  }
+  if (gsControlSecret !== null
+    && (gsControlSecret === gsSyntheticTicketSecret
+      || gsControlSecret === adminTokenSecret
+      || gsControlSecret === confirmTokenSecret)) {
+    throw new Error("game_server_control_secret_reused");
   }
   return {
     host: strEnv(env, "BRC_HOST", "127.0.0.1"),
     port: intEnv(env, "BRC_PORT", 8091),
     isProd,
 
-    adminTokenSecret: optEnv(env, "BRC_ADMIN_TOKEN_SECRET"),
-    confirmTokenSecret: optEnv(env, "BRC_CONFIRM_TOKEN_SECRET"),
+    adminTokenSecret,
+    confirmTokenSecret,
     tokenAudience: strEnv(env, "BRC_TOKEN_AUDIENCE", "blobrogue-control"),
     adminTokenMaxTtlSec: intEnv(env, "BRC_ADMIN_TOKEN_MAX_TTL_SEC", 900),
     allowedOrigins: origins,
@@ -77,5 +90,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ControlConfig 
     gsWsUrl: strEnv(env, "BRC_GS_WS_URL", "ws://127.0.0.1:8090/ws"),
     gsLogOutFile: optEnv(env, "BRC_GS_LOG_OUT_FILE"),
     gsSyntheticTicketSecret,
+    gsControlSecret,
   };
 }
