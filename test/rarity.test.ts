@@ -226,6 +226,8 @@ function sourceGates(): void {
       const w = createWorld(0xB0B5 + s * 419, 5, { isSandbox: true });
       w.isGodMode = true;
       const p = w.players.get(LOCAL_ID)!;
+      const observer = spawnPlayerInWorld(w, "observer");
+      observer.x = 40; observer.y = 40;
       w.encounterPlayers = 4; // 5 choices per chest — the widest legal set
       const boss = devSpawnEnemy(w, "boss", p.x + 150, p.y);
       for (let t = 1; t <= 60 * 20 && !boss.dead; t++) {

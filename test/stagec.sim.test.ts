@@ -621,7 +621,8 @@ function blessingSafetyTests(): void {
   section("blessing safety: the boss chest offers EVERY member a Rare pick, all holding the descend");
   {
     const w = createWorld(0xB1E58, 5, { isShared: true, skipLocalPlayer: true });
-    const { a } = partyAtExit(w);
+    const { a, b } = partyAtExit(w);
+    b.x = a.x + 500;
     // The encounter snapshot the floor would carry had it been built with both present
     // (P is snapshotted at floor build; these harness worlds spawn after createWorld).
     w.encounterPlayers = 2;
@@ -637,9 +638,9 @@ function blessingSafetyTests(): void {
       && new Set(offers.map((o) => (o as { pid: string }).pid)).size === 2,
       `offers=${offers.length}`);
     const choices = w.pickups.filter((p) => p.isBossChoice);
-    check("the chest produced three personal choices; the opener immediately claims the signature in range",
-      a.hasClaimedBossChoice && a.ownedWeapons.includes("mortar") && choices.length === 2
-      && new Set(["mortar", ...choices.map((p) => p.weapon)]).size === 3,
+    check("the chest produced three personal choices; the nearby opener claims the signature",
+      a.hasClaimedBossChoice && a.ownedWeapons.includes("mortar") && !b.hasClaimedBossChoice
+      && choices.length === 3 && new Set(choices.map((p) => p.weapon)).size === 3,
       choices.map((p) => p.weapon).join(","));
     check("descend held while ANY chest pick is open", w.floor === 5, `floor=${w.floor}`);
     chooseBlessingInWorld(w, "pA", ITEMS[0]);

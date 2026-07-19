@@ -21,7 +21,7 @@ import {
 } from "../src/sim/enemies.js";
 import { generateDungeon } from "../src/sim/dungeon.js";
 import {
-  MARROW, CHOIR, WEAVER, GILDED, GAUNTLET, KING_REWARD_TABLE, bossWeaponChoices,
+  MARROW, CHOIR, WEAVER, GILDED, GAUNTLET, KING_REWARD_TABLE,
   marrowHpForFloor, choirHpForFloor, weaverHpForFloor, gildedHpForFloor, bossHpForFloor,
 } from "../src/sim/balance.js";
 import { WEAPONS, PICKUP_WEAPONS } from "../src/sim/weapons.js";
@@ -901,7 +901,7 @@ function curriculumTests(): void {
       evs.some((e) => e.t === "offerBlessing" && e.rare)
       && p.hasClaimedBossChoice
       && p.ownedWeapons.includes(GAUNTLET.chestWeapon)
-      && w.pickups.filter((k) => k.isBossChoice).length === bossWeaponChoices(1) - 1);
+      && w.pickups.every((k) => !k.isBossChoice));
   }
 
   section("corrected gate §3: the captain two-phase contract (no floor, non-invulnerable)");
