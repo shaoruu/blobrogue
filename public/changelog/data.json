@@ -249,6 +249,29 @@
       "date": "2026-07-18",
       "entries": [
         {
+          "title": "Framerate protects itself now",
+          "body": "the game watches its own frame time, and if things get heavy in a busy fight it quietly dials back cosmetic detail (fewer particles, lighter effects) to hold a smooth framerate, then restores full detail once it clears. It never touches anything you need to see — boss tells, telegraphs, hazards, and the HUD always stay full. You shouldn't notice it working; you'll just stop noticing drops."
+        },
+        {
+          "title": "Razor Halo won't tank your FPS in a crowd",
+          "body": "orbiting through a big pack of enemies used to fire off a burst of hit-effects on every blade contact and stutter the frame. Those contact effects now batch together, so a dense swarm stays smooth — the Halo hits exactly as hard, it just stops spamming the effects.",
+          "media": [
+            "/sprites/weapon_halo.png"
+          ]
+        },
+        {
+          "title": "Arena ultimates hit like a truck (visually)",
+          "body": "the private-arena kit ults got a big glow-up so they actually read as screen-dominating — Gunner's salvo is a bold cyan volley, Mender's triage a green heal pulse, Bulwark's shove a solid steel slab wall, Phantom's slip a violet phase-blur — each on its own color so a 4-way brawl stays readable."
+        },
+        {
+          "title": "Jet stops littering the floor",
+          "body": "the F35 Mirror boss (Jet) left its blue corruption zones behind after it died, cluttering the room. They now clear when Jet goes down, so the floor's clean once the fight's over.",
+          "media": [
+            "/sprites/jet_phase1.png",
+            "/sprites/jet_expose.png"
+          ]
+        },
+        {
           "title": "Razor Halo is a main now",
           "body": "the worn blade-orbit got a heavy buff so you can actually build around it — 4 blades (was 3), faster spin, harder contact, a shorter re-hit, and a bigger, punchier flare on fire. It shreds anything that presses into your space.",
           "media": [
