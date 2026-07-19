@@ -86,6 +86,7 @@ const KEYWORD_RULES = [
   { test: words("firebomb"), paths: GUN("firebomb") },
   { test: words("tracker"), paths: GUN("tracker") },
   { test: words("singularity"), paths: GUN("singularity") },
+  { test: words("oddsmaker"), paths: GUN("oddsmaker") },
   { test: words("umbra"), paths: GUN("umbra") },
   { test: words("reaper"), paths: GUN("reaper") },
   { test: words("hive"), paths: GUN("hive") },

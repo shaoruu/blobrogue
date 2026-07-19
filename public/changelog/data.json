@@ -245,6 +245,68 @@
       ]
     },
     {
+      "version": "2026-07-18",
+      "date": "2026-07-18",
+      "entries": [
+        {
+          "title": "Razor Halo is a main now",
+          "body": "the worn blade-orbit got a heavy buff so you can actually build around it — 4 blades (was 3), faster spin, harder contact, a shorter re-hit, and a bigger, punchier flare on fire. It shreds anything that presses into your space.",
+          "media": [
+            "/sprites/weapon_halo.png"
+          ]
+        },
+        {
+          "title": "Razor Halo grows as you upgrade it",
+          "body": "the orbit now visibly escalates with your build — more blades, thicker glowing trails, and a more dramatic flare at higher upgrade tiers, so a maxed Halo looks as strong as it hits (readability + hit geometry unchanged).",
+          "media": [
+            "/sprites/weapon_halo.png"
+          ]
+        },
+        {
+          "title": "Melee weapons hit like they mean it",
+          "body": "a full class buff so you can main a blade — Cutlass (fast circle-clear), Claymore (heavy flank sweep), Pike (reach thrust), and the Crooked Chain (snappier reel + harder sweep) all got more damage, snappier cadence, and a touch more reach, with their boss pricing paid down so parked uptime stays fair.",
+          "media": [
+            "/sprites/weapon_crook.png"
+          ]
+        },
+        {
+          "title": "Melee feels meaty now",
+          "body": "a juice pass gives each blade its own impact weight — Cutlass reads as a snappy flurry, Claymore lands a heavy low thud with a cleave shockwave on big hits, Pike is a sharp linear skewer — plus combo-scaled blade trails and crit sparks. Performance-safe (effects coalesce, no frame drops)."
+        },
+        {
+          "title": "Melee sounds, per weapon",
+          "body": "a new melee audio layer — distinct swing + impact stems for Cutlass / Claymore / Pike, a cleave boom on heavy hits, a crit ring, and dedicated cues for the new melee blessings (including a decisive execute stinger)."
+        },
+        {
+          "title": "Five melee-native blessings",
+          "body": "real melee build verbs (not stat sticks) — STAGGER PULSE (heavy hits ring a knockback + slow to nearby foes), BLADE WARD (landing a hit grants a brief absorb shield), CLEAVE ON CRIT (a crit swing widens into a bigger arc), MOMENTUM CHARGE (dash or cover ground to load a big next swing), and FINISHER (execute low-HP trash — bosses always immune)."
+        },
+        {
+          "title": "Split Shot is gone — say hi to Side Channel",
+          "body": "the \"just more pellets\" blessing (and its Scattergun cousin) are retired. In their place, Side Channel rewards movement — after a dash or a hard aim-flick, your next shot also fires a ghost round along your *previous* aim. A second projectile you earn by juking, not by hosing."
+        },
+        {
+          "title": "PVP Wave 3 — arena ultimates (private arena)",
+          "body": "the private-room deathmatch now has kit ults built for the arena — Gunner's salvo, Mender's triage burst, Bulwark's shove-wall, and Phantom's blink. Public matchmaking stays off; this is private room-code arena only."
+        },
+        {
+          "title": "PVP melee stays fair",
+          "body": "with melee buffed, blades were killing too fast in duels, so player-vs-player melee damage is dampened in the arena (co-op melee is untouched) to keep fights in the intended ~4-5 second range."
+        },
+        {
+          "title": "\"px\" is gone from blessing text",
+          "body": "blessing descriptions no longer leak raw pixel units (stuff like \"revive from 12px farther\") — they read in plain language now, and a test keeps it that way."
+        },
+        {
+          "title": "Oddsmaker no longer tanks your FPS",
+          "body": "the gamble gun's blast used to stack a full barrel-explosion (screen flash, tons of debris) on every roll and drop frames under rapid fire. Now it gets a proportionate, still-punchy pop — juicy without the stutter.",
+          "media": [
+            "/sprites/weapon_oddsmaker.png"
+          ]
+        }
+      ]
+    },
+    {
       "version": "2026-07-11",
       "date": "2026-07-11",
       "entries": [

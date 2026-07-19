@@ -44,6 +44,19 @@ Visual patch notes with screenshots: [/changelog](/changelog) on the live site.
 - Bug fixes in flight: heart double-consume, leaderboard deepest-floor not recording past a point, name change, sentry animation, Umbra art, drag-and-drop precision.
 - Double-tap dash + rebindable dash key, shop click-outside-to-close, remaining visual polish (bullet art, thumper scorch), music variety, run persistence on reconnect.
 
+## 2026-07-18
+- **Razor Halo is a main now:** the worn blade-orbit got a heavy buff so you can actually build around it — 4 blades (was 3), faster spin, harder contact, a shorter re-hit, and a bigger, punchier flare on fire. It shreds anything that presses into your space.
+- **Razor Halo grows as you upgrade it:** the orbit now visibly escalates with your build — more blades, thicker glowing trails, and a more dramatic flare at higher upgrade tiers, so a maxed Halo looks as strong as it hits (readability + hit geometry unchanged).
+- **Melee weapons hit like they mean it:** a full class buff so you can main a blade — Cutlass (fast circle-clear), Claymore (heavy flank sweep), Pike (reach thrust), and the Crooked Chain (snappier reel + harder sweep) all got more damage, snappier cadence, and a touch more reach, with their boss pricing paid down so parked uptime stays fair.
+- **Melee feels meaty now:** a juice pass gives each blade its own impact weight — Cutlass reads as a snappy flurry, Claymore lands a heavy low thud with a cleave shockwave on big hits, Pike is a sharp linear skewer — plus combo-scaled blade trails and crit sparks. Performance-safe (effects coalesce, no frame drops).
+- **Melee sounds, per weapon:** a new melee audio layer — distinct swing + impact stems for Cutlass / Claymore / Pike, a cleave boom on heavy hits, a crit ring, and dedicated cues for the new melee blessings (including a decisive execute stinger).
+- **Five melee-native blessings:** real melee build verbs (not stat sticks) — STAGGER PULSE (heavy hits ring a knockback + slow to nearby foes), BLADE WARD (landing a hit grants a brief absorb shield), CLEAVE ON CRIT (a crit swing widens into a bigger arc), MOMENTUM CHARGE (dash or cover ground to load a big next swing), and FINISHER (execute low-HP trash — bosses always immune).
+- **Split Shot is gone — say hi to Side Channel:** the "just more pellets" blessing (and its Scattergun cousin) are retired. In their place, Side Channel rewards movement — after a dash or a hard aim-flick, your next shot also fires a ghost round along your *previous* aim. A second projectile you earn by juking, not by hosing.
+- **PVP Wave 3 — arena ultimates (private arena):** the private-room deathmatch now has kit ults built for the arena — Gunner's salvo, Mender's triage burst, Bulwark's shove-wall, and Phantom's blink. Public matchmaking stays off; this is private room-code arena only.
+- **PVP melee stays fair:** with melee buffed, blades were killing too fast in duels, so player-vs-player melee damage is dampened in the arena (co-op melee is untouched) to keep fights in the intended ~4-5 second range.
+- **"px" is gone from blessing text:** blessing descriptions no longer leak raw pixel units (stuff like "revive from 12px farther") — they read in plain language now, and a test keeps it that way.
+- **Oddsmaker no longer tanks your FPS:** the gamble gun's blast used to stack a full barrel-explosion (screen flash, tons of debris) on every roll and drop frames under rapid fire. Now it gets a proportionate, still-punchy pop — juicy without the stutter.
+
 ## 2026-07-11
 - **Enemy shots read as real threats:** enemy bullets are no longer flat circles — they're now hot danger-orbs (a soft glow + a white-hot core that says "dodge this"), kept round + uniform so they're instantly distinct from your own streaky shots, and readability-gated on every biome.
 
