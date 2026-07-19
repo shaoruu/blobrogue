@@ -43,12 +43,14 @@ function startDevServer() {
       env: process.env,
     });
     let settled = false;
+    let timeout = null;
     const onData = (buf) => {
       const text = buf.toString();
       process.stdout.write(`[vite] ${text}`);
       const match = text.match(/Local:\s+(http:\/\/[^\s]+)/);
       if (match && !settled) {
         settled = true;
+        if (timeout !== null) clearTimeout(timeout);
         resolve({ proc, url: match[1].replace(/\/$/, "") });
       }
     };
@@ -57,7 +59,7 @@ function startDevServer() {
     proc.on("exit", (code) => {
       if (!settled) reject(new Error(`vite exited before ready (code ${code})`));
     });
-    setTimeout(() => {
+    timeout = setTimeout(() => {
       if (!settled) reject(new Error("vite did not report a Local URL in time"));
     }, 60000);
   });
