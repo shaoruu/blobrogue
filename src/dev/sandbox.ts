@@ -13,7 +13,13 @@ import type { KitId } from "../sim/kits.js";
 import { WEAPONS } from "../sim/weapons.js";
 import { weaponDisplayStats } from "../sim/weaponStats.js";
 import { createMods } from "../sim/items.js";
-import { ENEMY_ARCHETYPES } from "../sim/enemies.js";
+import {
+  BOSS_FLOORS,
+  BOSS_KINDS as BOSS_FIGHT_KINDS,
+  ENEMY_ARCHETYPES,
+  bossDisplayName,
+  bossKindForFloor,
+} from "../sim/enemies.js";
 import { CAMP_NODES } from "../sim/camp_nodes.js";
 import { COSMETIC_SLOTS, cosmeticsForSlot, bodyPaletteIndex } from "../game/cosmetics.js";
 import type { CosmeticLoadout, CosmeticSlot } from "../game/cosmetics.js";
@@ -21,11 +27,11 @@ import type { BlobLook } from "../ui/blobPreview.js";
 import { spriteThumb, spritePreview, blobThumb, blobPreview, blankThumb, textBadge } from "./thumbs.js";
 import { injectDevStyles } from "./styles.js";
 
-const ENEMY_KINDS: readonly EnemyKind[] = [
+const REGULAR_KINDS: readonly EnemyKind[] = [
   "slime", "bat", "skeleton", "ghost", "spitter", "charger", "burrower", "orbiter", "shielder",
-  "boss", "marrow", "choir", "weaver", "gilded",
-  // Wave 1 deep bosses (spawn the core; it raises its own husks / slabs / mirror pool).
-  "jet", "tithe", "quorum", "gorge", "pale",
+];
+export const ENEMY_KINDS: readonly EnemyKind[] = [
+  ...new Set<EnemyKind>([...REGULAR_KINDS, ...BOSS_FIGHT_KINDS]),
 ];
 const WEAPON_IDS: readonly WeaponId[] = [
   "pistol", "shotgun", "rapid", "smg", "cannon", "burst", "ricochet", "homing", "tesla",
@@ -382,6 +388,20 @@ function buildPanel(game: Game): void {
   realRow.appendChild(btn("Real here", () => game.devLoadRealFloor(floor), "mini"));
   floorSec.appendChild(realRow);
   panel.appendChild(floorSec);
+
+  const bossSec = section("Bosses");
+  const bossRow = h("div", "dev-row");
+  for (const bossFloor of BOSS_FLOORS) {
+    const kind = bossKindForFloor(0, bossFloor);
+    if (kind === null) continue;
+    bossRow.appendChild(btn(
+      `${bossDisplayName(kind)} · F${bossFloor}`,
+      () => { floor = bossFloor; game.devLoadRealFloor(bossFloor); },
+      "mini",
+    ));
+  }
+  bossSec.appendChild(bossRow);
+  panel.appendChild(bossSec);
 
   const paleSec = section("Pale F75 QA");
   const paleSetup = h("div", "dev-row");

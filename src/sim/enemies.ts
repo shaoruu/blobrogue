@@ -557,7 +557,7 @@ export function isBossFloor(floor: number): boolean {
 // Only the three FIGHT bodies are boss kinds (chest drop, danger-end, HP scaling, the
 // HUD bar). The Tithe's slab and the Quorum husks are satellite/mechanic bodies, never
 // boss kinds themselves.
-const BOSS_KINDS: readonly EnemyKind[] = ["boss", "marrow", "choir", "weaver", "gilded", "jet", "tithe", "quorum", "gorge", "sever", "choirmaster", "undertow", "claimant", "wake", "pale"];
+export const BOSS_KINDS: readonly EnemyKind[] = ["boss", "marrow", "choir", "weaver", "gilded", "jet", "tithe", "quorum", "gorge", "sever", "choirmaster", "undertow", "claimant", "wake", "pale"];
 
 export function isBossKind(kind: EnemyKind): boolean {
   return BOSS_KINDS.indexOf(kind) !== -1;
@@ -728,6 +728,24 @@ export const WAKE_FLOOR = 80;
 // The floor the PALE THRONE giant caps (the Pale region — F71-90). The SECOND giant set-piece,
 // pinned exactly like GORGE_FLOOR; F100 Unmaker will add its own pin the same way.
 export const PALE_FLOOR = 75;
+
+export const BOSS_FLOORS: readonly number[] = [
+  BOSS.baseHpFloor,
+  MARROW.baseHpFloor,
+  WEAVER.baseHpFloor,
+  GILDED.baseHpFloor,
+  CHOIR.baseHpFloor,
+  JET.baseHpFloor,
+  TITHE.baseHpFloor,
+  QUORUM.baseHpFloor,
+  GORGE_FLOOR,
+  SEVER_FLOOR,
+  CHOIRMASTER_FLOOR,
+  UNDERTOW_FLOOR,
+  CLAIMANT_FLOOR,
+  PALE_FLOOR,
+  WAKE_FLOOR,
+];
 
 // Walk the seeded ladder from the top so "no immediate repeats" is well-defined and
 // deterministic at any depth (each step rerolls, shifting off the previous pick). Step 0
