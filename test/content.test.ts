@@ -899,8 +899,9 @@ function curriculumTests(): void {
     const evs = step(w, idle(9999));
     check("opening it raises the rare blessing offer and the boss choice set (no blessing before the full clear)",
       evs.some((e) => e.t === "offerBlessing" && e.rare)
-      && w.pickups.filter((k) => k.isBossChoice).length === bossWeaponChoices(1)
-      && w.pickups.some((k) => k.isBossChoice && k.weapon === GAUNTLET.chestWeapon));
+      && p.hasClaimedBossChoice
+      && p.ownedWeapons.includes(GAUNTLET.chestWeapon)
+      && w.pickups.filter((k) => k.isBossChoice).length === bossWeaponChoices(1) - 1);
   }
 
   section("corrected gate §3: the captain two-phase contract (no floor, non-invulnerable)");

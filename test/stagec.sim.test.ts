@@ -637,9 +637,10 @@ function blessingSafetyTests(): void {
       && new Set(offers.map((o) => (o as { pid: string }).pid)).size === 2,
       `offers=${offers.length}`);
     const choices = w.pickups.filter((p) => p.isBossChoice);
-    check("the chest spilled the min(P+1,5) personal boss choices (P2 -> 3, signature first)",
-      choices.length === 3 && choices.some((p) => p.weapon === "mortar")
-      && new Set(choices.map((p) => p.weapon)).size === 3, choices.map((p) => p.weapon).join(","));
+    check("the chest produced three personal choices; the opener immediately claims the signature in range",
+      a.hasClaimedBossChoice && a.ownedWeapons.includes("mortar") && choices.length === 2
+      && new Set(["mortar", ...choices.map((p) => p.weapon)]).size === 3,
+      choices.map((p) => p.weapon).join(","));
     check("descend held while ANY chest pick is open", w.floor === 5, `floor=${w.floor}`);
     chooseBlessingInWorld(w, "pA", ITEMS[0]);
     stepWorldPhase(w, DT, []);
@@ -779,7 +780,7 @@ function chestWeaponTests(): void {
     check("no chest spawns overlapping a prop", chestPropOverlaps === 0, `overlaps=${chestPropOverlaps}`);
   }
 
-  section("chest weapons: opening the chest ejects its weapon in front of the opener");
+  section("chest weapons: opening the chest puts its weapon within the opener's visual pickup range");
   {
     const w = createWorld(0xF100D, 2, { isShared: true, skipLocalPlayer: true });
     const a = spawnPlayerInWorld(w, "pA");
@@ -792,14 +793,9 @@ function chestWeaponTests(): void {
     a.x = chest.x + 1; a.y = chest.y;
     stepWorldPhase(w, DT, []);
     check("chest opened by touch", chest.opened);
-    const drop = w.pickups.find((p) => p.kind === "weapon");
-    check("the chest ejected exactly its stocked weapon", drop !== undefined && drop.weapon === contents, `weapon=${drop?.weapon}`);
-    check("the drop lands clear of the chest (in front, never under it)",
-      drop !== undefined && Math.hypot(drop.x - chest.x, drop.y - chest.y) >= chest.radius + drop.radius,
-      drop ? `dist=${Math.hypot(drop.x - chest.x, drop.y - chest.y).toFixed(0)}px` : "no drop");
-    a.x = drop!.x; a.y = drop!.y;
-    stepWorldPhase(w, DT, []);
-    check("weapon collected into the opener's inventory", a.ownedWeapons.includes(contents), `owned=${a.ownedWeapons.join(",")}`);
+    check("the stocked weapon collects immediately at the visible edge",
+      a.ownedWeapons.includes(contents) && w.pickups.every((p) => p.kind !== "weapon"),
+      `owned=${a.ownedWeapons.join(",")}`);
   }
 
   section("chest weapons: identical seed stocks the identical chests (deterministic contents)");
@@ -832,8 +828,8 @@ function chestWeaponTests(): void {
           stepWorldPhase(w, 1 / 20, []);
           const drop = w.pickups.find((pk) => pk.id === dropId && pk.kind === "weapon");
           if (!drop) {
-            // A boxed-in fallback drops on the chest tile, right under the opener, and
-            // collects the same tick — reachable by definition.
+            // The normal inner ring and boxed-in fallback are both within the opener's
+            // visual pickup range, so either can collect in the opening tick.
             if (a.ownedWeapons.includes(contents)) drops++; else uncollected++;
             continue;
           }

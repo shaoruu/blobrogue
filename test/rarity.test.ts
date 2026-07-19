@@ -239,7 +239,8 @@ function sourceGates(): void {
       p.x = chest.x; p.y = chest.y;
       step(w, idle(9999));
       p.x = 40; p.y = 40;
-      if (w.pickups.some((k) => k.isBossChoice && k.weapon !== null && WEAPONS[k.weapon].rarity === "legendary")) {
+      if (p.ownedWeapons.some((id) => WEAPONS[id].rarity === "legendary")
+        || w.pickups.some((k) => k.isBossChoice && k.weapon !== null && WEAPONS[k.weapon].rarity === "legendary")) {
         sawLegendaryChoice = true;
       }
     }
