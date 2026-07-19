@@ -21,6 +21,7 @@ interface CanvasLog {
   spawnShieldStrokeCalls: number;
   spawnShellFillCalls: number;
   remoteSoftStrokeCalls: number;
+  meleeTrailFillCalls: number;
   // Alpha of every body draw (hero sprite blit or its fallback disc). The protection ring and
   // shell paint in their own amber palette, so these entries isolate the blob body itself —
   // the regression surface for "ring drawn around an empty floor".
@@ -103,6 +104,7 @@ function recordingCanvas(log: CanvasLog): HTMLCanvasElement {
         return () => {
           if (fillStyle === "#f5e6c8" || fillStyle === "#ffd27a") log.spawnShellFillCalls++;
           if (fillStyle === HERO_FALLBACK_TINT) log.bodyDrawAlphas.push(globalAlpha);
+          if (fillStyle === "#c8e0ff") log.meleeTrailFillCalls++;
         };
       }
       if (property === "fillRect") {
@@ -205,6 +207,7 @@ async function main(): Promise<void> {
     spawnShieldStrokeCalls: 0,
     spawnShellFillCalls: 0,
     remoteSoftStrokeCalls: 0,
+    meleeTrailFillCalls: 0,
     bodyDrawAlphas: [],
   };
   const gameInstance = new Game(
@@ -297,6 +300,41 @@ async function main(): Promise<void> {
   game.tick(FIXED_DT);
   check("remote arena ult events survive the positional client filter",
     game.devArenaUltEventCount() === 1 && game.devArenaUltFxCount() === 1);
+
+  rival.weapon = "sword";
+  rival.aimAngle = Math.PI * 0.25;
+  world.tick++;
+  socket.deliver(buildSnapshot(world, "p1", 0, [{
+    id: 2,
+    e: {
+      t: "meleeSwing",
+      pid: "p2",
+      weapon: "sword",
+      x: rival.x,
+      y: rival.y,
+      aim: rival.aimAngle,
+      bx: rival.x,
+      by: rival.y,
+    },
+  }], 2, true, {
+    worldId: "pvp:room:ABCD",
+    roster,
+    identities: new Map([
+      ["p1", { name: "Self", colorIndex: 1 }],
+      ["p2", { name: "Rival", colorIndex: 2 }],
+    ]),
+  }));
+  game.tick(FIXED_DT);
+  canvasLog.meleeTrailFillCalls = 0;
+  game.renderRemotePlayers();
+  check("a remote melee event renders its colored crescent on the observing client",
+    canvasLog.meleeTrailFillCalls > 0, `trailFills=${canvasLog.meleeTrailFillCalls}`);
+  for (let i = 0; i < 12; i++) game.tick(FIXED_DT);
+  canvasLog.meleeTrailFillCalls = 0;
+  game.renderRemotePlayers();
+  check("the client-owned remote swing expires after its authored duration",
+    canvasLog.meleeTrailFillCalls === 0, `trailFills=${canvasLog.meleeTrailFillCalls}`);
+
   check("HUD phase, timer, score, and roster names come from the latest match snapshot",
     hudState.arenaMatch?.phase === "live"
     && hudState.arenaMatch.secondsLeft === 299

@@ -219,9 +219,21 @@ export interface DevSnapshot {
 
 interface RemoteTracer { x: number; y: number; angle: number; life: number; color: string; len?: number; width?: number; isArc?: boolean; }
 interface Corpse { sprite: SpriteName; x: number; y: number; size: number; facing: number; t: number; dur: number; }
-// Per-teammate render bookkeeping: the walk/idle anim plus the dash-FX clocks (edge
-// detection for the takeoff juice, spacing for the afterimage trail and the dust motes).
-interface RemoteAnimEntry { anim: Anim; lastX: number; lastY: number; isDashing: boolean; dashImgCd: number; dashDustCd: number; }
+type MeleeRenderSwing = Pick<MeleeSwing, "timer" | "duration" | "aim" | "arc" | "reach" | "isThrust" | "color">;
+// Per-teammate render bookkeeping: walk/idle, dash FX, and an independent melee sweep.
+interface RemoteAnimEntry {
+  anim: Anim;
+  lastX: number;
+  lastY: number;
+  isDashing: boolean;
+  dashImgCd: number;
+  dashDustCd: number;
+  meleeSwing: MeleeRenderSwing | null;
+  meleeFlipDir: number;
+  meleeTrailLength: number;
+  meleeTrailWidth: number;
+  meleeTrailIntensity: number;
+}
 // A companion pet's client-only render state (META spec §3): the lagged follow body (a trot
 // velocity that scampers to catch up and coasts to a sit — see petFollow.ts), plus an anim
 // clock for the idle-breathe / run cycle. Purely cosmetic — never a sim entity.
@@ -2846,8 +2858,24 @@ export class Game {
         if (!this.isSelfPid(e.pid)) {
           const isVisible = this.isNearCamera(e.x, e.y);
           if (m && isVisible) this.spawnSlashWind(e.x, e.y, e.aim, m, w.color);
-          const entry = this.remoteAnims.get(e.pid);
-          if (entry) triggerRecoil(entry.anim);
+          const entry = this.remoteAnimEntry(e.pid, e.x, e.y);
+          triggerRecoil(entry.anim);
+          if (m) {
+            entry.meleeFlipDir = -entry.meleeFlipDir;
+            entry.meleeTrailLength = feel?.trailLength ?? 1;
+            entry.meleeTrailWidth = feel?.trailWidth ?? 1;
+            entry.meleeTrailIntensity = feel?.trailIntensity ?? 1;
+            const duration = m.swingDur ?? 0.2;
+            entry.meleeSwing = {
+              timer: duration,
+              duration,
+              aim: e.aim,
+              arc: m.arc,
+              reach: m.reach,
+              isThrust: m.isThrust === true,
+              color: w.color,
+            };
+          }
           if (feel) {
             if (!waveAudio.playMeleeSwing(e.weapon, { x: e.x, y: e.y, gain: 0.4 })) {
               this.sfxAt(feel.swingSfx, e.x, e.y, { rate: feel.swingRate, gain: feel.swingGain * 0.4 });
@@ -4489,19 +4517,40 @@ export class Game {
     this.corpses = this.corpses.filter((c) => c.t < 1);
   }
 
-  // Advance every teammate's client-side cosmetics from whichever remote source is active
-  // (legacy co-op presence OR the authoritative server): walk/idle anim + the remote dash FX.
+  private remoteAnimEntry(playerId: string, x: number, y: number): RemoteAnimEntry {
+    let entry = this.remoteAnims.get(playerId);
+    if (entry) return entry;
+    entry = {
+      anim: createAnim(),
+      lastX: x,
+      lastY: y,
+      isDashing: false,
+      dashImgCd: 0,
+      dashDustCd: 0,
+      meleeSwing: null,
+      meleeFlipDir: 1,
+      meleeTrailLength: 1,
+      meleeTrailWidth: 1,
+      meleeTrailIntensity: 1,
+    };
+    this.remoteAnims.set(playerId, entry);
+    return entry;
+  }
+
   private updateRemoteAnims(dt: number) {
     const remotes = this.remotes();
     if (remotes.length === 0 && this.remoteAnims.size === 0) return;
     for (const r of remotes) {
       this.arenaUltVfx.syncRemotePosition(r.playerId, r.x, r.y);
-      let entry = this.remoteAnims.get(r.playerId);
-      if (!entry) { entry = { anim: createAnim(), lastX: r.x, lastY: r.y, isDashing: false, dashImgCd: 0, dashDustCd: 0 }; this.remoteAnims.set(r.playerId, entry); }
+      const entry = this.remoteAnimEntry(r.playerId, r.x, r.y);
       const moving = Math.hypot(r.x - entry.lastX, r.y - entry.lastY) > 0.35;
       const lean = r.x - entry.lastX;
       stepAnim(entry.anim, dt, moving, lean < 0 ? -1 : lean > 0 ? 1 : 0);
       entry.lastX = r.x; entry.lastY = r.y;
+      if (entry.meleeSwing) {
+        entry.meleeSwing.timer -= dt;
+        if (entry.meleeSwing.timer <= 0) entry.meleeSwing = null;
+      }
       this.updateRemoteDashFx(r, entry, dt);
     }
     if (this.remoteAnims.size > remotes.length) {
@@ -5422,7 +5471,18 @@ export class Game {
     this.renderPets(); // client-side cosmetic companions (follow/sit; never a sim entity)
     this.renderAfterimages();
     this.renderHealBeam(); // MENDER Lifebloom tether (under the bodies) — see who you're healing
-    this.renderMeleeSwing();
+    const localSwing = this.meleeSwing;
+    if (localSwing) {
+      this.renderMeleeSwing(
+        this.px - this.renderCam.x,
+        this.py - this.renderCam.y,
+        localSwing,
+        this.meleeFlipDir,
+        this.meleeTrailLength,
+        this.meleeTrailWidth,
+        this.meleeTrailIntensity,
+      );
+    }
     this.renderPlayer();
     this.renderReviveRings();
     this.renderExitCoordination();
@@ -9970,6 +10030,18 @@ export class Game {
       const base = heroBodySprite(r.hat);
       const tinted = this.sprites.tintedSprite(base, color);
       const entry = this.remoteAnims.get(r.playerId);
+      const remoteSwing = entry?.meleeSwing ?? null;
+      if (!r.isDown && !r.isAbsent && !isArenaRespawning && entry && remoteSwing) {
+        this.renderMeleeSwing(
+          sx,
+          sy,
+          remoteSwing,
+          entry.meleeFlipDir,
+          entry.meleeTrailLength,
+          entry.meleeTrailWidth,
+          entry.meleeTrailIntensity,
+        );
+      }
       const xf = entry ? characterXform(entry.anim, CHARACTER_STYLE) : IDENTITY_XFORM;
       const arenaCue = this.arenaUltVfx.bodyCue(r.playerId, false);
       if (entry) this.applyArenaUltPose(arenaCue, xf);
@@ -10007,7 +10079,9 @@ export class Game {
       this.drawCosmetics(r.hat, r.face, sx, sy, 52, r.facing, xf, alpha, false);
 
       if (!r.isDown && !r.isAbsent && !isArenaRespawning) {
-        if (WEAPONS[r.weapon].melee) this.renderHeldMelee(sx, sy, r.aimAngle, r.weapon, 1, null);
+        if (WEAPONS[r.weapon].melee) {
+          this.renderHeldMelee(sx, sy, r.aimAngle, r.weapon, 1, remoteSwing, entry?.meleeFlipDir ?? 1);
+        }
         else this.renderHeldWeapon(sx, sy, r.aimAngle, r.weapon, 1, 0, r.isSluiceDrain);
       }
 
@@ -10418,7 +10492,9 @@ export class Game {
       // so the gun stays glued to the body while moving. The bullet/muzzle ORIGIN stays at the
       // true sim center (psx/psy) — the weapon art is cosmetic and just follows the body.
       const bx = psx + xf.ox, by = psy + xf.oy;
-      if (WEAPONS[this.weapon].melee) this.renderHeldMelee(bx, by, this.aimAngle, this.weapon, alpha, this.meleeSwing);
+      if (WEAPONS[this.weapon].melee) {
+        this.renderHeldMelee(bx, by, this.aimAngle, this.weapon, alpha, this.meleeSwing, this.meleeFlipDir);
+      }
       else this.renderHeldWeapon(
         bx, by, this.aimAngle, this.weapon, alpha, this.playerAnim.recoil,
         this.p.weaponCycles.sluicegate % 2 === 1,
@@ -10695,45 +10771,59 @@ export class Game {
   // exact hit wedge — aim ± arc/2 — alternating direction per swing. The hitbox is the
   // whole wedge for the whole swing (see isPointInMeleeHit), so the visual sweep passes
   // through precisely the area that can hit.
-  private swingBladeAngle(swing: MeleeSwing, t: number): number {
+  private swingBladeAngle(swing: MeleeRenderSwing, t: number, flipDir: number): number {
     const u = t < 0 ? 0 : t > 1 ? 1 : t;
     const k = 1 - (1 - u) * (1 - u) * (1 - u); // easeOutCubic: snaps through, settles at the end
-    return swing.aim + this.meleeFlipDir * swing.arc * (k - 0.5);
+    return swing.aim + flipDir * swing.arc * (k - 0.5);
   }
 
   // The slash VFX: a crescent ribbon that TRAILS the blade through its eased sweep (or a
   // lunging streak for thrusts), plus a white-hot leading edge where the blade is right
   // now. Analytic — sampled from the same easing the blade uses — so the trail and the
   // held sprite always agree at any framerate without retaining trail geometry.
-  private renderMeleeSwing() {
-    const swing = this.meleeSwing;
-    if (!swing || swing.timer <= 0) return;
+  private renderMeleeSwing(
+    cx: number,
+    cy: number,
+    swing: MeleeRenderSwing,
+    flipDir: number,
+    trailLength: number,
+    trailWidth: number,
+    trailIntensity: number,
+  ) {
+    if (swing.timer <= 0) return;
     const t = 1 - swing.timer / swing.duration;
-    if (swing.isThrust) this.renderThrustFx(swing, t);
-    else this.renderSlashArc(swing, t);
+    if (swing.isThrust) this.renderThrustFx(cx, cy, swing, t);
+    else this.renderSlashArc(cx, cy, swing, t, flipDir, trailLength, trailWidth, trailIntensity);
   }
 
-  private renderSlashArc(swing: MeleeSwing, t: number) {
-    const { ctx, renderCam: cam } = this;
-    const sx = this.px - cam.x;
-    const sy = this.py - cam.y;
+  private renderSlashArc(
+    cx: number,
+    cy: number,
+    swing: MeleeRenderSwing,
+    t: number,
+    flipDir: number,
+    trailLength: number,
+    trailWidth: number,
+    trailIntensity: number,
+  ) {
+    const { ctx } = this;
     const inner = 12;
     const outer = swing.reach * (0.9 + 0.1 * Math.sin(t * Math.PI));
-    const trailStart = Math.max(0, t - this.meleeTrailLength);
+    const trailStart = Math.max(0, t - trailLength);
     const trailSpan = t - trailStart;
     const SEGS = 10;
     const fadeOut = 1 - t * t; // the whole crescent dissolves as the swing settles
     ctx.save();
     ctx.globalCompositeOperation = "lighter";
-    ctx.translate(sx, sy);
+    ctx.translate(cx, cy);
     ctx.fillStyle = swing.color;
     // The analytic trailing crescent, brightest at the blade and fading toward the tail.
     for (let i = 0; i < SEGS; i++) {
       const s0 = i / SEGS, s1 = (i + 1) / SEGS; // 0 = tail (swing start), 1 = head (blade)
-      const a0 = this.swingBladeAngle(swing, trailStart + trailSpan * s0);
-      const a1 = this.swingBladeAngle(swing, trailStart + trailSpan * s1);
+      const a0 = this.swingBladeAngle(swing, trailStart + trailSpan * s0, flipDir);
+      const a1 = this.swingBladeAngle(swing, trailStart + trailSpan * s1, flipDir);
       if (Math.abs(a1 - a0) < 0.002) continue;
-      ctx.globalAlpha = 0.5 * this.meleeTrailIntensity * Math.pow(s1, 1.4) * fadeOut;
+      ctx.globalAlpha = 0.5 * trailIntensity * Math.pow(s1, 1.4) * fadeOut;
       const ro = outer * (0.78 + 0.22 * s1); // tail tapers inward
       const ccw = a1 < a0;
       ctx.beginPath();
@@ -10743,19 +10833,19 @@ export class Game {
       ctx.fill();
     }
     // Leading edge: the blade line itself, white-hot over a colored glow.
-    const head = this.swingBladeAngle(swing, t);
+    const head = this.swingBladeAngle(swing, t, flipDir);
     const hx = Math.cos(head), hy = Math.sin(head);
     ctx.lineCap = "round";
-    ctx.globalAlpha = Math.min(1, 0.6 * this.meleeTrailIntensity) * fadeOut;
+    ctx.globalAlpha = Math.min(1, 0.6 * trailIntensity) * fadeOut;
     ctx.strokeStyle = swing.color;
-    ctx.lineWidth = 5 * this.meleeTrailWidth;
+    ctx.lineWidth = 5 * trailWidth;
     ctx.beginPath();
     ctx.moveTo(hx * inner, hy * inner);
     ctx.lineTo(hx * outer, hy * outer);
     ctx.stroke();
-    ctx.globalAlpha = Math.min(1, 0.9 * this.meleeTrailIntensity) * fadeOut;
+    ctx.globalAlpha = Math.min(1, 0.9 * trailIntensity) * fadeOut;
     ctx.strokeStyle = "#ffffff";
-    ctx.lineWidth = 2 * this.meleeTrailWidth;
+    ctx.lineWidth = 2 * trailWidth;
     ctx.beginPath();
     ctx.moveTo(hx * (inner + 4), hy * (inner + 4));
     ctx.lineTo(hx * (outer - 2), hy * (outer - 2));
@@ -10763,14 +10853,12 @@ export class Game {
     ctx.restore();
   }
 
-  private renderThrustFx(swing: MeleeSwing, t: number) {
-    const { ctx, renderCam: cam } = this;
-    const sx = this.px - cam.x;
-    const sy = this.py - cam.y;
+  private renderThrustFx(cx: number, cy: number, swing: MeleeRenderSwing, t: number) {
+    const { ctx } = this;
     const ext = Math.sin(t * Math.PI); // 0 -> full extension -> 0
     const len = swing.reach * (0.45 + 0.55 * ext);
-    const headX = sx + Math.cos(swing.aim) * (12 + len);
-    const headY = sy + Math.sin(swing.aim) * (12 + len);
+    const headX = cx + Math.cos(swing.aim) * (12 + len);
+    const headY = cy + Math.sin(swing.aim) * (12 + len);
     // Colored streak trailing back from the tip (sprite glow with a stroke fallback).
     const isStreak = this.fxTrail("trail_streak", swing.color, headX, headY, len, 13 * (1 - t * 0.3), 0.8 * (1 - t * 0.25), swing.aim);
     ctx.save();
@@ -10781,7 +10869,7 @@ export class Game {
       ctx.strokeStyle = swing.color;
       ctx.lineWidth = 7 * (1 - t * 0.4);
       ctx.beginPath();
-      ctx.moveTo(sx + Math.cos(swing.aim) * 14, sy + Math.sin(swing.aim) * 14);
+      ctx.moveTo(cx + Math.cos(swing.aim) * 14, cy + Math.sin(swing.aim) * 14);
       ctx.lineTo(headX, headY);
       ctx.stroke();
     }
@@ -10790,7 +10878,7 @@ export class Game {
     ctx.strokeStyle = "#ffffff";
     ctx.lineWidth = 2.2;
     ctx.beginPath();
-    ctx.moveTo(sx + Math.cos(swing.aim) * 16, sy + Math.sin(swing.aim) * 16);
+    ctx.moveTo(cx + Math.cos(swing.aim) * 16, cy + Math.sin(swing.aim) * 16);
     ctx.lineTo(headX, headY);
     ctx.stroke();
     ctx.restore();
@@ -10853,9 +10941,16 @@ export class Game {
   // (swingBladeAngle), with a smear of ghost blades behind it — so what you see IS where
   // the hitbox is. Thrusts lunge the pike out along the locked aim instead of arcing.
   // Drawn big (per-weapon bladeSize; the tip lands at the weapon's true reach) so the
-  // weapon reads as a weapon, not a bar. Remotes pass swing=null and get the aim-tracking
-  // idle pose.
-  private renderHeldMelee(cx: number, cy: number, aim: number, weapon: WeaponId, alpha: number, swing: MeleeSwing | null) {
+  // weapon reads as a weapon, not a bar.
+  private renderHeldMelee(
+    cx: number,
+    cy: number,
+    aim: number,
+    weapon: WeaponId,
+    alpha: number,
+    swing: MeleeRenderSwing | null,
+    flipDir: number,
+  ) {
     const img = this.sprites.heldWeapon(weapon);
     if (!img) { this.renderHeldWeapon(cx, cy, aim, weapon, alpha); return; }
     const feel = MELEE_FEEL[weapon];
@@ -10872,7 +10967,7 @@ export class Game {
         angle = swing.aim;
         stretch = Math.sin(t * Math.PI) * swing.reach * 0.34;
       } else {
-        angle = this.swingBladeAngle(swing, t);
+        angle = this.swingBladeAngle(swing, t, flipDir);
       }
       scale = 1 + 0.12 * Math.sin(t * Math.PI); // punch out slightly mid-swing
     }
@@ -10889,8 +10984,8 @@ export class Game {
     const anchor = d * 0.42 + stretch; // shorter: base near the hand, blade reaches out
     // Ghost smears behind an arcing blade sell the speed of the sweep.
     if (isSwinging && !swing.isThrust) {
-      this.drawBlade(img, hx, hy, this.swingBladeAngle(swing, t - 0.22), anchor, d * scale, alpha * 0.16, isFlip, artAngle);
-      this.drawBlade(img, hx, hy, this.swingBladeAngle(swing, t - 0.11), anchor, d * scale, alpha * 0.32, isFlip, artAngle);
+      this.drawBlade(img, hx, hy, this.swingBladeAngle(swing, t - 0.22, flipDir), anchor, d * scale, alpha * 0.16, isFlip, artAngle);
+      this.drawBlade(img, hx, hy, this.swingBladeAngle(swing, t - 0.11, flipDir), anchor, d * scale, alpha * 0.32, isFlip, artAngle);
     }
     this.drawBlade(img, hx, hy, angle, anchor, d * scale, alpha, isFlip, artAngle);
   }
