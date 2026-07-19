@@ -13,6 +13,7 @@ import { getFunctionName } from "convex/server";
 import type { ConvexClient } from "convex/browser";
 
 import { OnlineLobby } from "../src/net/onlineLobby.js";
+import type { RoomLoadoutRejectReason } from "../src/net/api.js";
 import { Session } from "../src/net/session.js";
 import { worldIdForRoomCode, pvpWorldIdForRoomCode } from "../src/net/protocol.js";
 import {
@@ -45,6 +46,11 @@ interface FakeConvexOpts {
   ensureDelayMs?: number;
   // The mode a rooms:join resolves to (a joiner ADOPTS the room's mode). Default "coop".
   joinMode?: "coop" | "pvp";
+  confirmRejection?: {
+    ok: false;
+    reason: RoomLoadoutRejectReason;
+    message?: string;
+  };
 }
 
 // A Convex client double that records every call in order and answers with canned rows.
@@ -84,6 +90,7 @@ function fakeConvex(calls: Call[], opts: FakeConvexOpts = {}): ConvexClient {
           loadoutGeneration: 1, kitId: args.kitId, petId: args.petId,
         };
       case "rooms:confirmLoadout":
+        if (opts.confirmRejection) return opts.confirmRejection;
         return {
           ok: true,
           generation: args.generation,
@@ -397,6 +404,41 @@ async function main(): Promise<void> {
     check("reopen advances generation and invalidates local run authority",
       lobby.loadoutGeneration === 2 && lobby.selfLoadout === null && !lobby.isSelfLoadoutConfirmed);
     lobby.leave();
+  }
+
+  section("loadout confirmation surfaces the server's specific rejection");
+  {
+    const calls: Call[] = [];
+    const client = fakeConvex(calls, {
+      confirmRejection: {
+        ok: false,
+        reason: "pet_unowned",
+        message: "Rescue that pet before choosing it",
+      },
+    });
+    const lobby = new OnlineLobby(client, new Session(client));
+    await lobby.create("coop", LOADOUT);
+    await lobby.beginLoadoutEdit(1);
+    lobby.chooseDraftKit("mender", 1);
+    lobby.chooseDraftPet("pebble", 1);
+    const petError = await lobby.confirmLoadout({ kitId: "mender", petId: "pebble" }, 1);
+    check("an unowned co-op pet names the rescue requirement",
+      petError === "Rescue that pet before choosing it", petError ?? "");
+    lobby.leave();
+
+    const kitCalls: Call[] = [];
+    const kitClient = fakeConvex(kitCalls, {
+      confirmRejection: { ok: false, reason: "kit_locked" },
+    });
+    const kitLobby = new OnlineLobby(kitClient, new Session(kitClient));
+    await kitLobby.create("coop", LOADOUT);
+    await kitLobby.beginLoadoutEdit(1);
+    kitLobby.chooseDraftKit("phantom", 1);
+    kitLobby.chooseDraftPet(null, 1);
+    const kitError = await kitLobby.confirmLoadout({ kitId: "phantom", petId: null }, 1);
+    check("a locked kit names the account-level requirement",
+      kitError === "That kit is locked at your account level", kitError ?? "");
+    kitLobby.leave();
   }
 
   section("reportWorld: the authoritative join/leave is mirrored onto the presence row");

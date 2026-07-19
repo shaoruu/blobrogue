@@ -110,9 +110,21 @@ export type LoadoutMutationResult = {
   profile: ProfileDoc;
 };
 
+export type RoomLoadoutRejectReason =
+  | "run_locked"
+  | "generation_changed"
+  | "edit_changed"
+  | "not_in_room"
+  | "kit_choice_required"
+  | "pet_choice_required"
+  | "unknown_kit"
+  | "kit_locked"
+  | "pet_unowned";
+
 export type RoomLoadoutResult = {
   ok: boolean;
-  reason?: string;
+  reason?: RoomLoadoutRejectReason;
+  message?: string;
   generation?: number;
   kitId?: string;
   petId?: string | null;
@@ -133,7 +145,8 @@ export type ReadyMutationResult = {
 
 export type RoomDraftMutationResult = {
   ok: boolean;
-  reason?: "run_locked" | "generation_changed" | "edit_changed" | "not_in_room" | "unknown_kit" | "kit_locked" | "pet_unowned";
+  reason?: RoomLoadoutRejectReason;
+  message?: string;
   editRevision?: number;
 };
 

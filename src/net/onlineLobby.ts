@@ -1,11 +1,18 @@
 import type { ConvexClient } from "convex/browser";
 import { api } from "./api.js";
-import type { PresenceDoc, RoomStatus, RoomMode } from "./api.js";
+import type {
+  PresenceDoc,
+  RoomDraftMutationResult,
+  RoomLoadoutRejectReason,
+  RoomMode,
+  RoomStatus,
+} from "./api.js";
 import type { Session } from "./session.js";
 import { worldIdForRoomCode, pvpWorldIdForRoomCode } from "./worldId.js";
 import type { PlayableKitId, RunLoadout } from "./kitSelection.js";
 import { isKitId } from "../sim/kits.js";
 import { assertPvpAccessAllowed } from "./pvpFlag.js";
+import { normalizeOnlineError } from "./onlineError.js";
 
 // One room session for AUTHORITATIVE online play — the ONLY multiplayer product path.
 // Convex hosts only the social handshake: the room code, who is EXPECTED in it (roster),
@@ -20,6 +27,26 @@ import { assertPvpAccessAllowed } from "./pvpFlag.js";
 // working, and the two kinds never cross-match (enforced in convex/rooms.ts).
 
 const HEARTBEAT_MS = 5000; // presence rows go stale at 12s; keep the roster alive while we sit here
+
+const LOADOUT_REJECT_COPY: Record<RoomLoadoutRejectReason, string> = {
+  run_locked: "This run already started",
+  generation_changed: "The lobby changed — choose again",
+  edit_changed: "Loadout editing changed — review again",
+  not_in_room: "You are no longer in this room",
+  kit_choice_required: "Choose a kit for this run",
+  pet_choice_required: "Choose a pet or No Pet for this run",
+  unknown_kit: "That kit does not exist",
+  kit_locked: "That kit is locked at your account level",
+  pet_unowned: "Rescue that pet before choosing it",
+};
+
+function loadoutRejectMessage(
+  result: Pick<RoomDraftMutationResult, "reason" | "message">,
+  fallback: string,
+): string {
+  if (result.message) return result.message;
+  return result.reason ? LOADOUT_REJECT_COPY[result.reason] : fallback;
+}
 
 export interface LobbyPlayer {
   playerId: string;
@@ -421,7 +448,9 @@ export class OnlineLobby {
         editRevision,
         kitId,
       });
-      if (!result.ok) this.loadoutDraftError = "Could not save the kit draft";
+      if (!result.ok) {
+        this.loadoutDraftError = loadoutRejectMessage(result, "Could not save the kit draft");
+      }
     }).catch(() => { this.loadoutDraftError = "Could not save the kit draft"; });
   }
 
@@ -451,7 +480,9 @@ export class OnlineLobby {
         editRevision,
         petId,
       });
-      if (!result.ok) this.loadoutDraftError = "Could not save the pet draft";
+      if (!result.ok) {
+        this.loadoutDraftError = loadoutRejectMessage(result, "Could not save the pet draft");
+      }
     }).catch(() => { this.loadoutDraftError = "Could not save the pet draft"; });
   }
 
@@ -469,12 +500,7 @@ export class OnlineLobby {
         editRevision,
       });
       if (!result.ok || result.kitId === undefined) {
-        if (result.reason === "generation_changed") return "The lobby changed — choose again";
-        if (result.reason === "edit_changed") return "Loadout editing changed — review again";
-        if (result.reason === "run_locked") return "This run already started";
-        if (result.reason === "kit_locked") return "That kit is locked at your account level";
-        if (result.reason === "pet_unowned") return "Rescue that pet before choosing it";
-        return "Could not confirm that loadout";
+        return loadoutRejectMessage(result, "Could not confirm that loadout");
       }
       this.loadoutGeneration = result.generation ?? generation;
       this.acceptLoadout(result.kitId, result.petId ?? null);
@@ -492,8 +518,8 @@ export class OnlineLobby {
         this.emit();
       }
       return null;
-    } catch {
-      return "Could not confirm that loadout";
+    } catch (error) {
+      return normalizeOnlineError(error, "Could not confirm that loadout").message;
     }
   }
 
