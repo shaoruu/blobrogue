@@ -3534,7 +3534,7 @@ export function dropWeaponInWorld(w: WorldState, pid: PlayerId, id: WeaponId, ev
   delete p.weaponFireCooldowns[id];
   if (p.weapon === id) equipWeapon(p, p.ownedWeapons[Math.min(idx, p.ownedWeapons.length - 1)]);
   const [x, y] = spot;
-  w.pickups.push({ id: w.nextPickupId++, kind: "weapon", x, y, radius: 16, weapon: id });
+  w.pickups.push({ id: w.nextPickupId++, kind: "weapon", x, y, radius: C.WEAPON_PICKUP_RADIUS, weapon: id });
   ev.push({ t: "weaponDrop", weapon: id, x, y });
   refreshMaxedShopBlessings(w, p);
   return true;
@@ -3589,7 +3589,7 @@ export function swapWeaponInWorld(w: WorldState, pid: PlayerId, pickupId: number
   p.ownedWeapons.splice(dropIdx, 1);
   delete p.weaponFireCooldowns[dropId];
   const [x, y] = spot;
-  w.pickups.push({ id: w.nextPickupId++, kind: "weapon", x, y, radius: 16, weapon: dropId });
+  w.pickups.push({ id: w.nextPickupId++, kind: "weapon", x, y, radius: C.WEAPON_PICKUP_RADIUS, weapon: dropId });
   ev.push({ t: "weaponDrop", weapon: dropId, x, y });
   acquireWeapon(w, p, grant);
   delete p.weaponFireCooldowns[dropId];
@@ -16344,7 +16344,7 @@ function ejectChestLoot(w: WorldState, c: Chest, loot: ChestLoot[], base: number
     placed.push({ x, y });
     if (item.kind === "weapon") {
       w.pickups.push({
-        id: w.nextPickupId++, kind: "weapon", x, y, radius: 16, weapon: item.weapon,
+        id: w.nextPickupId++, kind: "weapon", x, y, radius: C.WEAPON_PICKUP_RADIUS, weapon: item.weapon,
         isBossChoice: item.isBossChoice, isMystery: item.isMystery, twist: item.twist,
       });
       ev.push({ t: "lootDrop", x, y, color: item.isMystery ? MYSTERY_COLOR : WEAPON_RARITY_COLOR[WEAPONS[item.weapon].rarity] });

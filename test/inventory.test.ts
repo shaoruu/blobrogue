@@ -7,6 +7,9 @@
 //
 // Run: npm run test:inventory
 
+import "./harness/domShim.js";
+import { domCanvas, domMinimap, domOverlay } from "./harness/domShim.js";
+
 import {
   createWorld, spawnPlayerInWorld, acquireWeaponInWorld, switchWeaponInWorld,
   reorderWeaponsInWorld, dropWeaponInWorld, swapWeaponInWorld, stepWorld, devSpawnProp, devSpawnChest,
@@ -19,7 +22,11 @@ import { TILE } from "../src/sim/types.js";
 import type { WeaponId } from "../src/sim/types.js";
 import { toSelfWire, applySelfWire } from "../src/net/protocol.js";
 import { LocalTransport } from "../src/client/transport.js";
-import { PROP_RADIUS, WEAPON_DROP_RADII, CHEST_LOOT_WALL_MARGIN, MAX_OWNED_WEAPONS, WEAPON_SWAP_RANGE } from "../src/sim/constants.js";
+import { Game } from "../src/game/game.js";
+import {
+  PROP_RADIUS, WEAPON_PICKUP_RADIUS, WEAPON_DROP_RADII, CHEST_LOOT_WALL_MARGIN,
+  MAX_OWNED_WEAPONS, WEAPON_SWAP_RANGE,
+} from "../src/sim/constants.js";
 
 let passed = 0, failed = 0;
 const failures: string[] = [];
@@ -241,6 +248,19 @@ function dropCollectionTests(): void {
   check("world holds no leftover weapon pickup", !w.pickups.some((q) => q.kind === "weapon"));
 }
 
+function weaponPickupRangeTests(): void {
+  section("weapon pickup range matches the visible 38px footprint");
+  const { w, p } = sharedWorld();
+  const distance = 37;
+  const pkId = dropPickup(w, p.x + distance, p.y, "flamer");
+  const inputs = new Map<PlayerId, InputCmd>([[p.id, IDLE_INPUT]]);
+  check("weapon pickups use the shared 20px radius", w.pickups[0]?.radius === WEAPON_PICKUP_RADIUS && WEAPON_PICKUP_RADIUS === 20);
+  check("the regression pickup is beyond the old 34px range", distance > p.pr + 16);
+  stepWorld(w, inputs, 1 / 60);
+  check("an unowned gun 37px away collects into an empty slot",
+    p.ownedWeapons.includes("flamer") && !w.pickups.some((q) => q.id === pkId));
+}
+
 // Enough distinct non-pistol ids to fill any sane cap (players start with the pistol).
 const FILLERS: WeaponId[] = ["shotgun", "railgun", "tesla", "smg", "cannon", "rapid", "burst", "homing"];
 
@@ -253,7 +273,7 @@ function fillToCap(w: WorldState, pid: PlayerId): void {
 
 function dropPickup(w: WorldState, x: number, y: number, weapon: WeaponId, isBossChoice = false): number {
   const id = w.nextPickupId++;
-  w.pickups.push({ id, kind: "weapon", x, y, radius: 16, weapon, isBossChoice: isBossChoice || undefined });
+  w.pickups.push({ id, kind: "weapon", x, y, radius: WEAPON_PICKUP_RADIUS, weapon, isBossChoice: isBossChoice || undefined });
   return id;
 }
 
@@ -456,6 +476,48 @@ function swapDeterminismTests(): void {
   check("two identical runs agree byte-for-byte", run() === run());
 }
 
+interface PickupSwapGameAccess {
+  devStartSandbox(): void;
+  devWorld(): WorldState;
+  tickSwapPrompt(): void;
+  stop(): void;
+  input: {
+    keyDown(key: string, isRepeat?: boolean): boolean;
+    keyUp(key: string): void;
+  };
+}
+
+function keyboardSwapInputTests(): void {
+  section("keyboard pickup: E swaps the floor gun into the equipped slot at a full hotbar");
+  const gameInstance = new Game(
+    domCanvas as object as HTMLCanvasElement,
+    domMinimap as object as HTMLCanvasElement,
+    domOverlay as object as HTMLElement,
+    () => {},
+    () => {},
+  );
+  const game = gameInstance as object as PickupSwapGameAccess;
+  game.devStartSandbox();
+  const w = game.devWorld();
+  const p = w.players.get(LOCAL_ID)!;
+  fillToCap(w, LOCAL_ID);
+  const equipped = p.ownedWeapons[2];
+  switchWeaponInWorld(w, LOCAL_ID, equipped);
+  const pkId = dropPickup(w, p.x + 37, p.y, "flamer");
+
+  game.tickSwapPrompt();
+  check("full hotbar leaves the in-range floor gun available for a swap", w.pickups.some((q) => q.id === pkId));
+  game.input.keyDown("e");
+  game.input.keyUp("e");
+
+  check("E claims and equips the floor gun through the swap command",
+    p.weapon === "flamer" && p.ownedWeapons.includes("flamer") && !w.pickups.some((q) => q.id === pkId));
+  check("E replaces the previously equipped slot and drops that gun",
+    !p.ownedWeapons.includes(equipped) && w.pickups.some((q) => q.kind === "weapon" && q.weapon === equipped));
+  check("the keyboard swap preserves the hotbar cap", p.ownedWeapons.length === MAX_OWNED_WEAPONS);
+  game.stop();
+}
+
 function localTransportParityTests(): void {
   section("solo parity: the SAME commands flow through LocalTransport (one UX/path)");
   const t = new LocalTransport();
@@ -504,11 +566,13 @@ function main(): void {
   dropRuleTests();
   dropPlacementTests();
   dropCollectionTests();
+  weaponPickupRangeTests();
   capTests();
   duplicatePickupTests();
   swapTests();
   slotSelectabilityTests();
   swapDeterminismTests();
+  keyboardSwapInputTests();
   localTransportParityTests();
   process.stdout.write(`\n${passed} checks passed, ${failed} failed\n`);
   if (failed > 0) { process.stdout.write(`FAILURES:\n${failures.map((f) => "  - " + f).join("\n")}\n`); process.exit(1); }
