@@ -647,6 +647,7 @@ function blessingSafetyTests(): void {
     stepWorldPhase(w, DT, []);
     check("one member picking is not enough — the gate waits for all", w.floor === 5, `floor=${w.floor}`);
     chooseBlessingInWorld(w, "pB", ITEMS[1]);
+    b.x = a.x; b.y = a.y;
     stepWorldPhase(w, DT, []);
     check("party descends once EVERY Rare pick resolves", w.floor === 6, `floor=${w.floor}`);
   }
