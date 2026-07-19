@@ -506,6 +506,7 @@ function buildPanel(game: Game): void {
   const readSec = section("Readout");
   const read = h("div", "dev-read");
   const fpsV = h("span", "v");
+  const fxQualityV = h("span", "v");
   const enemyV = h("span", "v");
   const bulletV = h("span", "v");
   const partV = h("span", "v");
@@ -513,6 +514,7 @@ function buildPanel(game: Game): void {
   const lightV = h("span", "v");
   read.append(
     h("span", "k", "fps"), fpsV,
+    h("span", "k", "fx quality"), fxQualityV,
     h("span", "k", "enemies"), enemyV,
     h("span", "k", "bullets"), bulletV,
     h("span", "k", "particles"), partV,
@@ -558,7 +560,9 @@ function buildPanel(game: Game): void {
     fpsV.classList.toggle("warn", s.fps < 50);
     fpsMeterRate.textContent = `${roundedFps} FPS`;
     fpsMeterRate.classList.toggle("warn", s.fps < 50);
-    fpsMeterDetail.textContent = `${s.fps > 0 ? (1000 / s.fps).toFixed(1) : "--.-"} ms \u00b7 ${Math.round(low)}\u2013${Math.round(high)}`;
+    const fxQualityPercent = Math.round(s.fxQuality * 100);
+    fpsMeterDetail.textContent = `${s.frameMsEma.toFixed(1)} ms EMA \u00b7 FX ${fxQualityPercent}% \u00b7 ${Math.round(low)}\u2013${Math.round(high)}`;
+    fxQualityV.textContent = `${fxQualityPercent}% \u00b7 ${s.frameMsEma.toFixed(1)} ms`;
     enemyV.textContent = String(s.enemies);
     bulletV.textContent = String(s.bullets);
     partV.textContent = String(s.particles);
