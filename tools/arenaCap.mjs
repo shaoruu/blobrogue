@@ -41,6 +41,7 @@ function startDevServer() {
     const proc = spawn("npm", ["run", "dev", "--", "--host", "127.0.0.1"], {
       cwd: new URL("..", import.meta.url),
       env: process.env,
+      detached: true,
     });
     let settled = false;
     let timeout = null;
@@ -115,7 +116,13 @@ async function main() {
     }
   } finally {
     await browser.close();
-    if (devProc !== null) devProc.kill("SIGTERM");
+    if (devProc !== null) {
+      try {
+        process.kill(-devProc.pid, "SIGTERM");
+      } catch {
+        devProc.kill("SIGTERM");
+      }
+    }
   }
 
   console.log(`\ncaptured ${captured.length} arena screenshots:`);
