@@ -753,7 +753,7 @@ function spawnGraceTests(): void {
 // Bug regression: "i often see guns on top of chests?" Floor weapons used to spawn loose at
 // room centers — the same tiles chests and props prefer — so guns sat stacked on chests.
 // They are now chest CONTENTS: no loose weapon pickup exists at floor build, chests never
-// land on prop tiles, and opening the chest ejects its weapon just in front of the opener.
+// land on prop tiles, and opening the chest ejects its weapon toward the opener.
 function chestWeaponTests(): void {
   const DT = 1 / 20;
 
@@ -779,7 +779,7 @@ function chestWeaponTests(): void {
     check("no chest spawns overlapping a prop", chestPropOverlaps === 0, `overlaps=${chestPropOverlaps}`);
   }
 
-  section("chest weapons: opening the chest ejects its weapon in front of the opener");
+  section("chest weapons: opening the chest collects its ejected weapon within the visible footprint");
   {
     const w = createWorld(0xF100D, 2, { isShared: true, skipLocalPlayer: true });
     const a = spawnPlayerInWorld(w, "pA");
@@ -790,16 +790,14 @@ function chestWeaponTests(): void {
     const chest = w.chests.find((c) => c.weapon !== undefined)!;
     const contents = chest.weapon!;
     a.x = chest.x + 1; a.y = chest.y;
-    stepWorldPhase(w, DT, []);
+    const events: SimEvent[] = [];
+    stepWorldPhase(w, DT, events);
     check("chest opened by touch", chest.opened);
-    const drop = w.pickups.find((p) => p.kind === "weapon");
-    check("the chest ejected exactly its stocked weapon", drop !== undefined && drop.weapon === contents, `weapon=${drop?.weapon}`);
-    check("the drop lands clear of the chest (in front, never under it)",
-      drop !== undefined && Math.hypot(drop.x - chest.x, drop.y - chest.y) >= chest.radius + drop.radius,
-      drop ? `dist=${Math.hypot(drop.x - chest.x, drop.y - chest.y).toFixed(0)}px` : "no drop");
-    a.x = drop!.x; a.y = drop!.y;
-    stepWorldPhase(w, DT, []);
-    check("weapon collected into the opener's inventory", a.ownedWeapons.includes(contents), `owned=${a.ownedWeapons.join(",")}`);
+    check("the weapon 35px from the opener collects in the same tick",
+      a.ownedWeapons.includes(contents) && !w.pickups.some((p) => p.kind === "weapon"),
+      `owned=${a.ownedWeapons.join(",")}`);
+    check("the immediate collection emits the authoritative weapon pickup event",
+      events.some((event) => event.t === "pickup" && event.pid === a.id && event.kind === "weapon"));
   }
 
   section("chest weapons: identical seed stocks the identical chests (deterministic contents)");
