@@ -196,10 +196,10 @@ export const SANCTUARY = {
 // delayed — a Mender under fire still instantly saves a teammate. LIFEBLOOM.fraction is untouched
 // (lowering it would weaken ALLY healing, which is not the problem).
 export const MENDER_HEAL_CLAMP = {
-  perTargetHpPerSec: 1.5, // one ALLY: combined Mender HoT ≤ this (tops a focused teammate) — unchanged
+  perTargetHpPerSec: 0.9, // one ALLY: combined Mender HoT ≤ this — nerf 1.5->0.9 (balancer 2026-07-19): 1.5 fully negated sustained incoming on a duo partner (unkillable); 0.9 still heals a full bar in ~7-11s but can't out-pace focused fire
   partyHpPerSec: 3.0,     // whole party: combined Mender HoT ≤ this — unchanged
-  selfHpPerSec: 0.6,      // SELF ceiling (guard): sustained self-heal ≤ this; admits Lifebloom's ~0.5/s
-  selfHealDelaySec: 1.5,  // SELF-heal pauses this long after the Mender takes a hit (PRIMARY; ally never pauses)
+  selfHpPerSec: 0.4,      // SELF ceiling (guard) nerf 0.6->0.4 (2026-07-19): Ian still felt immortal as Mender; tighten sustained self-heal
+  selfHealDelaySec: 2.5,  // SELF-heal pause after a hit — PRIMARY self lever, nerf 1.5->2.5 (2026-07-19): longer pause so a Mender under fire can't facetank; ally never pauses
 } as const;
 
 // MENDER HEAL-PULSE (Wave 2 SIGNATURE): a short-CD DIRECTED active heal — a felt VERB on top of

@@ -231,9 +231,14 @@ function sanctuaryTests(): void {
   check("on-cast burst healed the wounded ally (+2)", ally.hp === 3, `hp=${ally.hp}`);
   const zone = w.effects.find((e) => e.kind === "sanctuary")!;
   check("the zone lifetime is the fixed 4.0s", Math.abs(zone.maxLife - ticksToSec(SANCTUARY.lifetimeTicks)) < 1e-6);
-  // Stand in the zone for its whole life: the HoT tops the ally but NEVER exceeds maxHp.
+  // Stand in the zone for its whole life: the HoT heals within the clamped ally rate and NEVER
+  // exceeds maxHp. Post 2026-07-19 nerf (perTargetHpPerSec 0.9) a single 4s zone tops up PARTIALLY,
+  // not a full bar — healing supplements survival, it no longer replaces it. The invariant that
+  // must always hold: HP only goes up (or holds) and never overheals past maxHp.
+  const hpBeforeHot = ally.hp;
   for (let i = 0; i < SANCTUARY.lifetimeTicks + 5; i++) tick(w, () => idle());
-  check("the HoT tops the ally to (not past) maxHp — overheal does nothing", ally.hp === ally.maxHp, `hp=${ally.hp}/${ally.maxHp}`);
+  check("the clamped HoT never overheals past maxHp and never drops the ally",
+    ally.hp >= hpBeforeHot && ally.hp <= ally.maxHp, `hp=${ally.hp}/${ally.maxHp}`);
   check("the zone expired on its fixed lifetime", !w.effects.some((e) => e.kind === "sanctuary"));
   // A HoT never revives a downed ally (spec §7).
   const w2 = freshWorld();
@@ -312,7 +317,7 @@ function phaseTests(): void {
 
 function healClampTests(): void {
   section("§10 MENDER incoming-heal clamp: two Menders' HoT on ONE ally does NOT double-stack");
-  check("the per-target + party heal caps are exposed as tunables", MENDER_HEAL_CLAMP.perTargetHpPerSec === 1.5 && MENDER_HEAL_CLAMP.partyHpPerSec === 3.0);
+  check("the per-target + party heal caps are exposed as tunables", MENDER_HEAL_CLAMP.perTargetHpPerSec === 0.9 && MENDER_HEAL_CLAMP.partyHpPerSec === 3.0);
   // Two Menders both drop Sanctuary over one wounded ally; the sustained HoT is rate-clamped.
   const w = freshWorld();
   spawnPlayerInWorld(w, "m1"); setPlayerKit(w, "m1", "mender");
