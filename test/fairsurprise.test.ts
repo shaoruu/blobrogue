@@ -515,6 +515,9 @@ function reshapeGates(): void {
     check("even at P3 the interior stays a readable safe pocket", safePocketOk());
     check("even at P3 a walkable route survives", hasRoute(w, p.x, p.y, boss.x, boss.y));
     check("the P3 corruption reshape still opens NO window", !isBossExposed(boss));
+    for (let t = 0; t < 60 * 2 && !boss.dead; t++) step(w, idle(1000 + t));
+    check("the queued phase damage kills JET through the boss-death path", boss.dead);
+    check("JET's corruption clears when boss danger ends", corruptCount() === 0);
   }
 }
 

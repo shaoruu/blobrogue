@@ -4907,8 +4907,8 @@ function killEnemy(
 function endBossDanger(w: WorldState, boss: Enemy, ev: SimEvent[]): void {
   w.bullets = w.bullets.filter((b) => b.friendly);
   w.pendingSpawns = [];
-  // Pending ambush blooms fizzle with their summoner: death always ends the danger.
-  w.hazards = w.hazards.filter((h) => h.kind !== "omen");
+  // Pending ambush blooms and JET's persistent corruption fizzle when boss danger ends.
+  w.hazards = w.hazards.filter((h) => h.kind !== "omen" && h.kind !== "corrupt");
   for (const other of w.enemies) {
     if (other === boss || other.dead) continue;
     other.dead = true;
