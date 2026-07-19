@@ -558,10 +558,10 @@ function gate8PhantomMarkBossCap(): void {
 
 // A Mender is a great healer OF OTHERS and a POOR SELF-sustainer (balancer 2026-07-13). Two
 // surgical, self-ONLY levers, and WHICH does the work matters: the post-hit DELAY (selfHealDelaySec
-// 1.5s) is the PRIMARY fix — it drops effective self-heal to ~0.13 HP/s during active combat so a
-// solo Mender's HP drifts DOWN in a fight; the selfHpPerSec 0.6 sub-clamp is the CEILING GUARD —
-// it admits Lifebloom's natural ~0.5 HP/s untouched and only caps STACKED self output. ALLY
-// healing (perTarget 1.5 / party 3.0) is unchanged and NEVER delayed. This gate proves all of it.
+// 2.5s) is the PRIMARY fix — it nearly stops self-heal during sustained active combat so a solo
+// Mender's HP drifts DOWN; the selfHpPerSec 0.4 sub-clamp is the CEILING GUARD. Lifebloom alone
+// realizes ~0.25 HP/s through its 2s source cadence and the 2.5s self ceiling cadence. ALLY
+// healing (perTarget 0.9 / party 3.0) is NEVER delayed. This gate proves all of it.
 
 // A combat poke cadence COPRIME with Lifebloom's 40-tick cadence (~2s, gcd(41,40)=1), so a hit's
 // phase drifts across Lifebloom fires and the delay gates a realistic fraction of them (rather
@@ -654,7 +654,7 @@ function measureSelfPulseGate(): { unhitLands: boolean; withinDelayRefused: bool
   tick(w, (p) => ({ ...idleCmd(), aim: 0, pulse: p.id === "m" }));
   const withinDelayRefused = m.hp === b2 && m.pulseReadyAtTick <= w.tick; // not healed, button not spent
 
-  for (let t = 0; t < TICKS_PER_SECOND * 2; t++) tick(w, () => idleCmd()); // let the delay lapse (no more hits)
+  for (let t = 0; t < Math.ceil(TICKS_PER_SECOND * MENDER_HEAL_CLAMP.selfHealDelaySec); t++) tick(w, () => idleCmd());
   m.hp = 200; m.pulseReadyAtTick = 0; m.selfHealReadyTick = 0;
   const b3 = m.hp;
   tick(w, (p) => ({ ...idleCmd(), aim: 0, pulse: p.id === "m" }));
@@ -680,14 +680,14 @@ function measureAllyPulseUnaffectedByMenderHit(): boolean {
 function gate9MenderSelfSustain(): void {
   section("GATE 9 — Mender self-sustain: delay-primary + ceiling-guard, ally healing untouched");
 
-  // GUARD (selfHpPerSec 0.6): the sustained self-heal ceiling. Out of combat, Lifebloom's natural
-  // ~0.5/s is ADMITTED untouched (NOT zeroed — the cadence is slower than the ceiling), and even
-  // stacking Sanctuary-on-self + self-pulse can't push sustained self-heal above the 0.6/s ceiling.
+  // GUARD (selfHpPerSec 0.4): the sustained self-heal ceiling. Out of combat, Lifebloom remains
+  // non-zero at ~0.25/s through the source + ceiling cadences, and even stacking Sanctuary-on-self
+  // + self-pulse can't push sustained self-heal above the 0.4/s ceiling.
   const selfBase = measureMenderSelfHealRate({ seconds: 12 }); // Lifebloom only, out of combat
   const selfStacked = measureMenderSelfHealRate({ seconds: 30, useSanctuary: true, selfPulse: true });
   const allyRate = measureMenderAllyHealRate(false);
-  check("out-of-combat self-heal is PRESERVED (Lifebloom ~0.5 HP/s admitted, not zeroed)",
-    selfBase > 0.4 && selfBase <= MENDER_HEAL_CLAMP.selfHpPerSec + 1e-9,
+  check("out-of-combat self-heal is PRESERVED (Lifebloom remains non-zero at ~0.25 HP/s)",
+    selfBase > 0.2 && selfBase <= MENDER_HEAL_CLAMP.selfHpPerSec + 1e-9,
     `self=${selfBase.toFixed(3)} HP/s`);
   check(`ceiling guard: stacking Sanctuary-on-self + self-pulse stays ≤ selfHpPerSec (${MENDER_HEAL_CLAMP.selfHpPerSec} HP/s)`,
     selfStacked <= MENDER_HEAL_CLAMP.selfHpPerSec + 0.05,
@@ -696,10 +696,10 @@ function gate9MenderSelfSustain(): void {
     selfStacked < allyRate,
     `self≤${selfStacked.toFixed(3)} vs ally=${allyRate.toFixed(3)} HP/s`);
 
-  // PRIMARY (selfHealDelaySec 1.5): under active combat (poked ~every 2s) the delay collapses
-  // effective self-heal to ~0.13/s — well under intake — so it can no longer pin the Mender full.
+  // PRIMARY (selfHealDelaySec 2.5): under active combat (poked ~every 2s) the delay collapses
+  // effective self-heal to nearly zero — well under intake — so it cannot pin the Mender full.
   // Measured over a long window so the hit phase decorrelates from Lifebloom's cadence (the delay
-  // gates ~73% of fires: pause 1.5s of every ~2s poke → ~0.13 HP/s).
+  // exceeds the poke interval and gates nearly every fire).
   const selfCombat = measureMenderSelfHealRate({ seconds: 80, pokeEveryTicks: COMBAT_POKE_TICKS });
   check("PRIMARY: the post-hit delay collapses effective self-heal during active combat (≪ out-of-combat, < 0.3 HP/s)",
     selfCombat < 0.3 && selfCombat < selfBase,

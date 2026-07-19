@@ -1728,11 +1728,12 @@ function isSelfHealDelayed(w: WorldState, p: PlayerSim): boolean {
 // STACKED self output (Sanctuary-on-self + self-pulse) is throttled to the ceiling.
 const SELF_HEAL_TICKS_PER_HP = Math.ceil(TICKS_PER_SECOND / MENDER_HEAL_CLAMP.selfHpPerSec);
 
-// §10 incoming-heal ROOM (whole HP) allowed RIGHT NOW. For an ALLY it's the shared rolling 1s
+// §10 incoming-heal ROOM allowed RIGHT NOW. For an ALLY it's the shared rolling 1s
 // per-target budget AND the party-wide budget, so combined Mender output (any Mender count,
 // Lifebloom + Sanctuary) never double-stacks or out-heals incoming damage. For a SELF-heal the
 // per-target term is instead the selfHpPerSec CEILING (≤1 HP per SELF_HEAL_TICKS_PER_HP); the
-// party budget is shared and unchanged.
+// party budget is shared and unchanged. Fractional ally room is preserved because sub-1 HP/s
+// budgets cannot be represented by flooring each heal attempt to whole HP.
 function incomingHealRoom(w: WorldState, target: PlayerSim, isSelf: boolean): number {
   const now = w.tick;
   const win = TICKS_PER_SECOND; // 1s rolling window
@@ -1746,7 +1747,7 @@ function incomingHealRoom(w: WorldState, target: PlayerSim, isSelf: boolean): nu
     const targetHealed = tw && now - tw.tick < win ? tw.hp : 0;
     perTargetRoom = MENDER_HEAL_CLAMP.perTargetHpPerSec - targetHealed;
   }
-  return Math.max(0, Math.floor(Math.min(perTargetRoom, partyRoom) + 1e-9));
+  return Math.max(0, Math.min(perTargetRoom, partyRoom));
 }
 
 // Commit `hp` of actually-applied Mender healing against the party budget and, per target type,
@@ -2103,7 +2104,7 @@ function updateUlts(w: WorldState, ev: SimEvent[]): void {
   for (const p of w.players.values()) {
     if (!isRealKit(p.kitId) || p.isDown || p.isAbsent || p.hp <= 0) continue;
     if (inCombat) accrueUlt(p, "time", timeGrant);
-    // MENDER LIFEBLOOM payout: bank credit pays out in WHOLE HP on the capped cadence, routed
+    // MENDER LIFEBLOOM payout: bank credit pays out on the capped cadence, routed
     // through the shared incoming-heal clamp so it never out-heals or double-stacks (spec §2.2).
     if (p.kitId === "mender" && w.tick % LIFEBLOOM.healEveryTicks === 0 && p.passiveState >= 1) {
       const target = lowestHpAllyInRange(w, p, LIFEBLOOM.range) ?? p;
