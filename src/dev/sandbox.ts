@@ -51,6 +51,8 @@ const PROP_LABEL: Record<PropKind, string> = {
   crate: "Crate", pot: "Pot", barrel: "Barrel", barrel_explosive: "Boom Barrel", brazier: "Brazier",
   root_wall: "Root Wall", silt_mound: "Silt Mound", clinker_brick: "Clinker Brick", gorge_debris: "Shell Debris", pale_debris: "Pale Shell Debris",
 };
+const FPS_REFRESH_FRAMES = 15;
+const FPS_SAMPLE_COUNT = 20;
 
 // Sprite filenames mostly follow WeaponId; melee uses its display-name art filenames.
 const WEAPON_ART_ID: Partial<Record<WeaponId, string>> = {
@@ -136,6 +138,10 @@ export function bootSandbox(canvas: HTMLCanvasElement, minimap: HTMLCanvasElemen
 
 function buildPanel(game: Game): void {
   const panel = h("div", "dev-panel");
+  const fpsMeter = h("div", "dev-fps-meter");
+  const fpsMeterRate = h("span", "rate", "-- FPS");
+  const fpsMeterDetail = h("span", "detail", "--.- ms \u00b7 --\u2013--");
+  fpsMeter.append(fpsMeterRate, fpsMeterDetail);
   // The game's own loaded sprite registry — catalog thumbnails resolve through it, so a
   // panel entry shows exactly the frame the world renders (never a stale duplicate load).
   const sprites = game.devSprites();
@@ -522,14 +528,37 @@ function buildPanel(game: Game): void {
   footer.appendChild(btn("Exit to game", () => { window.location.href = window.location.pathname; }, "wide"));
   panel.appendChild(footer);
 
-  document.body.appendChild(panel);
+  document.body.append(panel, fpsMeter);
 
-  // Poll the game for readouts + reflect current weapon/god/flow state. rAF keeps it in
-  // step with the sim; text-only updates on fixed-width fields avoid any layout shift.
+  const fpsSamples = new Float64Array(FPS_SAMPLE_COUNT);
+  let fpsSampleCount = 0;
+  let fpsSampleIndex = 0;
+  let framesUntilRefresh = 0;
   const tick = () => {
+    if (framesUntilRefresh > 0) {
+      framesUntilRefresh--;
+      requestAnimationFrame(tick);
+      return;
+    }
+    framesUntilRefresh = FPS_REFRESH_FRAMES - 1;
     const s: DevSnapshot = game.devSnapshot();
+    if (s.fps > 0) {
+      fpsSamples[fpsSampleIndex] = s.fps;
+      fpsSampleIndex = (fpsSampleIndex + 1) % FPS_SAMPLE_COUNT;
+      fpsSampleCount = Math.min(FPS_SAMPLE_COUNT, fpsSampleCount + 1);
+    }
+    let low = s.fps;
+    let high = s.fps;
+    for (let i = 0; i < fpsSampleCount; i++) {
+      low = Math.min(low, fpsSamples[i]);
+      high = Math.max(high, fpsSamples[i]);
+    }
+    const roundedFps = Math.round(s.fps);
     fpsV.textContent = String(Math.round(s.fps));
     fpsV.classList.toggle("warn", s.fps < 50);
+    fpsMeterRate.textContent = `${roundedFps} FPS`;
+    fpsMeterRate.classList.toggle("warn", s.fps < 50);
+    fpsMeterDetail.textContent = `${s.fps > 0 ? (1000 / s.fps).toFixed(1) : "--.-"} ms \u00b7 ${Math.round(low)}\u2013${Math.round(high)}`;
     enemyV.textContent = String(s.enemies);
     bulletV.textContent = String(s.bullets);
     partV.textContent = String(s.particles);

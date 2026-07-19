@@ -180,6 +180,49 @@ async function measureOddsmakerSpam(): Promise<Stat> {
   return stat(times);
 }
 
+async function measureHaloDensePack(): Promise<Stat> {
+  const { game } = await bootGame(VIEW_W, VIEW_H);
+  game.devStartSandbox();
+  loadDeterministicFloor(game, SEED, FLOOR);
+  const w = realWorld(game);
+  w.isGodMode = true;
+  const c = spawnCenter(w);
+  settleAt(game, c.x, c.y, VIEW_W, VIEW_H);
+  game.devGiveWeapon("halo");
+  const packStart = w.enemies.length;
+  for (let i = 0; i < 20; i++) {
+    const a = (i / 20) * Math.PI * 2;
+    const enemy = devSpawnEnemy(w, "slime", c.x + Math.cos(a) * 48, c.y + Math.sin(a) * 48);
+    enemy.hp = 1_000_000;
+    enemy.maxHp = 1_000_000;
+  }
+  const parkPack = (): void => {
+    for (let i = 0; i < 20; i++) {
+      const enemy = w.enemies[packStart + i];
+      const a = (i / 20) * Math.PI * 2;
+      enemy.x = c.x + Math.cos(a) * 48;
+      enemy.y = c.y + Math.sin(a) * 48;
+      enemy.vx = 0;
+      enemy.vy = 0;
+    }
+  };
+  for (let i = 0; i < WARMUP + 60; i++) {
+    parkPack();
+    game.tick(1 / 60);
+    game.render();
+  }
+  const times: number[] = [];
+  for (let i = 0; i < FRAMES; i++) {
+    parkPack();
+    const t0 = performance.now();
+    game.tick(1 / 60);
+    game.render();
+    times.push(performance.now() - t0);
+  }
+  game.stop();
+  return stat(times);
+}
+
 async function measureClaymoreCleave(): Promise<Stat> {
   const { game } = await bootGame(VIEW_W, VIEW_H);
   game.devStartSandbox();
@@ -393,6 +436,11 @@ async function main(): Promise<void> {
     const s = await measureOddsmakerSpam();
     scenarios["oddsmaker-full-auto"] = s;
     process.stdout.write(`    oddsmaker-full-auto: median ${s.median.toFixed(2)}ms, p95 ${s.p95.toFixed(2)}ms\n`);
+  }
+  {
+    const s = await measureHaloDensePack();
+    scenarios["halo-dense-pack"] = s;
+    process.stdout.write(`    halo-dense-pack: median ${s.median.toFixed(2)}ms, p95 ${s.p95.toFixed(2)}ms\n`);
   }
   {
     const s = await measureClaymoreCleave();
