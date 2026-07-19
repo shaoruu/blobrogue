@@ -15,7 +15,6 @@ import { weaponDisplayStats } from "../sim/weaponStats.js";
 import { createMods } from "../sim/items.js";
 import {
   BOSS_FLOORS,
-  BOSS_KINDS as BOSS_FIGHT_KINDS,
   ENEMY_ARCHETYPES,
   bossDisplayName,
   bossKindForFloor,
@@ -24,15 +23,10 @@ import { CAMP_NODES } from "../sim/camp_nodes.js";
 import { COSMETIC_SLOTS, cosmeticsForSlot, bodyPaletteIndex } from "../game/cosmetics.js";
 import type { CosmeticLoadout, CosmeticSlot } from "../game/cosmetics.js";
 import type { BlobLook } from "../ui/blobPreview.js";
+import { ENEMY_KINDS } from "./sandboxCatalog.js";
 import { spriteThumb, spritePreview, blobThumb, blobPreview, blankThumb, textBadge } from "./thumbs.js";
 import { injectDevStyles } from "./styles.js";
 
-const REGULAR_KINDS: readonly EnemyKind[] = [
-  "slime", "bat", "skeleton", "ghost", "spitter", "charger", "burrower", "orbiter", "shielder",
-];
-export const ENEMY_KINDS: readonly EnemyKind[] = [
-  ...new Set<EnemyKind>([...REGULAR_KINDS, ...BOSS_FIGHT_KINDS]),
-];
 const WEAPON_IDS: readonly WeaponId[] = [
   "pistol", "shotgun", "rapid", "smg", "cannon", "burst", "ricochet", "homing", "tesla",
   "sawnoff", "railgun", "nailer", "flamer", "mortar", "beam", "sword", "longsword", "spear",

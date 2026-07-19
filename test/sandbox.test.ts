@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { ENEMY_KINDS } from "../src/dev/sandbox.js";
+import { ENEMY_KINDS } from "../src/dev/sandboxCatalog.js";
 import {
   BOSS_FLOORS,
   BOSS_KINDS,
