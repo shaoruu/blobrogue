@@ -3641,7 +3641,7 @@ export class Game {
         isCrit ? "#fff3c4" : undefined,
         0.8,
       );
-      this.spawnSparkFlash(puffX, puffY, isCrit ? "#fff3c4" : "#d8f0e8");
+      this.spawnSparkFlash(puffX, puffY, "#fff3c4");
     }
   }
 
