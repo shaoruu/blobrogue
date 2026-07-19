@@ -2821,14 +2821,17 @@ export class Game {
       case "enemyHit": {
         triggerFlash(this.animForId(e.eid));
         this.captureUltMoteOrigin(e.dmgX, e.dmgY, this.isBossEid(e.eid) ? "boss" : "dmg");
-        const isHaloImpact = e.melee && this.isHaloActiveForBurst;
+        const localMeleeWeapon = e.melee
+          ? this.meleeImpactWeaponFor(e.eid, e.puffX, e.puffY)
+          : null;
+        const isHaloImpact = e.melee && this.isHaloActiveForBurst && localMeleeWeapon === null;
         let meleeWeapon: WeaponId | null = null;
         if (isHaloImpact) {
           this.queueHaloImpact(e.puffX, e.puffY, e.dmgX, e.dmgY, e.dmg, e.puffColor, e.crit);
         } else {
           this.spawnDmgNumber(e.dmgX, e.dmgY, e.dmg, { crit: e.crit });
           this.spawnPuff(e.puffX, e.puffY, e.crit ? 9 : 5, e.puffColor);
-          if (e.melee) meleeWeapon = this.replayMeleeImpact(e.eid, e.puffX, e.puffY, e.crit);
+          if (e.melee) meleeWeapon = this.replayMeleeImpact(e.eid, e.puffX, e.puffY, e.crit, localMeleeWeapon);
         }
         if (e.crit) {
           if (e.melee) waveAudio.play("melee.crit", { x: e.puffX, y: e.puffY });
@@ -3645,11 +3648,7 @@ export class Game {
     }
   }
 
-  // Melee connect: metal-on-flesh weight. Sparks fly out along the strike line from the
-  // player through the contact point, a bright flash pops at the blade, and the per-weapon
-  // hit-stop/trauma land the blow. Striking an enemy MID-ATTACK (windup/active) reads as a
-  // clash — the parry CLANG, a white flash, and a longer stop — rewarding aggressive timing.
-  private replayMeleeImpact(eid: number, hitX: number, hitY: number, isCrit: boolean): WeaponId | null {
+  private meleeImpactWeaponFor(eid: number, hitX: number, hitY: number): WeaponId | null {
     let isLocalBladeHit = false;
     const localHits = this.meleeSwing?.hitList;
     if (this.animClock <= this.meleeImpactUntil) {
@@ -3668,7 +3667,20 @@ export class Game {
         isLocalBladeHit = dx * dx + dy * dy <= 24 * 24;
       }
     }
-    const weapon = isLocalBladeHit ? this.meleeImpactWeapon : null;
+    return isLocalBladeHit ? this.meleeImpactWeapon : null;
+  }
+
+  // Melee connect: metal-on-flesh weight. Sparks fly out along the strike line from the
+  // player through the contact point, a bright flash pops at the blade, and the per-weapon
+  // hit-stop/trauma land the blow. Striking an enemy MID-ATTACK (windup/active) reads as a
+  // clash — the parry CLANG, a white flash, and a longer stop — rewarding aggressive timing.
+  private replayMeleeImpact(
+    eid: number,
+    hitX: number,
+    hitY: number,
+    isCrit: boolean,
+    weapon: WeaponId | null,
+  ): WeaponId | null {
     const feel = weapon === null ? undefined : MELEE_FEEL[weapon];
     this.burstTrauma = Math.min(1, this.burstTrauma + (feel?.hitTrauma ?? MELEE_HIT_TRAUMA));
     this.burstFreeze = Math.max(this.burstFreeze, feel?.hitFreeze ?? FREEZE_KILL);
