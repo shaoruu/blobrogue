@@ -184,8 +184,8 @@ function pickKind(rng: Rng, profile: BiomeHazardProfile): FloorHazardKind {
 
 // Wave step between tiles of one spike row (a travelling ripple you can read and race).
 const ROW_WAVE_STEP = 0.35;
-const SPAWN_CLEAR = 3;  // Chebyshev tiles kept clean around the spawn
-const EXIT_CLEAR = 2;   // and around the exit
+export const SPAWN_CLEAR = 3;  // Chebyshev tiles kept clean around the spawn
+export const EXIT_CLEAR = 2;   // and around the exit
 
 // Per-room arbitration state (see scheduleGroup / fitsDenialCap).
 interface RoomSchedule {

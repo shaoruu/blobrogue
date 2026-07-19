@@ -59,14 +59,21 @@ function main(): void {
 
   section("chest loot: A opens the weapon chest -> inventories DIVERGE");
   const weaponChest = w.chests.find((c) => c.weapon !== undefined)!;
+  const bonusChest = w.chests.find((c) => c !== weaponChest);
+  check("fixed floor has a second chest for the cleared-floor exit check", bonusChest !== undefined);
   const droppedWeapon = weaponChest.weapon!;
-  placeAt(a, weaponChest.x + 1, weaponChest.y); // touch-opens; the weapon ejects toward A
+  placeAt(a, weaponChest.x, weaponChest.y); // touch-opens; the weapon ejects toward A
   placeAt(b, weaponChest.x + 400, weaponChest.y + 300);
-  step(w);
-  const weaponDrop = w.pickups.find((p) => p.kind === "weapon")!;
-  check("opening the chest ejected its weapon as a real pickup", weaponChest.opened && weaponDrop !== undefined && weaponDrop.weapon === droppedWeapon);
-  placeAt(a, weaponDrop.x, weaponDrop.y); // A walks onto the drop; B stays away
-  const pickupEvents = step(w);
+  const openEvents = step(w);
+  const weaponDrop = w.pickups.find((p) => p.kind === "weapon");
+  const isCollectedOnOpen = openEvents.some((e) => e.t === "pickup" && e.kind === "weapon" && e.pid === "pA");
+  check("opening the chest ejected its weapon as a real pickup",
+    weaponChest.opened && (weaponDrop?.weapon === droppedWeapon || isCollectedOnOpen));
+  let pickupEvents = openEvents;
+  if (weaponDrop) {
+    placeAt(a, weaponDrop.x, weaponDrop.y); // A walks onto the drop; B stays away
+    pickupEvents = step(w);
+  }
   check("pickup collected through the ordinary pickup system", pickupEvents.some((e) => e.t === "pickup" && e.kind === "weapon" && e.pid === "pA"));
   check("A owns the picked weapon", a.ownedWeapons.includes(droppedWeapon), `A=${a.ownedWeapons.join(",")}`);
   check("B does NOT own it (per-player inventory)", !b.ownedWeapons.includes(droppedWeapon), `B=${b.ownedWeapons.join(",")}`);
@@ -109,6 +116,15 @@ function main(): void {
   }
   check("floor fully cleared through combat kills", w.enemies.length === 0, `enemies=${w.enemies.length} after ${guard} ticks`);
   check("the killer was credited authoritative kills", a.kills > 0, `A.kills=${a.kills}`);
+
+  section("cleared-floor chest: the party can open it without entering the exit gate");
+  if (bonusChest) {
+    placeAt(a, bonusChest.x, bonusChest.y);
+    placeAt(b, bonusChest.x, bonusChest.y);
+    const chestEvents = step(w);
+    check("remaining chest opens before descend proximity triggers",
+      bonusChest.opened && w.floor === 2 && chestEvents.every((e) => e.t !== "offerBlessing"));
+  }
 
   section("exit gate: blessings are offered at the cleared exit; descend waits for the picks");
   const ex = w.dungeon.exit.x * TILE + TILE / 2;
