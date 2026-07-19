@@ -52,7 +52,10 @@ import type {
   MysteryTwist, Vec2, SluiceMode, OddsmakerOutcome, MarginCategory,
   Effect, ZoneEffect, WireEffect, OrbitEffect, SentryEffect, TetherEffect, SanctuaryEffect, AegisEffect,
 } from "./types.js";
-import { placeFloorHazards, isFloorHazardDamaging, floorHazardPhaseAt, FLOOR_HAZARD_DAMAGE, RIFT_PULL_RADIUS, RIFT_PULL_SPEED } from "./hazards.js";
+import {
+  placeFloorHazards, isFloorHazardDamaging, floorHazardPhaseAt, FLOOR_HAZARD_DAMAGE,
+  RIFT_PULL_RADIUS, RIFT_PULL_SPEED, EXIT_CLEAR, SPAWN_CLEAR,
+} from "./hazards.js";
 import { Rng } from "./rng.js";
 import {
   ENEMY_ARCHETYPES, BOSS_KIN, spawnFloorEnemies, createEnemy, threatCostOf, isBossFloor,
@@ -2931,10 +2934,10 @@ function placeChests(w: WorldState): Chest[] {
   return list;
 }
 
-// A free tile for a chest: open floor, unused, not the spawn/exit tile, and not a tile a
-// prop already occupies (props are placed first, and a chest materializing on a barrel is
-// the same stacked-loot eyesore as a gun on a chest). The shop room takes no chests at
-// all — its floor plan is authored by the shop layout.
+// A free tile for a chest: open floor, unused, outside the spawn/exit safety radii, and
+// not a tile a prop already occupies (props are placed first, and a chest materializing
+// on a barrel is the same stacked-loot eyesore as a gun on a chest). The shop room takes
+// no chests at all — its floor plan is authored by the shop layout.
 function chestTile(w: WorldState, room: Room, used: Set<number>): { tx: number; ty: number } | null {
   if (room.kind === "shop") return null;
   const d = w.dungeon;
@@ -2943,8 +2946,8 @@ function chestTile(w: WorldState, room: Room, used: Set<number>): { tx: number; 
     used.has(ty * d.w + tx) ||
     hasLivePropOnTile(w, tx, ty) ||
     hasFloorHazardOnTile(w, tx, ty) ||
-    (tx === d.spawn.x && ty === d.spawn.y) ||
-    (tx === d.exit.x && ty === d.exit.y);
+    Math.max(Math.abs(tx - d.exit.x), Math.abs(ty - d.exit.y)) <= EXIT_CLEAR ||
+    Math.max(Math.abs(tx - d.spawn.x), Math.abs(ty - d.spawn.y)) <= SPAWN_CLEAR;
   if (!isBad(room.cx, room.cy)) return { tx: room.cx, ty: room.cy };
   for (let ty = room.y; ty < room.y + room.h; ty++)
     for (let tx = room.x; tx < room.x + room.w; tx++)

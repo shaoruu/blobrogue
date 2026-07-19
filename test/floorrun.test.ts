@@ -59,6 +59,8 @@ function main(): void {
 
   section("chest loot: A opens the weapon chest -> inventories DIVERGE");
   const weaponChest = w.chests.find((c) => c.weapon !== undefined)!;
+  const bonusChest = w.chests.find((c) => c !== weaponChest);
+  check("fixed floor has a second chest for the cleared-floor exit check", bonusChest !== undefined);
   const droppedWeapon = weaponChest.weapon!;
   placeAt(a, weaponChest.x + 1, weaponChest.y); // touch-opens; the weapon ejects toward A
   placeAt(b, weaponChest.x + 400, weaponChest.y + 300);
@@ -109,6 +111,15 @@ function main(): void {
   }
   check("floor fully cleared through combat kills", w.enemies.length === 0, `enemies=${w.enemies.length} after ${guard} ticks`);
   check("the killer was credited authoritative kills", a.kills > 0, `A.kills=${a.kills}`);
+
+  section("cleared-floor chest: the party can open it without entering the exit gate");
+  if (bonusChest) {
+    placeAt(a, bonusChest.x, bonusChest.y);
+    placeAt(b, bonusChest.x, bonusChest.y);
+    const chestEvents = step(w);
+    check("remaining chest opens before descend proximity triggers",
+      bonusChest.opened && w.floor === 2 && chestEvents.every((e) => e.t !== "offerBlessing"));
+  }
 
   section("exit gate: blessings are offered at the cleared exit; descend waits for the picks");
   const ex = w.dungeon.exit.x * TILE + TILE / 2;

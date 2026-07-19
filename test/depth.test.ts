@@ -12,6 +12,7 @@ import {
   placeFloorHazards, floorHazardBudgetFor, floorHazardPhaseAt, floorHazardPhaseFrac, isFloorHazardDamaging,
   HAZARD_TIMING, FLOOR_HAZARD_DAMAGE, RIFT_PULL_SPEED, RIFT_PULL_RADIUS, floorHazardPeriod,
   HAZARD_PERIOD, HAZARD_RELEASE_GAP, floorHazardOnset, floorHazardOnsetsInRoom,
+  EXIT_CLEAR, SPAWN_CLEAR,
 } from "../src/sim/hazards.js";
 import { HAZARD_DIFFICULTY } from "../src/sim/balance.js";
 import type { Difficulty } from "../src/sim/balance.js";
@@ -415,6 +416,30 @@ function hazardPlacementTests(): void {
     }
   }
   check("spawn -> exit and every room center reachable without touching a pool", arePoolsFair);
+}
+
+function chestPlacementTests(): void {
+  section("chest placement: spawn and exit safety radii, determinism");
+  let isExitClear = true, isSpawnClear = true, isLayoutDeterministic = true;
+  let chestsChecked = 0;
+  for (const seed of SEEDS) {
+    for (const floor of FLOORS) {
+      const w = createWorld(seed, floor);
+      const again = createWorld(seed, floor);
+      if (JSON.stringify(w.chests) !== JSON.stringify(again.chests)) isLayoutDeterministic = false;
+      for (const chest of w.chests) {
+        chestsChecked++;
+        const tx = Math.floor(chest.x / TILE);
+        const ty = Math.floor(chest.y / TILE);
+        if (Math.max(Math.abs(tx - w.dungeon.exit.x), Math.abs(ty - w.dungeon.exit.y)) <= EXIT_CLEAR) isExitClear = false;
+        if (Math.max(Math.abs(tx - w.dungeon.spawn.x), Math.abs(ty - w.dungeon.spawn.y)) <= SPAWN_CLEAR) isSpawnClear = false;
+      }
+    }
+  }
+  check(`chests stay beyond the ${EXIT_CLEAR}-tile exit clearance`, isExitClear && chestsChecked > 0,
+    `chests checked=${chestsChecked}`);
+  check(`chests stay beyond the ${SPAWN_CLEAR}-tile spawn clearance`, isSpawnClear);
+  check("chest layouts remain deterministic per (seed, floor)", isLayoutDeterministic);
 }
 
 // The studio balance gate's hazard rows (docs/specs/blobrogue_STUDIO_BALANCE_GATE.md
@@ -875,6 +900,7 @@ function main(): void {
   curriculumCadenceTests();
   biomeLadderTests();
   hazardPlacementTests();
+  chestPlacementTests();
   studioGateTests();
   hazardTimingTests();
   hazardDamageTests();
