@@ -27,10 +27,15 @@ export class GenerationAdmissionStore {
   private entries = new Map<string, AdmissionEntry>();
   private recovered: string[] = [];
 
-  constructor(private path: string | null, nowMs = Date.now()) {
+  constructor(
+    private path: string | null,
+    nowMs = Date.now(),
+    preservedActiveWorldIds: ReadonlySet<string> = new Set(),
+  ) {
     this.load();
     for (const entry of this.entries.values()) {
       if (entry.state === "active") {
+        if (preservedActiveWorldIds.has(entry.worldId)) continue;
         this.recovered.push(entry.worldId);
         entry.state = "retired";
         entry.retiredUntil = nowMs + GENERATION_RETIRE_MS;

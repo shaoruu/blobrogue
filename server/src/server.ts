@@ -49,6 +49,7 @@ import type {
   RunReceiptParticipant,
 } from "../../src/net/runReceipt.js";
 import { newRunReceiptJti } from "./runReceipt.js";
+import { RunSnapshotStore } from "./runSnapshot.js";
 
 const TICK_MS = 1000 / TICK_HZ;
 // Catch-up bound for the drift-corrected pump: if the event loop stalls, run up to this many
@@ -83,6 +84,7 @@ export interface ServerDeps {
   receiptDispatcher?: RunReceiptDispatcher;
   generationAdmissions?: GenerationAdmissionStore;
   admissionClient?: GenerationAdmissionClient;
+  runSnapshots?: RunSnapshotStore;
 }
 
 export class GameServer {
@@ -98,6 +100,8 @@ export class GameServer {
   private metrics = new Metrics();
   private receiptDispatcher: RunReceiptDispatcher;
   private admissionClient: GenerationAdmissionClient;
+  private runSnapshots: RunSnapshotStore;
+  private restoredSnapshotWorldIds = new Set<string>();
   private completedWorlds = new Set<string>();
   private pendingCompletions = new Map<string, PendingCompletion>();
   private isAcceptingJoins = true;
@@ -117,6 +121,9 @@ export class GameServer {
     this.log = deps.logger ?? createLogger({ app: "blobrogue-gs" });
     this.clock = deps.clock ?? systemClock;
     this.trustedProxies = parseCidrList(cfg.trustedProxies);
+    this.runSnapshots = deps.runSnapshots ?? new RunSnapshotStore(cfg.runSnapshotDir);
+    const savedRunSnapshots = this.runSnapshots.loadAll();
+    const preservedWorldIds = new Set(savedRunSnapshots.map((snapshot) => snapshot.worldId));
     this.receiptDispatcher = deps.receiptDispatcher ?? new RunReceiptDispatcher(
       cfg.receiptEndpoint,
       cfg.receiptSecret,
@@ -135,17 +142,25 @@ export class GameServer {
     // for a pvp room) spins up a deathmatch world, everything else stays co-op. The mode is part
     // of the id, so every joiner of the same room lands in the same kind of world.
     this.sessions = deps.sessions ?? new WorldRegistry(
-      (id, pvpPolicy) => new GameWorld(
+      (id, pvpPolicy, seed) => new GameWorld(
         id,
-        undefined,
+        seed,
         cfg.arena,
         isPvpWorldId(id) ? "pvp" : "coop",
         pvpPolicy,
       ),
       this.log,
-      deps.generationAdmissions ?? new GenerationAdmissionStore(cfg.generationStatePath),
+      deps.generationAdmissions ?? new GenerationAdmissionStore(
+        cfg.generationStatePath,
+        this.clock.now(),
+        preservedWorldIds,
+      ),
       (room) => this.onWorldReleased(room),
     );
+    for (const snapshot of savedRunSnapshots) {
+      this.sessions.restoreRoom(snapshot, this.clock.now(), cfg.resumeGraceMs);
+      this.restoredSnapshotWorldIds.add(snapshot.worldId);
+    }
     for (const worldId of this.sessions.recoveredGenerationWorldIds?.() ?? []) {
       if (!this.receiptDispatcher.hasDeliverableWorld(worldId)) {
         this.submitCompletion(worldId, `${worldId}:restart`, "server_restart", [], true);
@@ -198,6 +213,7 @@ export class GameServer {
     if (this.heartbeatTimer) clearInterval(this.heartbeatTimer);
     this.tickTimer = null;
     this.heartbeatTimer = null;
+    for (const room of this.sessions.rooms()) this.refreshPreservedSnapshot(room);
     for (const conn of this.conns.values()) {
       try { conn.ws.close(1001, "server shutdown"); } catch { /* already gone */ }
     }
@@ -218,6 +234,13 @@ export class GameServer {
     }
     this.isAcceptingJoins = false;
     for (const room of [...this.sessions.rooms()]) {
+      if (this.runSnapshots.has(room.id)) {
+        this.refreshPreservedSnapshot(room);
+        for (const conn of [...room.conns.values()]) {
+          if (!conn.closing) this.closeConn(conn, 1012, "server update");
+        }
+        continue;
+      }
       this.completedWorlds.add(room.id);
       const pending = this.pendingCompletions.get(room.id);
       this.pendingCompletions.delete(room.id);
@@ -238,18 +261,60 @@ export class GameServer {
     this.sessions.sweep(this.clock.now());
   }
 
+  private refreshPreservedSnapshot(room: RoomRuntime): void {
+    if (!this.runSnapshots.has(room.id)) return;
+    const snapshot = room.captureRunSnapshot(this.clock.now());
+    if (snapshot === null) {
+      this.log.error("preserved run could not be refreshed before reload", { worldId: room.id });
+      return;
+    }
+    this.runSnapshots.save(snapshot);
+  }
+
   private applyControlWorldAction(action: ControlWorldAction): ControlWorldActionResult {
+    if (action.action === "restore") {
+      if (!this.runSnapshots.isEnabled()) return { isApplied: false, reason: "unavailable" };
+      const existing = this.sessions.room(action.worldId);
+      if (existing !== undefined) {
+        if (!this.restoredSnapshotWorldIds.has(action.worldId)) {
+          return { isApplied: false, reason: "world_active" };
+        }
+        return this.worldActionSuccess(existing, this.runSnapshots.pathFor(action.worldId));
+      }
+      const snapshot = this.runSnapshots.load(action.worldId);
+      if (snapshot === null) return { isApplied: false, reason: "snapshot_not_found" };
+      const restored = this.sessions.restoreRoom(snapshot, this.clock.now(), this.cfg.resumeGraceMs);
+      this.restoredSnapshotWorldIds.add(action.worldId);
+      return this.worldActionSuccess(restored, this.runSnapshots.pathFor(action.worldId));
+    }
     const room = this.sessions.room(action.worldId);
     if (room === undefined) return { isApplied: false, reason: "world_not_found" };
+    if (action.action === "snapshot") {
+      if (room.pvpPolicy !== null) return { isApplied: false, reason: "pvp_forbidden" };
+      if (!this.runSnapshots.isEnabled()) return { isApplied: false, reason: "unavailable" };
+      const snapshot = room.captureRunSnapshot(this.clock.now());
+      if (snapshot === null) return { isApplied: false, reason: "snapshot_unavailable" };
+      const path = this.runSnapshots.save(snapshot);
+      return this.worldActionSuccess(room, path);
+    }
     const isApplied = action.action === "warp"
       ? room.adminWarpToFloor(action.floor)
       : room.adminForceOpenExit();
     if (!isApplied) return { isApplied: false, reason: "pvp_forbidden" };
+    return this.worldActionSuccess(room, null);
+  }
+
+  private worldActionSuccess(
+    room: RoomRuntime,
+    snapshotPath: string | null,
+  ): Extract<ControlWorldActionResult, { isApplied: true }> {
     return {
       isApplied: true,
       worldId: room.id,
       floor: room.state.floor,
       players: room.playerCount,
+      fidelity: snapshotPath === null ? undefined : "build+floor",
+      snapshotPath: snapshotPath ?? undefined,
     };
   }
 
@@ -383,6 +448,8 @@ export class GameServer {
   }
 
   private onWorldReleased(room: RoomRuntime): void {
+    this.runSnapshots.remove(room.id);
+    this.restoredSnapshotWorldIds.delete(room.id);
     const pending = this.pendingCompletions.get(room.id);
     if (pending) {
       this.pendingCompletions.delete(room.id);

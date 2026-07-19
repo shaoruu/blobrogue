@@ -213,7 +213,15 @@ export class FakeGameServerProbe implements GameServerProbe {
     const floor = action.action === "warp"
       ? action.floor
       : this.worldsValue.find((world) => world.id === action.worldId)?.floor ?? 0;
-    return { isApplied: true, worldId: action.worldId, floor, players: 0 };
+    const isSnapshotAction = action.action === "snapshot" || action.action === "restore";
+    return {
+      isApplied: true,
+      worldId: action.worldId,
+      floor,
+      players: 0,
+      fidelity: isSnapshotAction ? "build+floor" : undefined,
+      snapshotPath: isSnapshotAction ? `/var/lib/blobrogue/run-snapshots/${action.worldId}.json` : undefined,
+    };
   }
   async logs(_q: LogQuery): Promise<LogRecord[]> { return this.logsValue; }
   async verifyDiagnostic(): Promise<VerifyResult> {

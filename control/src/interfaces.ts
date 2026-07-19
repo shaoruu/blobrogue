@@ -49,6 +49,8 @@ export interface GameServerAdmin {
   worlds(): Promise<WorldSummary[]>;
   warpWorld(worldId: string, floor: number): Promise<GameServerWorldActionResult>;
   forceOpenWorldExit(worldId: string): Promise<GameServerWorldActionResult>;
+  snapshotWorld(worldId: string): Promise<GameServerWorldActionResult>;
+  restoreWorld(worldId: string): Promise<GameServerWorldActionResult>;
   logs(q: LogQuery): Promise<LogRecord[]>;
   drain(): Promise<AdminEffectResult>;
   flush(): Promise<AdminEffectResult>;

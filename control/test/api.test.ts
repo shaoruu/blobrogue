@@ -182,6 +182,10 @@ export async function suite(t: TestRunner): Promise<void> {
       });
       t.check("warp without admin token is rejected", noAuth.status === 401);
       t.check("rejected warp never reaches the game server", bed.probe.worldActionCalls.length === 0);
+      const noAuthSnapshot = await api(bed.base, "POST", "/v1/worlds/snapshot", {
+        body: { worldId: "arena-1" },
+      });
+      t.check("snapshot without admin token is rejected", noAuthSnapshot.status === 401);
 
       const warp = await api(bed.base, "POST", "/v1/worlds/warp", {
         token: adminToken(bed.clock),
@@ -200,6 +204,22 @@ export async function suite(t: TestRunner): Promise<void> {
         && force.body.isApplied === true
         && bed.probe.worldActionCalls[1]?.action === "force-open-exit");
 
+      const snapshot = await api(bed.base, "POST", "/v1/worlds/snapshot", {
+        token: adminToken(bed.clock),
+        body: { worldId: "arena-1" },
+      });
+      t.check("admin snapshot persists the named world", snapshot.status === 200
+        && snapshot.body.fidelity === "build+floor"
+        && bed.probe.worldActionCalls[2]?.action === "snapshot");
+
+      const restore = await api(bed.base, "POST", "/v1/worlds/restore", {
+        token: adminToken(bed.clock),
+        body: { worldId: "arena-1" },
+      });
+      t.check("admin restore rehydrates the named world", restore.status === 200
+        && restore.body.fidelity === "build+floor"
+        && bed.probe.worldActionCalls[3]?.action === "restore");
+
       const missing = await api(bed.base, "POST", "/v1/worlds/warp", {
         token: adminToken(bed.clock),
         body: { worldId: "missing", floor: 55 },
@@ -216,8 +236,10 @@ export async function suite(t: TestRunner): Promise<void> {
         token: adminToken(bed.clock),
       });
       const serialized = JSON.stringify(audits.body);
-      t.check("warp and force-open attempts are audited", serialized.includes("warp_world")
+      t.check("every live-run rescue attempt is audited", serialized.includes("warp_world")
         && serialized.includes("force_open_exit")
+        && serialized.includes("snapshot_world")
+        && serialized.includes("restore_world")
         && serialized.includes("world=arena-1"));
     } finally {
       await bed.close();

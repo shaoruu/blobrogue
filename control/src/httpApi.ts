@@ -126,6 +126,8 @@ export class ControlHttpServer {
         case "/v1/resume": return this.handleLifecycle("resume", rc, res);
         case "/v1/worlds/warp": return this.handleWorldWarp(body, rc, res);
         case "/v1/worlds/force-open-exit": return this.handleForceOpenExit(body, rc, res);
+        case "/v1/worlds/snapshot": return this.handleRunSnapshot(body, rc, res);
+        case "/v1/worlds/restore": return this.handleRunRestore(body, rc, res);
         case "/v1/restart": return this.handleRestart(body, rc, res);
         case "/v1/rollback": return this.handleRollback(body, rc, res);
       }
@@ -239,8 +241,26 @@ export class ControlHttpServer {
     return this.send(res, 200, result);
   }
 
+  private async handleRunSnapshot(body: string, rc: RouteCtx, res: ServerResponse): Promise<void> {
+    const worldId = this.parseWorldIdBody(body, res, "world_snapshot_invalid");
+    if (worldId === null) return;
+    const result = await this.d.gameServer.snapshotWorld(worldId);
+    await this.auditWorldAction("snapshot_world", worldId, null, result, rc);
+    if (!result.isApplied) return this.sendWorldActionError(res, result.reason);
+    return this.send(res, 200, result);
+  }
+
+  private async handleRunRestore(body: string, rc: RouteCtx, res: ServerResponse): Promise<void> {
+    const worldId = this.parseWorldIdBody(body, res, "world_restore_invalid");
+    if (worldId === null) return;
+    const result = await this.d.gameServer.restoreWorld(worldId);
+    await this.auditWorldAction("restore_world", worldId, null, result, rc);
+    if (!result.isApplied) return this.sendWorldActionError(res, result.reason);
+    return this.send(res, 200, result);
+  }
+
   private async auditWorldAction(
-    action: "warp_world" | "force_open_exit",
+    action: "warp_world" | "force_open_exit" | "snapshot_world" | "restore_world",
     worldId: string,
     floor: number | null,
     result: GameServerWorldActionResult,
@@ -263,9 +283,17 @@ export class ControlHttpServer {
 
   private sendWorldActionError(
     res: ServerResponse,
-    reason: "world_not_found" | "pvp_forbidden" | "unavailable",
+    reason:
+      | "world_not_found"
+      | "pvp_forbidden"
+      | "snapshot_not_found"
+      | "snapshot_unavailable"
+      | "world_active"
+      | "unavailable",
   ): void {
-    const status = reason === "world_not_found" ? 404 : reason === "pvp_forbidden" ? 409 : 503;
+    const status = reason === "world_not_found" || reason === "snapshot_not_found"
+      ? 404
+      : reason === "unavailable" ? 503 : 409;
     this.send(res, status, { error: reason });
   }
 
@@ -315,6 +343,22 @@ export class ControlHttpServer {
       return {};
     }
     return parsed.value;
+  }
+
+  private parseWorldIdBody(
+    body: string,
+    res: ServerResponse,
+    error: string,
+  ): string | null {
+    const parsed = this.mustObject(body, res);
+    if (this.wasSent(res)) return null;
+    if (Object.keys(parsed).length !== 1
+      || typeof parsed.worldId !== "string"
+      || !isValidWorldId(parsed.worldId)) {
+      this.send(res, 400, { error });
+      return null;
+    }
+    return parsed.worldId;
   }
 
   private wasSent(res: ServerResponse): boolean {

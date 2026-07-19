@@ -30,8 +30,24 @@ export interface WorldReport {
 }
 
 export type ControlWorldActionResult =
-  | { isApplied: true; worldId: string; floor: number; players: number }
-  | { isApplied: false; reason: "world_not_found" | "pvp_forbidden" };
+  | {
+    isApplied: true;
+    worldId: string;
+    floor: number;
+    players: number;
+    fidelity?: "build+floor";
+    snapshotPath?: string;
+  }
+  | {
+    isApplied: false;
+    reason:
+      | "world_not_found"
+      | "pvp_forbidden"
+      | "snapshot_not_found"
+      | "snapshot_unavailable"
+      | "world_active"
+      | "unavailable";
+  };
 
 export interface HttpDeps {
   config: ServerConfig;
@@ -159,7 +175,11 @@ async function handleControlWorldAction(
   }
   usedJtis.set(auth.jti, auth.exp);
   const result = deps.controlWorld(action);
-  const status = result.isApplied ? 200 : result.reason === "world_not_found" ? 404 : 409;
+  const status = result.isApplied
+    ? 200
+    : result.reason === "world_not_found" || result.reason === "snapshot_not_found"
+      ? 404
+      : result.reason === "unavailable" ? 503 : 409;
   res.writeHead(status, {
     "content-type": "application/json",
     "cache-control": "no-store",
@@ -185,6 +205,10 @@ function parseControlWorldAction(body: string): ControlWorldAction | null {
     return value;
   }
   if (value.action === "force-open-exit") {
+    if (Object.keys(value).length !== 2 || !isValidWorldId(value.worldId)) return null;
+    return value;
+  }
+  if (value.action === "snapshot" || value.action === "restore") {
     if (Object.keys(value).length !== 2 || !isValidWorldId(value.worldId)) return null;
     return value;
   }

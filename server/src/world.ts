@@ -9,7 +9,7 @@
 // the fixed step, so a client can neither buy extra time (no client dt) nor gain advantage by its
 // frame rate (fixed-cadence consumption).
 
-import { adminForceOpenExitInWorld, adminWarpToFloorInWorld, beginWorldTick, createWorld, refreshWarmthDrain, stepPlayerPhase, stepWorldPhase, spawnPlayerInWorld, removePlayerFromWorld, setPlayerAbsence, setPlayerKit, setPlayerPet, switchWeaponInWorld, reorderWeaponsInWorld, dropWeaponInWorld, swapWeaponInWorld, buyFromShopInWorld, chooseBlessingInWorld, dismissBlessingOfferInWorld, rollBlessingChoicesInWorld, resetRunInWorld, devSpawnEnemy, isPvp, isPvpDraftRuntime } from "../../src/sim/world.js";
+import { adminForceOpenExitInWorld, adminWarpToFloorInWorld, beginWorldTick, createWorld, refreshWarmthDrain, stepPlayerPhase, stepWorldPhase, spawnPlayerInWorld, removePlayerFromWorld, setPlayerAbsence, setPlayerKit, setPlayerPet, switchWeaponInWorld, reorderWeaponsInWorld, dropWeaponInWorld, swapWeaponInWorld, buyFromShopInWorld, chooseBlessingInWorld, dismissBlessingOfferInWorld, rollBlessingChoicesInWorld, resetRunInWorld, devSpawnEnemy, isPvp, isPvpDraftRuntime, loadFloorIntoWorld } from "../../src/sim/world.js";
 import type { KitId } from "../../src/sim/kits.js";
 import { PVP, pvpDraftSeed } from "../../src/sim/pvp.js";
 import type { WorldMode } from "../../src/sim/pvp.js";
@@ -28,6 +28,12 @@ import type { Conn, InputIntent } from "./connection.js";
 import type { ServerConfig } from "./config.js";
 import type { RoomRuntime, BlessingOfferRequest, Seat, TakeSeatResult } from "./ports.js";
 import type { RunReceiptParticipant } from "../../src/net/runReceipt.js";
+import { applyPlayerSnapshot, projectPlayer } from "../../src/net/playerSnapshot.js";
+import {
+  RUN_SNAPSHOT_FIDELITY,
+  type RunSnapshot,
+  type RunSnapshotSeat,
+} from "./runSnapshot.js";
 
 const BLESSING_CHOICES = 3;
 const TICK_MS = 1000 / TICK_HZ;
@@ -149,6 +155,163 @@ export class GameWorld implements RoomRuntime {
     const isApplied = adminForceOpenExitInWorld(this.state);
     if (isApplied) this.clearAllOffers(pendingOfferPlayers);
     return isApplied;
+  }
+
+  captureRunSnapshot(nowMs: number): RunSnapshot | null {
+    if (isPvp(this.state) || this.state.players.size === 0) return null;
+    const players: RunSnapshot["players"] = [];
+    for (const [pid, player] of this.state.players) {
+      const seat = this.snapshotSeat(pid, nowMs);
+      if (seat === null) return null;
+      players.push({
+        pid,
+        offerIdentity: player.offerIdentity,
+        state: projectPlayer(player),
+        pet: player.pet,
+        weaponOfferHistory: {
+          weaponSeenCounts: { ...player.weaponOfferHistory.weaponSeenCounts },
+          recentWeaponOffers: player.weaponOfferHistory.recentWeaponOffers.slice(),
+        },
+        blessingOfferHistory: {
+          blessingSeenCounts: { ...player.blessingOfferHistory.blessingSeenCounts },
+          recentBlessingOffers: player.blessingOfferHistory.recentBlessingOffers.map((offer) => offer.slice()),
+        },
+        blessingOfferOrdinal: player.blessingOfferOrdinal,
+        shopWeaponOfferOrdinal: player.shopWeaponOfferOrdinal,
+        shopBlessingOfferOrdinal: player.shopBlessingOfferOrdinal,
+        premiumWeaponOfferOrdinal: player.premiumWeaponOfferOrdinal,
+        seat,
+      });
+    }
+    return {
+      version: 1,
+      fidelity: RUN_SNAPSHOT_FIDELITY,
+      createdAt: new Date(nowMs).toISOString(),
+      worldId: this.id,
+      seed: this.state.seed,
+      floor: this.state.floor,
+      encounterPlayers: this.state.encounterPlayers,
+      pityStreak: this.state.pityStreak,
+      weaponBag: {
+        ...this.state.weaponBag,
+        weaponSeenCounts: { ...this.state.weaponBag.weaponSeenCounts },
+        recentWeaponOffers: this.state.weaponBag.recentWeaponOffers.slice(),
+        order: this.state.weaponBag.order.slice(),
+      },
+      players,
+    };
+  }
+
+  restoreRunSnapshot(snapshot: RunSnapshot, nowMs: number, ttlMs: number): void {
+    if (snapshot.worldId !== this.id || isPvp(this.state)) {
+      throw new Error("run snapshot world mismatch");
+    }
+    this.state.players.clear();
+    this.state.catalogVersion = snapshot.weaponBag.catalogVersion ?? this.state.catalogVersion;
+    this.state.weaponBag = {
+      ...snapshot.weaponBag,
+      weaponSeenCounts: { ...snapshot.weaponBag.weaponSeenCounts },
+      recentWeaponOffers: snapshot.weaponBag.recentWeaponOffers.slice(),
+      order: snapshot.weaponBag.order.slice(),
+    };
+    this.state.pityStreak = snapshot.pityStreak;
+    this.seatMap.clear();
+    this.joinedAtTick.clear();
+    this.joinedAtFloor.clear();
+    this.bossKillsByPlayer.clear();
+    this.authIdentityByPlayer.clear();
+    for (const saved of snapshot.players) {
+      const player = spawnPlayerInWorld(this.state, saved.pid, saved.offerIdentity);
+      applyPlayerSnapshot(player, saved.state);
+      player.offerIdentity = saved.offerIdentity;
+      player.pet = saved.pet;
+      player.weaponOfferHistory = {
+        weaponSeenCounts: { ...saved.weaponOfferHistory.weaponSeenCounts },
+        recentWeaponOffers: saved.weaponOfferHistory.recentWeaponOffers.slice(),
+      };
+      player.blessingOfferHistory = {
+        blessingSeenCounts: { ...saved.blessingOfferHistory.blessingSeenCounts },
+        recentBlessingOffers: saved.blessingOfferHistory.recentBlessingOffers.map((offer) => offer.slice()),
+      };
+      player.blessingOfferOrdinal = saved.blessingOfferOrdinal;
+      player.shopWeaponOfferOrdinal = saved.shopWeaponOfferOrdinal;
+      player.shopBlessingOfferOrdinal = saved.shopBlessingOfferOrdinal;
+      player.premiumWeaponOfferOrdinal = saved.premiumWeaponOfferOrdinal;
+      this.joinedAtTick.set(saved.pid, this.state.tick);
+      this.joinedAtFloor.set(saved.pid, snapshot.floor);
+      this.bossKillsByPlayer.set(saved.pid, new Set());
+      this.authIdentityByPlayer.set(saved.pid, saved.seat.authName);
+    }
+    loadFloorIntoWorld(this.state, snapshot.floor, snapshot.encounterPlayers);
+    this.state.pityStreak = snapshot.pityStreak;
+    for (const saved of snapshot.players) {
+      const player = this.state.players.get(saved.pid);
+      if (player === undefined) throw new Error("run snapshot player missing after floor rebuild");
+      player.hp = Math.max(1, Math.min(player.hp, player.maxHp));
+      player.isDown = false;
+      player.reviveProgress = 0;
+      player.reviveBy = null;
+      player.downsThisFloor = 0;
+      player.combo = 0;
+      player.comboTimer = 0;
+      setPlayerAbsence(this.state, saved.pid, true);
+      this.seatMap.set(saved.seat.authName, {
+        ...saved.seat,
+        reservedAt: nowMs,
+        expiresAt: nowMs + ttlMs,
+        pendingOffer: null,
+        offerId: 0,
+        offerDeadline: 0,
+      });
+    }
+    this.injectedEvents.length = 0;
+    this.eventLog.length = 0;
+    this.nextEventId = 1;
+    this.gameOverThisTick = [];
+    this.offerThisTick = [];
+    this.expiredOffersThisTick = [];
+    this.pvpTelemetryThisTick = [];
+    this.isAdminWarped = true;
+  }
+
+  private snapshotSeat(pid: PlayerId, nowMs: number): RunSnapshotSeat | null {
+    const conn = [...this.conns.values()].find((candidate) => (
+      candidate.playerId === pid
+      && candidate.authName !== null
+      && candidate.resumeToken !== null
+    ));
+    if (conn !== undefined && conn.authName !== null && conn.resumeToken !== null) {
+      return {
+        pid,
+        authName: conn.authName,
+        token: conn.resumeToken,
+        prevToken: conn.isResumeTokenConfirmed ? null : conn.presentedResumeToken,
+        displayName: conn.displayName,
+        colorIndex: conn.colorIndex,
+        hat: conn.hat,
+        face: conn.face,
+        pet: conn.pet,
+        kitId: conn.kitId,
+        lastAppliedSeq: conn.lastAppliedSeq,
+        lastCseq: conn.lastCseq,
+      };
+    }
+    const seat = [...this.seatMap.values()].find((candidate) => candidate.pid === pid);
+    if (seat === undefined || nowMs >= seat.expiresAt) return null;
+    return {
+      pid: seat.pid,
+      authName: seat.authName,
+      token: seat.token,
+      prevToken: seat.prevToken,
+      displayName: seat.displayName,
+      colorIndex: seat.colorIndex,
+      hat: seat.hat,
+      face: seat.face,
+      pet: seat.pet,
+      kitId: seat.kitId,
+      lastAppliedSeq: seat.lastAppliedSeq,
+      lastCseq: seat.lastCseq,
+    };
   }
 
   private seedArenaEnemies(): void {

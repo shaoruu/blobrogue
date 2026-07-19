@@ -6,12 +6,14 @@ import { isValidWorldId } from "../../src/net/worldId.js";
 
 export type ControlWorldAction =
   | { action: "warp"; worldId: string; floor: number }
-  | { action: "force-open-exit"; worldId: string };
+  | { action: "force-open-exit"; worldId: string }
+  | { action: "snapshot"; worldId: string }
+  | { action: "restore"; worldId: string };
 
 export const MAX_CONTROL_FLOOR = 1000;
 
 interface ControlActionClaims {
-  action: "warp" | "force-open-exit";
+  action: ControlWorldAction["action"];
   worldId: string;
   floor?: number;
   iat: number;

@@ -8,8 +8,9 @@ import type { RoomRuntime, SessionStore } from "./ports.js";
 import type { Conn } from "./connection.js";
 import { GenerationAdmissionStore } from "./generationAdmissionStore.js";
 import type { PvpPolicyId } from "../../src/net/pvpPolicy.js";
+import type { RunSnapshot } from "./runSnapshot.js";
 
-export type RoomFactory = (id: string, pvpPolicy: PvpPolicyId | null) => RoomRuntime;
+export type RoomFactory = (id: string, pvpPolicy: PvpPolicyId | null, seed?: number) => RoomRuntime;
 
 export class WorldRegistry implements SessionStore {
   private worlds = new Map<string, RoomRuntime>();
@@ -36,6 +37,22 @@ export class WorldRegistry implements SessionStore {
 
   room(id: string): RoomRuntime | undefined {
     return this.worlds.get(id);
+  }
+
+  restoreRoom(snapshot: RunSnapshot, nowMs: number, ttlMs: number): RoomRuntime {
+    const existing = this.worlds.get(snapshot.worldId);
+    if (existing !== undefined) return existing;
+    this.admissions.markActive(snapshot.worldId, nowMs);
+    const room = this.factory(snapshot.worldId, null, snapshot.seed);
+    room.restoreRunSnapshot(snapshot, nowMs, ttlMs);
+    this.worlds.set(snapshot.worldId, room);
+    this.log.info("world restored from run snapshot", {
+      worldId: snapshot.worldId,
+      floor: snapshot.floor,
+      players: snapshot.players.length,
+      fidelity: snapshot.fidelity,
+    });
+    return room;
   }
 
   isRetired(id: string): boolean {

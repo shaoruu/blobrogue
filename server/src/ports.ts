@@ -16,6 +16,7 @@ import type { PvpPolicyId } from "../../src/net/pvpPolicy.js";
 import type { PvpTelemetryEvent } from "../../src/sim/events.js";
 import type { Conn, InputIntent } from "./connection.js";
 import type { ServerConfig } from "./config.js";
+import type { RunSnapshot } from "./runSnapshot.js";
 
 // A reserved reconnect seat: the continuity a dropped connection needs to come back as the
 // SAME player. The body itself stays in the WorldState (absent/paused); the seat carries the
@@ -85,6 +86,8 @@ export interface RoomRuntime {
   resetRun(): void;
   adminWarpToFloor(floor: number): boolean;
   adminForceOpenExit(): boolean;
+  captureRunSnapshot(nowMs: number): RunSnapshot | null;
+  restoreRunSnapshot(snapshot: RunSnapshot, nowMs: number, ttlMs: number): void;
 
   // Advance one authoritative tick (fixed step; the room owns simulation time).
   step(cfg: ServerConfig): void;
@@ -140,6 +143,7 @@ export interface SessionStore {
   room(id: string): RoomRuntime | undefined;
   isRetired(id: string): boolean;
   recoveredGenerationWorldIds?(): string[];
+  restoreRoom(snapshot: RunSnapshot, nowMs: number, ttlMs: number): RoomRuntime;
   rooms(): IterableIterator<RoomRuntime>;
   roomCount(): number;
   totalPlayers(): number;

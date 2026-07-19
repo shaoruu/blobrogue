@@ -136,11 +136,29 @@ export interface WorldSummary {
 
 export type GameServerWorldAction =
   | { action: "warp"; worldId: string; floor: number }
-  | { action: "force-open-exit"; worldId: string };
+  | { action: "force-open-exit"; worldId: string }
+  | { action: "snapshot"; worldId: string }
+  | { action: "restore"; worldId: string };
 
 export type GameServerWorldActionResult =
-  | { isApplied: true; worldId: string; floor: number; players: number }
-  | { isApplied: false; reason: "world_not_found" | "pvp_forbidden" | "unavailable" };
+  | {
+    isApplied: true;
+    worldId: string;
+    floor: number;
+    players: number;
+    fidelity?: "build+floor";
+    snapshotPath?: string;
+  }
+  | {
+    isApplied: false;
+    reason:
+      | "world_not_found"
+      | "pvp_forbidden"
+      | "snapshot_not_found"
+      | "snapshot_unavailable"
+      | "world_active"
+      | "unavailable";
+  };
 
 // A single redacted structured log line. Values are primitives only (already sanitized).
 export type LogValue = string | number | boolean | null;
