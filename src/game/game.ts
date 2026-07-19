@@ -2570,7 +2570,7 @@ export class Game {
         const cos = Math.cos(cast.aim);
         const sin = Math.sin(cast.aim);
         for (let i = 0; i < ARENA_SALVO.shots; i++) {
-          const side = (i - (ARENA_SALVO.shots - 1) / 2) * 6;
+          const side = (i - (ARENA_SALVO.shots - 1) / 2) * 13;
           this.remoteTracers.push({
             x: cast.x + cos * 18 - sin * side,
             y: cast.y + sin * 18 + cos * side,
@@ -2578,7 +2578,7 @@ export class Game {
             life: 0.2,
             color: ARENA_ULT_HUE.salvo,
             len: ARENA_SALVO.rangePx - 18,
-            width: 15,
+            width: 10,
           });
         }
         if (cast.isLocal) {
