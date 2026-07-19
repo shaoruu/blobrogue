@@ -2866,13 +2866,14 @@ export class Game {
             entry.meleeTrailLength = feel?.trailLength ?? 1;
             entry.meleeTrailWidth = feel?.trailWidth ?? 1;
             entry.meleeTrailIntensity = feel?.trailIntensity ?? 1;
+            const duration = m.swingDur ?? 0.2;
             entry.meleeSwing = {
-              timer: m.swingDur,
-              duration: m.swingDur,
+              timer: duration,
+              duration,
               aim: e.aim,
               arc: m.arc,
               reach: m.reach,
-              isThrust: m.isThrust,
+              isThrust: m.isThrust === true,
               color: w.color,
             };
           }
