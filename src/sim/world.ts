@@ -802,10 +802,9 @@ export interface WorldState {
   // seconds left before that shooter may nudge that target again (A->B independent of B->A).
   // Sim-internal — never on the wire; entries self-expire and are cleared on every floor build.
   friendlyNudgeCd: Map<string, number>;
-  // §10 MENDER incoming-heal clamp: the rolling 1s per-target + party-wide heal budget ALL
-  // Mender output (Lifebloom + Sanctuary, any Mender count) shares, so healing never double-
-  // stacks or out-heals incoming damage. Server-only (heals resolve in the world phase); keyed
-  // by target player id, reset per floor.
+  // §10 MENDER incoming-heal clamp: the one-second-refill per-target + party-wide heal budget all
+  // Mender output shares. Burst overages remain as debt until later refills repay them, so healing
+  // never double-stacks or exceeds the sustained rate. Server-only; reset per floor.
   incomingHealWindows: Map<PlayerId, { tick: number; hp: number }>;
   partyHealWindow: { tick: number; hp: number };
   // Lag-compensation position history: per-enemy ring of past positions (offset 0 = most
@@ -1723,12 +1722,20 @@ function isSelfHealDelayed(w: WorldState, p: PlayerSim): boolean {
 }
 
 // The min ticks between two 1-HP SELF-heals — the sustained self-heal CEILING (guard). ceil so the
-// realized rate stays ≤ selfHpPerSec (at 0.6/s → 34 ticks → ~0.588 HP/s). Slower than Lifebloom's
-// 40-tick cadence, so a Lifebloom-only Mender self-heals at its natural ~0.5/s untouched; only
-// STACKED self output (Sanctuary-on-self + self-pulse) is throttled to the ceiling.
+// realized rate stays ≤ selfHpPerSec. Combined with Lifebloom's 40-tick cadence, the shipped
+// 0.4 HP/s ceiling realizes 0.25 HP/s from Lifebloom alone and throttles stacked self output.
 const SELF_HEAL_TICKS_PER_HP = Math.ceil(TICKS_PER_SECOND / MENDER_HEAL_CLAMP.selfHpPerSec);
 
-// §10 incoming-heal ROOM allowed RIGHT NOW. For an ALLY it's the shared rolling 1s
+function advanceIncomingHealWindow(window: { tick: number; hp: number }, now: number, hpPerSecond: number): { tick: number; hp: number } {
+  const elapsedWindows = Math.floor((now - window.tick) / TICKS_PER_SECOND);
+  if (elapsedWindows <= 0) return window;
+  return {
+    tick: window.tick + elapsedWindows * TICKS_PER_SECOND,
+    hp: Math.max(0, window.hp - elapsedWindows * hpPerSecond),
+  };
+}
+
+// §10 incoming-heal ROOM allowed RIGHT NOW. For an ALLY it's the shared one-second-refill
 // per-target budget AND the party-wide budget, so combined Mender output (any Mender count,
 // Lifebloom + Sanctuary) never double-stacks or out-heals incoming damage. For a SELF-heal the
 // per-target term is instead the selfHpPerSec CEILING (≤1 HP per SELF_HEAL_TICKS_PER_HP); the
@@ -1736,16 +1743,22 @@ const SELF_HEAL_TICKS_PER_HP = Math.ceil(TICKS_PER_SECOND / MENDER_HEAL_CLAMP.se
 // budgets cannot be represented by flooring each heal attempt to whole HP.
 function incomingHealRoom(w: WorldState, target: PlayerSim, isSelf: boolean): number {
   const now = w.tick;
-  const win = TICKS_PER_SECOND; // 1s rolling window
-  const partyHealed = now - w.partyHealWindow.tick < win ? w.partyHealWindow.hp : 0;
-  const partyRoom = MENDER_HEAL_CLAMP.partyHpPerSec - partyHealed;
+  w.partyHealWindow = advanceIncomingHealWindow(
+    w.partyHealWindow,
+    now,
+    MENDER_HEAL_CLAMP.partyHpPerSec,
+  );
+  const partyRoom = MENDER_HEAL_CLAMP.partyHpPerSec - w.partyHealWindow.hp;
   let perTargetRoom: number;
   if (isSelf) {
     perTargetRoom = now >= target.selfHealReadyTick ? 1 : 0; // the sustained self-heal ceiling
   } else {
     const tw = w.incomingHealWindows.get(target.id);
-    const targetHealed = tw && now - tw.tick < win ? tw.hp : 0;
-    perTargetRoom = MENDER_HEAL_CLAMP.perTargetHpPerSec - targetHealed;
+    const targetWindow = tw
+      ? advanceIncomingHealWindow(tw, now, MENDER_HEAL_CLAMP.perTargetHpPerSec)
+      : null;
+    if (targetWindow) w.incomingHealWindows.set(target.id, targetWindow);
+    perTargetRoom = MENDER_HEAL_CLAMP.perTargetHpPerSec - (targetWindow?.hp ?? 0);
   }
   return Math.max(0, Math.min(perTargetRoom, partyRoom));
 }
@@ -1754,14 +1767,23 @@ function incomingHealRoom(w: WorldState, target: PlayerSim, isSelf: boolean): nu
 // either the SELF ceiling (advance the next-self-heal tick) or the shared ally per-target window.
 function consumeIncomingHeal(w: WorldState, target: PlayerSim, hp: number, isSelf: boolean): void {
   const now = w.tick;
-  const win = TICKS_PER_SECOND;
   if (isSelf) {
     target.selfHealReadyTick = now + SELF_HEAL_TICKS_PER_HP; // hold the next self-HP to the ceiling cadence
   } else {
-    const tw = w.incomingHealWindows.get(target.id);
-    if (tw && now - tw.tick < win) tw.hp += hp; else w.incomingHealWindows.set(target.id, { tick: now, hp });
+    const tw = advanceIncomingHealWindow(
+      w.incomingHealWindows.get(target.id) ?? { tick: now, hp: 0 },
+      now,
+      MENDER_HEAL_CLAMP.perTargetHpPerSec,
+    );
+    tw.hp += hp;
+    w.incomingHealWindows.set(target.id, tw);
   }
-  if (now - w.partyHealWindow.tick < win) w.partyHealWindow.hp += hp; else w.partyHealWindow = { tick: now, hp };
+  w.partyHealWindow = advanceIncomingHealWindow(
+    w.partyHealWindow,
+    now,
+    MENDER_HEAL_CLAMP.partyHpPerSec,
+  );
+  w.partyHealWindow.hp += hp;
 }
 
 // Heal an ally by a MENDER source, clamped to maxHp (overheal does nothing, spec §2.2), emitting
