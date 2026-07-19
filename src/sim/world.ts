@@ -12798,6 +12798,10 @@ function severHuntStep(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): voi
   const bp = w.dungeon.blueprint;
   const cps = bp?.objectiveRoomIds ?? [];
   const cp = Math.max(0, Math.min(2, enc.checkpoint));
+  if (enc.currentRoomId === cps[cp] && Number(enc.flags.anchorsPlantedCp ?? -1) < cp) {
+    severPlantAnchors(w, e, ev);
+    return;
+  }
 
   // Trap = anchors live (players may intercept). Sever still flees when pressured;
   // only the earned window holds the body for punish.

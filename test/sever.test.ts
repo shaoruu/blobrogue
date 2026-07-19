@@ -227,7 +227,7 @@ function anchorsAndWindow(): void {
 
 function severAnchorLoopCompletes(): void {
   section("Anchor loop resumes after exposure and completes all checkpoints");
-  const w = createWorld(0xA4C4, 55, {});
+  const w = createWorld(0xF1EE, 55, {});
   loadFloorIntoWorld(w, 55);
   const boss = w.enemies.find((e) => e.kind === "sever");
   if (!boss || !boss.boss || !w.encounter) { check("sever for full anchor loop", false); return; }
@@ -249,50 +249,64 @@ function severAnchorLoopCompletes(): void {
     }
     return anchors.length;
   };
-  const expireWindow = (): void => {
+  const positionPlayerToward = (checkpoint: number): void => {
+    const checkpointRoomId = w.dungeon.blueprint!.objectiveRoomIds[checkpoint];
+    const room = w.dungeon.rooms.find((candidate) => candidate.id === checkpointRoomId)!;
+    const dx = room.cx * TILE + TILE / 2 - boss.x;
+    const dy = room.cy * TILE + TILE / 2 - boss.y;
+    const distance = Math.max(1, Math.hypot(dx, dy));
+    p.x = boss.x + dx / distance * 40;
+    p.y = boss.y + dy / distance * 40;
+    p.invuln = 999;
+  };
+  const expireWindow = (nextCheckpoint: number): void => {
     const ticks = Math.ceil(SEVER.interceptWindow / DT) + 2;
     for (let i = 0; i < ticks; i++) {
-      p.x = boss.x + 40;
-      p.y = boss.y;
-      p.invuln = 999;
+      positionPlayerToward(nextCheckpoint);
       step(w, 1);
     }
   };
-  const driveToAnchors = (checkpoint: number): boolean => {
-    for (let i = 0; i < 1200; i++) {
-      p.x = boss.x + 40;
-      p.y = boss.y;
-      p.invuln = 999;
-      p.isDown = false;
-      p.hp = Math.max(p.hp, 1);
-      step(w, 1);
-      if (w.encounter!.checkpoint === checkpoint
-        && Number(w.encounter!.flags.anchorsPlantedCp) === checkpoint
-        && liveAnchors().length === SEVER.anchorsPerCheckpoint) return true;
-    }
-    return false;
+  const arriveAtCheckpoint = (checkpoint: number): boolean => {
+    const checkpointRoomId = w.dungeon.blueprint!.objectiveRoomIds[checkpoint];
+    const room = w.dungeon.rooms.find((candidate) => candidate.id === checkpointRoomId)!;
+    boss.x = room.cx * TILE + TILE / 2;
+    boss.y = room.cy * TILE + TILE / 2;
+    positionPlayerToward(checkpoint);
+    step(w, 1);
+    return w.encounter!.checkpoint === checkpoint
+      && Number(w.encounter!.flags.anchorsPlantedCp) === checkpoint
+      && liveAnchors().length === SEVER.anchorsPerCheckpoint;
   };
 
   check("checkpoint 0 starts with two anchors", breakAnchors() === SEVER.anchorsPerCheckpoint);
   step(w, 2);
   check("checkpoint stays put during its earned window",
     w.encounter.checkpoint === 0 && w.encounter.flags.interceptState === "exposed");
-  expireWindow();
+  expireWindow(1);
   check("expired window resumes hunt at checkpoint 1",
     w.encounter.checkpoint === 1 && w.encounter.flags.interceptState === "hunt"
     && boss.boss.exposed === 0);
-  const isCheckpointOneReplanted = driveToAnchors(1);
+  const huntX = boss.x;
+  const huntY = boss.y;
+  positionPlayerToward(1);
+  step(w, 5);
+  check("Sever resumes fleeing after exposure",
+    Math.hypot(boss.x - huntX, boss.y - huntY) > 0 && w.encounter.flags.interceptState === "hunt");
+  const isCheckpointOneReplanted = arriveAtCheckpoint(1);
   check("Sever reaches checkpoint 1 and plants a new anchor pair", isCheckpointOneReplanted);
 
   check("checkpoint 1 anchors can be broken", breakAnchors() === SEVER.anchorsPerCheckpoint);
   step(w, 2);
-  expireWindow();
-  const isCheckpointTwoReplanted = driveToAnchors(2);
+  expireWindow(2);
+  check("second expired window advances to the final hunt",
+    w.encounter.checkpoint === 2 && w.encounter.flags.interceptState === "hunt"
+    && boss.boss.exposed === 0);
+  const isCheckpointTwoReplanted = arriveAtCheckpoint(2);
   check("Sever reaches checkpoint 2 and plants a new anchor pair", isCheckpointTwoReplanted);
 
   check("final checkpoint anchors can be broken", breakAnchors() === SEVER.anchorsPerCheckpoint);
   step(w, 2);
-  expireWindow();
+  expireWindow(2);
   check("final window completes the hunt and opens the exit",
     w.encounter.completed === true && w.encounter.failed === false && isFloorCleared(w));
   check("full anchor objective completes without killing Sever", !boss.dead && boss.hp > 0);
