@@ -62,7 +62,7 @@ function main(): void {
   const bonusChest = w.chests.find((c) => c !== weaponChest);
   check("fixed floor has a second chest for the cleared-floor exit check", bonusChest !== undefined);
   const droppedWeapon = weaponChest.weapon!;
-  placeAt(a, weaponChest.x + 1, weaponChest.y); // touch-opens; the weapon ejects toward A
+  placeAt(a, weaponChest.x, weaponChest.y); // touch-opens; the weapon ejects toward A
   placeAt(b, weaponChest.x + 400, weaponChest.y + 300);
   step(w);
   const weaponDrop = w.pickups.find((p) => p.kind === "weapon")!;
