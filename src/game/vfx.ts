@@ -156,6 +156,7 @@ interface Mote {
   size: number;
   speedMult: number;
   layer: number;
+  densityRank: number;
 }
 
 interface MoteLayer {
@@ -225,6 +226,7 @@ export class AmbienceField {
           size: layer.size * (0.7 + Math.random() * 0.6),
           speedMult: 0.6 + Math.random() * 0.8,
           layer: li,
+          densityRank: (i + 1) / layer.count,
         });
       }
     }
@@ -233,13 +235,14 @@ export class AmbienceField {
   // px/py: the local player (reaction center). pvx/pvy: their velocity, which scales and
   // directs the scatter so running through pollen actually parts it.
   update(dt: number, camX: number, camY: number, viewW: number, viewH: number,
-    px: number, py: number, pvx: number, pvy: number): void {
+    px: number, py: number, pvx: number, pvy: number, density = 1): void {
     const left = camX - MOTE_MARGIN, right = camX + viewW + MOTE_MARGIN;
     const top = camY - MOTE_MARGIN, bottom = camY + viewH + MOTE_MARGIN;
     const spanX = right - left, spanY = bottom - top;
     const speed = Math.hypot(pvx, pvy);
     const decay = Math.exp(-REACT_DECAY * dt);
     for (const m of this.motes) {
+      if (m.densityRank > density) continue;
       const layer = this.layers[m.layer];
       m.phase += dt * layer.swayFreq * 6.28;
       if (layer.reactRadius > 0) {
@@ -270,11 +273,12 @@ export class AmbienceField {
     }
   }
 
-  render(ctx: CanvasRenderingContext2D, camX: number, camY: number): void {
+  render(ctx: CanvasRenderingContext2D, camX: number, camY: number, density = 1): void {
     if (this.motes.length === 0) return;
     ctx.save();
     ctx.globalCompositeOperation = "lighter";
     for (const m of this.motes) {
+      if (m.densityRank > density) continue;
       const layer = this.layers[m.layer];
       const sx = m.x - camX, sy = m.y - camY;
       switch (layer.kind) {

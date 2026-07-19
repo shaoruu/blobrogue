@@ -97,6 +97,15 @@ import {
 import type { ArenaUltCastView, ArenaUltMoment } from "./arenaUltVfx.js";
 import { LightingRenderer } from "./lighting.js";
 import type { StaticLightSpec } from "./lighting.js";
+import {
+  FRAME_MS_EMA_SEED,
+  FX_QUALITY_MAX,
+  FX_QUALITY_MIN,
+  createFxQualityDwell,
+  resetFxQualityDwell,
+  updateFrameMsEma,
+  updateFxQualityTier,
+} from "./adaptiveFxQuality.js";
 import { HALO_VISUAL_BASE, haloVisualStrength, haloVisualTier } from "./haloVisual.js";
 import { settings } from "./settings.js";
 import { InputController } from "./input.js";
@@ -192,6 +201,8 @@ export interface StartOptions {
 // Populated only via the dev hooks below; nothing in normal play reads it.
 export interface DevSnapshot {
   fps: number;
+  frameMsEma: number;
+  fxQuality: number;
   floor: number;
   hp: number;
   maxHp: number;
@@ -1162,6 +1173,10 @@ export class Game {
   private isDevPaleCapture = false;
   private devArenaUltEventsSeen = 0;
   private fps = 0;             // smoothed frames/sec, surfaced via devSnapshot()
+  private frameMsEma = FRAME_MS_EMA_SEED;
+  private fxQuality = FX_QUALITY_MAX;
+  private fxQualityDwell = createFxQualityDwell();
+  private isFxAdaptationSuspended = false;
 
   constructor(
     canvas: HTMLCanvasElement,
@@ -1465,7 +1480,8 @@ export class Game {
     }
     this.isRunning = true;
     this.syncInputContext(); // entering the run drops any latched menu-era input
-    this.last = performance.now();
+    this.fxQuality = FX_QUALITY_MAX;
+    this.resetFrameTiming(performance.now());
     cancelAnimationFrame(this.raf);
     this.raf = requestAnimationFrame(this.loop);
   }
@@ -1632,6 +1648,16 @@ export class Game {
     const dt = Math.min(raw, 0.05);
     this.last = t;
     if (raw > 0) this.fps += (1 / raw - this.fps) * 0.1; // dev readout only; harmless otherwise
+    const isFxAdaptationFrozen = this.isPaused || this.isChoosing || this.freeze > 0;
+    if (isFxAdaptationFrozen) {
+      this.isFxAdaptationSuspended = true;
+      resetFxQualityDwell(this.fxQualityDwell);
+    } else if (this.isFxAdaptationSuspended) {
+      this.resetFrameTiming(t);
+    } else if (raw > 0) {
+      this.frameMsEma = updateFrameMsEma(this.frameMsEma, raw * 1000);
+      this.fxQuality = updateFxQualityTier(this.fxQuality, this.frameMsEma, this.fxQualityDwell);
+    }
     this.animClock = t / 1000; // ambient props keep flickering even while paused/frozen
     // Paused (Esc) or picking a blessing: keep drawing the frozen frame under the
     // overlay, run no sim. Reuses the exact freeze path co-op already tolerates. An ONLINE
@@ -1671,6 +1697,13 @@ export class Game {
     this.raf = requestAnimationFrame(this.loop);
   };
 
+  private resetFrameTiming(t: number): void {
+    this.last = t;
+    this.frameMsEma = FRAME_MS_EMA_SEED;
+    resetFxQualityDwell(this.fxQualityDwell);
+    this.isFxAdaptationSuspended = false;
+  }
+
   private togglePause() {
     if (!this.isRunning || this.isChoosing) return; // a blessing pick owns the freeze
     this.setPaused(!this.isPaused);
@@ -1682,10 +1715,12 @@ export class Game {
     // without fresh input after the pause.
     this.syncInputContext();
     if (paused) {
+      this.isFxAdaptationSuspended = true;
+      resetFxQualityDwell(this.fxQualityDwell);
       this.pause.show();
     } else {
       this.pause.hide();
-      this.last = performance.now(); // avoid a huge catch-up dt after the pause
+      this.resetFrameTiming(performance.now()); // avoid a huge catch-up dt after the pause
     }
   }
 
@@ -2400,7 +2435,18 @@ export class Game {
     const pvy = dt > 0 ? (this.py - this.lastPy) / dt : 0;
     this.lastPx = this.px;
     this.lastPy = this.py;
-    this.motes.update(dt, this.cam.x, this.cam.y, this.canvas.width, this.canvas.height, this.px, this.py, pvx, pvy);
+    this.motes.update(
+      dt,
+      this.cam.x,
+      this.cam.y,
+      this.canvas.width,
+      this.canvas.height,
+      this.px,
+      this.py,
+      pvx,
+      pvy,
+      this.fxQuality,
+    );
     this.updateHazardCosmetics(dt);
 
     // Wave-audio observation pass: authoritative attack-state tells (windup/lock/active/
@@ -2579,7 +2625,7 @@ export class Game {
   // burst counter — called only for ON-SCREEN bursts, the ones actually paid for.
   private burstScale(): number {
     const n = this.fxBurstCount++;
-    return n < FX_BURST_FULL ? 1 : n < FX_BURST_HALF ? 0.5 : 0.25;
+    return (n < FX_BURST_FULL ? 1 : n < FX_BURST_HALF ? 0.5 : 0.25) * this.fxQuality;
   }
 
   private resetArenaUltBurst(): void {
@@ -3911,7 +3957,7 @@ export class Game {
       this.isChoosing = false;
       this.input.releaseAll();
       this.syncInputContext();
-      this.last = performance.now();
+      this.resetFrameTiming(performance.now());
     }, { isDraft: this.isArena });
   }
 
@@ -3950,7 +3996,7 @@ export class Game {
       this.isChoosing = false;
       this.input.releaseAll();
       this.syncInputContext();
-      this.last = performance.now();
+      this.resetFrameTiming(performance.now());
     }, { isDraft: offer.k === "pvp_draft" });
   }
 
@@ -5113,20 +5159,24 @@ export class Game {
 
   // True when a world point is on (or near) the visible screen — used to gate audio
   // and juice for far-off co-op events so a teammate across the map never spams us.
-  private isNearCamera(x: number, y: number, margin = 160): boolean {
-    return x >= this.cam.x - margin && x <= this.cam.x + this.canvas.width + margin
-      && y >= this.cam.y - margin && y <= this.cam.y + this.canvas.height + margin;
+  private isNearCamera(x: number, y: number, margin?: number): boolean {
+    const qualityMargin = 40 + 120 * ((this.fxQuality - FX_QUALITY_MIN) / (FX_QUALITY_MAX - FX_QUALITY_MIN));
+    const effectiveMargin = margin ?? qualityMargin;
+    return x >= this.cam.x - effectiveMargin && x <= this.cam.x + this.canvas.width + effectiveMargin
+      && y >= this.cam.y - effectiveMargin && y <= this.cam.y + this.canvas.height + effectiveMargin;
   }
 
   // Every particle enters through here so the pool stays capped: when full, the oldest
   // particle yields to the newest — a busy screen softens instead of dropping frames.
   private pushParticle(p: Particle) {
-    if (this.particles.length >= MAX_PARTICLES) this.particles.shift();
+    const cap = Math.max(1, Math.round(MAX_PARTICLES * this.fxQuality));
+    if (this.particles.length >= cap) this.particles.splice(0, this.particles.length - cap + 1);
     this.particles.push(p);
   }
 
   private spawnParticles(x: number, y: number, n: number, color: string) {
-    for (let i = 0; i < n; i++) {
+    const count = Math.max(1, Math.round(n * this.fxQuality));
+    for (let i = 0; i < count; i++) {
       const a = Math.random() * 6.28, s = 40 + Math.random() * 140;
       this.pushParticle({ x, y, vx: Math.cos(a) * s, vy: Math.sin(a) * s, life: 0.3 + Math.random() * 0.4, maxLife: 0.7, color, size: 1 + Math.random() * 3, kind: "dot", rot: 0, vr: 0, gravity: 0, drag: 0.92 });
     }
@@ -5224,7 +5274,8 @@ export class Game {
 
   // Bright, short sparks that shoot back off a surface (wall impacts).
   private spawnSparks(x: number, y: number, n: number, angle: number, fan = 0.9, tint?: string, speedScale = 1) {
-    for (let i = 0; i < n; i++) {
+    const count = Math.max(1, Math.round(n * this.fxQuality));
+    for (let i = 0; i < count; i++) {
       const a = angle + (Math.random() * 2 - 1) * fan;
       const s = (160 + Math.random() * 220) * speedScale;
       const life = 0.12 + Math.random() * 0.16;
@@ -5258,7 +5309,8 @@ export class Game {
 
   // Soft colored haze — a bullet biting into flesh.
   private spawnPuff(x: number, y: number, n: number, color: string) {
-    for (let i = 0; i < n; i++) {
+    const count = Math.max(1, Math.round(n * this.fxQuality));
+    for (let i = 0; i < count; i++) {
       const a = Math.random() * 6.28, s = 20 + Math.random() * 80;
       const life = 0.2 + Math.random() * 0.3;
       this.pushParticle({
@@ -5282,6 +5334,7 @@ export class Game {
   }
 
   private addDecal(x: number, y: number, color: string, r: number, kind: "splat" | "ring") {
+    if (this.fxQuality < 0.5) return;
     this.decals.push({ x, y, color, r, t: 0, life: kind === "ring" ? 0.4 : 3.2, kind });
     if (this.decals.length > MAX_DECALS) this.decals.shift();
   }
@@ -5311,7 +5364,9 @@ export class Game {
     // trauma² shake, scaled by the player's intensity setting (zeroed under reduced
     // motion). New random offset per frame; the background fill above stays put so
     // edges never flash the void.
-    const mag = this.trauma * this.trauma * SHAKE_MAX_PX * settings.effectiveShake;
+    const normalizedFxQuality = (this.fxQuality - FX_QUALITY_MIN) / (FX_QUALITY_MAX - FX_QUALITY_MIN);
+    const shakeQuality = 0.6 + 0.4 * normalizedFxQuality;
+    const mag = this.trauma * this.trauma * SHAKE_MAX_PX * settings.effectiveShake * shakeQuality;
     const shakeX = mag > 0.05 ? (Math.random() * 2 - 1) * mag : 0;
     const shakeY = mag > 0.05 ? (Math.random() * 2 - 1) * mag : 0;
     ctx.save();
@@ -5326,7 +5381,7 @@ export class Game {
     this.renderHazards(); // dynamic boss hazards (the Weaver's webs), over the floor layer
     this.renderGroundEffects(); // weapon ground effects (chill zones, snap wires) at floor level
     this.arenaUltVfx.renderGround(ctx, this.renderCam.x, this.renderCam.y, this.sprites);
-    this.motes.render(ctx, this.renderCam.x, this.renderCam.y); // ambient biome air, over the floor, under entities
+    this.motes.render(ctx, this.renderCam.x, this.renderCam.y, this.fxQuality); // ambient biome air, over the floor, under entities
     this.renderExit();
     this.renderShadows();
     this.renderPropEntities();
@@ -11308,6 +11363,8 @@ export class Game {
   devSnapshot(): DevSnapshot {
     return {
       fps: this.fps,
+      frameMsEma: this.frameMsEma,
+      fxQuality: this.fxQuality,
       floor: this.floor,
       hp: this.hp,
       maxHp: this.maxHp,

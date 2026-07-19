@@ -20,7 +20,7 @@ const DEV_CSS = `
   .dev-panel::-webkit-scrollbar-thumb { background: var(--dun-3); }
   .dev-fps-meter {
     position: fixed; top: 12px; left: 12px; z-index: 30;
-    width: 132px; padding: 7px 9px;
+    width: 248px; padding: 7px 9px;
     font-family: var(--f-num), monospace; font-variant-numeric: tabular-nums;
     color: var(--cream); background: rgba(14, 11, 26, 0.84);
     box-shadow: inset 0 0 0 2px var(--dun-3), 0 0 0 2px var(--ink);
