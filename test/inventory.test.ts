@@ -536,7 +536,7 @@ function keyboardSwapTests(): void {
   switchWeaponInWorld(w, LOCAL_ID, equipped);
   const pkId = dropPickup(w, p.x, p.y, "flamer");
 
-  (game as object as { updateHud(): void }).updateHud();
+  (game as object as { tickSwapPrompt(): void }).tickSwapPrompt();
   fireWindowEvent("keydown", { key: "e", repeat: false });
   fireWindowEvent("keyup", { key: "e" });
 
