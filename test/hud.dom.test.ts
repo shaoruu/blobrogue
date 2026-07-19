@@ -413,6 +413,26 @@ function hudIntegrationTests(): void {
   check("interaction hint shown with 2+ weapons", root.querySelector("[data-hb-hint]")!.classList.contains("show"));
   check("below the cap the hint keeps the classic verbs", root.querySelector("[data-hb-hint]")!.textContent === "CLICK EQUIP \u00b7 DRAG REORDER \u00b7 Q DROP");
 
+  const slotsBeforeSwitch = [...root.querySelectorAll<HTMLElement>(".hb-slot")];
+  const imagesBeforeSwitch = slotsBeforeSwitch.map((slot) => slot.querySelector<HTMLImageElement>("img"));
+  hud.update(mkState({
+    weapons: [
+      wslot("pistol", "Pistol", true),
+      wslot("shotgun", "Shotgun", false),
+      wslot("tesla", "Tesla", false),
+    ],
+  }));
+  const slotsAfterSwitch = [...root.querySelectorAll<HTMLElement>(".hb-slot")];
+  check("switching weapons preserves every hotbar slot DOM node",
+    slotsBeforeSwitch.every((slot, i) => slotsAfterSwitch[i] === slot));
+  check("switching weapons preserves every hotbar image DOM node",
+    imagesBeforeSwitch.every((image, i) => slotsAfterSwitch[i].querySelector("img") === image));
+  check("a DOM-preserving switch moves the equipped highlight and accessible label",
+    slotsAfterSwitch[0].classList.contains("on")
+    && slotsAfterSwitch[0].getAttribute("aria-label") === "Pistol, slot 1, equipped"
+    && !slotsAfterSwitch[1].classList.contains("on")
+    && slotsAfterSwitch[1].getAttribute("aria-label") === "Shotgun, slot 2");
+
   hud.update(mkState({ items: [ITEM_LV2, ITEM_MAX] }));
   check("blessing row appears with picks", root.querySelector(".hb-buffs")!.classList.contains("show"));
   check("one icon slot per distinct blessing", root.querySelectorAll(".hb-buffs .hb-buff").length === 2);
