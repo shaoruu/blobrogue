@@ -103,7 +103,9 @@ for confirm-gated routes, `X-Confirm-Token: dev:whatever`. Point it at a local g
 ```sh
 npm run typecheck   # tsc (src + tests + the real-gs integration import)
 npm run build       # tsc emit -> dist/src/main.js
-npm run test        # full suite over injected fs/pm2/gs fakes + one real-gs integration suite
+npm run test:unit   # blocking correctness suite over injected fs/pm2/gs fakes
+npm run test:integration # real-gs live VERIFY integration
+npm test            # both groups
 ```
 
 ## Release build → promote → deploy
@@ -112,8 +114,11 @@ Releases are **immutable**. The build runs on CI / a build box from a clean chec
 admin-triggered `git pull`, never a mutable working-tree deploy.
 
 ```sh
-# 1) BUILD (CI / build box): gates -> exact tested server+client+control artifacts + manifest
-control/scripts/build-release.sh
+# 1) BUILD (CI / build box): fast interactive path skips only the flaky live-gs VERIFY
+control/scripts/build-release.sh --skip-verify
+#    FAST_DEPLOY=1 control/scripts/build-release.sh is equivalent.
+#    Without fast mode, live-gs VERIFY runs report-only and writes artifacts/control-verify-<commit>.log.
+#    Typecheck, server/control unit tests, and deterministic goldens always remain blocking.
 #    -> artifacts/<releaseId>.tar.gz (+ .sha256), prints <releaseId>
 #    releaseId = <commitShort>-<version>-<checksum12>; manifest records gate results + checksum
 

@@ -1,6 +1,5 @@
-// Control-plane test entrypoint. Runs every suite against in-memory fakes (plus one real-gs
-// integration suite), aggregates results, and exits non-zero on any failure so it gates CI.
-// Run: npm run test (in control/).
+// Control-plane test entrypoint. Unit suites run against in-memory fakes; the integration suite
+// boots a real game server. Run all suites with `npm test`, or select one group via package scripts.
 
 import { TestRunner } from "./harness.js";
 import { suite as authSuite } from "./auth.test.js";
@@ -12,14 +11,24 @@ import { suite as integrationSuite } from "./integration.test.js";
 import { suite as configSuite } from "./config.test.js";
 
 async function main(): Promise<void> {
+  const isUnitOnly = process.argv.includes("--unit");
+  const isIntegrationOnly = process.argv.includes("--integration");
+  if (isUnitOnly && isIntegrationOnly) {
+    throw new Error("choose either --unit or --integration");
+  }
+
   const t = new TestRunner();
-  await configSuite(t);
-  await authSuite(t);
-  await verifierSuite(t);
-  await deploySuite(t);
-  await apiSuite(t);
-  await redactSuite(t);
-  await integrationSuite(t);
+  if (!isIntegrationOnly) {
+    await configSuite(t);
+    await authSuite(t);
+    await verifierSuite(t);
+    await deploySuite(t);
+    await apiSuite(t);
+    await redactSuite(t);
+  }
+  if (!isUnitOnly) {
+    await integrationSuite(t);
+  }
 
   process.stdout.write(`\n${t.passed} checks passed, ${t.failed} failed\n`);
   if (t.failed > 0) {
