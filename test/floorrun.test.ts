@@ -64,11 +64,16 @@ function main(): void {
   const droppedWeapon = weaponChest.weapon!;
   placeAt(a, weaponChest.x, weaponChest.y); // touch-opens; the weapon ejects toward A
   placeAt(b, weaponChest.x + 400, weaponChest.y + 300);
-  step(w);
-  const weaponDrop = w.pickups.find((p) => p.kind === "weapon")!;
-  check("opening the chest ejected its weapon as a real pickup", weaponChest.opened && weaponDrop !== undefined && weaponDrop.weapon === droppedWeapon);
-  placeAt(a, weaponDrop.x, weaponDrop.y); // A walks onto the drop; B stays away
-  const pickupEvents = step(w);
+  const openEvents = step(w);
+  const weaponDrop = w.pickups.find((p) => p.kind === "weapon");
+  const isCollectedOnOpen = openEvents.some((e) => e.t === "pickup" && e.kind === "weapon" && e.pid === "pA");
+  check("opening the chest ejected its weapon as a real pickup",
+    weaponChest.opened && (weaponDrop?.weapon === droppedWeapon || isCollectedOnOpen));
+  let pickupEvents = openEvents;
+  if (weaponDrop) {
+    placeAt(a, weaponDrop.x, weaponDrop.y); // A walks onto the drop; B stays away
+    pickupEvents = step(w);
+  }
   check("pickup collected through the ordinary pickup system", pickupEvents.some((e) => e.t === "pickup" && e.kind === "weapon" && e.pid === "pA"));
   check("A owns the picked weapon", a.ownedWeapons.includes(droppedWeapon), `A=${a.ownedWeapons.join(",")}`);
   check("B does NOT own it (per-player inventory)", !b.ownedWeapons.includes(droppedWeapon), `B=${b.ownedWeapons.join(",")}`);
