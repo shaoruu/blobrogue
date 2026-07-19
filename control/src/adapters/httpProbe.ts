@@ -138,7 +138,7 @@ export function validateAuthorityVersion(value: ProbeJson): AuthorityVersionVali
     && value.coopTicket === SYNTHETIC_COOP_TICKET_ENVELOPE
     && value.pvpTicket === SYNTHETIC_PVP_TICKET_ENVELOPE
     && value.admission === SYNTHETIC_ADMISSION_ENVELOPE
-    && value.pvpPrivateEnabled === false
+    && value.pvpPrivateEnabled === true
     && value.pvpPublicEnabled === false;
   return isContractValid
     ? { isValid: true, detail: null }

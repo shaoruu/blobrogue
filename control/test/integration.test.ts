@@ -179,7 +179,7 @@ export async function suite(t: TestRunner): Promise<void> {
       coopTicket: "v1",
       pvpTicket: "v2",
       admission: "a2",
-      pvpPrivateEnabled: false,
+      pvpPrivateEnabled: true,
       pvpPublicEnabled: false,
     };
     t.check("exact canonical policy catalog passes",
