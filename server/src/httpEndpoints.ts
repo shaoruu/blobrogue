@@ -200,6 +200,7 @@ function parseControlWorldAction(body: string): ControlWorldAction | null {
   if (value.action === "warp") {
     const keys = Object.keys(value);
     if ((keys.length !== 3 && keys.length !== 4)
+      || keys.some((key) => !["action", "worldId", "floor", "loadouts"].includes(key))
       || !isValidWorldId(value.worldId)
       || !Number.isSafeInteger(value.floor)
       || value.floor < 1

@@ -266,7 +266,9 @@ export class HttpGameServerProbe implements GameServerProbe {
         && Number.isSafeInteger(result.floor)
         && typeof result.players === "number"
         && Number.isSafeInteger(result.players)) {
-        const loadouts = parseLoadoutResults(result.loadouts);
+        const loadouts = result.loadouts === undefined
+          ? undefined
+          : parseLoadoutResults(result.loadouts);
         if (result.loadouts !== undefined && loadouts === null) {
           return { isApplied: false, reason: "unavailable" };
         }
@@ -504,8 +506,7 @@ export class HttpGameServerProbe implements GameServerProbe {
   }
 }
 
-function parseLoadoutResults(value: ProbeJson | undefined): GameServerPlayerLoadoutResult[] | null {
-  if (value === undefined) return [];
+function parseLoadoutResults(value: ProbeJson): GameServerPlayerLoadoutResult[] | null {
   if (!Array.isArray(value)) return null;
   const results: GameServerPlayerLoadoutResult[] = [];
   for (const entry of value) {

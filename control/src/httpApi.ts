@@ -223,6 +223,7 @@ export class ControlHttpServer {
         ? parseAdminLoadouts(parsed.loadouts)
         : null;
     if ((keys.length !== 2 && keys.length !== 3)
+      || keys.some((key) => !["worldId", "floor", "loadouts"].includes(key))
       || typeof parsed.worldId !== "string"
       || !isValidWorldId(parsed.worldId)
       || typeof parsed.floor !== "number"

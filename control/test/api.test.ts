@@ -254,6 +254,12 @@ export async function suite(t: TestRunner): Promise<void> {
       });
       t.check("invalid loadout structure is rejected before the game server",
         malformedLoadout.status === 400);
+      const extraField = await api(bed.base, "POST", "/v1/worlds/warp", {
+        token: adminToken(bed.clock),
+        body: { worldId: "arena-1", floor: 55, extra: true },
+      });
+      t.check("unexpected warp fields are rejected before the game server",
+        extraField.status === 400);
 
       const audits = await api(bed.base, "GET", "/v1/audit", {
         token: adminToken(bed.clock),
