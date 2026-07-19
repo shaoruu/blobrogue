@@ -18,6 +18,17 @@ const DEV_CSS = `
   }
   .dev-panel::-webkit-scrollbar { width: 8px; }
   .dev-panel::-webkit-scrollbar-thumb { background: var(--dun-3); }
+  .dev-fps-meter {
+    position: fixed; top: 12px; left: 12px; z-index: 30;
+    width: 132px; padding: 7px 9px;
+    font-family: var(--f-num), monospace; font-variant-numeric: tabular-nums;
+    color: var(--cream); background: rgba(14, 11, 26, 0.84);
+    box-shadow: inset 0 0 0 2px var(--dun-3), 0 0 0 2px var(--ink);
+    pointer-events: none; contain: layout paint;
+  }
+  .dev-fps-meter .rate { display: block; height: 24px; font-size: 22px; line-height: 24px; color: var(--amber-hi); }
+  .dev-fps-meter .rate.warn { color: var(--red); }
+  .dev-fps-meter .detail { display: block; height: 15px; font-size: 13px; line-height: 15px; color: var(--dun-4); white-space: nowrap; }
   .dev-title {
     font-family: var(--f-logo), monospace; font-size: 11px; letter-spacing: 1px;
     color: var(--amber); text-shadow: 0 2px 0 var(--dun-0);

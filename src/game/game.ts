@@ -532,6 +532,8 @@ const MAX_PARTICLES = 700;
 // stays bounded (the pools already FIFO-evict — this keeps them from thrashing).
 const FX_BURST_FULL = 3;
 const FX_BURST_HALF = 8;
+const HALO_IMPACT_SAMPLES = 4;
+const HALO_IMPACT_TRAUMA_CAP = 0.28;
 // Hard cap on lingering corpse sprites: unbounded corpses grew both the array and the draw
 // loop through a long fight. When full, the oldest corpse shifts out.
 const MAX_CORPSES = 32;
@@ -968,6 +970,18 @@ export class Game {
   private arenaBurstTrauma = 0;
   private arenaBurstKickX = 0;
   private arenaBurstKickY = 0;
+  private isHaloActiveForBurst = false;
+  private isHaloFlaredForBurst = false;
+  private haloImpactCount = 0;
+  private haloImpactSampleCount = 0;
+  private haloImpactTrauma = 0;
+  private readonly haloImpactPuffX = new Float64Array(HALO_IMPACT_SAMPLES);
+  private readonly haloImpactPuffY = new Float64Array(HALO_IMPACT_SAMPLES);
+  private readonly haloImpactDmgX = new Float64Array(HALO_IMPACT_SAMPLES);
+  private readonly haloImpactDmgY = new Float64Array(HALO_IMPACT_SAMPLES);
+  private readonly haloImpactDmg = new Float64Array(HALO_IMPACT_SAMPLES);
+  private readonly haloImpactCrit = new Uint8Array(HALO_IMPACT_SAMPLES);
+  private readonly haloImpactColor = Array<string>(HALO_IMPACT_SAMPLES).fill("#ffffff");
   private meleeShockwaveX = 0;
   private meleeShockwaveY = 0;
   private meleeShockwaveCount = 0;
@@ -2522,7 +2536,20 @@ export class Game {
     this.burstKick = 0;
     this.burstKickDir = 0;
     this.resetArenaUltBurst();
+    this.isHaloActiveForBurst = this.weapon === "halo";
+    this.isHaloFlaredForBurst = false;
+    this.haloImpactCount = 0;
+    this.haloImpactSampleCount = 0;
+    this.haloImpactTrauma = 0;
+    if (this.isHaloActiveForBurst) {
+      for (const effect of this.effects) {
+        if (effect.kind !== "orbit" || effect.owner !== LOCAL_ID) continue;
+        this.isHaloFlaredForBurst = effect.flare > 0;
+        break;
+      }
+    }
     for (const e of events) this.handleSimEvent(e);
+    this.flushHaloImpacts();
     // The explosion/kill burst coalesces its hitstop + shake into ONE apply per frame. The
     // per-event calls all clamp anyway (freeze -> max, trauma -> sum capped at 1), so this is
     // outcome-identical while a many-detonation frame no longer runs the apply 11 times.
@@ -2794,15 +2821,19 @@ export class Game {
       case "enemyHit": {
         triggerFlash(this.animForId(e.eid));
         this.captureUltMoteOrigin(e.dmgX, e.dmgY, this.isBossEid(e.eid) ? "boss" : "dmg");
-        this.spawnDmgNumber(e.dmgX, e.dmgY, e.dmg, { crit: e.crit });
-        this.spawnPuff(e.puffX, e.puffY, e.crit ? 9 : 5, e.puffColor);
-        const meleeWeapon = e.melee
-          ? this.replayMeleeImpact(e.eid, e.puffX, e.puffY, e.crit)
-          : null;
+        const isHaloImpact = e.melee && this.isHaloActiveForBurst;
+        let meleeWeapon: WeaponId | null = null;
+        if (isHaloImpact) {
+          this.queueHaloImpact(e.puffX, e.puffY, e.dmgX, e.dmgY, e.dmg, e.puffColor, e.crit);
+        } else {
+          this.spawnDmgNumber(e.dmgX, e.dmgY, e.dmg, { crit: e.crit });
+          this.spawnPuff(e.puffX, e.puffY, e.crit ? 9 : 5, e.puffColor);
+          if (e.melee) meleeWeapon = this.replayMeleeImpact(e.eid, e.puffX, e.puffY, e.crit);
+        }
         if (e.crit) {
           if (e.melee) waveAudio.play("melee.crit", { x: e.puffX, y: e.puffY });
           else sfx("crit", { gain: 0.6 });
-          this.spawnSparkFlash(e.puffX, e.puffY, "#fff3c4");
+          if (!isHaloImpact) this.spawnSparkFlash(e.puffX, e.puffY, "#fff3c4");
           if (e.melee) this.burstFreeze = Math.max(this.burstFreeze, 0.03);
           else this.addFreeze(0.03); // a hair of impact-frame so a crit lands harder
         }
@@ -2815,11 +2846,10 @@ export class Game {
         if (!e.killed) {
           if (!e.melee && waveAudio.isBeamWeapon(this.p.weapon)) {
             waveAudio.beamHitAt(e.eid, e.dmgX, e.dmgY);
-          } else if (e.melee && this.weapon === "halo") {
+          } else if (isHaloImpact) {
             // The ring's contact voice (flared hits read as the CATCH) — the local
             // wielder's read; remote halos keep the shared melee thump.
-            const orbit = this.effects.find((fx) => fx.kind === "orbit" && fx.owner === LOCAL_ID);
-            const cue = orbit !== undefined && orbit.kind === "orbit" && orbit.flare > 0 ? "halo.catch" : "halo.hit";
+            const cue = this.isHaloFlaredForBurst ? "halo.catch" : "halo.hit";
             if (!waveAudio.cueAt(cue, e.puffX, e.puffY, e.eid)) sfx("meleeHit", { gain: 0.9 });
           } else if (e.melee) {
             if (meleeWeapon === null || !waveAudio.playMeleeImpact(meleeWeapon, {
@@ -3560,6 +3590,59 @@ export class Game {
       color: Math.random() < 0.5 ? BURN_TINT : "#ffd27a",
       size: 2 + Math.random() * 2, kind: "puff", rot: 0, vr: 0, gravity: -40, drag: 0.9,
     });
+  }
+
+  private queueHaloImpact(
+    puffX: number,
+    puffY: number,
+    dmgX: number,
+    dmgY: number,
+    dmg: number,
+    color: string,
+    isCrit: boolean,
+  ): void {
+    const scale = this.haloImpactCount < FX_BURST_FULL
+      ? 1
+      : this.haloImpactCount < FX_BURST_HALF ? 0.5 : 0.25;
+    this.haloImpactCount++;
+    this.burstFreeze = Math.max(this.burstFreeze, FREEZE_KILL);
+    this.haloImpactTrauma = Math.min(
+      HALO_IMPACT_TRAUMA_CAP,
+      this.haloImpactTrauma + MELEE_HIT_TRAUMA * scale,
+    );
+    if (this.haloImpactSampleCount >= HALO_IMPACT_SAMPLES || !this.isNearCamera(puffX, puffY)) return;
+    const index = this.haloImpactSampleCount++;
+    this.haloImpactPuffX[index] = puffX;
+    this.haloImpactPuffY[index] = puffY;
+    this.haloImpactDmgX[index] = dmgX;
+    this.haloImpactDmgY[index] = dmgY;
+    this.haloImpactDmg[index] = dmg;
+    this.haloImpactCrit[index] = isCrit ? 1 : 0;
+    this.haloImpactColor[index] = color;
+  }
+
+  private flushHaloImpacts(): void {
+    this.burstTrauma = Math.min(1, this.burstTrauma + this.haloImpactTrauma);
+    for (let i = 0; i < this.haloImpactSampleCount; i++) {
+      const isCrit = this.haloImpactCrit[i] === 1;
+      const scale = this.burstScale();
+      const puffX = this.haloImpactPuffX[i];
+      const puffY = this.haloImpactPuffY[i];
+      const color = this.haloImpactColor[i];
+      this.spawnDmgNumber(this.haloImpactDmgX[i], this.haloImpactDmgY[i], this.haloImpactDmg[i], { crit: isCrit });
+      this.spawnPuff(puffX, puffY, Math.max(1, Math.round((isCrit ? 9 : 5) * scale)), color);
+      const dir = Math.atan2(puffY - this.py, puffX - this.px) + HALF_PI;
+      this.spawnSparks(
+        puffX,
+        puffY,
+        Math.max(1, Math.round((isCrit ? 10 : 6) * scale)),
+        dir,
+        isCrit ? 1.125 : 0.9,
+        isCrit ? "#fff3c4" : undefined,
+        0.8,
+      );
+      this.spawnSparkFlash(puffX, puffY, isCrit ? "#fff3c4" : "#d8f0e8");
+    }
   }
 
   // Melee connect: metal-on-flesh weight. Sparks fly out along the strike line from the
