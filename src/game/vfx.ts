@@ -242,7 +242,11 @@ export class AmbienceField {
     const speed = Math.hypot(pvx, pvy);
     const decay = Math.exp(-REACT_DECAY * dt);
     for (const m of this.motes) {
-      if (m.densityRank > density) continue;
+      if (m.densityRank > density) {
+        if (m.x < left || m.x > right) m.x = left + ((m.x - left) % spanX + spanX) % spanX;
+        if (m.y < top || m.y > bottom) m.y = top + ((m.y - top) % spanY + spanY) % spanY;
+        continue;
+      }
       const layer = this.layers[m.layer];
       m.phase += dt * layer.swayFreq * 6.28;
       if (layer.reactRadius > 0) {

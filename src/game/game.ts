@@ -537,6 +537,8 @@ const LOW_HP_FRAC = 0.25;
 // Client particle budget: the newest effect wins; the oldest particle is dropped when the
 // pool is full, so a busy screen degrades gracefully instead of eating the frame budget.
 const MAX_PARTICLES = 700;
+const FX_CAMERA_MARGIN_MIN = 40;
+const FX_CAMERA_MARGIN_MAX = 160;
 // Per-frame FX burst coalescing: a thumper into an explosive-barrel cluster can land many
 // explosions + kills in ONE frame. The first FX_BURST_FULL on-screen bursts spawn at full
 // particle counts; beyond that per-event counts scale down so the frame's total spawn work
@@ -1264,7 +1266,12 @@ export class Game {
     });
     window.addEventListener("blur", () => this.input.releaseAll());
     document.addEventListener("visibilitychange", () => {
-      if (document.visibilityState === "hidden") this.input.releaseAll();
+      if (document.visibilityState === "hidden") {
+        this.input.releaseAll();
+        this.suspendFrameTiming();
+      } else if (this.isRunning && !this.isPaused && !this.isChoosing) {
+        this.resetFrameTiming(performance.now());
+      }
     });
   }
 
@@ -1648,13 +1655,12 @@ export class Game {
     const dt = Math.min(raw, 0.05);
     this.last = t;
     if (raw > 0) this.fps += (1 / raw - this.fps) * 0.1; // dev readout only; harmless otherwise
-    const isFxAdaptationFrozen = this.isPaused || this.isChoosing || this.freeze > 0;
-    if (isFxAdaptationFrozen) {
-      this.isFxAdaptationSuspended = true;
-      resetFxQualityDwell(this.fxQualityDwell);
+    const isFrameTimingSuspended = this.isPaused || this.isChoosing || document.visibilityState === "hidden";
+    if (isFrameTimingSuspended) {
+      this.suspendFrameTiming();
     } else if (this.isFxAdaptationSuspended) {
       this.resetFrameTiming(t);
-    } else if (raw > 0) {
+    } else if (this.freeze <= 0 && raw > 0) {
       this.frameMsEma = updateFrameMsEma(this.frameMsEma, raw * 1000);
       this.fxQuality = updateFxQualityTier(this.fxQuality, this.frameMsEma, this.fxQualityDwell);
     }
@@ -1697,6 +1703,11 @@ export class Game {
     this.raf = requestAnimationFrame(this.loop);
   };
 
+  private suspendFrameTiming(): void {
+    this.isFxAdaptationSuspended = true;
+    resetFxQualityDwell(this.fxQualityDwell);
+  }
+
   private resetFrameTiming(t: number): void {
     this.last = t;
     this.frameMsEma = FRAME_MS_EMA_SEED;
@@ -1715,8 +1726,7 @@ export class Game {
     // without fresh input after the pause.
     this.syncInputContext();
     if (paused) {
-      this.isFxAdaptationSuspended = true;
-      resetFxQualityDwell(this.fxQualityDwell);
+      this.suspendFrameTiming();
       this.pause.show();
     } else {
       this.pause.hide();
@@ -2507,7 +2517,7 @@ export class Game {
       this.hazardPhases.set(h.id, phase);
       if (prev === undefined || phase === prev) continue;
       const x = (h.tx + 0.5) * TILE, y = (h.ty + 0.5) * TILE;
-      if (!this.isNearCamera(x, y)) continue;
+      if (!this.isNearCamera(x, y, FX_CAMERA_MARGIN_MAX)) continue;
       // Phase-edge cues route through the wave manifest (authored hazard/* assets with
       // safe library fallbacks) — never the old uiClick/meleeSwing/enemyAttack repitches.
       const cues = WAVE_HAZARDS[h.kind];
@@ -3486,7 +3496,7 @@ export class Game {
         triggerRecoil(this.animForId(e.eid));
         if (e.spawned) {
           this.spawnParticles(e.mx, e.my, 8, "#a855f7");
-          if (this.isNearCamera(e.x, e.y)) { sfx("enemyHit", { gain: 0.5, rate: 0.6 }); this.addTrauma(TRAUMA_BOSS_SLAM); }
+          if (this.isNearCamera(e.x, e.y, FX_CAMERA_MARGIN_MAX)) { sfx("enemyHit", { gain: 0.5, rate: 0.6 }); this.addTrauma(TRAUMA_BOSS_SLAM); }
         }
         break;
       case "bossPhase": {
@@ -3512,7 +3522,7 @@ export class Game {
         if (waveAudio.bossEntrance(e.kind, e.x, e.y, e.eid)) break;
         const placeCue = e.kind === "caskbellows" ? bestiaryCue(e.kind, "place") : null;
         if (placeCue !== null && waveAudio.cueAt(placeCue, e.x, e.y, e.eid)) break;
-        if (this.isNearCamera(e.x, e.y)) sfx("enemyHit", { gain: 0.4, rate: 0.7 });
+        if (this.isNearCamera(e.x, e.y, FX_CAMERA_MARGIN_MAX)) sfx("enemyHit", { gain: 0.4, rate: 0.7 });
         break;
       }
       case "descend":
@@ -3624,7 +3634,7 @@ export class Game {
         // off-camera law — boss locks must stay audible); legacy names keep the near-camera
         // gate and exact SfxName replay.
         const isWaveCue = waveAudio.cueAt(e.name, e.x, e.y);
-        if (this.isNearCamera(e.x, e.y)) {
+        if (this.isNearCamera(e.x, e.y, FX_CAMERA_MARGIN_MAX)) {
           if (!isWaveCue) sfx(e.name as SfxName, { rate: e.rate, gain: e.gain });
           if (e.trauma > 0) this.addTrauma(e.trauma);
         }
@@ -4241,7 +4251,7 @@ export class Game {
   // Plays a positional sfx only when the source is on/near the local screen, so a
   // teammate's distant fight never spams the local mix.
   private sfxAt(name: SfxName, x: number, y: number, opts?: SfxOptions) {
-    if (this.isNearCamera(x, y)) sfx(name, opts);
+    if (this.isNearCamera(x, y, FX_CAMERA_MARGIN_MAX)) sfx(name, opts);
   }
 
   // A positional sfx that never strobes: at most one play of `key` per `minGapTicks` sim
@@ -4251,7 +4261,7 @@ export class Game {
   // firefight peppering a wall reads as one tick, not a machine-gun of clicks.
   private lastCueTick = new Map<string, number>();
   private sfxAtThrottled(name: SfxName, x: number, y: number, key: string, minGapTicks: number, opts?: SfxOptions) {
-    if (!this.isNearCamera(x, y)) return;
+    if (!this.isNearCamera(x, y, FX_CAMERA_MARGIN_MAX)) return;
     const now = this.world.tick;
     const last = this.lastCueTick.get(key);
     if (last !== undefined && now - last < minGapTicks) return;
@@ -4355,7 +4365,7 @@ export class Game {
   // player's body) covers the time-floor / dash / heal / damage-taken trickle.
   private captureUltMoteOrigin(x: number, y: number, source: UltMoteSource): void {
     if (!isRealKit(this.p.kitId)) return;
-    if (!this.isNearCamera(x, y)) return;
+    if (!this.isNearCamera(x, y, FX_CAMERA_MARGIN_MAX)) return;
     this.ultMoteOrigin = { x, y, source };
   }
 
@@ -4578,7 +4588,7 @@ export class Game {
         this.spawnParticles(r.x + Math.cos(r.aimAngle) * 18, r.y + Math.sin(r.aimAngle) * 18, 2, "#ffe6a0");
         const entry = this.remoteAnims.get(r.playerId);
         if (entry) triggerRecoil(entry.anim);
-        if (this.isNearCamera(r.x, r.y)
+        if (this.isNearCamera(r.x, r.y, FX_CAMERA_MARGIN_MAX)
           && !waveAudio.weaponFired(r.weapon, { x: r.x, y: r.y, gain: 0.4, beamKey: r.playerId })) {
           sfx(SHOOT_SFX[r.weapon], { gain: 0.4 });
         }
@@ -4594,7 +4604,7 @@ export class Game {
     for (const r of this.coop.remotePlayers()) {
       live.add(r.playerId);
       const wasDown = this.remoteDownSeen.get(r.playerId) ?? false;
-      if (r.isDown && !wasDown && this.isNearCamera(r.x, r.y)) {
+      if (r.isDown && !wasDown && this.isNearCamera(r.x, r.y, FX_CAMERA_MARGIN_MAX)) {
         sfx("playerHurt", { gain: 0.6 });
         this.spawnParticles(r.x, r.y, 10, "#ff5a5a");
         this.addTrauma(TRAUMA_REMOTE_DOWN);
@@ -5160,7 +5170,9 @@ export class Game {
   // True when a world point is on (or near) the visible screen — used to gate audio
   // and juice for far-off co-op events so a teammate across the map never spams us.
   private isNearCamera(x: number, y: number, margin?: number): boolean {
-    const qualityMargin = 40 + 120 * ((this.fxQuality - FX_QUALITY_MIN) / (FX_QUALITY_MAX - FX_QUALITY_MIN));
+    const qualityRange = FX_CAMERA_MARGIN_MAX - FX_CAMERA_MARGIN_MIN;
+    const qualityMargin = FX_CAMERA_MARGIN_MIN
+      + qualityRange * ((this.fxQuality - FX_QUALITY_MIN) / (FX_QUALITY_MAX - FX_QUALITY_MIN));
     const effectiveMargin = margin ?? qualityMargin;
     return x >= this.cam.x - effectiveMargin && x <= this.cam.x + this.canvas.width + effectiveMargin
       && y >= this.cam.y - effectiveMargin && y <= this.cam.y + this.canvas.height + effectiveMargin;
