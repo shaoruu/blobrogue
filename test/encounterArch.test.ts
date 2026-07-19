@@ -166,13 +166,15 @@ function encounterStateTests(): void {
     rescue.encounter.failed = true;
     rescue.encounter.completed = false;
   }
+  rescue.pendingBlessings.set("ian", 60);
   if (rescue.dungeon.edges.length > 0) rescue.dungeon.edges[0].locked = true;
   const forced = adminForceOpenExitInWorld(rescue);
   check("admin force-open clears stuck combat and opens the exit",
     forced
     && isFloorCleared(rescue)
     && rescue.enemies.length === 0
-    && rescue.pendingSpawns.length === 0);
+    && rescue.pendingSpawns.length === 0
+    && rescue.pendingBlessings.size === 0);
   check("admin force-open resolves encounter and route blockers",
     rescue.encounter?.completed === true
     && rescue.encounter.failed === false

@@ -43,10 +43,11 @@ import { createLogger as createGsLogger } from "../../server/src/logger.js";
 import { FakePm2, InMemoryFileSystem, ManualClock, stageRelease, TestRunner } from "./harness.js";
 
 const GS_SECRET = "itest-gs-secret";
+const GS_CONTROL_SECRET = "itest-gs-control-secret";
 const CTX: OperationContext = { actor: "op", requestId: "itest", idempotencyKey: null, tokenJti: "jti", confirmJti: "cf" };
 
 async function bootGs(heartbeatMs: number): Promise<{ port: number; close: () => Promise<void> }> {
-  const cfg = { ...loadGsConfig({}), host: "127.0.0.1", port: 0, auth: { secret: GS_SECRET, allowDev: false }, controlSecret: GS_SECRET, heartbeatMs, heartbeatMisses: 3 };
+  const cfg = { ...loadGsConfig({}), host: "127.0.0.1", port: 0, auth: { secret: GS_SECRET, allowDev: false }, controlSecret: GS_CONTROL_SECRET, heartbeatMs, heartbeatMisses: 3 };
   const gs = new GameServer(cfg, { logger: createGsLogger({ app: "gs-itest" }, "error") });
   const port = await gs.listen();
   return { port, close: () => gs.close() };
@@ -205,7 +206,7 @@ export async function suite(t: TestRunner): Promise<void> {
     const gs = await bootGs(200);
     try {
       const probe = new HttpGameServerProbe(
-        { baseUrl: `http://127.0.0.1:${gs.port}`, wsUrl: `ws://127.0.0.1:${gs.port}/ws`, logOutFile: null, syntheticTicketSecret: GS_SECRET, controlSecret: GS_SECRET, logTailMax: 100 },
+        { baseUrl: `http://127.0.0.1:${gs.port}`, wsUrl: `ws://127.0.0.1:${gs.port}/ws`, logOutFile: null, syntheticTicketSecret: GS_SECRET, controlSecret: GS_CONTROL_SECRET, logTailMax: 100 },
         new NodeTailReader(),
       );
       const status = await probe.status();
@@ -304,7 +305,7 @@ export async function suite(t: TestRunner): Promise<void> {
           wsUrl: `ws://127.0.0.1:${gs.port}/ws`,
           logOutFile: null,
           syntheticTicketSecret: GS_SECRET,
-          controlSecret: GS_SECRET,
+          controlSecret: GS_CONTROL_SECRET,
           logTailMax: 100,
         },
         new NodeTailReader(),
@@ -396,7 +397,7 @@ export async function suite(t: TestRunner): Promise<void> {
       const audit = new FileAuditSink(fs, "/opt/blobrogue-control/state");
       const verifier = new ChecksumArtifactVerifier(fs, root);
       const probe = new HttpGameServerProbe(
-        { baseUrl: `http://127.0.0.1:${gs.port}`, wsUrl: `ws://127.0.0.1:${gs.port}/ws`, logOutFile: null, syntheticTicketSecret: GS_SECRET, controlSecret: GS_SECRET, logTailMax: 100 },
+        { baseUrl: `http://127.0.0.1:${gs.port}`, wsUrl: `ws://127.0.0.1:${gs.port}/ws`, logOutFile: null, syntheticTicketSecret: GS_SECRET, controlSecret: GS_CONTROL_SECRET, logTailMax: 100 },
         new NodeTailReader(),
       );
       const pm2 = new FakePm2();

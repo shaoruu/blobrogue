@@ -2642,6 +2642,7 @@ export function adminForceOpenExitInWorld(w: WorldState): boolean {
   w.effects = [];
   w.warmthDrain = null;
   w.persistentBossWindows.clear();
+  w.pendingBlessings.clear();
   for (const edge of w.dungeon.edges) edge.locked = false;
   for (const p of w.players.values()) resetPlayerWarmth(p);
   if (w.gauntlet !== null) {

@@ -29,6 +29,7 @@ import {
 } from "../src/auth.js";
 import { worldIdForRoomCode as clientWorldIdForRoomCode } from "../../src/net/protocol.js";
 import { PRIVATE_DRAFT_PVP_POLICY } from "../../src/net/pvpPolicy.js";
+import { loadConfig } from "../src/config.js";
 import {
   requirePvpPolicyId,
   type PvpPolicyId,
@@ -368,6 +369,26 @@ async function main(): Promise<void> {
     const roomy = verifyTicket(devCfg, "dev:alice@room:ABCD", now);
     check("dev ticket carries a world", roomy.ok === true && roomy.worldId === "room:ABCD", `got=${roomy.worldId}`);
     check("dev ticket with a junk world rejects", verifyTicket(devCfg, "dev:alice@bad world!", now).ok === false);
+  }
+
+  section("control action secret stays isolated from game credentials");
+  {
+    let authReuse = "";
+    try {
+      loadConfig({ GS_AUTH_SECRET: "shared", GS_CONTROL_SECRET: "shared" });
+    } catch (error) {
+      authReuse = error instanceof Error ? error.message : String(error);
+    }
+    check("control secret cannot reuse game auth secret",
+      authReuse.includes("GS_CONTROL_SECRET must be distinct"));
+    let receiptReuse = "";
+    try {
+      loadConfig({ GS_RECEIPT_SECRET: "shared", GS_CONTROL_SECRET: "shared" });
+    } catch (error) {
+      receiptReuse = error instanceof Error ? error.message : String(error);
+    }
+    check("control secret cannot reuse receipt secret",
+      receiptReuse.includes("GS_CONTROL_SECRET must be distinct"));
   }
 
   process.stdout.write(`\n${passed} checks passed, ${failed} failed\n`);

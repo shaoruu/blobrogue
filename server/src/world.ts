@@ -137,8 +137,7 @@ export class GameWorld implements RoomRuntime {
     const isApplied = adminWarpToFloorInWorld(this.state, floor);
     if (!isApplied) return false;
     if (previousFloor === floor) return true;
-    for (const pid of this.state.players.keys()) this.clearOfferFor(pid);
-    for (const pid of pendingOfferPlayers) this.injectedEvents.push({ t: "blessingExpired", pid });
+    this.clearAllOffers(pendingOfferPlayers);
     this.offerThisTick = [];
     this.expiredOffersThisTick = [];
     this.isAdminWarped = true;
@@ -146,7 +145,10 @@ export class GameWorld implements RoomRuntime {
   }
 
   adminForceOpenExit(): boolean {
-    return adminForceOpenExitInWorld(this.state);
+    const pendingOfferPlayers = [...this.state.pendingBlessings.keys()];
+    const isApplied = adminForceOpenExitInWorld(this.state);
+    if (isApplied) this.clearAllOffers(pendingOfferPlayers);
+    return isApplied;
   }
 
   private seedArenaEnemies(): void {
@@ -533,5 +535,10 @@ export class GameWorld implements RoomRuntime {
       if (seat.pid !== pid) continue;
       seat.pendingOffer = null;
     }
+  }
+
+  private clearAllOffers(pendingOfferPlayers: PlayerId[]): void {
+    for (const pid of this.state.players.keys()) this.clearOfferFor(pid);
+    for (const pid of pendingOfferPlayers) this.injectedEvents.push({ t: "blessingExpired", pid });
   }
 }
