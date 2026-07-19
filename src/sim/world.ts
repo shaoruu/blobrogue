@@ -5434,10 +5434,10 @@ function spawnPlainGhostLane(
     fx: parent.fx,
     enemyHits: 0,
     isGhostLane: true,
-    isSideChannelGhost: isSideChannelGhost || undefined,
     bornTick: w.tick,
     lagRewind: p.rewindTicks,
   };
+  if (isSideChannelGhost) ghost.isSideChannelGhost = true;
   w.bullets.push(ghost);
   return ghost;
 }
