@@ -6,7 +6,7 @@ import { isValidWorldId } from "../../src/net/worldId.js";
 import type { BlessingOfferHistory, WeaponOfferHistory } from "../../src/sim/offerHistory.js";
 import type { PlayerId } from "../../src/sim/input.js";
 import type { WeaponBag } from "../../src/sim/weaponBag.js";
-import type { KitId } from "../../src/sim/kits.js";
+import { isKitId, type KitId } from "../../src/sim/kits.js";
 import { writeJsonAtomic } from "./durableJson.js";
 
 export const RUN_SNAPSHOT_FIDELITY = "build+floor" as const;
@@ -53,8 +53,57 @@ export interface RunSnapshot {
   players: RunSnapshotPlayer[];
 }
 
+const PLAYER_NUMBER_FIELDS: ReadonlyArray<keyof AuthoritativePlayerSnapshot> = [
+  "x", "y", "hp", "maxHp", "invuln", "dashInvuln", "dashCd", "dashTime", "dashDx", "dashDy",
+  "fireCd", "chargeT", "fangCd", "facing", "warmthIdleSec", "warmthPathPx", "reviveProgress",
+  "kills", "coins", "combo", "comboTimer", "premiumHpBuys", "amberWindfall", "reviveTokens",
+  "extraWeaponSlots", "hpTithe", "prospectorFloor", "ultCharge", "ultReadyAtTick", "overdriveT",
+  "overheatT", "overshield", "pulseReadyAtTick", "phaseSpeed", "ultInvuln", "passiveState",
+  "petCdReadyAtTick", "petTellT", "petLightT", "petFetchT", "petShieldT", "petNullT", "respawnT",
+  "spawnGraceT", "spawnShieldT", "spawnProtectionStartedTick", "spawnHardGraceEndsAtTick",
+  "spawnShieldEndsAtTick", "hearthFavorT", "hearthEmberT",
+];
+
+const PLAYER_BOOLEAN_FIELDS: ReadonlyArray<keyof AuthoritativePlayerSnapshot> = [
+  "isMuddyRefundSpent", "isDown", "isWarmthChilled", "hasClaimedBossChoice",
+  "isAmberCacheArmed", "isBlessingRerollArmed", "isSpawnOffenseLatched",
+];
+
 function isSnapshotToken(value: string): boolean {
   return /^[A-Za-z0-9_-]{16,128}$/.test(value);
+}
+
+function isPlayerSnapshot(value: AuthoritativePlayerSnapshot): boolean {
+  for (const field of PLAYER_NUMBER_FIELDS) {
+    const fieldValue = value[field];
+    if (typeof fieldValue !== "number" || !Number.isFinite(fieldValue)) return false;
+  }
+  for (const field of PLAYER_BOOLEAN_FIELDS) {
+    if (typeof value[field] !== "boolean") return false;
+  }
+  return value.maxHp > 0
+    && typeof value.weapon === "string"
+    && Array.isArray(value.ownedWeapons)
+    && value.ownedWeapons.every((weapon) => typeof weapon === "string")
+    && typeof value.weaponFireCooldowns === "object"
+    && value.weaponFireCooldowns !== null
+    && Object.values(value.weaponFireCooldowns).every((cooldown) => (
+      typeof cooldown === "number" && Number.isFinite(cooldown)
+    ))
+    && typeof value.weaponCycles === "object"
+    && value.weaponCycles !== null
+    && Number.isSafeInteger(value.weaponCycles.sluicegate)
+    && Number.isSafeInteger(value.weaponCycles.oddsmaker)
+    && Array.isArray(value.ownedItemIds)
+    && value.ownedItemIds.every((item) => typeof item === "string")
+    && typeof value.mods === "object"
+    && value.mods !== null
+    && Object.values(value.mods).every((modifier) => (
+      typeof modifier === "number" && Number.isFinite(modifier)
+    ))
+    && (value.reviveBy === null || typeof value.reviveBy === "string")
+    && isKitId(value.kitId)
+    && typeof value.arenaUltKit === "string";
 }
 
 function isRunSnapshot(value: RunSnapshot): boolean {
@@ -74,7 +123,16 @@ function isRunSnapshot(value: RunSnapshot): boolean {
     || value.players.length < 1
     || value.players.length > 4
     || typeof value.weaponBag !== "object"
-    || value.weaponBag === null) {
+    || value.weaponBag === null
+    || !Number.isSafeInteger(value.weaponBag.seed)
+    || !Number.isSafeInteger(value.weaponBag.refills)
+    || !Number.isSafeInteger(value.weaponBag.weightedDraws)
+    || !Array.isArray(value.weaponBag.order)
+    || !value.weaponBag.order.every((weapon) => typeof weapon === "string")
+    || !Array.isArray(value.weaponBag.recentWeaponOffers)
+    || !value.weaponBag.recentWeaponOffers.every((weapon) => typeof weapon === "string")
+    || typeof value.weaponBag.weaponSeenCounts !== "object"
+    || value.weaponBag.weaponSeenCounts === null) {
     return false;
   }
   const playerIds = new Set<string>();
@@ -87,16 +145,29 @@ function isRunSnapshot(value: RunSnapshot): boolean {
       || typeof player.offerIdentity !== "string"
       || typeof player.state !== "object"
       || player.state === null
-      || !Number.isFinite(player.state.hp)
-      || !Number.isFinite(player.state.maxHp)
-      || player.state.maxHp <= 0
+      || !isPlayerSnapshot(player.state)
+      || (typeof player.pet !== "string" && player.pet !== null)
+      || typeof player.weaponOfferHistory !== "object"
+      || player.weaponOfferHistory === null
+      || typeof player.weaponOfferHistory.weaponSeenCounts !== "object"
+      || player.weaponOfferHistory.weaponSeenCounts === null
+      || !Array.isArray(player.weaponOfferHistory.recentWeaponOffers)
+      || typeof player.blessingOfferHistory !== "object"
+      || player.blessingOfferHistory === null
+      || typeof player.blessingOfferHistory.blessingSeenCounts !== "object"
+      || player.blessingOfferHistory.blessingSeenCounts === null
+      || !Array.isArray(player.blessingOfferHistory.recentBlessingOffers)
+      || !player.blessingOfferHistory.recentBlessingOffers.every((offer) => Array.isArray(offer))
       || typeof player.seat !== "object"
       || player.seat === null
       || player.seat.pid !== player.pid
       || typeof player.seat.authName !== "string"
       || authNames.has(player.seat.authName)
       || !isSnapshotToken(player.seat.token)
-      || (player.seat.prevToken !== null && !isSnapshotToken(player.seat.prevToken))) {
+      || (player.seat.prevToken !== null && !isSnapshotToken(player.seat.prevToken))
+      || !isKitId(player.seat.kitId)
+      || !Number.isSafeInteger(player.seat.lastAppliedSeq)
+      || !Number.isSafeInteger(player.seat.lastCseq)) {
       return false;
     }
     playerIds.add(player.pid);
@@ -152,7 +223,7 @@ export class RunSnapshotStore {
     return snapshot;
   }
 
-  loadAll(): RunSnapshot[] {
+  loadAll(onInvalid: (worldId: string, reason: string) => void = () => {}): RunSnapshot[] {
     if (this.directory === null) return [];
     let names: string[];
     try {
@@ -166,8 +237,12 @@ export class RunSnapshotStore {
       if (!name.endsWith(".json")) continue;
       const worldId = name.slice(0, -5);
       if (!isValidWorldId(worldId)) continue;
-      const snapshot = this.load(worldId);
-      if (snapshot !== null) snapshots.push(snapshot);
+      try {
+        const snapshot = this.load(worldId);
+        if (snapshot !== null) snapshots.push(snapshot);
+      } catch (error) {
+        onInvalid(worldId, error instanceof Error ? error.message : String(error));
+      }
     }
     return snapshots;
   }

@@ -68,6 +68,7 @@ let first: TestServer | null = null;
 let second: TestServer | null = null;
 let ian: Bot | null = null;
 let anson: Bot | null = null;
+let intruder: Bot | null = null;
 
 try {
   first = await startTestServer({
@@ -146,6 +147,8 @@ try {
       ianBot.transport.getReconnectInfo().isReconnecting
       && ansonBot.transport.getReconnectInfo().isReconnecting
     ), 3_000));
+  ianBot.dropConnection(true);
+  ansonBot.dropConnection(true);
   const port = first.port;
   await first.close();
   first = null;
@@ -157,6 +160,25 @@ try {
     runSnapshotDir: snapshotDirectory,
     resumeGraceMs: 10_000,
   });
+  const intruderBot = new Bot({
+    url: second.url,
+    secret: second.secret,
+    playerId: "new-party-member",
+    world: worldId,
+    script: () => idle(),
+  });
+  intruder = intruderBot;
+  intruderBot.start();
+  check("a fresh join cannot collide with either restored player id",
+    await waitUntil(() => intruderBot.transport.isReady(), 3_000)
+    && intruderBot.transport.getSelfServerId() !== ianPid
+    && intruderBot.transport.getSelfServerId() !== ansonPid);
+  intruderBot.stop();
+  intruder = null;
+  check("the fresh body leaves without disturbing restored seats",
+    await waitUntil(() => second?.server.getWorld(worldId)?.playerCount === 2, 2_000));
+  ianBot.restoreNetwork();
+  ansonBot.restoreNetwork();
   check("both clients resume their original seats after the process restart",
     await waitUntil(() => (
       ianBot.transport.isReady()
@@ -209,6 +231,7 @@ try {
 } finally {
   ian?.stop();
   anson?.stop();
+  intruder?.stop();
   if (first !== null) await first.close();
   if (second !== null) await second.close();
   rmSync(directory, { recursive: true, force: true });

@@ -254,6 +254,9 @@ export class GameWorld implements RoomRuntime {
       player.downsThisFloor = 0;
       player.combo = 0;
       player.comboTimer = 0;
+      player.ultReadyAtTick = 0;
+      player.pulseReadyAtTick = 0;
+      player.petCdReadyAtTick = 0;
       setPlayerAbsence(this.state, saved.pid, true);
       this.seatMap.set(saved.seat.authName, {
         ...saved.seat,
@@ -279,6 +282,7 @@ export class GameWorld implements RoomRuntime {
       candidate.playerId === pid
       && candidate.authName !== null
       && candidate.resumeToken !== null
+      && (candidate.isResumeTokenConfirmed || candidate.presentedResumeToken !== null)
     ));
     if (conn !== undefined && conn.authName !== null && conn.resumeToken !== null) {
       return {

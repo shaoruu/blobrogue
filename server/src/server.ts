@@ -122,7 +122,9 @@ export class GameServer {
     this.clock = deps.clock ?? systemClock;
     this.trustedProxies = parseCidrList(cfg.trustedProxies);
     this.runSnapshots = deps.runSnapshots ?? new RunSnapshotStore(cfg.runSnapshotDir);
-    const savedRunSnapshots = this.runSnapshots.loadAll();
+    const savedRunSnapshots = this.runSnapshots.loadAll((worldId, reason) => {
+      this.log.error("invalid run snapshot skipped during recovery", { worldId, reason });
+    });
     const preservedWorldIds = new Set(savedRunSnapshots.map((snapshot) => snapshot.worldId));
     this.receiptDispatcher = deps.receiptDispatcher ?? new RunReceiptDispatcher(
       cfg.receiptEndpoint,
@@ -158,7 +160,8 @@ export class GameServer {
       (room) => this.onWorldReleased(room),
     );
     for (const snapshot of savedRunSnapshots) {
-      this.sessions.restoreRoom(snapshot, this.clock.now(), cfg.resumeGraceMs);
+      const room = this.sessions.restoreRoom(snapshot, this.clock.now(), cfg.resumeGraceMs);
+      this.reserveConnectionIdsPast(room);
       this.restoredSnapshotWorldIds.add(snapshot.worldId);
     }
     for (const worldId of this.sessions.recoveredGenerationWorldIds?.() ?? []) {
@@ -284,6 +287,7 @@ export class GameServer {
       const snapshot = this.runSnapshots.load(action.worldId);
       if (snapshot === null) return { isApplied: false, reason: "snapshot_not_found" };
       const restored = this.sessions.restoreRoom(snapshot, this.clock.now(), this.cfg.resumeGraceMs);
+      this.reserveConnectionIdsPast(restored);
       this.restoredSnapshotWorldIds.add(action.worldId);
       return this.worldActionSuccess(restored, this.runSnapshots.pathFor(action.worldId));
     }
@@ -316,6 +320,17 @@ export class GameServer {
       fidelity: snapshotPath === null ? undefined : "build+floor",
       snapshotPath: snapshotPath ?? undefined,
     };
+  }
+
+  private reserveConnectionIdsPast(room: RoomRuntime): void {
+    for (const playerId of room.state.players.keys()) {
+      const match = /^p([1-9]\d*)$/.exec(playerId);
+      if (match === null) continue;
+      const connectionId = Number(match[1]);
+      if (Number.isSafeInteger(connectionId)) {
+        this.nextConnId = Math.max(this.nextConnId, connectionId + 1);
+      }
+    }
   }
 
   // ---- fixed tick loop (drift-corrected accumulator on the monotonic clock) ----
