@@ -52,23 +52,33 @@ section("combined authority distinguishes explicit No Pet from no pet choice");
     confirmed.ok && confirmed.kitId === "mender" && confirmed.petId === null);
 }
 
-section("server-side unlock and rescue gates reject tampered pairs");
+section("server-side unlock and rescue gates are scoped by mode");
 {
   const locked = validateCombinedLoadout(
     { masteryXp: 0, unlocks: [] },
     { ...explicitNoPet, kitId: "phantom" },
+    "pvp",
   );
   const unowned = validateCombinedLoadout(
     { masteryXp: 0, unlocks: [] },
-    { ...explicitNoPet, petId: "doggie" },
+    { ...explicitNoPet, petId: "pebble" },
+    "coop",
+  );
+  const arenaCosmetic = validateCombinedLoadout(
+    { masteryXp: 0, unlocks: [] },
+    { ...explicitNoPet, petId: "pebble" },
+    "pvp",
   );
   const rescued = validateCombinedLoadout(
-    { masteryXp: 0, unlocks: ["pet_doggie"] },
-    { ...explicitNoPet, petId: "doggie" },
+    { masteryXp: 0, unlocks: ["pet_pebble"] },
+    { ...explicitNoPet, petId: "pebble" },
+    "coop",
   );
-  check("locked Phantom is rejected at account level 1", !locked.ok && locked.reason === "kit_locked");
-  check("unrescued Doggie is rejected", !unowned.ok && unowned.reason === "pet_unowned");
-  check("rescued Doggie is accepted", rescued.ok && rescued.petId === "doggie");
+  check("locked Phantom stays rejected in PVP", !locked.ok && locked.reason === "kit_locked");
+  check("unrescued Pebble is rejected in co-op", !unowned.ok && unowned.reason === "pet_unowned");
+  check("unrescued Pebble is accepted as an arena cosmetic",
+    arenaCosmetic.ok && arenaCosmetic.petId === "pebble");
+  check("rescued Pebble is accepted in co-op", rescued.ok && rescued.petId === "pebble");
 }
 
 function member(overrides: Partial<LobbyStartMember> = {}): LobbyStartMember {

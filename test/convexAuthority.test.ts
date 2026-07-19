@@ -143,6 +143,18 @@ const joinRoom = makeFunctionReference<
   },
   { roomId: string }
 >("rooms:join");
+const confirmRoomLoadout = makeFunctionReference<
+  "mutation",
+  {
+    roomId: string;
+    clientId: string;
+    guestCapability?: string;
+    generation: number;
+    editRevision: number;
+  },
+  | { ok: true; generation: number; kitId: string; petId: string | null }
+  | { ok: false; reason: string; message?: string }
+>("rooms:confirmLoadout");
 
 function receipt(
   playerId: string,
@@ -575,6 +587,101 @@ describe("Convex run authority", () => {
     const rooms = await t.run(async (ctx) => await ctx.db.query("rooms").collect());
     expect(rooms).toHaveLength(1);
     expect(rooms[0].pvpPolicy).toBeUndefined();
+  });
+
+  test("arena confirms an unowned cosmetic pet while co-op keeps the rescue gate", async () => {
+    const t = convexTest(schema, modules);
+    const seeded = await t.run(async (ctx) => {
+      const now = Date.now();
+      const playerId = await ctx.db.insert("players", {
+        clientId: "arena-pet-browser",
+        name: "Arena Pet",
+        totalKills: 0,
+        deepestFloor: 0,
+        totalCoins: 0,
+        gamesPlayed: 0,
+        unlocks: [],
+        createdAt: now,
+        lastSeen: now,
+      });
+      const roomIds = [];
+      for (const mode of ["pvp", "coop"] as const) {
+        const roomId = await ctx.db.insert("rooms", {
+          code: mode === "pvp" ? "PETP" : "PETC",
+          kind: "online",
+          mode,
+          ...(mode === "pvp" ? { pvpPolicy: PRIVATE_DRAFT_PVP_POLICY } : {}),
+          hostPlayerId: playerId,
+          seed: 1,
+          floor: 1,
+          status: "lobby",
+          isPublic: false,
+          loadoutGeneration: 1,
+          generationState: "pending",
+          createdAt: now,
+          lastActivity: now,
+        });
+        await ctx.db.insert("presence", {
+          roomId,
+          playerId,
+          name: "Arena Pet",
+          x: 0,
+          y: 0,
+          facing: 1,
+          hp: 6,
+          maxHp: 6,
+          weapon: "pistol",
+          floor: 1,
+          isDown: false,
+          aimAngle: 0,
+          shotSeq: 0,
+          kills: 0,
+          colorIndex: 0,
+          reviveNonce: 0,
+          updatedAt: now,
+          loadoutKitId: "mender",
+          loadoutPetId: "pebble",
+          isKitChoiceMade: true,
+          isPetChoiceMade: true,
+          loadoutGeneration: 1,
+          loadoutEditRevision: 1,
+        });
+        roomIds.push(roomId);
+      }
+      await ctx.db.insert("guestSessions", {
+        token: "arena-pet-capability",
+        refreshToken: "arena-pet-refresh",
+        clientId: "arena-pet-browser",
+        playerId,
+        scopes: ["profile", "room", "ticket", "economy"],
+        createdAt: now,
+        expiresAt: now + 60_000,
+        refreshExpiresAt: now + 120_000,
+      });
+      return { pvpRoomId: roomIds[0], coopRoomId: roomIds[1] };
+    });
+    const caller = {
+      clientId: "arena-pet-browser",
+      guestCapability: "arena-pet-capability",
+      generation: 1,
+      editRevision: 1,
+    };
+    await expect(t.mutation(confirmRoomLoadout, {
+      ...caller,
+      roomId: seeded.pvpRoomId,
+    })).resolves.toMatchObject({
+      ok: true,
+      kitId: "mender",
+      petId: "pebble",
+    });
+    await expect(t.mutation(confirmRoomLoadout, {
+      ...caller,
+      roomId: seeded.coopRoomId,
+    })).resolves.toEqual({
+      ok: false,
+      reason: "pet_unowned",
+      message: "Rescue that pet before choosing it",
+    });
   });
 
   test("concurrent online joins admit exactly four durable members", async () => {

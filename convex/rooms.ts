@@ -14,7 +14,12 @@ import {
   type PvpPolicyId,
 } from "./pvpPolicy";
 import { validateCombinedLoadout, validateKitDraft, validatePetDraft } from "./loadoutCore";
-import type { CombinedLoadoutInput, ConfirmedKitId, LoadoutValidation } from "./loadoutCore";
+import type {
+  CombinedLoadoutInput,
+  ConfirmedKitId,
+  LoadoutMode,
+  LoadoutValidation,
+} from "./loadoutCore";
 import { evaluateLobbyStart } from "./lobbyLoadoutCore";
 import { resolveAuthorizedPlayer } from "./guestAuth";
 import { pvpWorldIdForRoomCode, worldIdForRoomCode } from "./gsTicketCore";
@@ -46,15 +51,19 @@ interface ConfirmedLoadout {
 }
 
 const LOADOUT_REJECT_COPY: Record<Exclude<LoadoutValidation, { ok: true }>["reason"], string> = {
-  kit_choice_required: "choose a kit for this run",
-  pet_choice_required: "choose a pet or No Pet for this run",
-  unknown_kit: "that kit does not exist",
-  kit_locked: "that kit is locked at your account level",
-  pet_unowned: "rescue that pet before choosing it",
+  kit_choice_required: "Choose a kit for this run",
+  pet_choice_required: "Choose a pet or No Pet for this run",
+  unknown_kit: "That kit does not exist",
+  kit_locked: "That kit is locked at your account level",
+  pet_unowned: "Rescue that pet before choosing it",
 };
 
-function requireLoadout(player: Doc<"players">, input: CombinedLoadoutInput): ConfirmedLoadout {
-  const validation = validateCombinedLoadout(player, input);
+function requireLoadout(
+  player: Doc<"players">,
+  input: CombinedLoadoutInput,
+  mode: LoadoutMode,
+): ConfirmedLoadout {
+  const validation = validateCombinedLoadout(player, input, mode);
   if (!validation.ok) {
     throw new ConvexError({
       code: validation.reason,
@@ -253,7 +262,9 @@ export const create = mutation({
     const pvpPolicy = privatePolicyForCreate(roomKind, roomMode);
     const player = await resolveRoomCaller(ctx, roomKind, clientId, guestCapability, requestedPlayerId);
     const playerId = player._id;
-    const loadout = roomKind === "online" ? requireLoadout(player, loadoutInput(args)) : null;
+    const loadout = roomKind === "online"
+      ? requireLoadout(player, loadoutInput(args), roomMode)
+      : null;
     const code = await uniqueCode(ctx);
     const seed = (Math.floor(Math.random() * 0xffffffff) | 0);
     const now = Date.now();
@@ -311,7 +322,9 @@ export const join = mutation({
         throw new ConvexError({ code: "room_full", message: "that room is full" });
       }
     }
-    const loadout = wantKind === "online" ? requireLoadout(player, loadoutInput(args)) : null;
+    const loadout = wantKind === "online"
+      ? requireLoadout(player, loadoutInput(args), modeOf(room))
+      : null;
     const color = colorIndex ?? await smallestFreeColor(ctx, room._id);
     const generation = room.loadoutGeneration ?? 1;
     const effectiveLoadout = await ensurePresence(ctx, room._id,
@@ -351,7 +364,9 @@ export const quickPlay = mutation({
     }
     const player = await resolveRoomCaller(ctx, wantKind, clientId, guestCapability, requestedPlayerId);
     const playerId = player._id;
-    const loadout = wantKind === "online" ? requireLoadout(player, loadoutInput(args)) : null;
+    const loadout = wantKind === "online"
+      ? requireLoadout(player, loadoutInput(args), wantMode)
+      : null;
     const now = Date.now();
 
     // Look for public rooms still going (lobby or playing), freshest first.
@@ -713,7 +728,13 @@ export const chooseDraftKit = mutation({
       return { ok: false as const, reason: "edit_changed" as const };
     }
     const validation = validateKitDraft(player, kitId);
-    if (!validation.ok) return { ok: false as const, reason: validation.reason };
+    if (!validation.ok) {
+      return {
+        ok: false as const,
+        reason: validation.reason,
+        message: LOADOUT_REJECT_COPY[validation.reason],
+      };
+    }
     await ctx.db.patch(row._id, {
       loadoutKitId: validation.kitId,
       isKitChoiceMade: true,
@@ -754,8 +775,14 @@ export const chooseDraftPet = mutation({
     if (row.loadoutEditRevision !== editRevision) {
       return { ok: false as const, reason: "edit_changed" as const };
     }
-    const validation = validatePetDraft(player, petId);
-    if (!validation.ok) return { ok: false as const, reason: validation.reason };
+    const validation = validatePetDraft(player, petId, modeOf(room));
+    if (!validation.ok) {
+      return {
+        ok: false as const,
+        reason: validation.reason,
+        message: LOADOUT_REJECT_COPY[validation.reason],
+      };
+    }
     await ctx.db.patch(row._id, {
       loadoutPetId: validation.petId ?? undefined,
       isPetChoiceMade: true,
@@ -799,13 +826,23 @@ export const confirmLoadout = mutation({
     if (row.loadoutEditRevision !== args.editRevision) {
       return { ok: false as const, reason: "edit_changed" as const };
     }
-    const validation = validateCombinedLoadout(player, {
-      kitId: row.loadoutKitId ?? "",
-      petId: row.loadoutPetId ?? null,
-      isKitChoiceMade: row.isKitChoiceMade === true,
-      isPetChoiceMade: row.isPetChoiceMade === true,
-    });
-    if (!validation.ok) return { ok: false as const, reason: validation.reason };
+    const validation = validateCombinedLoadout(
+      player,
+      {
+        kitId: row.loadoutKitId ?? "",
+        petId: row.loadoutPetId ?? null,
+        isKitChoiceMade: row.isKitChoiceMade === true,
+        isPetChoiceMade: row.isPetChoiceMade === true,
+      },
+      modeOf(room),
+    );
+    if (!validation.ok) {
+      return {
+        ok: false as const,
+        reason: validation.reason,
+        message: LOADOUT_REJECT_COPY[validation.reason],
+      };
+    }
     await ctx.db.patch(row._id, {
       loadoutKitId: validation.kitId,
       loadoutPetId: validation.petId ?? undefined,

@@ -15,6 +15,8 @@ export interface LoadoutAuthority {
   unlocks: readonly string[];
 }
 
+export type LoadoutMode = "coop" | "pvp";
+
 export type LoadoutRejectReason =
   | "kit_choice_required"
   | "pet_choice_required"
@@ -47,8 +49,9 @@ export function validateKitDraft(
 export function validatePetDraft(
   authority: LoadoutAuthority,
   petId: string | null,
+  mode: LoadoutMode = "coop",
 ): PetDraftValidation {
-  if (petId !== null && !isPetOwned(petId, authority.unlocks)) {
+  if (mode === "coop" && petId !== null && !isPetOwned(petId, authority.unlocks)) {
     return { ok: false, reason: "pet_unowned" };
   }
   return { ok: true, petId };
@@ -57,12 +60,13 @@ export function validatePetDraft(
 export function validateCombinedLoadout(
   authority: LoadoutAuthority,
   input: CombinedLoadoutInput,
+  mode: LoadoutMode = "coop",
 ): LoadoutValidation {
   if (!input.isKitChoiceMade) return { ok: false, reason: "kit_choice_required" };
   if (!input.isPetChoiceMade) return { ok: false, reason: "pet_choice_required" };
   const kit = validateKitDraft(authority, input.kitId);
   if (!kit.ok) return kit;
-  const pet = validatePetDraft(authority, input.petId);
+  const pet = validatePetDraft(authority, input.petId, mode);
   if (!pet.ok) return pet;
   return { ok: true, kitId: kit.kitId, petId: pet.petId };
 }
