@@ -250,7 +250,7 @@ function mechanicsOf(w: Weapon, mods: PlayerMods): WeaponMechanic[] {
   if (w.parry !== undefined) m.push({ tag: "PARRY", text: "A FRONTAL WINDOW CATCHES A SHOT TO RETURN", mag: w.parry.returnCoef });
   if (w.relight !== undefined) m.push({ tag: "RELIGHT", text: "A LIT SHOT PIERCES AND PLANTS A SAFE PATCH", mag: w.relight.patchRadius });
   if (w.faultlink !== undefined) m.push({ tag: "LINK", text: "MARKS TWO BODIES AND ECHOES DAMAGE BETWEEN", mag: w.faultlink.range });
-  if (w.ghostLane !== undefined) m.push({ tag: "GHOST LANE", text: "BODY FACING STEERS A SECOND PLAIN ROUND", mag: w.ghostLane.bodyOffset });
+  if (w.ghostLane !== undefined) m.push({ tag: "GHOST LANE", text: "A STRAIGHT GHOST FIRES 80° TO ONE SIDE OF AIM", mag: w.ghostLane.aimOffset });
   if (w.paint?.isPaving === true) m.push({ tag: "PAVE", text: "CLEARS HOSTILE GROUND; PAVES FLOOR HAZARDS", mag: w.paint.radius });
   if (w.melee?.isThrust) m.push({ tag: "THRUST", text: "PIERCING THRUST", mag: 1 });
   if (w.chain !== undefined) m.push({ tag: "CHAIN", text: `CHAINS TO ${w.chain} MORE`, mag: w.chain });

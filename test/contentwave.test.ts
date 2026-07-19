@@ -109,17 +109,17 @@ function behaviorGates(): void {
     check("cleaver's disc damages an entire line from one volley", line.every((e) => e.hp < 40),
       line.map((e) => e.hp.toFixed(0)).join("/"));
   }
-  // Shoulderfire: one aimed round plus a body-steered ghost lane.
+  // Shoulderfire: one aimed round plus a straight same-side aim-offset ghost lane.
   {
     const { w, p } = arena(0x5C2A);
     acquireWeaponInWorld(w, LOCAL_ID, "scrapper");
-    p.facing = 1;
+    p.facing = -1;
     p.fireCd = 0;
     fire(w, p, 0);
     const bullets = w.bullets.filter((bullet) => bullet.friendly);
     const main = bullets.find((bullet) => bullet.isGhostLane !== true);
     const ghost = bullets.find((bullet) => bullet.isGhostLane === true);
-    check("Shoulderfire fires one aimed round and one body-steered ghost",
+    check("Shoulderfire fires one aimed round and one fixed aim +80° ghost",
       bullets.length === 2
       && main !== undefined
       && ghost !== undefined

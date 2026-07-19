@@ -5450,8 +5450,7 @@ function spawnWeaponGhostLane(
 ): void {
   const lane = wep.ghostLane;
   if (lane === undefined) return;
-  const bodyAim = p.facing >= 0 ? 0 : Math.PI;
-  const aim = normalizeAngle(bodyAim + lane.bodyOffset * p.facing);
+  const aim = normalizeAngle(p.aimAngle + lane.aimOffset);
   spawnPlainGhostLane(w, p, parent, aim, lane.damageMult, lane.damageMult, false);
 }
 

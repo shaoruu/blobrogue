@@ -201,7 +201,7 @@ export interface FaultlinkSpec {
 }
 
 export interface GhostLaneSpec {
-  bodyOffset: number;
+  aimOffset: number;
   damageMult: number;
 }
 
@@ -535,12 +535,12 @@ export const WEAPONS: Record<WeaponId, Weapon> = {
     special: "A slow saw disc shreds through a whole line of bodies.",
   },
   // STEER A SECOND LANE: the main pellet follows aim while one plain ghost lane stays
-  // fixed to the player's shoulder, rewarding body orientation instead of fan coverage.
+  // fixed 80 degrees to the same side of that aim, rewarding deliberate aim rotation.
   scrapper: {
     id: "scrapper", name: "Shoulderfire", rarity: "common", fireCd: 0.14, speed: 600, life: 0.85,
     damage: 1.3, pellets: 1, spread: 0, bulletRadius: 4, color: "#b6d36a", muzzle: 2,
-    ghostLane: { bodyOffset: 80 * Math.PI / 180, damageMult: 0.6 },
-    special: "GHOST LANE — aim the main round while your body steers a second lane at 60% damage.",
+    ghostLane: { aimOffset: 80 * Math.PI / 180, damageMult: 0.6 },
+    special: "GHOST LANE — a straight ghost fires 80° to one fixed side of aim at 60% damage.",
   },
   // WORK THE CORNERS UP CLOSE: a bouncing buckshot — the fan banks off walls, so a corner
   // shot fills a room. A close-range ricochet pack tool, distinct from the single-round banks.
