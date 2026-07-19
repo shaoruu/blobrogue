@@ -27,7 +27,7 @@ const SCENES = [
   "live-ult-slip",
 ];
 const ULT_SCENES = new Map([
-  ["live-ult-salvo", { auk: "gunner", kind: "salvo", minT: 0.43, maxT: 0.52 }],
+  ["live-ult-salvo", { auk: "gunner", kind: "salvo", minT: 0.48, maxT: 0.58 }],
   ["live-ult-triage", { auk: "mender", kind: "triage", minT: 0.45, maxT: 0.54 }],
   ["live-ult-shove", { auk: "bulwark", kind: "shove", minT: 0.58, maxT: 0.70 }],
   ["live-ult-slip", { auk: "phantom", kind: "slip", minT: 0.82, maxT: 0.90 }],

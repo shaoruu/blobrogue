@@ -2575,7 +2575,7 @@ export class Game {
             x: cast.x + cos * 18 - sin * side,
             y: cast.y + sin * 18 + cos * side,
             angle: cast.aim,
-            life: 0.2,
+            life: ARENA_SALVO.volleySec,
             color: ARENA_ULT_HUE.salvo,
             len: ARENA_SALVO.rangePx - 18,
             width: 10,

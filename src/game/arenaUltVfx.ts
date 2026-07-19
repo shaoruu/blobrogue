@@ -23,7 +23,8 @@ const ARENA_ULT_CORE: Record<ArenaUltKind, string> = {
 const MAX_CASTS = 8;
 const MAX_HIT_PULSES = 10;
 const SHOVE_ARC = ARENA_SHOVE.arcDeg * Math.PI / 180;
-const SALVO_SCAR_SEC = 0.2;
+const SALVO_SCAR_SEC = 0.4;
+const SALVO_HIT_PULSE_SEC = 0.2;
 const SHOVE_GLINT_SEC = 0.55;
 const TAU = Math.PI * 2;
 
@@ -220,7 +221,7 @@ export class ArenaUltVfx {
     for (const pulse of this.hitPulses) {
       if (!pulse.isActive) continue;
       pulse.t += dt;
-      if (pulse.t >= SALVO_SCAR_SEC) pulse.isActive = false;
+      if (pulse.t >= SALVO_HIT_PULSE_SEC) pulse.isActive = false;
     }
   }
 
@@ -403,7 +404,7 @@ export class ArenaUltVfx {
     }
     for (const pulse of this.hitPulses) {
       if (!pulse.isActive) continue;
-      const k = pulse.t / SALVO_SCAR_SEC;
+      const k = pulse.t / SALVO_HIT_PULSE_SEC;
       const x = pulse.x - camX;
       const y = pulse.y - camY;
       const r = 7 + k * 13;
@@ -444,9 +445,9 @@ export class ArenaUltVfx {
     const start = cast.tell + ARENA_SALVO.volleySec;
     const k = (cast.t - start) / SALVO_SCAR_SEC;
     if (k < 0 || k >= 1) return;
-    ctx.globalAlpha = (1 - k) * 0.3;
+    ctx.globalAlpha = (1 - k) * 0.45;
     ctx.strokeStyle = ARENA_ULT_HUE.salvo;
-    ctx.lineWidth = 8 - k * 5;
+    ctx.lineWidth = 10 - k * 6;
     ctx.beginPath();
     ctx.moveTo(x, y);
     ctx.lineTo(
@@ -564,7 +565,7 @@ export class ArenaUltVfx {
     const elapsed = cast.t - cast.tell;
     if (elapsed > ARENA_SALVO.volleySec) return;
     ctx.globalCompositeOperation = "lighter";
-    const bloom = Math.max(0, 1 - elapsed / 0.2);
+    const bloom = Math.max(0, 1 - elapsed / 0.32);
     ctx.globalAlpha = bloom * 0.8;
     ctx.fillStyle = ARENA_ULT_CORE.salvo;
     ctx.beginPath();
