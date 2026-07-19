@@ -847,19 +847,19 @@ export const WAVE_SOUNDS = {
     priority: WAVE_PRIORITY.impact, jitter: 0, spatial: true,
   },
   "oddsmaker.ricochet": {
-    stem: "sfx/oddsmaker_ricochet", variants: 1, takes: [], gain: 0.7, bus: "sfx",
+    stem: "sfx/oddsmaker_ricochet", variants: 1, takes: ["sfx/oddsmaker_ricochet"], gain: 0.7, bus: "sfx",
     priority: WAVE_PRIORITY.weapon, jitter: 0, spatial: true,
   },
   "oddsmaker.seeker": {
-    stem: "sfx/oddsmaker_seeker", variants: 1, takes: [], gain: 0.7, bus: "sfx",
+    stem: "sfx/oddsmaker_seeker", variants: 1, takes: ["sfx/oddsmaker_seeker"], gain: 0.7, bus: "sfx",
     priority: WAVE_PRIORITY.weapon, jitter: 0, spatial: true,
   },
   "oddsmaker.blast": {
-    stem: "sfx/oddsmaker_blast", variants: 1, takes: [], gain: 0.75, bus: "sfx",
+    stem: "sfx/oddsmaker_blast", variants: 1, takes: ["sfx/oddsmaker_blast"], gain: 0.75, bus: "sfx",
     priority: WAVE_PRIORITY.weapon, jitter: 0, spatial: true,
   },
   "oddsmaker.pierce": {
-    stem: "sfx/oddsmaker_pierce", variants: 1, takes: [], gain: 0.7, bus: "sfx",
+    stem: "sfx/oddsmaker_pierce", variants: 1, takes: ["sfx/oddsmaker_pierce"], gain: 0.7, bus: "sfx",
     priority: WAVE_PRIORITY.weapon, jitter: 0, spatial: true,
   },
   "blessing.holdFast": {
