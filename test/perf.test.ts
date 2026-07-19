@@ -219,6 +219,41 @@ async function measureClaymoreCleave(): Promise<Stat> {
   return stat(times);
 }
 
+async function measureArenaUltParty(): Promise<Stat> {
+  const { game } = await bootGame(VIEW_W, VIEW_H);
+  game.devStartSandbox();
+  loadDeterministicFloor(game, SEED, FLOOR);
+  const w = realWorld(game);
+  w.isGodMode = true;
+  const c = spawnCenter(w);
+  settleAt(game, c.x, c.y, VIEW_W, VIEW_H);
+  const events: SimEvent[] = [
+    { t: "ultArena", pid: "arena-gunner", kind: "salvo", x: c.x - 70, y: c.y, aim: 0, tellTicks: 8 },
+    { t: "ultArena", pid: "arena-mender", kind: "triage", x: c.x, y: c.y - 55, aim: Math.PI / 2, tellTicks: 8 },
+    { t: "ultArena", pid: "arena-bulwark", kind: "shove", x: c.x + 70, y: c.y, aim: Math.PI, tellTicks: 8 },
+    { t: "ultArena", pid: "arena-phantom", kind: "slip", x: c.x, y: c.y + 55, aim: -Math.PI / 2, tellTicks: 8 },
+  ];
+  const replay = (): void => {
+    (game as object as { handleSimEvents(events: SimEvent[]): void }).handleSimEvents(events);
+  };
+  replay();
+  for (let i = 0; i < WARMUP + 60; i++) {
+    if (i > 0 && i % 45 === 0) replay();
+    game.tick(1 / 60);
+    game.render();
+  }
+  const times: number[] = [];
+  for (let i = 0; i < FRAMES; i++) {
+    if (i % 45 === 0) replay();
+    const t0 = performance.now();
+    game.tick(1 / 60);
+    game.render();
+    times.push(performance.now() - t0);
+  }
+  game.stop();
+  return stat(times);
+}
+
 // Worst-case scenarios. Each builds a heavy live world around the settled player.
 const SCENARIOS: Record<string, Setup> = {
   "thumper-into-barrels": (game) => {
@@ -363,6 +398,11 @@ async function main(): Promise<void> {
     const s = await measureClaymoreCleave();
     scenarios["claymore-cleave"] = s;
     process.stdout.write(`    claymore-cleave: median ${s.median.toFixed(2)}ms, p95 ${s.p95.toFixed(2)}ms\n`);
+  }
+  {
+    const s = await measureArenaUltParty();
+    scenarios["arena-ult-party"] = s;
+    process.stdout.write(`    arena-ult-party: median ${s.median.toFixed(2)}ms, p95 ${s.p95.toFixed(2)}ms\n`);
   }
 
   if (isWrite) {

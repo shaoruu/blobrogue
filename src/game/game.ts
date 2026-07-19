@@ -85,9 +85,11 @@ import {
 } from "./waveSpec.js";
 import { pvpKillCue, pvpMatchOverCue, pvpFragStreakRate, pvpCountTickRate } from "./waveSpec.js";
 import type { WaveEventId } from "./waveSpec.js";
-import { PVP, HEARTH, WEATHER, PVP_WEATHER_CARDINALS, pvpDraftSeed, pvpSpawnHardGraceTicks } from "../sim/pvp.js";
-import type { MatchPhase } from "../sim/pvp.js";
+import { ARENA_SALVO, ARENA_SHOVE, ARENA_SLIP, PVP, HEARTH, WEATHER, PVP_WEATHER_CARDINALS, pvpDraftSeed, pvpSpawnHardGraceTicks } from "../sim/pvp.js";
+import type { ArenaUltKind, MatchPhase } from "../sim/pvp.js";
 import { ShockwaveField, ScreenFlash, AmbienceField } from "./vfx.js";
+import { ARENA_ULT_HUE, ArenaUltVfx } from "./arenaUltVfx.js";
+import type { ArenaUltCastView, ArenaUltMoment } from "./arenaUltVfx.js";
 import { LightingRenderer } from "./lighting.js";
 import type { StaticLightSpec } from "./lighting.js";
 import { HALO_VISUAL_BASE, haloVisualStrength, haloVisualTier } from "./haloVisual.js";
@@ -957,6 +959,10 @@ export class Game {
   private burstTrauma = 0;
   private burstKick = 0;
   private burstKickDir = 0;
+  private arenaBurstFreeze = 0;
+  private arenaBurstTrauma = 0;
+  private arenaBurstKickX = 0;
+  private arenaBurstKickY = 0;
   private meleeShockwaveX = 0;
   private meleeShockwaveY = 0;
   private meleeShockwaveCount = 0;
@@ -977,6 +983,7 @@ export class Game {
   private muzzle = { t: 0, x: 0, y: 0, angle: 0, size: 2, color: "#ffe6a0" };
   // Client-only VFX subsystems (see vfx.ts) — pure cosmetics over the sim's event stream.
   private shockwaves = new ShockwaveField();
+  private arenaUltVfx = new ArenaUltVfx();
   private screenFlash = new ScreenFlash();
   private motes = new AmbienceField();
   // Ambient occlusion + authored local lighting (see lighting.ts) — cached per floor,
@@ -1129,6 +1136,7 @@ export class Game {
   private isDevBossNameHidden = false;
   private isDevHitRadiusVisible = false;
   private isDevPaleCapture = false;
+  private devArenaUltEventsSeen = 0;
   private fps = 0;             // smoothed frames/sec, surfaced via devSnapshot()
 
   constructor(
@@ -1330,6 +1338,7 @@ export class Game {
     this.selfPet = this.mode === "coop" ? null : opts.selfPet ?? null;
     this.runFloorsCleared = 0;
     this.runBossKills.clear();
+    this.devArenaUltEventsSeen = 0;
     this.hasShownUltReadyNudge = false; // the "[F] <ULT> READY" world nudge shows once per RUN
     this.petRenders.clear();
     this.online = this.mode === "online" ? opts.online ?? null : null;
@@ -1381,6 +1390,11 @@ export class Game {
     this.freeze = 0;
     this.trauma = 0;
     this.kickX = 0; this.kickY = 0;
+    this.arenaBurstFreeze = 0;
+    this.arenaBurstTrauma = 0;
+    this.arenaBurstKickX = 0;
+    this.arenaBurstKickY = 0;
+    this.arenaUltVfx.clear();
     this.meleeImpactWeapon = null;
     this.meleeImpactUntil = 0;
     this.meleeImpactAim = 0;
@@ -1491,6 +1505,7 @@ export class Game {
     this.muzzle.t = 0;
     this.sentryFx.clear();
     this.shockwaves.clear();
+    this.arenaUltVfx.clear();
     this.screenFlash.clear();
     if (isBandReveal) {
       const glow = hexToRgb(this.currentBiome.glow);
@@ -2317,6 +2332,11 @@ export class Game {
       if (this.dashImgCd <= 0) { this.afterimages.push({ x: this.px, y: this.py, facing: this.facing, t: 0, color: null, base: heroBodySprite(this.selfCosmetics?.hat ?? null) }); this.dashImgCd = 0.04; }
     }
 
+    this.arenaUltVfx.syncLocalPosition(this.px, this.py);
+    this.resetArenaUltBurst();
+    this.arenaUltVfx.update(dt, this.onArenaUltMoment);
+    this.flushArenaUltBurst();
+
     this.updateFootstepDust(dt);
     this.updateParticles(dt);
     this.updateDmgNumbers(dt);
@@ -2496,6 +2516,7 @@ export class Game {
     this.burstTrauma = 0;
     this.burstKick = 0;
     this.burstKickDir = 0;
+    this.resetArenaUltBurst();
     for (const e of events) this.handleSimEvent(e);
     // The explosion/kill burst coalesces its hitstop + shake into ONE apply per frame. The
     // per-event calls all clamp anyway (freeze -> max, trauma -> sum capped at 1), so this is
@@ -2507,6 +2528,7 @@ export class Game {
       this.kickX += Math.cos(this.burstKickDir) * kick;
       this.kickY += Math.sin(this.burstKickDir) * kick;
     }
+    this.flushArenaUltBurst();
   }
 
   // Coalesce heavy FX bursts: as more explosions/kills land in one frame, scale per-event
@@ -2516,6 +2538,94 @@ export class Game {
     const n = this.fxBurstCount++;
     return n < FX_BURST_FULL ? 1 : n < FX_BURST_HALF ? 0.5 : 0.25;
   }
+
+  private resetArenaUltBurst(): void {
+    this.arenaBurstFreeze = 0;
+    this.arenaBurstTrauma = 0;
+    this.arenaBurstKickX = 0;
+    this.arenaBurstKickY = 0;
+  }
+
+  private flushArenaUltBurst(): void {
+    if (this.arenaBurstFreeze > 0) this.addFreeze(this.arenaBurstFreeze);
+    if (this.arenaBurstTrauma > 0) this.addTrauma(Math.min(1, this.arenaBurstTrauma));
+    if (this.arenaBurstKickX !== 0 || this.arenaBurstKickY !== 0) {
+      const recoil = settings.effectiveRecoil;
+      this.kickX += this.arenaBurstKickX * recoil;
+      this.kickY += this.arenaBurstKickY * recoil;
+    }
+    this.resetArenaUltBurst();
+  }
+
+  private readonly onArenaUltMoment = (cast: ArenaUltCastView, moment: ArenaUltMoment): void => {
+    const isNear = this.isNearCamera(cast.x, cast.y, 180);
+    if (!isNear) return;
+    switch (moment) {
+      case "salvo": {
+        if (cast.isLocal) {
+          const kick = 9;
+          this.arenaBurstFreeze = Math.max(this.arenaBurstFreeze, 0.035);
+          this.arenaBurstTrauma += 0.28;
+          this.arenaBurstKickX -= Math.cos(cast.aim) * kick;
+          this.arenaBurstKickY -= Math.sin(cast.aim) * kick;
+        } else {
+          this.arenaBurstTrauma += 0.1;
+        }
+        this.lighting.addPulse(cast.x, cast.y, 150, 0.8 * settings.flashFactor, ARENA_ULT_HUE.salvo, 0.24);
+        this.flashScreen(205, 248, 255, 0.11, 4);
+        break;
+      }
+      case "triage":
+        this.shockwaves.spawn(cast.x, cast.y, 12, 112, 0.42, ARENA_ULT_HUE.triage, 7, 0.95);
+        this.lighting.addPulse(cast.x, cast.y, 130, 0.65 * settings.flashFactor, ARENA_ULT_HUE.triage, 0.38);
+        break;
+      case "shoveShatter": {
+        const arc = ARENA_SHOVE.arcDeg * Math.PI / 180;
+        this.shockwaves.spawnArc(
+          cast.x,
+          cast.y,
+          18,
+          ARENA_SHOVE.reachPx * 2.2,
+          0.34,
+          ARENA_ULT_HUE.shove,
+          cast.aim,
+          arc,
+          8 * settings.flashFactor,
+          settings.flashFactor,
+        );
+        const scale = this.burstScale();
+        this.spawnDustRing(cast.x, cast.y, ARENA_SHOVE.reachPx, Math.max(3, Math.round(10 * scale)), "#a9b6c5");
+        this.arenaBurstFreeze = Math.max(this.arenaBurstFreeze, 0.055);
+        this.arenaBurstTrauma += 0.34;
+        this.flashScreen(205, 233, 255, 0.12, 4.2);
+        break;
+      }
+      case "slip": {
+        const remote = cast.isLocal
+          ? null
+          : this.remotes().find((candidate) => candidate.playerId === cast.pid) ?? null;
+        const base = cast.isLocal
+          ? heroBodySprite(this.selfCosmetics?.hat ?? null)
+          : heroBodySprite(remote?.hat ?? null);
+        const facing = cast.isLocal
+          ? this.facing
+          : remote?.facing ?? (Math.cos(cast.aim) < 0 ? -1 : 1);
+        for (let i = 0; i < 4; i++) {
+          const k = i / 3;
+          this.afterimages.push({
+            x: cast.x + Math.cos(cast.aim) * ARENA_SLIP.blinkPx * k,
+            y: cast.y + Math.sin(cast.aim) * ARENA_SLIP.blinkPx * k,
+            facing,
+            t: i * 0.08,
+            color: ARENA_ULT_HUE.slip,
+            base,
+          });
+        }
+        this.arenaBurstTrauma += cast.isLocal ? 0.12 : 0.05;
+        break;
+      }
+    }
+  };
 
   private flushMeleeShockwave() {
     if (this.meleeShockwaveCount === 0) return;
@@ -2778,6 +2888,7 @@ export class Game {
         this.spawnParticles(e.x, e.y, 1, "#ffd27a");
         break;
       case "playerHurt":
+        this.arenaUltVfx.pulseSalvoHit(e.x, e.y);
         // A teammate getting hit MUST be audible to everyone (Ian: "I want to hear my friend
         // get hit") — but a remote hit is a positional red burst + hurt cue on THEIR blob,
         // never the local player's screen shake / hurt vignette / shop-close.
@@ -2919,6 +3030,9 @@ export class Game {
           : "plate.block";
         if (!waveAudio.cueAt(blockCue, e.x, e.y)) this.sfxAt("parry", e.x, e.y, { rate: 1.2, gain: 0.5 });
         this.spawnSparks(e.x, e.y, 4, e.aim);
+        if (this.isArena && e.kind === "shielder") {
+          this.arenaUltVfx.cutShove(e.x, e.y, false, this.onArenaUltMoment);
+        }
         break;
       }
       case "bulletExpire":
@@ -3139,16 +3253,23 @@ export class Game {
       // PVP WAVE 3 ARENA ULTS: one cast event for all four; `kind` picks the tell/VFX flavor. The
       // effects themselves (salvo hits, triage heal, shove KB, slip blink) ride state/playerHurt.
       case "ultArena": {
+        this.devArenaUltEventsSeen++;
         if (this.isSelfPid(e.pid)) this.isUltCasting = true;
-        const arenaColor = e.kind === "salvo" ? "#ffd166"
-          : e.kind === "triage" ? "#7fe6a8"
-          : e.kind === "shove" ? "#bcd4ff"
-          : "#a8e6ff"; // slip
-        this.spawnPuff(e.x, e.y, 12, arenaColor);
-        // A short directional tell streak along the committed aim (the >= 0.40s telegraph read).
-        this.remoteTracers.push({ x: e.x, y: e.y, angle: e.aim, life: 0.14, color: arenaColor, len: 40, isArc: false });
+        const kind: ArenaUltKind = e.kind === "salvo" || e.kind === "triage"
+          || e.kind === "shove" || e.kind === "slip"
+          ? e.kind
+          : "slip";
+        this.arenaUltVfx.spawn(
+          e.pid,
+          kind,
+          e.x,
+          e.y,
+          e.aim,
+          e.tellTicks * FIXED_DT,
+          this.shooterColorOf(e.pid),
+          this.isSelfPid(e.pid),
+        );
         this.sfxAt(e.kind === "triage" ? "heart" : e.kind === "shove" ? "parry" : "weapon", e.x, e.y, { rate: 1.2, gain: 0.6 });
-        this.addTrauma(0.1);
         break;
       }
       case "tetherLatch": {
@@ -3369,6 +3490,9 @@ export class Game {
         triggerFlash(this.animForId(e.eid));
         break;
       case "puff":
+        if (this.isArena && e.n === 6 && e.color === "#cfe6ff") {
+          this.arenaUltVfx.cutShove(e.x, e.y, true, this.onArenaUltMoment);
+        }
         this.spawnPuff(e.x, e.y, e.n, e.color);
         break;
       case "trauma":
@@ -4164,6 +4288,7 @@ export class Game {
     const remotes = this.remotes();
     if (remotes.length === 0 && this.remoteAnims.size === 0) return;
     for (const r of remotes) {
+      this.arenaUltVfx.syncRemotePosition(r.playerId, r.x, r.y);
       let entry = this.remoteAnims.get(r.playerId);
       if (!entry) { entry = { anim: createAnim(), lastX: r.x, lastY: r.y, isDashing: false, dashImgCd: 0, dashDustCd: 0 }; this.remoteAnims.set(r.playerId, entry); }
       const moving = Math.hypot(r.x - entry.lastX, r.y - entry.lastY) > 0.35;
@@ -5049,6 +5174,7 @@ export class Game {
     this.renderRingWeather(); // PVP Wave 2: the cinder_gust wind (director-only; tar/spark ride renderHazards)
     this.renderHazards(); // dynamic boss hazards (the Weaver's webs), over the floor layer
     this.renderGroundEffects(); // weapon ground effects (chill zones, snap wires) at floor level
+    this.arenaUltVfx.renderGround(ctx, this.renderCam.x, this.renderCam.y, this.sprites);
     this.motes.render(ctx, this.renderCam.x, this.renderCam.y); // ambient biome air, over the floor, under entities
     this.renderExit();
     this.renderShadows();
@@ -5066,6 +5192,13 @@ export class Game {
     this.renderGrapplePreview();
     this.renderSideChannelArmed();
     this.renderTracers();
+    this.arenaUltVfx.renderWorld(
+      ctx,
+      this.renderCam.x,
+      this.renderCam.y,
+      this.sprites,
+      settings.isReducedMotion,
+    );
     this.renderRemotePlayers();
     this.renderDevPalePlayers();
     this.renderPets(); // client-side cosmetic companions (follow/sit; never a sim entity)
@@ -9514,6 +9647,73 @@ export class Game {
     }
   }
 
+  private applyArenaUltPose(cue: ArenaUltCastView | null, xf: Xform): void {
+    if (cue === null || cue.kind !== "slip") return;
+    if (this.arenaUltVfx.isSlipTelling(cue)) {
+      xf.sx *= 1.12;
+      xf.sy *= 0.72;
+      xf.oy += 7;
+    } else if (this.arenaUltVfx.isSlipLanding(cue)) {
+      xf.sx *= 1.08;
+      xf.sy *= 0.88;
+      xf.oy += 4;
+    }
+  }
+
+  private renderArenaUltBodyRim(
+    cue: ArenaUltCastView | null,
+    sx: number,
+    sy: number,
+    alpha: number,
+  ): void {
+    if (cue === null) return;
+    const { ctx } = this;
+    const isLanding = this.arenaUltVfx.isSlipLanding(cue);
+    const isGlass = cue.kind === "salvo" && cue.t < ARENA_SALVO.glassSec;
+    const pulse = settings.isReducedMotion ? 1 : 0.82 + 0.18 * Math.sin(cue.t * 18);
+    ctx.save();
+    ctx.globalAlpha = alpha * (isLanding ? 0.9 : isGlass ? 0.72 : 0.48) * pulse;
+    ctx.strokeStyle = ARENA_ULT_HUE[cue.kind];
+    ctx.lineWidth = isLanding ? 5 : isGlass ? 3.5 : 2.5;
+    if (isGlass) ctx.setLineDash(AIM_DASH);
+    ctx.beginPath();
+    ctx.ellipse(sx, sy + 2, isLanding ? 31 : 28, isLanding ? 25 : 23, 0, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.globalAlpha = alpha * (isLanding ? 0.95 : 0.72);
+    ctx.strokeStyle = cue.accent;
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.arc(sx, sy, isLanding ? 35 : 32, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  private renderRemoteArenaBodyFlash(
+    cue: ArenaUltCastView | null,
+    base: SpriteName,
+    sx: number,
+    sy: number,
+    facing: number,
+    xf: Xform,
+    alpha: number,
+    hurtFlash: number,
+  ): void {
+    const arenaFlash = cue === null ? 0 : this.arenaUltVfx.bodyFlash(cue);
+    const flash = Math.max(arenaFlash, hurtFlash);
+    if (flash <= 0) return;
+    const img = this.sprites.flashSprite(base);
+    if (img === null) return;
+    const { ctx } = this;
+    ctx.save();
+    ctx.globalCompositeOperation = "lighter";
+    ctx.globalAlpha = alpha * flash;
+    ctx.translate(sx + xf.ox, sy + xf.oy);
+    ctx.rotate(xf.rot);
+    ctx.scale(facing * xf.sx, xf.sy);
+    ctx.drawImage(img, -26, -26, 52, 52);
+    ctx.restore();
+  }
+
   private renderRemotePlayers() {
     const remotes = this.remotes();
     if (remotes.length === 0) return;
@@ -9549,9 +9749,12 @@ export class Game {
       const color = playerColor(r.colorIndex);
       // A hatted teammate renders from the bald base (their equipped hat replaces the baked
       // cowboy hat); bare-headed teammates keep the classic hatted hero.
-      const tinted = this.sprites.tintedSprite(heroBodySprite(r.hat), color);
+      const base = heroBodySprite(r.hat);
+      const tinted = this.sprites.tintedSprite(base, color);
       const entry = this.remoteAnims.get(r.playerId);
       const xf = entry ? characterXform(entry.anim, CHARACTER_STYLE) : IDENTITY_XFORM;
+      const arenaCue = this.arenaUltVfx.bodyCue(r.playerId, false);
+      if (entry) this.applyArenaUltPose(arenaCue, xf);
       ctx.save();
       // A network-absent teammate renders as an explicit ghost (their body is reserved for
       // the reconnect grace) — never mistakable for a live player or a corpse. A live one
@@ -9579,6 +9782,8 @@ export class Game {
         ctx.beginPath(); ctx.arc(0, 0, this.pr, 0, 6.28); ctx.fill();
       }
       ctx.restore();
+      this.renderRemoteArenaBodyFlash(arenaCue, base, sx, sy, r.facing, xf, alpha, entry?.anim.flash ?? 0);
+      this.renderArenaUltBodyRim(arenaCue, sx, sy, alpha);
       // Teammates' verified cosmetic overlays (same transform as their body draw above,
       // which never uses frame sheets — the procedural xf carries the full deform).
       this.drawCosmetics(r.hat, r.face, sx, sy, 52, r.facing, xf, alpha, false);
@@ -9954,6 +10159,8 @@ export class Game {
     alpha *= materialize;
     const clip: SheetClip = this.playerAnim.move > 0.5 ? "walk" : "idle";
     const xf = characterXform(this.playerAnim, CHARACTER_STYLE);
+    const arenaCue = this.arenaUltVfx.bodyCue(this.p.id, true);
+    this.applyArenaUltPose(arenaCue, xf);
     // Directional recoil: nudge the blob back against its aim as it fires.
     const rec = this.playerAnim.recoil;
     xf.ox += -Math.cos(this.aimAngle) * rec * 4;
@@ -9961,7 +10168,22 @@ export class Game {
     // A hatted blob renders from the bald base so the equipped hat replaces the baked cowboy
     // hat instead of stacking on it; bare-headed blobs keep the classic hatted hero.
     const base = heroBodySprite(this.selfCosmetics?.hat ?? null);
-    this.drawChar(base, clip, psx, psy, 52, this.facing, xf, 1, alpha, this.playerAnim.flash, this.playerAnim.clock, this.selfTint());
+    const arenaFlash = arenaCue === null ? 0 : this.arenaUltVfx.bodyFlash(arenaCue);
+    this.drawChar(
+      base,
+      clip,
+      psx,
+      psy,
+      52,
+      this.facing,
+      xf,
+      1,
+      alpha,
+      Math.max(this.playerAnim.flash, arenaFlash),
+      this.playerAnim.clock,
+      this.selfTint(),
+    );
+    this.renderArenaUltBodyRim(arenaCue, psx, psy, alpha);
     if (this.selfCosmetics) {
       // Socket determinism: the cosmetic pass reads the SAME frame index the body sheet
       // shows this tick, so per-frame socket anchors can never drift off the head.
@@ -10901,6 +11123,18 @@ export class Game {
   // SAME selfPet the run start + wire identity feed into renderPets.
   devSetPet(petId: string | null): void {
     this.selfPet = petId;
+  }
+
+  devArenaUltFxCount(): number {
+    return this.arenaUltVfx.activeCount();
+  }
+
+  devArenaUltEventCount(): number {
+    return this.devArenaUltEventsSeen;
+  }
+
+  devIsWorldReady(): boolean {
+    return this.isWorldRevealed;
   }
 
   devSnapshot(): DevSnapshot {

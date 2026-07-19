@@ -27,10 +27,10 @@ const SCENES = [
   "live-ult-slip",
 ];
 const ULT_SCENES = new Map([
-  ["live-ult-salvo", { auk: "gunner", kind: "salvo" }],
-  ["live-ult-triage", { auk: "mender", kind: "triage" }],
-  ["live-ult-shove", { auk: "bulwark", kind: "shove" }],
-  ["live-ult-slip", { auk: "phantom", kind: "slip" }],
+  ["live-ult-salvo", { auk: "gunner", kind: "salvo", captureMs: 520 }],
+  ["live-ult-triage", { auk: "mender", kind: "triage", captureMs: 460 }],
+  ["live-ult-shove", { auk: "bulwark", kind: "shove", captureMs: 650 }],
+  ["live-ult-slip", { auk: "phantom", kind: "slip", captureMs: 850 }],
 ]);
 const CHROME = "/usr/bin/google-chrome";
 
@@ -94,17 +94,18 @@ async function main() {
         null,
         { timeout: 30000 },
       );
-      // Sprites, the reveal veil lifting, and the first animated frames settling.
-      await page.waitForTimeout(2600);
+      const expectedUlt = ULT_SCENES.get(scene);
+      // Arena ults capture their authored hero beat; ambient scenes get a longer settle.
+      await page.waitForTimeout(expectedUlt?.captureMs ?? 2600);
       const active = await page.evaluate(() => window.__arena.currentScene());
       if (active !== scene) throw new Error(`scene mismatch: asked ${scene}, got ${active}`);
-      const expectedUlt = ULT_SCENES.get(scene);
       if (expectedUlt !== undefined) {
         const debug = await page.evaluate(() => window.__arena.debug());
-        if (debug.auk !== expectedUlt.auk || debug.ultArena !== expectedUlt.kind || debug.ultT <= 0) {
+        if (debug.auk !== expectedUlt.auk || debug.ultArena !== expectedUlt.kind
+          || debug.ultT <= 0 || debug.ultFx <= 0) {
           throw new Error(`ult state mismatch for ${scene}: ${JSON.stringify(debug)}`);
         }
-        console.log(`  [${scene}] auk=${debug.auk} ultArena=${debug.ultArena} ultT=${debug.ultT}`);
+        console.log(`  [${scene}] auk=${debug.auk} ultArena=${debug.ultArena} ultT=${debug.ultT} ultFx=${debug.ultFx}`);
       }
       const wave = scene.startsWith("live-ult-") ? "wave3" : "wave2";
       const path = join(OUT_DIR, `${wave}-${scene}.png`);

@@ -11,6 +11,8 @@ export interface Shockwave {
   color: string;
   width: number;
   alpha: number;
+  angle: number;
+  arc: number;
 }
 
 const MAX_SHOCKWAVES = 12;
@@ -18,6 +20,7 @@ const MAX_SHOCKWAVES = 12;
 export class ShockwaveField {
   private readonly pool: Shockwave[] = Array.from({ length: MAX_SHOCKWAVES }, () => ({
     x: 0, y: 0, t: 0, dur: 0, r0: 0, r1: 0, color: "#ffffff", width: 0, alpha: 0,
+    angle: 0, arc: Math.PI * 2,
   }));
   private count = 0;
 
@@ -39,6 +42,26 @@ export class ShockwaveField {
     wave.color = color;
     wave.width = width;
     wave.alpha = alpha;
+    wave.angle = 0;
+    wave.arc = Math.PI * 2;
+  }
+
+  spawnArc(
+    x: number,
+    y: number,
+    r0: number,
+    r1: number,
+    dur: number,
+    color: string,
+    angle: number,
+    arc: number,
+    width = 4,
+    alpha = 1,
+  ): void {
+    this.spawn(x, y, r0, r1, dur, color, width, alpha);
+    const wave = this.pool[this.count - 1];
+    wave.angle = angle;
+    wave.arc = arc;
   }
 
   clear(): void {
@@ -73,7 +96,7 @@ export class ShockwaveField {
       ctx.strokeStyle = s.color;
       ctx.lineWidth = Math.max(1, s.width * (1 - k * 0.6));
       ctx.beginPath();
-      ctx.arc(s.x - camX, s.y - camY, r, 0, 6.28);
+      ctx.arc(s.x - camX, s.y - camY, r, s.angle - s.arc / 2, s.angle + s.arc / 2);
       ctx.stroke();
     }
     ctx.restore();

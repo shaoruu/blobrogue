@@ -48,6 +48,8 @@ interface ArenaDebug {
   auk: string;
   ultArena: string;
   ultT: number;
+  ultFx: number;
+  ultEvents: number;
 }
 
 const ROOM_CODE = "ARENA";
@@ -156,6 +158,9 @@ class ArenaHarness {
   private sseq = 1;
   private eventId = 1;
   private evTo = 0;
+  private ultEvent: WireEvent | null = null;
+  private ultEventsAtSceneStart = 0;
+  private isUltEventPending = false;
   private scene: ArenaScene = "live-hearth";
   private lastSnap: ServerMsg | null = null;
   isReady = false;
@@ -225,6 +230,10 @@ class ArenaHarness {
     settleBody(this.self, tick);
     settleBody(this.rival, tick);
     resetArenaUlt(this.self);
+    this.ultEvent = null;
+    this.ultEventsAtSceneStart = this.game.devArenaUltEventCount();
+    this.isUltEventPending = scene.startsWith("live-ult-");
+    this.isReady = false;
     idleWeather(world);
     const hc = this.hearth();
     // Default: self settled on the hearth, rival parked well outside the ring.
@@ -337,7 +346,7 @@ class ArenaHarness {
     this.self.arenaUlt.aim = aim;
   }
 
-  private arenaUltEvent(): WireEvent | null {
+  private buildArenaUltEvent(): WireEvent | null {
     let kind: ArenaUltKind;
     switch (this.scene) {
       case "live-ult-salvo": kind = "salvo"; break;
@@ -362,7 +371,7 @@ class ArenaHarness {
     const socket = HarnessSocket.latest;
     if (socket === null) return;
     this.socket = socket;
-    const event = this.arenaUltEvent();
+    const event = this.ultEvent;
     const snap = buildSnapshot(this.world, SELF_ID, 0, event === null ? [] : [event], this.evTo, true, {
       worldId: WORLD_ID,
       roster: ROSTER,
@@ -370,7 +379,8 @@ class ArenaHarness {
     });
     this.lastSnap = snap;
     socket.deliver(snap);
-    this.isReady = true;
+    this.isReady = !this.isUltEventPending && (event === null
+      || this.game.devArenaUltEventCount() > this.ultEventsAtSceneStart);
   }
 
   // The authoritative weather/hazard/ult readout this frame. `auk` and `ultArena` prove the wire
@@ -378,7 +388,10 @@ class ArenaHarness {
   debug(): ArenaDebug {
     const snap = this.lastSnap;
     if (snap === null || snap.t !== "snap") {
-      return { hazards: [], wk: "", wp: "", wd: 0, hc: false, auk: "", ultArena: "", ultT: 0 };
+      return {
+        hazards: [], wk: "", wp: "", wd: 0, hc: false, auk: "",
+        ultArena: "", ultT: 0, ultFx: 0, ultEvents: 0,
+      };
     }
     const ultEvent = snap.events.find((event) => event.e.t === "ultArena");
     const ultArena = ultEvent?.e.t === "ultArena" ? ultEvent.e.kind : "";
@@ -397,6 +410,8 @@ class ArenaHarness {
       auk: snap.self?.auk ?? "",
       ultArena,
       ultT,
+      ultFx: this.game.devArenaUltFxCount(),
+      ultEvents: this.game.devArenaUltEventCount(),
     };
   }
 
@@ -407,6 +422,10 @@ class ArenaHarness {
     if (this.scene === "live-hearth") {
       this.self.hearthFavorT = pvpHearthArmTicks();
       this.self.hearthEmberT = pvpHearthEmberWindowTicks();
+    }
+    if (this.isUltEventPending && this.game.devIsWorldReady()) {
+      this.ultEvent = this.buildArenaUltEvent();
+      this.isUltEventPending = false;
     }
     this.deliver();
   }
