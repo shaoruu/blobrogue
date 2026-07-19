@@ -2968,14 +2968,114 @@ function hasFloorHazardOnTile(w: WorldState, tx: number, ty: number): boolean {
 
 function isWall(w: WorldState, px: number, py: number): boolean {
   const tx = Math.floor(px / TILE), ty = Math.floor(py / TILE);
+  return isWallTile(w, tx, ty);
+}
+
+function isWallTile(w: WorldState, tx: number, ty: number): boolean {
   if (tx < 0 || ty < 0 || tx >= w.dungeon.w || ty >= w.dungeon.h) return true;
   return w.dungeon.tiles[ty * w.dungeon.w + tx] === 1;
 }
 
+function isBodyOverlappingWall(w: WorldState, x: number, y: number, r: number): boolean {
+  const minTx = Math.floor((x - r) / TILE);
+  const maxTx = Math.ceil((x + r) / TILE) - 1;
+  const minTy = Math.floor((y - r) / TILE);
+  const maxTy = Math.ceil((y + r) / TILE) - 1;
+  for (let ty = minTy; ty <= maxTy; ty++) {
+    for (let tx = minTx; tx <= maxTx; tx++) {
+      if (isWallTile(w, tx, ty)) return true;
+    }
+  }
+  return false;
+}
+
+function ejectBodyFromWall(w: WorldState, x: number, y: number, r: number): [number, number] | null {
+  if (!isBodyOverlappingWall(w, x, y, r)) return null;
+  const minTx = Math.floor((x - r) / TILE);
+  const maxTx = Math.ceil((x + r) / TILE) - 1;
+  const minTy = Math.floor((y - r) / TILE);
+  const maxTy = Math.ceil((y + r) / TILE) - 1;
+  let bestX = x;
+  let bestY = y;
+  let bestDistance = Infinity;
+  for (let ty = minTy; ty <= maxTy; ty++) {
+    for (let tx = minTx; tx <= maxTx; tx++) {
+      if (!isWallTile(w, tx, ty)) continue;
+      const candidates: readonly [number, number][] = [
+        [tx * TILE - r, y],
+        [(tx + 1) * TILE + r, y],
+        [x, ty * TILE - r],
+        [x, (ty + 1) * TILE + r],
+      ];
+      for (const [candidateX, candidateY] of candidates) {
+        const distance = Math.abs(candidateX - x) + Math.abs(candidateY - y);
+        if (
+          distance < bestDistance &&
+          !isBodyOverlappingWall(w, candidateX, candidateY, r) &&
+          !blockedByProp(w, candidateX, candidateY, r)
+        ) {
+          bestX = candidateX;
+          bestY = candidateY;
+          bestDistance = distance;
+        }
+      }
+    }
+  }
+  return [bestX, bestY];
+}
+
+function sweepBodyX(w: WorldState, x: number, y: number, r: number, targetX: number): number {
+  if (targetX === x) return x;
+  const minTy = Math.floor((y - r) / TILE);
+  const maxTy = Math.ceil((y + r) / TILE) - 1;
+  if (targetX > x) {
+    const endTx = Math.floor((targetX + r) / TILE);
+    for (let tx = Math.floor((x + r) / TILE); tx <= endTx; tx++) {
+      for (let ty = minTy; ty <= maxTy; ty++) {
+        if (isWallTile(w, tx, ty)) return Math.min(targetX, tx * TILE - r);
+      }
+    }
+  } else {
+    const endTx = Math.ceil((targetX - r) / TILE) - 1;
+    for (let tx = Math.ceil((x - r) / TILE) - 1; tx >= endTx; tx--) {
+      for (let ty = minTy; ty <= maxTy; ty++) {
+        if (isWallTile(w, tx, ty)) return Math.max(targetX, (tx + 1) * TILE + r);
+      }
+    }
+  }
+  return targetX;
+}
+
+function sweepBodyY(w: WorldState, x: number, y: number, r: number, targetY: number): number {
+  if (targetY === y) return y;
+  const minTx = Math.floor((x - r) / TILE);
+  const maxTx = Math.ceil((x + r) / TILE) - 1;
+  if (targetY > y) {
+    const endTy = Math.floor((targetY + r) / TILE);
+    for (let ty = Math.floor((y + r) / TILE); ty <= endTy; ty++) {
+      for (let tx = minTx; tx <= maxTx; tx++) {
+        if (isWallTile(w, tx, ty)) return Math.min(targetY, ty * TILE - r);
+      }
+    }
+  } else {
+    const endTy = Math.ceil((targetY - r) / TILE) - 1;
+    for (let ty = Math.ceil((y - r) / TILE) - 1; ty >= endTy; ty--) {
+      for (let tx = minTx; tx <= maxTx; tx++) {
+        if (isWallTile(w, tx, ty)) return Math.max(targetY, (ty + 1) * TILE + r);
+      }
+    }
+  }
+  return targetY;
+}
+
 export function moveCircle(w: WorldState, x: number, y: number, r: number, dx: number, dy: number): [number, number] {
   const nx = x + dx, ny = y + dy;
-  if (!isWall(w, nx + Math.sign(dx) * r, y) && !blockedByProp(w, nx, y, r)) x = nx;
-  if (!isWall(w, x, ny + Math.sign(dy) * r) && !blockedByProp(w, x, ny, r)) y = ny;
+  const ejected = ejectBodyFromWall(w, x, y, r);
+  if (ejected !== null) return ejected;
+  const wallX = sweepBodyX(w, x, y, r, nx);
+  if (!blockedByProp(w, wallX, y, r)) x = wallX;
+  const wallY = sweepBodyY(w, x, y, r, ny);
+  if (!blockedByProp(w, x, wallY, r)) y = wallY;
   return [x, y];
 }
 
@@ -3009,7 +3109,7 @@ function reachFieldFor(w: WorldState, radius: number): FlowField {
 // movement uses, outside every live prop's collision ring, and off every chest footprint
 // (chests never block movement, but a body materializing ON one reads as a bug).
 function isBodyClear(w: WorldState, x: number, y: number, r: number): boolean {
-  if (isWall(w, x, y) || isWall(w, x - r, y) || isWall(w, x + r, y) || isWall(w, x, y - r) || isWall(w, x, y + r)) return false;
+  if (isBodyOverlappingWall(w, x, y, r)) return false;
   if (blockedByProp(w, x, y, r)) return false;
   for (const c of w.chests) {
     const rr = r + c.radius;
