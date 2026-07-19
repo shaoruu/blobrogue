@@ -3622,7 +3622,7 @@ export class Game {
   }
 
   private flushHaloImpacts(): void {
-    this.burstTrauma = Math.min(1, this.burstTrauma + this.haloImpactTrauma);
+    this.burstTrauma += this.haloImpactTrauma;
     for (let i = 0; i < this.haloImpactSampleCount; i++) {
       const isCrit = this.haloImpactCrit[i] === 1;
       const scale = this.burstScale();
