@@ -150,7 +150,7 @@ section("catalog and typed hooks");
   }
   check("Wave A additions produce the locked catalog totals",
     contentCatalogFor(WAVE_A_CONTENT_CATALOG_VERSION).pickupWeapons.length === 41
-    && contentCatalogFor(WAVE_A_CONTENT_CATALOG_VERSION).normalBlessingIds.length === 34
+    && contentCatalogFor(WAVE_A_CONTENT_CATALOG_VERSION).normalBlessingIds.length === 36
     && WAVE_A_WEAPONS.every((id) => contentCatalogFor(WAVE_A_CONTENT_CATALOG_VERSION).pickupWeapons.includes(id)));
 }
 

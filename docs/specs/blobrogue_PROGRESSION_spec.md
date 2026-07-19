@@ -36,7 +36,7 @@ There is no run end, so define an **Expedition Attunement** without adding a new
 
 ## Current blessing tuning roles (`items.ts`)
 Keep each pick in one of four readable buckets (tag ItemDef; used by draft weighting):
-- **Output:** Hair Trigger, Big Iron, Deadeye, Full Metal, elemental coatings.
+- **Output:** Hair Trigger, Split Shot, Scattergun, Big Iron, Deadeye, Full Metal, elemental coatings.
 - **Positioning:** Side Channel rewards a dash or hard aim flick with one plain ghost round along the previous aim; ranks improve its power, armed window, and cooldown, never its projectile count.
 - **Survival/mobility:** Vitality, Swift Boots, Second Wind, Fang.
 - **Economy:** Greed, Coin Magnet (never offered in boss reward).
@@ -234,6 +234,8 @@ Replace `ownedItems: ItemDef[]` with `itemLevels: Map<ItemId,1|2|3>` (HUD/summar
 ### Exact level effects (cumulative result at Lv1 / Lv2 / Lv3)
 - Glass Cannon: damage +60%/-2HP · +90%/-3HP · +110%/-3HP.
 - Hair Trigger: fire rate +35% · +55% · +70%.
+- Split Shot: +1 projectile/-8% damage/+0.14 spread · +2/-15%/+0.20 · +2/-15%/+0.14.
+- Scattergun: +2 projectiles/-15% damage/+0.24 spread · +3/-20%/+0.28 · +3/-22%/+0.24.
 - Side Channel: after a dash or a 90-degree aim change within 0.40s, prior aim is armed for 2.0s/2.3s/2.6s. The next projectile shot fires exactly one plain ghost round along that aim. Room damage is 55%/65%/75%, boss damage is 30%/34%/38%, and the internal cooldown is 1.20s/1.05s/0.90s.
 - Full Metal: pierce +1 · +2 · +3.
 - Swift Boots: move +20% · +30% · +35%.

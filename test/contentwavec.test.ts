@@ -129,11 +129,11 @@ section("catalog v3, typed hooks, and additive migration");
     CURRENT_CONTENT_CATALOG_VERSION === WAVE_C_CONTENT_CATALOG_VERSION
     && PICKUP_WEAPONS.length === 49);
   check("Wave C adds the five melee-native blessings to the prior pool",
-    contentCatalogFor(WAVE_C_CONTENT_CATALOG_VERSION).normalBlessingIds.length === 44
-    && contentCatalogFor(WAVE_B_CONTENT_CATALOG_VERSION).normalBlessingIds.length === 39
+    contentCatalogFor(WAVE_C_CONTENT_CATALOG_VERSION).normalBlessingIds.length === 46
+    && contentCatalogFor(WAVE_B_CONTENT_CATALOG_VERSION).normalBlessingIds.length === 41
     && ["stagger_pulse", "blade_ward", "cleave_crit", "momentum_charge", "finisher"]
       .every((id) => contentCatalogFor(WAVE_C_CONTENT_CATALOG_VERSION).normalBlessingIds.includes(id))
-    && ITEMS.filter((i) => i.isPremiumOnly !== true && i.isPvpOnly !== true).length === 44);
+    && ITEMS.filter((i) => i.isPremiumOnly !== true && i.isPvpOnly !== true).length === 46);
   check("catalog 2 (Wave B) arrays are never mutated by Wave C",
     contentCatalogFor(WAVE_B_CONTENT_CATALOG_VERSION).pickupWeapons.length === 45
     && WAVE_C_WEAPONS.every((id) => !contentCatalogFor(WAVE_B_CONTENT_CATALOG_VERSION).pickupWeapons.includes(id)));

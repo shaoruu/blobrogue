@@ -83,10 +83,10 @@ section("catalog contracts");
     Object.keys(WEAPONS).length === 50
     && PICKUP_WEAPONS.length === 49
     && !PICKUP_WEAPONS.includes("pistol"));
-  check("51 blessings split into 44 co-op normal, 4 premium cores, 3 pvp-only counters",
-    ITEMS.length === 51 && normal.length === 44 && premium.length === 4 && pvpOnly.length === 3);
-  check("normal blessing rarities are exactly 10 common, 19 uncommon, 15 rare",
-    counts.common === 10 && counts.uncommon === 19 && counts.rare === 15,
+  check("53 blessings split into 46 co-op normal, 4 premium cores, 3 pvp-only counters",
+    ITEMS.length === 53 && normal.length === 46 && premium.length === 4 && pvpOnly.length === 3);
+  check("normal blessing rarities are exactly 10 common, 21 uncommon, 15 rare",
+    counts.common === 10 && counts.uncommon === 21 && counts.rare === 15,
     JSON.stringify(counts));
 }
 
@@ -123,9 +123,9 @@ section("owner-accepted catalog rate drift");
   check("pre-F4 weapon C/R drift is exactly 48.780/51.220 → 48.889/51.111",
     [48.780, 51.220].every((expected, index) => near(legacyEarly[index], expected))
     && [48.889, 51.111].every((expected, index) => near(waveAEarly[index], expected)));
-  check("normal blessing C/U/R drift is exactly 39.326/47.191/13.483 → 42.254/45.070/12.676",
-    [39.326, 47.191, 13.483].every((expected, index) => near(legacyBlessing[index], expected))
-    && [42.254, 45.070, 12.676].every((expected, index) => near(waveABlessing[index], expected)));
+  check("normal blessing C/U/R drift is exactly 36.842/50.526/12.632 → 40.000/48.000/12.000",
+    [36.842, 50.526, 12.632].every((expected, index) => near(legacyBlessing[index], expected))
+    && [40.000, 48.000, 12.000].every((expected, index) => near(waveABlessing[index], expected)));
 }
 
 section("weapon first pass and history-aware refills");

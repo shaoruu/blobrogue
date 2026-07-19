@@ -438,9 +438,8 @@ export type WeaponId =
   //  - phase: rounds pass straight through walls — cover is the player's, never the room's;
   //  - vortex: shots implode, dragging every nearby body onto the impact point.
   | "reaper" | "swarm" | "midas" | "phase" | "vortex"
-  // The content wave — new guns built entirely on the existing one-behavior-field pattern
-  // (cleaver/scrapper/skipper/arcbolt/cryobolt/firebomb/tracker) plus one legendary that
-  // carries a single new isolated field (singularity: implode THEN a delayed nova blast).
+  // The content wave — new guns built on one-behavior-field patterns, including
+  // scrapper's Shoulderfire ghost lane and Singularity's delayed nova blast.
   | "cleaver" | "scrapper" | "skipper" | "arcbolt" | "cryobolt" | "firebomb" | "tracker"
   | "singularity"
   | "mooring_nail" | "sluicegate" | "oddsmaker" | "pathmaker"
@@ -657,6 +656,7 @@ export interface Bullet {
   lampLit?: boolean;        // lamplighter: latched once the lit-path threshold is crossed
   isFaultPrimary?: boolean; // faultlink: a primary round that marks the body it hits
   isFaultEcho?: boolean;    // faultlink: a shared echo round (no crit/status/proc/recurse)
+  isGhostLane?: boolean;
   isSideChannelGhost?: boolean;
   // Elemental status a bullet stamps on the enemy it hits (see applyBulletStatuses).
   // Undefined on plain rounds; the value is the status duration in seconds.

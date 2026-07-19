@@ -88,7 +88,7 @@ export type CoverageKind =
   | "ARTILLERY" | "TRAP" | "ORBIT" | "TURRET" | "TETHER" | "GROUND"
   | "GRAPPLE" | "MODESHIFT" | "GAMBLE" | "PAVE"
   | "TUNE" | "REWRITE" | "COPY" | "FLANK"
-  | "STANCE" | "PARRY" | "RELIGHT" | "LINK";
+  | "STANCE" | "PARRY" | "RELIGHT" | "LINK" | "GHOST LANE";
 
 export interface WeaponCoverage {
   kind: CoverageKind;
@@ -131,6 +131,7 @@ function roleOf(w: Weapon): string {
   if (w.parry !== undefined) return "PARRY AND RETURN";
   if (w.relight !== undefined) return "RELIGHT THE ROOM";
   if (w.faultlink !== undefined) return "LINK AND SHARE";
+  if (w.ghostLane !== undefined) return "STEER A SECOND LANE";
   if (w.paint?.isPaving === true) return "CLEANSE AND PAVE";
   if (w.paint !== undefined) return "CUT THE ROOM IN TWO";
   if (w.lowHpBonus !== undefined) return "TRADE SAFETY FOR THE KILL";
@@ -204,6 +205,7 @@ function coverageOf(w: Weapon, pellets: number, spread: number): WeaponCoverage 
   if (w.parry !== undefined) return { kind: "PARRY", patternOrder: null };
   if (w.relight !== undefined) return { kind: "RELIGHT", patternOrder: null };
   if (w.faultlink !== undefined) return { kind: "LINK", patternOrder: null };
+  if (w.ghostLane !== undefined) return { kind: "GHOST LANE", patternOrder: null };
   if (w.paint?.isPaving === true) return { kind: "PAVE", patternOrder: null };
   if (w.paint !== undefined) return { kind: "GROUND", patternOrder: null };
   if (w.blast !== undefined) return { kind: "AREA", patternOrder: null };
@@ -248,6 +250,7 @@ function mechanicsOf(w: Weapon, mods: PlayerMods): WeaponMechanic[] {
   if (w.parry !== undefined) m.push({ tag: "PARRY", text: "A FRONTAL WINDOW CATCHES A SHOT TO RETURN", mag: w.parry.returnCoef });
   if (w.relight !== undefined) m.push({ tag: "RELIGHT", text: "A LIT SHOT PIERCES AND PLANTS A SAFE PATCH", mag: w.relight.patchRadius });
   if (w.faultlink !== undefined) m.push({ tag: "LINK", text: "MARKS TWO BODIES AND ECHOES DAMAGE BETWEEN", mag: w.faultlink.range });
+  if (w.ghostLane !== undefined) m.push({ tag: "GHOST LANE", text: "A STRAIGHT GHOST FIRES 80° TO ONE SIDE OF AIM", mag: w.ghostLane.aimOffset });
   if (w.paint?.isPaving === true) m.push({ tag: "PAVE", text: "CLEARS HOSTILE GROUND; PAVES FLOOR HAZARDS", mag: w.paint.radius });
   if (w.melee?.isThrust) m.push({ tag: "THRUST", text: "PIERCING THRUST", mag: 1 });
   if (w.chain !== undefined) m.push({ tag: "CHAIN", text: `CHAINS TO ${w.chain} MORE`, mag: w.chain });
@@ -293,13 +296,17 @@ export function expectedBossDps(
   const burnDot = mods.burnChance > 0 ? 3 : 0;
   const perProjectile = w.damage * mods.damageMult * wepCoef * vuln;
   const primaryDps = perProjectile * effPellets * rate * POWER.practicalFactor;
+  const ghostLaneDps = w.ghostLane === undefined
+    ? 0
+    : w.damage * mods.damageMult * wepCoef
+      * w.ghostLane.damageMult * rate * POWER.practicalFactor;
   const hasSideChannel = isSideChannelProjectileWeapon(id)
     && mods.sideChannelBossDamageMult > 0
     && mods.sideChannelIcd > 0;
   const ghostRate = hasSideChannel ? Math.min(rate, 1 / mods.sideChannelIcd) : 0;
   const ghostDps = w.damage * mods.damageMult * wepCoef
     * mods.sideChannelBossDamageMult * ghostRate * POWER.practicalFactor;
-  return primaryDps + ghostDps + burnDot;
+  return primaryDps + ghostLaneDps + ghostDps + burnDot;
 }
 
 export function weaponDisplayStats(id: WeaponId, mods: PlayerMods, lowHp: number): WeaponDisplayStats {
