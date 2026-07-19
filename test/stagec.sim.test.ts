@@ -573,7 +573,7 @@ function blessingSafetyTests(): void {
   section("blessing safety: a player mid-pick is paused and cannot be damaged");
   {
     const w = createWorld(0xB1E55, 1, { isShared: true, skipLocalPlayer: true });
-    const { a, b } = partyAtExit(w);
+    const { a } = partyAtExit(w);
     const ev: SimEvent[] = [];
     stepWorldPhase(w, DT, ev);
     check("offers raised at the cleared exit", ev.filter((e) => e.t === "offerBlessing").length === 2);
@@ -621,7 +621,7 @@ function blessingSafetyTests(): void {
   section("blessing safety: the boss chest offers EVERY member a Rare pick, all holding the descend");
   {
     const w = createWorld(0xB1E58, 5, { isShared: true, skipLocalPlayer: true });
-    const { a } = partyAtExit(w);
+    const { a, b } = partyAtExit(w);
     // The encounter snapshot the floor would carry had it been built with both present
     // (P is snapshotted at floor build; these harness worlds spawn after createWorld).
     w.encounterPlayers = 2;
