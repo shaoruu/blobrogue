@@ -48,7 +48,7 @@ import type { OnlineExitReason, OnlinePhase } from "../ui/onlineCopy.js";
 import { applyItemToWorld, chooseBlessingInWorld, dismissBlessingOfferInWorld, applyMaxHpBonus, loadFloorIntoWorld, descend, devSpawnEnemy, devSpawnProp, devSpawnChest, acquireWeaponInWorld, isFloorCleared, isPvp, navDebugField, workerBuildSites, nearestShopSlot, isPlayerInCombat, rollBlessingChoicesInWorld, setPlayerKit, effectiveReviveRadius, effectiveReviveRate, grapplePreview, resolveWarmthDrain, spawnPlayerInWorld } from "../sim/world.js";
 import type { WorldState, PlayerSim, MeleeSwing, RemoteTarget } from "../sim/world.js";
 import { ULT, isRealKit, canCastUlt, KIT_META, MOMENTUM, OVERSHIELD, HEAL_PULSE, LIFEBLOOM } from "../sim/kits.js";
-import { PET_ABILITY, petVerbFor, petCooldownTicks } from "../sim/petAbilities.js";
+import { PET_ABILITY, petVerbFor } from "../sim/petAbilities.js";
 import type { PetVerb } from "../sim/petAbilities.js";
 import type { KitId } from "../sim/kits.js";
 import { UltCueTracker, isFlyingMoteSource, isPassiveMeterPulse } from "./ultCue.js";
@@ -5431,7 +5431,7 @@ export class Game {
     this.renderWorldLabels();
     this.renderInteractPrompt(); // world-anchored [E] chip over the interact target (item 6)
     this.renderUltReadyNudge();  // one-time "[F] <ULT> READY" chip over the player
-    this.renderPetAbilityCue();  // PROTOCOL 45: pet ability tell ring + CD pip over the player
+    this.renderPetAbilityCue();  // PROTOCOL 45: pet ability cast cues over the player
     ctx.restore();
     this.renderBiomeVignette();
     this.screenFlash.render(ctx, canvas.width, canvas.height);
@@ -6939,11 +6939,11 @@ export class Game {
   }
 
   // The minimal PET ABILITY cue (PROTOCOL 46): a world-anchored tell ring over the local player
-  // while the 0.30s wind-up plays, the verb's active-effect ring while a window is live (the FETCH
-  // pull radius, the PEBBLEBRACE brace bubble, the NULLWAKE shimmer), and a small CD arc under the
-  // player. All read purely off the reconciled SelfWire timers, so it is reconnect-safe and never
-  // diverges from the authoritative ability state. Per-verb effects that live on OTHER bodies (the
-  // STALK pip, the SLIMETRAIL patch) render in their own passes off the enemy/hazard wires.
+  // while the 0.30s wind-up plays and the verb's active-effect ring while a window is live (the
+  // FETCH pull radius, the PEBBLEBRACE brace bubble, the NULLWAKE shimmer). All read purely off the
+  // reconciled SelfWire timers, so it is reconnect-safe and never diverges from the authoritative
+  // ability state. Per-verb effects that live on OTHER bodies (the STALK pip, the SLIMETRAIL patch)
+  // render in their own passes off the enemy/hazard wires.
   private petVerbColor(verb: PetVerb): string {
     switch (verb) {
       case "fetch": return "#ffd166";
@@ -7021,19 +7021,6 @@ export class Game {
       ctx.arc(sx, sy, this.pr + 12, 0, Math.PI * 2);
       ctx.stroke();
       ctx.setLineDash([]);
-      ctx.restore();
-    }
-    // CD pip: a small arc under the player that empties as the cooldown clears.
-    const cd = Math.max(0, Math.min(1, (p.petCdReadyAtTick - this.kitHudTick()) / petCooldownTicks(verb)));
-    if (cd > 0 && p.petTellT <= 0) {
-      const start = -Math.PI / 2;
-      ctx.save();
-      ctx.globalAlpha = 0.85;
-      ctx.strokeStyle = color;
-      ctx.lineWidth = 3;
-      ctx.beginPath();
-      ctx.arc(sx, sy + 30, 8, start, start + Math.PI * 2 * (1 - cd));
-      ctx.stroke();
       ctx.restore();
     }
   }
