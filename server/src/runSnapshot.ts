@@ -2,7 +2,7 @@ import { mkdirSync, readFileSync, readdirSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 
 import type { AuthoritativePlayerSnapshot } from "../../src/net/playerSnapshot.js";
-import { isValidWorldId } from "../../src/net/worldId.js";
+import { isPvpWorldId, isValidWorldId } from "../../src/net/worldId.js";
 import type { BlessingOfferHistory, WeaponOfferHistory } from "../../src/sim/offerHistory.js";
 import type { PlayerId } from "../../src/sim/input.js";
 import type { WeaponBag } from "../../src/sim/weaponBag.js";
@@ -131,6 +131,7 @@ function isRunSnapshot(value: RunSnapshot): boolean {
   if (value.version !== 1
     || value.fidelity !== RUN_SNAPSHOT_FIDELITY
     || !isValidWorldId(value.worldId)
+    || isPvpWorldId(value.worldId)
     || !Number.isSafeInteger(value.seed)
     || !Number.isSafeInteger(value.floor)
     || value.floor < 1
