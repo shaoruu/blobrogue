@@ -54,7 +54,7 @@ interface ArenaHitPulse {
   isActive: boolean;
 }
 
-export type ArenaUltMoment = "salvo" | "triage" | "shoveShatter" | "slip";
+export type ArenaUltMoment = "salvo" | "triage" | "shoveShatter" | "slip" | "slipLanding";
 export type ArenaUltMomentHandler = (cast: ArenaUltCastView, moment: ArenaUltMoment) => void;
 
 function createCast(): ArenaUltCast {
@@ -144,6 +144,10 @@ export class ArenaUltVfx {
     return this.castCount;
   }
 
+  activeTime(): number {
+    return this.castCount === 0 ? -1 : this.casts[this.castCount - 1].t;
+  }
+
   spawn(
     pid: PlayerId,
     kind: ArenaUltKind,
@@ -196,6 +200,12 @@ export class ArenaUltVfx {
         && previous < cast.tell + ARENA_SHOVE.wallLifeSec
         && cast.t >= cast.tell + ARENA_SHOVE.wallLifeSec) {
         this.shatter(cast, onMoment);
+      }
+      if (cast.kind === "slip") {
+        const landStart = cast.tell + ARENA_SLIP.iframeSec;
+        if (previous < landStart && cast.t >= landStart) {
+          onMoment(cast, "slipLanding");
+        }
       }
       if (cast.t < castEnd(cast)) {
         const slot = this.casts[live];

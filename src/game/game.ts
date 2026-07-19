@@ -2625,7 +2625,9 @@ export class Game {
         this.flashScreen(234, 243, 255, 0.12, 4.2);
         break;
       }
-      case "slip": {
+      case "slip":
+      case "slipLanding": {
+        const isLanding = moment === "slipLanding";
         const remote = cast.isLocal
           ? null
           : this.remotes().find((candidate) => candidate.playerId === cast.pid) ?? null;
@@ -2641,12 +2643,12 @@ export class Game {
             x: cast.x + Math.cos(cast.aim) * ARENA_SLIP.blinkPx * k,
             y: cast.y + Math.sin(cast.aim) * ARENA_SLIP.blinkPx * k,
             facing,
-            t: i * 0.08,
+            t: isLanding ? 0.5 + i * 0.1 : i * 0.08,
             color: ARENA_ULT_HUE.slip,
             base,
           });
         }
-        this.arenaBurstTrauma += cast.isLocal ? 0.12 : 0.05;
+        if (!isLanding) this.arenaBurstTrauma += cast.isLocal ? 0.12 : 0.05;
         break;
       }
     }
@@ -11165,6 +11167,10 @@ export class Game {
 
   devArenaUltFxCount(): number {
     return this.arenaUltVfx.activeCount();
+  }
+
+  devArenaUltFxTime(): number {
+    return this.arenaUltVfx.activeTime();
   }
 
   devArenaUltEventCount(): number {

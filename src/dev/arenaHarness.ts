@@ -49,6 +49,7 @@ interface ArenaDebug {
   ultArena: string;
   ultT: number;
   ultFx: number;
+  ultFxT: number;
   ultEvents: number;
 }
 
@@ -161,6 +162,7 @@ class ArenaHarness {
   private ultEvent: WireEvent | null = null;
   private ultEventsAtSceneStart = 0;
   private isUltEventPending = false;
+  private nextUltReplayTick = 0;
   private scene: ArenaScene = "live-hearth";
   private lastSnap: ServerMsg | null = null;
   isReady = false;
@@ -233,6 +235,7 @@ class ArenaHarness {
     this.ultEvent = null;
     this.ultEventsAtSceneStart = this.game.devArenaUltEventCount();
     this.isUltEventPending = scene.startsWith("live-ult-");
+    this.nextUltReplayTick = 0;
     this.isReady = false;
     idleWeather(world);
     const hc = this.hearth();
@@ -367,6 +370,16 @@ class ArenaHarness {
     };
   }
 
+  private ultReplayTicks(): number {
+    switch (this.scene) {
+      case "live-ult-salvo": return 20;
+      case "live-ult-triage": return 22;
+      case "live-ult-shove": return 35;
+      case "live-ult-slip": return 24;
+      default: return 0;
+    }
+  }
+
   private deliver(): void {
     const socket = HarnessSocket.latest;
     if (socket === null) return;
@@ -390,7 +403,7 @@ class ArenaHarness {
     if (snap === null || snap.t !== "snap") {
       return {
         hazards: [], wk: "", wp: "", wd: 0, hc: false, auk: "",
-        ultArena: "", ultT: 0, ultFx: 0, ultEvents: 0,
+        ultArena: "", ultT: 0, ultFx: 0, ultFxT: -1, ultEvents: 0,
       };
     }
     const ultEvent = snap.events.find((event) => event.e.t === "ultArena");
@@ -411,6 +424,7 @@ class ArenaHarness {
       ultArena,
       ultT,
       ultFx: this.game.devArenaUltFxCount(),
+      ultFxT: this.game.devArenaUltFxTime(),
       ultEvents: this.game.devArenaUltEventCount(),
     };
   }
@@ -426,6 +440,13 @@ class ArenaHarness {
     if (this.isUltEventPending && this.game.devIsWorldReady()) {
       this.ultEvent = this.buildArenaUltEvent();
       this.isUltEventPending = false;
+      this.nextUltReplayTick = this.world.tick + this.ultReplayTicks();
+    } else if (this.ultEvent !== null
+      && this.game.devArenaUltEventCount() > this.ultEventsAtSceneStart
+      && this.world.tick >= this.nextUltReplayTick) {
+      this.ultEventsAtSceneStart = this.game.devArenaUltEventCount();
+      this.ultEvent = this.buildArenaUltEvent();
+      this.nextUltReplayTick = this.world.tick + this.ultReplayTicks();
     }
     this.deliver();
   }
