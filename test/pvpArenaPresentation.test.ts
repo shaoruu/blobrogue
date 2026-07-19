@@ -41,6 +41,8 @@ interface ArenaGameAccess {
   renderMinimap(): void;
   checkFloorCleared(): void;
   exitWaitLabel(): string | null;
+  devArenaUltFxCount(): number;
+  devArenaUltEventCount(): number;
   stop(): void;
 }
 
@@ -276,6 +278,25 @@ async function main(): Promise<void> {
   game.renderRemotePlayers();
   const hudState = currentHudState();
   check("authoritative world identity selects arena presentation", game.isArena && hudState.isArena);
+  world.tick++;
+  socket.deliver(buildSnapshot(world, "p1", 0, [{
+    id: 1,
+    e: {
+      t: "ultArena",
+      pid: "p2",
+      kind: "shove",
+      x: rival.x,
+      y: rival.y,
+      aim: Math.PI,
+      tellTicks: 8,
+    },
+  }], 1, true, {
+    worldId: "pvp:room:ABCD",
+    roster,
+  }));
+  game.tick(FIXED_DT);
+  check("remote arena ult events survive the positional client filter",
+    game.devArenaUltEventCount() === 1 && game.devArenaUltFxCount() === 1);
   check("HUD phase, timer, score, and roster names come from the latest match snapshot",
     hudState.arenaMatch?.phase === "live"
     && hudState.arenaMatch.secondsLeft === 299

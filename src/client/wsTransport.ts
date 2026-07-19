@@ -167,7 +167,7 @@ function pidOf(e: SimEvent): PlayerId | undefined {
 // and pass anyway; the local player's own copies still play exactly once (deduped by id).
 const REMOTE_AUDIBLE_EVENTS: ReadonlySet<SimEvent["t"]> = new Set<SimEvent["t"]>([
   "shot", "meleeSwing", "playerHurt", "heal", "pickup", "pvpShieldBreak",
-  "grappleResolved", "blessingProc", "reviveHandoff",
+  "grappleResolved", "blessingProc", "reviveHandoff", "ultArena",
 ]);
 
 export class WSTransport implements Transport {

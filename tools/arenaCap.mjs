@@ -27,10 +27,10 @@ const SCENES = [
   "live-ult-slip",
 ];
 const ULT_SCENES = new Map([
-  ["live-ult-salvo", { auk: "gunner", kind: "salvo" }],
-  ["live-ult-triage", { auk: "mender", kind: "triage" }],
-  ["live-ult-shove", { auk: "bulwark", kind: "shove" }],
-  ["live-ult-slip", { auk: "phantom", kind: "slip" }],
+  ["live-ult-salvo", { auk: "gunner", kind: "salvo", minT: 0.48, maxT: 0.58 }],
+  ["live-ult-triage", { auk: "mender", kind: "triage", minT: 0.45, maxT: 0.54 }],
+  ["live-ult-shove", { auk: "bulwark", kind: "shove", minT: 0.58, maxT: 0.70 }],
+  ["live-ult-slip", { auk: "phantom", kind: "slip", minT: 0.82, maxT: 0.90 }],
 ]);
 const CHROME = "/usr/bin/google-chrome";
 
@@ -94,17 +94,34 @@ async function main() {
         null,
         { timeout: 30000 },
       );
-      // Sprites, the reveal veil lifting, and the first animated frames settling.
-      await page.waitForTimeout(2600);
+      const expectedUlt = ULT_SCENES.get(scene);
+      if (expectedUlt === undefined) {
+        await page.waitForTimeout(2600);
+      } else {
+        await page.waitForFunction(
+          ({ auk, kind, minT, maxT }) => {
+            const debug = window.__arena?.debug();
+            return debug !== undefined
+              && debug.auk === auk
+              && debug.ultArena === kind
+              && debug.ultFx > 0
+              && debug.ultFxT >= minT
+              && debug.ultFxT <= maxT;
+          },
+          expectedUlt,
+          { timeout: 30000 },
+        );
+      }
       const active = await page.evaluate(() => window.__arena.currentScene());
       if (active !== scene) throw new Error(`scene mismatch: asked ${scene}, got ${active}`);
-      const expectedUlt = ULT_SCENES.get(scene);
       if (expectedUlt !== undefined) {
         const debug = await page.evaluate(() => window.__arena.debug());
-        if (debug.auk !== expectedUlt.auk || debug.ultArena !== expectedUlt.kind || debug.ultT <= 0) {
+        if (debug.auk !== expectedUlt.auk || debug.ultArena !== expectedUlt.kind
+          || debug.ultT <= 0 || debug.ultFx <= 0
+          || debug.ultFxT < expectedUlt.minT || debug.ultFxT > expectedUlt.maxT) {
           throw new Error(`ult state mismatch for ${scene}: ${JSON.stringify(debug)}`);
         }
-        console.log(`  [${scene}] auk=${debug.auk} ultArena=${debug.ultArena} ultT=${debug.ultT}`);
+        console.log(`  [${scene}] auk=${debug.auk} ultArena=${debug.ultArena} ultT=${debug.ultT} ultFx=${debug.ultFx} ultFxT=${debug.ultFxT.toFixed(3)}`);
       }
       const wave = scene.startsWith("live-ult-") ? "wave3" : "wave2";
       const path = join(OUT_DIR, `${wave}-${scene}.png`);
