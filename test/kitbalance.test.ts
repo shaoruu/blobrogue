@@ -483,10 +483,14 @@ function measurePulsePlusPassives(menderCount: number, windowSeconds: number): {
   const menders: PlayerSim[] = [];
   for (let i = 0; i < menderCount; i++) { const id = `m${i}`; spawnPlayerInWorld(w, id); setPlayerKit(w, id, "mender"); menders.push(w.players.get(id)!); }
   const anchor = menders[0];
+  const anchorX = anchor.x, anchorY = anchor.y;
   const victim = spawnPlayerInWorld(w, "t");
   victim.maxHp = 4000; victim.hp = 2000; // deep pool held mid-bar so every heal lands (never overheal)
-  for (const m of menders) { m.x = anchor.x; m.y = anchor.y; }
-  victim.x = anchor.x + 20; victim.y = anchor.y; // to the +x of every Mender (under the aim reticle)
+  for (let i = 0; i < menders.length; i++) {
+    menders[i].x = anchorX;
+    menders[i].y = anchorY + (i - (menders.length - 1) / 2) * 20;
+  }
+  victim.x = anchorX + 30; victim.y = anchorY; // under every Mender's +x reticle; other Menders are outside the cone
   for (const m of menders) { m.ultCharge = ULT.meterMax; m.ultReadyAtTick = 0; }
   tick(w, (p) => ({ ...idleCmd(), ult: menders.indexOf(p) !== -1 })); // drop Sanctuary once (burst excluded below)
   const ticks = Math.round(windowSeconds * TICKS_PER_SECOND);
@@ -495,14 +499,11 @@ function measurePulsePlusPassives(menderCount: number, windowSeconds: number): {
   for (let t = 0; t < ticks; t++) {
     for (const m of menders) m.passiveState = LIFEBLOOM.poolCap; // pin Lifebloom credit full (worst case)
     const prePartyHp = partyHp(w);
-    // Every Mender holds the pulse (aim +x toward the victim) AND re-drops Sanctuary as it lapses.
+    // Every Mender holds the pulse, aimed +x toward the victim.
     tick(w, (p) => {
       const isMender = menders.indexOf(p) !== -1;
-      const wantUlt = isMender && p.ultReadyAtTick <= w.tick && p.ultCharge >= ULT.meterMax;
-      return { ...idleCmd(), aim: 0, pulse: isMender, ult: wantUlt };
+      return { ...idleCmd(), aim: 0, pulse: isMender };
     });
-    // Keep every Mender's meter topped so Sanctuary re-drops (sustained worst case).
-    for (const m of menders) if (m.ultReadyAtTick <= w.tick) m.ultCharge = ULT.meterMax;
     party += Math.max(0, partyHp(w) - prePartyHp);
   }
   const seconds = ticks / TICKS_PER_SECOND;
