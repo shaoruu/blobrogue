@@ -1726,12 +1726,12 @@ function isSelfHealDelayed(w: WorldState, p: PlayerSim): boolean {
 // 0.4 HP/s ceiling realizes 0.25 HP/s from Lifebloom alone and throttles stacked self output.
 const SELF_HEAL_TICKS_PER_HP = Math.ceil(TICKS_PER_SECOND / MENDER_HEAL_CLAMP.selfHpPerSec);
 
-function advanceIncomingHealWindow(window: { tick: number; hp: number }, now: number, hpPerSecond: number): { tick: number; hp: number } {
-  const elapsedWindows = Math.floor((now - window.tick) / TICKS_PER_SECOND);
-  if (elapsedWindows <= 0) return window;
+function advanceIncomingHealWindow(healWindow: { tick: number; hp: number }, now: number, hpPerSecond: number): { tick: number; hp: number } {
+  const elapsedWindows = Math.floor((now - healWindow.tick) / TICKS_PER_SECOND);
+  if (elapsedWindows <= 0) return healWindow;
   return {
-    tick: window.tick + elapsedWindows * TICKS_PER_SECOND,
-    hp: Math.max(0, window.hp - elapsedWindows * hpPerSecond),
+    tick: healWindow.tick + elapsedWindows * TICKS_PER_SECOND,
+    hp: Math.max(0, healWindow.hp - elapsedWindows * hpPerSecond),
   };
 }
 
