@@ -456,6 +456,8 @@ export const CHEST_LOOT_WALL_MARGIN = 10;
 // Weapon pickup collision matches the ±19px floor sprite: with the 18px player body,
 // center distances below 38px collect.
 export const WEAPON_PICKUP_RADIUS = 20;
+// Boss rewards are choice pedestals, so they retain the narrower walk-up claim range.
+export const BOSS_CHOICE_CLAIM_RADIUS = 16;
 // Player weapon drop (Q / inventory UI): candidate rings around the dropper, preferred
 // toward the aim direction. The inner radius sits beyond pickup range (18 + 20 = 38), so
 // a stationary dropper never instantly re-collects the drop.

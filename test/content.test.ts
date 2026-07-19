@@ -891,15 +891,23 @@ function curriculumTests(): void {
     check("the final clear drops the premium boss chest with the gauntlet signature",
       isFloorCleared(w) && w.chests.some((c) => c.kind === "boss" && c.weapon === GAUNTLET.chestWeapon));
 
-    // The premium chest behaves like every boss chest: choices plus a rare offer. From the
-    // exact chest center, the nearest choice at 36px is inside the visual pickup footprint.
+    // The premium chest behaves like every boss chest: choices plus a rare offer.
     const chest = w.chests.find((c) => c.kind === "boss")!;
     const p = w.players.get(LOCAL_ID)!;
     p.x = chest.x; p.y = chest.y;
     const evs = step(w, idle(9999));
-    check("opening it raises the rare blessing offer and collects the nearest boss choice at 36px",
+    const choices = w.pickups.filter((k) => k.isBossChoice);
+    check("opening it raises the rare blessing offer without auto-claiming a 36px boss choice",
       evs.some((e) => e.t === "offerBlessing" && e.rare)
-      && evs.some((e) => e.t === "pickup" && e.kind === "weapon")
+      && !evs.some((e) => e.t === "pickup" && e.kind === "weapon")
+      && !p.hasClaimedBossChoice
+      && choices.length === bossWeaponChoices(1)
+      && choices.some((k) => k.weapon === GAUNTLET.chestWeapon));
+    const signature = choices.find((k) => k.weapon === GAUNTLET.chestWeapon)!;
+    p.x = signature.x; p.y = signature.y;
+    const claimEvents = step(w, idle(10000));
+    check("walking onto the chosen pedestal claims it",
+      claimEvents.some((e) => e.t === "pickup" && e.kind === "weapon")
       && p.hasClaimedBossChoice
       && p.ownedWeapons.includes(GAUNTLET.chestWeapon)
       && !w.pickups.some((k) => k.isBossChoice));

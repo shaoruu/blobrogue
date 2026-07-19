@@ -261,6 +261,23 @@ function weaponPickupRangeTests(): void {
     p.ownedWeapons.includes("flamer") && !w.pickups.some((q) => q.id === pkId));
 }
 
+function bossChoicePickupRangeTests(): void {
+  section("boss-choice pedestals require a deliberate walk-up");
+  const { w, p } = sharedWorld();
+  const pickupX = p.x + 36;
+  const pkId = dropPickup(w, pickupX, p.y, "flamer", true);
+  const inputs = new Map<PlayerId, InputCmd>([[p.id, IDLE_INPUT]]);
+
+  stepWorld(w, inputs, 1 / 60);
+  check("a boss choice at the chest's 36px eject radius is not auto-claimed",
+    !p.hasClaimedBossChoice && !p.ownedWeapons.includes("flamer") && w.pickups.some((q) => q.id === pkId));
+
+  p.x = pickupX;
+  stepWorld(w, inputs, 1 / 60);
+  check("walking onto that pedestal claims it through the boss-choice path",
+    p.hasClaimedBossChoice && p.ownedWeapons.includes("flamer"));
+}
+
 // Enough distinct non-pistol ids to fill any sane cap (players start with the pistol).
 const FILLERS: WeaponId[] = ["shotgun", "railgun", "tesla", "smg", "cannon", "rapid", "burst", "homing"];
 
@@ -567,6 +584,7 @@ function main(): void {
   dropPlacementTests();
   dropCollectionTests();
   weaponPickupRangeTests();
+  bossChoicePickupRangeTests();
   capTests();
   duplicatePickupTests();
   swapTests();
