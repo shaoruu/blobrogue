@@ -588,6 +588,13 @@ export const ELITE_COST_CAP = 6;
 // total enemy threat can never exceed today's curve.
 export const AFFIX_THREAT_SURCHARGE = 1.0;
 
+// Single source of truth for the post-F30 "Unmaking / uniform randomness" threshold: the first
+// floor at which THE UNMAKING's byte-stable legacy behavior turns on. Lives here (a leaf module
+// that imports neither enemies nor floorRolls) so both can reference it without an import cycle;
+// floorRolls.ts re-exports it under its historical name RANDOMNESS_MIN_FLOOR. Pre-#244 balance
+// levers (e.g. AFFIX_THREAT_SURCHARGE) scope strictly below this so shipped F31+ tuning is frozen.
+export const DEEP_FLOOR_MIN = 31;
+
 // ---- the bestiary balance envelope (roster capacity, cadence, composition, pacing) ----
 // The governance layer over ALL bestiary growth. Numbers here are the contract the
 // planner enforces at build time and test/envelope.test.ts regresses seeded; the

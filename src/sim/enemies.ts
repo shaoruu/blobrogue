@@ -14,7 +14,7 @@ import {
   coopMobHpMult, coopBossHpMult, coopThreatMult, coopKbResistMult,
   MAX_COMPLEX_PER_ROOM, BRUTE_ELITE_COMBO_FLOOR,
   MAX_BURROWERS_PER_ROOM, MAX_SHIELDERS_PER_ROOM, MAX_WORKERS_PER_ROOM,
-  FLOCK_THREAT_SHARE_MAX, ROLL_AFFIX, AFFIX_THREAT_SURCHARGE,
+  FLOCK_THREAT_SHARE_MAX, ROLL_AFFIX, AFFIX_THREAT_SURCHARGE, DEEP_FLOOR_MIN,
 } from "./balance.js";
 import type { EnemyTier, EliteAffix } from "./balance.js";
 // Type-only (erased at runtime, so no import cycle with floorRolls, which imports isBossFloor
@@ -1290,7 +1290,9 @@ function planFloorUnits(rng: Rng, dungeon: Dungeon, seed: number, floor: number,
     // walk); an ordinal that rolled an affix pays the budget surcharge when it lands.
     let eliteOrdinal = 0;
     for (let i = 0; i < elites; i++) {
-      const surcharge = isEliteAffixed(eliteOrdinal) ? AFFIX_THREAT_SURCHARGE : 0;
+      // Pre-F30 ONLY: the surcharge is a pre-#244 budget lever, so it must never retune the
+      // already-shipped post-F30 "Unmaking" balance (F31+ stays byte-stable with the pre-#244 curve).
+      const surcharge = (floor < DEEP_FLOOR_MIN && isEliteAffixed(eliteOrdinal)) ? AFFIX_THREAT_SURCHARGE : 0;
       // Up to three rolls: an elite of a complex family needs a room playing its card.
       let placed = false;
       for (let roll = 0; roll < 3 && !placed; roll++) placed = add(weightedPick(rng, roster), "elite", surcharge);

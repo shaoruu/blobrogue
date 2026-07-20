@@ -17,6 +17,7 @@
 // new SYSTEMS still APPEND to the roll-order contract so stored seeds stay stable.
 
 import { RollStream, ROLL_ORDER, rollStream } from "./streams.js";
+import { DEEP_FLOOR_MIN } from "./balance.js";
 import type { RollStreamId } from "./streams.js";
 import type { FloorHazardKind } from "./types.js";
 import { isBossFloor, isMinibossFloor } from "./enemies.js";
@@ -34,7 +35,9 @@ export const FLOOR_CAPS = {
 // the SAME machinery on with a fairness ramp (PRE_F30_LEVEL_VARIETY: per-lever eligibility floors,
 // a floor-keyed roll-probability table, calm gates, and a per-band affix rate) — boss floors and
 // F1 still resolve to an empty descriptor.
-export const RANDOMNESS_MIN_FLOOR = 31;
+// Re-exported under its historical name; the value is owned by balance.ts (DEEP_FLOOR_MIN) so
+// enemies.ts can share the same threshold without a runtime import cycle through this module.
+export const RANDOMNESS_MIN_FLOOR = DEEP_FLOOR_MIN;
 
 // ---- PRE-F30 FAIRNESS RAMP (PRE_F30_LEVEL_VARIETY_NUMBERS.md §2-4) ----
 // Per-lever first-eligible floor (§3): a mutator is only in the bag when floor >= its first floor.
