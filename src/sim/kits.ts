@@ -179,22 +179,19 @@ export const SANCTUARY = {
 // §10 per-target SERVER-SIDE incoming-heal clamp: the ONE budget Lifebloom + Sanctuary (and any
 // number of Menders) share, so combined Mender output to one ally never exceeds perTargetHpPerSec
 // and party-wide never exceeds partyHpPerSec — regardless of Mender count. Overheal is discarded
-// on top. HP is integer, so a fractional per-second budget admits whole HP up to its floor.
+// on top. Fractional HP preserves sub-1 HP/s budgets without quantizing them to zero.
 //
 // SELF vs ALLY (balancer 2026-07-13): a Mender is a great healer OF OTHERS and a POOR
 // SELF-sustainer. TWO self-ONLY levers, and which does the work matters:
 //   PRIMARY — selfHealDelaySec: after the Mender takes a hit its OWN healing pauses this long. Solo
-//     Lifebloom self-heal is only ~0.5 HP/s, yet that still out-paced the player's ~0.3-0.5/s
-//     intake → permanent full. The 1.5s post-damage pause drops EFFECTIVE self-heal to ~0.13 HP/s
-//     during active combat (poked ~every 2s), so HP drifts DOWN in a fight and heals back only in a
-//     quiet 1.5s+ beat between fights. This is what restores tension.
+//     Lifebloom realizes ~0.25 HP/s through its source and ceiling cadences. The post-damage pause
+//     drops effective self-heal during active combat, so HP drifts down in a fight and heals back
+//     only in a quiet beat between fights.
 //   GUARD  — selfHpPerSec: the sustained SELF-heal CEILING, so a Mender can't park in its own
 //     Sanctuary + self-pulse to stack self-heal back above the delay's intent even when the delay
-//     is inactive. It admits Lifebloom's slower ~0.5 HP/s untouched and only caps STACKED self
-//     output. It is the guard, not the main effect.
-// ALLY healing is NEVER rate-reduced (perTargetHpPerSec / partyHpPerSec unchanged) and NEVER
-// delayed — a Mender under fire still instantly saves a teammate. LIFEBLOOM.fraction is untouched
-// (lowering it would weaken ALLY healing, which is not the problem).
+//     is inactive. It is the guard, not the main effect.
+// ALLY healing uses the separate per-target and party budgets and is NEVER delayed by damage to
+// the Mender.
 export const MENDER_HEAL_CLAMP = {
   perTargetHpPerSec: 0.9, // one ALLY: combined Mender HoT ≤ this — nerf 1.5->0.9 (balancer 2026-07-19): 1.5 fully negated sustained incoming on a duo partner (unkillable); 0.9 still heals a full bar in ~7-11s but can't out-pace focused fire
   partyHpPerSec: 3.0,     // whole party: combined Mender HoT ≤ this — unchanged
@@ -216,8 +213,8 @@ export const HEAL_PULSE = {
 
 export const LIFEBLOOM = {
   // Fraction of damage DEALT returned as heal credit to the lowest-HP ally in range (self if
-  // none). Credit accumulates in the per-kit passive channel and pays out in WHOLE HP on a
-  // capped cadence, so it never exceeds the heal/sec cap and HP stays integer (spec §2.2).
+  // none). Credit accumulates in the per-kit passive channel and pays out on a capped cadence,
+  // so it never exceeds the heal/sec cap (spec §2.2).
   fraction: 0.10,       // ~8-12% band
   poolCap: 4,           // never bank more than this much pending heal (anti-burst)
   healEveryTicks: 40, // balancer 2026-07-10: 40t = ≤0.5 HP/s passive (was 1/s, re-introduced cut sustain)

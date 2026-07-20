@@ -237,8 +237,8 @@ function sanctuaryTests(): void {
   // must always hold: HP only goes up (or holds) and never overheals past maxHp.
   const hpBeforeHot = ally.hp;
   for (let i = 0; i < SANCTUARY.lifetimeTicks + 5; i++) tick(w, () => idle());
-  check("the clamped HoT never overheals past maxHp and never drops the ally",
-    ally.hp >= hpBeforeHot && ally.hp <= ally.maxHp, `hp=${ally.hp}/${ally.maxHp}`);
+  check("the clamped HoT heals the ally without exceeding maxHp",
+    ally.hp > hpBeforeHot && ally.hp <= ally.maxHp, `hp=${ally.hp}/${ally.maxHp}`);
   check("the zone expired on its fixed lifetime", !w.effects.some((e) => e.kind === "sanctuary"));
   // A HoT never revives a downed ally (spec §7).
   const w2 = freshWorld();
@@ -331,13 +331,16 @@ function healClampTests(): void {
   // Both cast on the same tick.
   tick(w, (p) => ({ ...idle(), ult: p.id === "m1" || p.id === "m2" }));
   const afterBurst = ally.hp;
-  // Run 3 seconds of overlapping HoT; the sustained gain must track the per-target cap (≤ ~1
-  // whole HP/s from the combined Mender HoT), NOT 2 HP/s (which double-stacking would give).
+  // Run 3 seconds of overlapping HoT; the sustained gain must track the per-target cap,
+  // not the doubled source rate.
   const startHp = ally.hp;
   for (let i = 0; i < 60; i++) tick(w, () => idle());
   const hotGain = ally.hp - startHp;
   check("the on-cast burst still lands (Sanctuary keeps its signature)", afterBurst > 10);
-  check("3s of TWO overlapping Sanctuary HoTs heals at the clamped rate, not doubled", hotGain <= 4, `hotGain=${hotGain} (two-mender double-stack would be ~6)`);
+  const maxHotGain = MENDER_HEAL_CLAMP.perTargetHpPerSec * 3;
+  check("3s of TWO overlapping Sanctuary HoTs heals at the clamped rate, not doubled",
+    hotGain > 0 && hotGain <= maxHotGain + 1e-9,
+    `hotGain=${hotGain} (cap=${maxHotGain}, two-mender source rate would heal ~6)`);
 }
 
 function overdriveCeilingTests(): void {
