@@ -12,6 +12,22 @@ Visual patch notes with screenshots: [/changelog](/changelog) on the live site.
 - **PVP beyond the private arena:** public matchmaking is still switched off, and a Wave 3 siege / objective mode is still ahead — the private room-code arena's kit ultimates, ring-weather, and mid-match drafts have already shipped.
 - **Odds and ends still queued:** click-outside-to-close on the shop, a Thumper scorch decal, more music variety, and full run-persistence so a dropped connection resumes your run instead of losing it.
 
+## 2026-07-20
+- **The game fills your whole screen now:** on a big or high-res monitor the play area used to sit inside a black letterbox border. It now renders edge-to-edge at up to 4K, so you see more of the room and it stays pixel-crisp — no more bars around the game.
+- **Your ult tells you the moment it's ready:** the little "[F] <ULT> READY" tag that pops over your blob when your ultimate charges now re-appears every time it recharges, for all four kits — not just the first time in a run. A quick, easy-to-miss-free reminder that your big button is back.
+
+## 2026-07-19
+- **No more clipping through walls:** fixed a movement bug where you (or an enemy) could tunnel through a wall corner at the wrong moment. Collision is solid now, identically for everyone in co-op, so you can't accidentally slip out of a room or get shoved through geometry.
+- **You can pick up guns reliably again:** weapon pickup range was finicky and swapping weapons by number key didn't always take. Walking over a dropped gun now grabs it dependably, and keyboard weapon-swapping is snappy and consistent.
+- **Weapon switching doesn't scramble your hotbar:** changing weapons used to occasionally re-shuffle or blank the hotbar slots for a frame. The hotbar now holds its layout through a switch, so your slots stay put.
+- **Teammates' melee swings show up:** in co-op, other players' melee attacks weren't drawing on your screen — a blade would deal damage with no visible swing. Remote melee now animates for everyone, so you can actually see your friend cleaving.
+- **Split Shot is back (and Shoulderfire got reworked):** the projectile blessings (Split Shot and its Scattergun cousin) return in a tuned-down form, so a movement build via Side Channel isn't the only projectile option — Split Shot is a fair pick again, not a must-have. And the old twin-pellet Scrapper is now "Shoulderfire": instead of a plain spray it fires a straight ghost round 80° off to one side of your aim, rewarding deliberate aim rotation.
+- **Mender's team heal-over-time works again:** a bug had silently zeroed out the passive healing a Mender radiates to nearby allies (it was rounding down to nothing). Allies standing near a Mender now get their steady trickle of health back, exactly as intended — Mender's whole job as the team's sustain is restored.
+- **The Oddsmaker's gambles sound like what they roll:** the gamble gun's random payloads now each have their own audio — a ricochet ping, a seeker whoosh, a blast thud, a pierce zip — so you can hear which effect you rolled, not just see it.
+- **Sever won't stall mid-hunt:** on the F55 Sever fight, the boss could get stuck after an intercept window and stop hunting. It now correctly resumes the chase after each window, so the fight keeps flowing instead of hanging.
+- **Loot stops spawning on the exit:** treasure could drop right on top of the GO DOWN exit, so grabbing it and leaving the floor fought each other. Chests and pickups now keep clear of the exit tile.
+- **Bosses keep their signature weapons:** fixed a case where a boss's hand-picked weapon could get overwritten by a generic one — deliberate boss loadouts are preserved now.
+
 ## 2026-07-18
 - **Framerate protects itself now:** the game watches its own frame time, and if things get heavy in a busy fight it quietly dials back cosmetic detail (fewer particles, lighter effects) to hold a smooth framerate, then restores full detail once it clears. It never touches anything you need to see — boss tells, telegraphs, hazards, and the HUD always stay full. You shouldn't notice it working; you'll just stop noticing drops.
 - **Razor Halo won't tank your FPS in a crowd:** orbiting through a big pack of enemies used to fire off a burst of hit-effects on every blade contact and stutter the frame. Those contact effects now batch together, so a dense swarm stays smooth — the Halo hits exactly as hard, it just stops spamming the effects.
