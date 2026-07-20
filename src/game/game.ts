@@ -1237,9 +1237,10 @@ export class Game {
 
   private resize() {
     // Fill the whole viewport (camera-follow world, so more screen = more visible area).
-    // Cap at a sane max so a huge monitor doesn't blow out fill-rate, but no letterbox.
-    this.canvas.width = Math.min(window.innerWidth, 2560);
-    this.canvas.height = Math.min(window.innerHeight, 1440);
+    // Cap at 4K so a huge monitor doesn't blow out fill-rate, but no letterbox (adaptive
+    // FX quality is the safety net if frames dip at high res).
+    this.canvas.width = Math.min(window.innerWidth, 3840);
+    this.canvas.height = Math.min(window.innerHeight, 2160);
     // Nearest-neighbour sampling for the whole world raster: the tile pass draws scaled
     // pixel-art sprites off a deliberately fractional camera, and bilinear smoothing on
     // those samples the semi-transparent tile edges into 1px seams between floors/walls.
