@@ -274,7 +274,8 @@ const ULT_MOTE_ARC = 40;    // px of upward hump on the arc
 // The world-anchored "[F] <ULT> READY" nudge shown the FIRST time the ult is castable per run
 // (reuses the interact-prompt chip renderer) so a new player learns what F does. Seconds it
 // lingers over the player before fading.
-const ULT_READY_NUDGE_SECONDS = 2.6;
+const ULT_READY_NUDGE_SECONDS = 2.6;   // first ult-ready of a run: full teaching pop
+const ULT_READY_REPOP_SECONDS = 1.5;   // every later recharge: a shorter, non-nagging reminder
 // Kit accent hexes, mirroring the CSS --amber/--grn/--blu/--pur tokens (index.html :root): the
 // canvas-drawn charge motes carry the kit's color while the HUD chrome resolves the same accent
 // via --kit, so the two surfaces read as one identity.
@@ -978,8 +979,8 @@ export class Game {
   private ultChargePulsePrev = 0;
   private ultChargePulseClock = 0;
   private isUltCasting = false;           // the local player's own ult resolved this step
-  private hasShownUltReadyNudge = false;  // the one-time "[F] <ULT> READY" world nudge, per run
-  private ultReadyNudge: { verb: string; t: number } | null = null; // world-anchored, over the player
+  private hasShownUltReadyNudge = false;  // has the "[F] <ULT> READY" world nudge fired yet this run (first = full teaching pop, later recharges = shorter reminder)
+  private ultReadyNudge: { verb: string; t: number; dur: number } | null = null; // world-anchored, over the player
   // The world-anchored interact nudge, recomputed each tick (item 6): null when no interact
   // is available/in-range. Rendered as a floating [E] chip over the target of the verb.
   private interactPrompt: { x: number; y: number; verb: string; progress: number | null } | null = null;
@@ -1398,7 +1399,7 @@ export class Game {
     this.runFloorsCleared = 0;
     this.runBossKills.clear();
     this.devArenaUltEventsSeen = 0;
-    this.hasShownUltReadyNudge = false; // the "[F] <ULT> READY" world nudge shows once per RUN
+    this.hasShownUltReadyNudge = false; // the "[F] <ULT> READY" world nudge re-pops each recharge; first one is the full teaching length
     this.petRenders.clear();
     this.online = this.mode === "online" ? opts.online ?? null : null;
     this.spectateId = null;
@@ -4421,7 +4422,7 @@ export class Game {
     const isMoteLanded = this.updateUltMotes(dt);
     if (this.ultReadyNudge !== null) {
       this.ultReadyNudge.t += dt;
-      if (this.ultReadyNudge.t >= ULT_READY_NUDGE_SECONDS) this.ultReadyNudge = null;
+      if (this.ultReadyNudge.t >= this.ultReadyNudge.dur) this.ultReadyNudge = null;
     }
     const isCasting = this.isUltCasting;
     this.isUltCasting = false;
@@ -4481,10 +4482,13 @@ export class Game {
     sfx("levelup", { gain: 0.5 });
     this.flashScreen(255, 180, 59, 0.09, 2.2);
     this.hud.pulseUlt(); // the charge->ready "snap to solid + flash" on the (now solid) bar
-    if (!this.hasShownUltReadyNudge) {
-      this.hasShownUltReadyNudge = true;
-      this.ultReadyNudge = { verb: `${name.toUpperCase()} READY`, t: 0 };
-    }
+    // Re-pop the world chip on EVERY recharge (not just once/run): the HUD-corner meter is a
+    // blind spot mid-fight, so re-surface "<ULT> READY [F]" over the player each time it comes
+    // back up. First pop of the run is the full teaching length; later ones are a shorter,
+    // non-nagging reminder. Generic across kits (reads KIT_META[kit].ult).
+    const isFirst = !this.hasShownUltReadyNudge;
+    this.hasShownUltReadyNudge = true;
+    this.ultReadyNudge = { verb: `${name.toUpperCase()} READY`, t: 0, dur: isFirst ? ULT_READY_NUDGE_SECONDS : ULT_READY_REPOP_SECONDS };
   }
 
   private updateParticles(dt: number) {
@@ -6997,7 +7001,7 @@ export class Game {
   private renderUltReadyNudge() {
     const n = this.ultReadyNudge;
     if (n === null) return;
-    const k = n.t / ULT_READY_NUDGE_SECONDS; // 0..1
+    const k = n.t / n.dur; // 0..1
     const alpha = k < 0.15 ? k / 0.15 : k > 0.75 ? (1 - k) / 0.25 : 1;
     const sx = this.px - this.renderCam.x;
     const sy = this.py - this.renderCam.y - INTERACT_OFFSET_REVIVE;
