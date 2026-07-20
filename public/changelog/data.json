@@ -19,6 +19,72 @@
       ]
     },
     {
+      "version": "2026-07-20",
+      "date": "2026-07-20",
+      "entries": [
+        {
+          "title": "The game fills your whole screen now",
+          "body": "on a big or high-res monitor the play area used to sit inside a black letterbox border. It now renders edge-to-edge at up to 4K, so you see more of the room and it stays pixel-crisp — no more bars around the game."
+        },
+        {
+          "title": "Your ult tells you the moment it's ready",
+          "body": "the little \"[F] <ULT> READY\" tag that pops over your blob when your ultimate charges now re-appears every time it recharges, for all four kits — not just the first time in a run. A quick, easy-to-miss-free reminder that your big button is back."
+        }
+      ]
+    },
+    {
+      "version": "2026-07-19",
+      "date": "2026-07-19",
+      "entries": [
+        {
+          "title": "No more clipping through walls",
+          "body": "fixed a movement bug where you (or an enemy) could tunnel through a wall corner at the wrong moment. Collision is solid now, identically for everyone in co-op, so you can't accidentally slip out of a room or get shoved through geometry."
+        },
+        {
+          "title": "You can pick up guns reliably again",
+          "body": "weapon pickup range was finicky and swapping weapons by number key didn't always take. Walking over a dropped gun now grabs it dependably, and keyboard weapon-swapping is snappy and consistent."
+        },
+        {
+          "title": "Weapon switching doesn't scramble your hotbar",
+          "body": "changing weapons used to occasionally re-shuffle or blank the hotbar slots for a frame. The hotbar now holds its layout through a switch, so your slots stay put."
+        },
+        {
+          "title": "Teammates' melee swings show up",
+          "body": "in co-op, other players' melee attacks weren't drawing on your screen — a blade would deal damage with no visible swing. Remote melee now animates for everyone, so you can actually see your friend cleaving."
+        },
+        {
+          "title": "Split Shot is back (and Shoulderfire got reworked)",
+          "body": "the projectile blessings (Split Shot and its Scattergun cousin) return in a tuned-down form, so a movement build via Side Channel isn't the only projectile option — Split Shot is a fair pick again, not a must-have. And the old twin-pellet Scrapper is now \"Shoulderfire\": instead of a plain spray it fires a straight ghost round 80° off to one side of your aim, rewarding deliberate aim rotation.",
+          "media": [
+            "/sprites/weapon_scrapper.png"
+          ]
+        },
+        {
+          "title": "Mender's team heal-over-time works again",
+          "body": "a bug had silently zeroed out the passive healing a Mender radiates to nearby allies (it was rounding down to nothing). Allies standing near a Mender now get their steady trickle of health back, exactly as intended — Mender's whole job as the team's sustain is restored."
+        },
+        {
+          "title": "The Oddsmaker's gambles sound like what they roll",
+          "body": "the gamble gun's random payloads now each have their own audio — a ricochet ping, a seeker whoosh, a blast thud, a pierce zip — so you can hear which effect you rolled, not just see it.",
+          "media": [
+            "/sprites/weapon_oddsmaker.png"
+          ]
+        },
+        {
+          "title": "Sever won't stall mid-hunt",
+          "body": "on the F55 Sever fight, the boss could get stuck after an intercept window and stop hunting. It now correctly resumes the chase after each window, so the fight keeps flowing instead of hanging."
+        },
+        {
+          "title": "Loot stops spawning on the exit",
+          "body": "treasure could drop right on top of the GO DOWN exit, so grabbing it and leaving the floor fought each other. Chests and pickups now keep clear of the exit tile."
+        },
+        {
+          "title": "Bosses keep their signature weapons",
+          "body": "fixed a case where a boss's hand-picked weapon could get overwritten by a generic one — deliberate boss loadouts are preserved now."
+        }
+      ]
+    },
+    {
       "version": "2026-07-18",
       "date": "2026-07-18",
       "entries": [
