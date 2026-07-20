@@ -12,7 +12,7 @@ const DIST = "dist/assets";
 // ~268KB today; ceiling 340KB leaves ~25% growth room before it trips). The lazy game chunk
 // gets a loose ceiling just to catch a runaway, not to police normal content growth.
 const INITIAL_KB = 340;   // index-*.js + main-*.js (critical path)
-const LAZY_GAME_KB = 700; // game-*.js (loaded on run start)
+const LAZY_GAME_KB = 950; // game-*.js (loaded on run start) — raised 700->950 (2026-07-19): 8 days of Wave A/B/C content (bosses, guns, blessings, sprites) grew the LAZY chunk to ~759KB measured; critical-path (index+main) budget unchanged at 340KB and healthy. Headroom ~25% before it trips again.
 
 if (!existsSync(DIST)) {
   console.error(`bundle-budget: ${DIST} not found — run \`npm run build\` first`);
