@@ -39,6 +39,94 @@
     "projectedDensity": 0,
     "isDensityVetoed": false
   },
+  "1370090251|3|1": {
+    "floorIndex": 3,
+    "playerCountAtLock": 1,
+    "mutators": [],
+    "eliteAffixes": [],
+    "bossAffix": null,
+    "densityBudget": 4,
+    "projectedDensity": 0,
+    "isDensityVetoed": false
+  },
+  "1370090251|3|2": {
+    "floorIndex": 3,
+    "playerCountAtLock": 2,
+    "mutators": [],
+    "eliteAffixes": [],
+    "bossAffix": null,
+    "densityBudget": 3.5,
+    "projectedDensity": 0,
+    "isDensityVetoed": false
+  },
+  "1370090251|3|3": {
+    "floorIndex": 3,
+    "playerCountAtLock": 3,
+    "mutators": [],
+    "eliteAffixes": [],
+    "bossAffix": null,
+    "densityBudget": 3,
+    "projectedDensity": 0,
+    "isDensityVetoed": false
+  },
+  "1370090251|3|4": {
+    "floorIndex": 3,
+    "playerCountAtLock": 4,
+    "mutators": [],
+    "eliteAffixes": [],
+    "bossAffix": null,
+    "densityBudget": 2.5,
+    "projectedDensity": 0,
+    "isDensityVetoed": false
+  },
+  "1370090251|4|1": {
+    "floorIndex": 4,
+    "playerCountAtLock": 1,
+    "mutators": [
+      "moltenFloor"
+    ],
+    "eliteAffixes": [],
+    "bossAffix": null,
+    "densityBudget": 4,
+    "projectedDensity": 2,
+    "isDensityVetoed": false
+  },
+  "1370090251|4|2": {
+    "floorIndex": 4,
+    "playerCountAtLock": 2,
+    "mutators": [
+      "moltenFloor"
+    ],
+    "eliteAffixes": [],
+    "bossAffix": null,
+    "densityBudget": 3.5,
+    "projectedDensity": 2,
+    "isDensityVetoed": false
+  },
+  "1370090251|4|3": {
+    "floorIndex": 4,
+    "playerCountAtLock": 3,
+    "mutators": [
+      "moltenFloor"
+    ],
+    "eliteAffixes": [],
+    "bossAffix": null,
+    "densityBudget": 3,
+    "projectedDensity": 2,
+    "isDensityVetoed": false
+  },
+  "1370090251|4|4": {
+    "floorIndex": 4,
+    "playerCountAtLock": 4,
+    "mutators": [
+      "moltenFloor"
+    ],
+    "eliteAffixes": [],
+    "bossAffix": null,
+    "densityBudget": 2.5,
+    "projectedDensity": 2,
+    "isDensityVetoed": false
+  },
   "1370090251|5|1": {
     "floorIndex": 5,
     "playerCountAtLock": 1,
@@ -74,6 +162,462 @@
     "playerCountAtLock": 4,
     "mutators": [],
     "eliteAffixes": [],
+    "bossAffix": null,
+    "densityBudget": 2.5,
+    "projectedDensity": 0,
+    "isDensityVetoed": false
+  },
+  "1370090251|7|1": {
+    "floorIndex": 7,
+    "playerCountAtLock": 1,
+    "mutators": [
+      "amberfall"
+    ],
+    "eliteAffixes": [
+      {
+        "ordinal": 0,
+        "affix": null
+      },
+      {
+        "ordinal": 1,
+        "affix": "hazardTrail"
+      }
+    ],
+    "bossAffix": null,
+    "densityBudget": 4,
+    "projectedDensity": 1.5,
+    "isDensityVetoed": false
+  },
+  "1370090251|7|2": {
+    "floorIndex": 7,
+    "playerCountAtLock": 2,
+    "mutators": [
+      "amberfall"
+    ],
+    "eliteAffixes": [
+      {
+        "ordinal": 0,
+        "affix": null
+      },
+      {
+        "ordinal": 1,
+        "affix": "hazardTrail"
+      }
+    ],
+    "bossAffix": null,
+    "densityBudget": 3.5,
+    "projectedDensity": 1.5,
+    "isDensityVetoed": false
+  },
+  "1370090251|7|3": {
+    "floorIndex": 7,
+    "playerCountAtLock": 3,
+    "mutators": [
+      "amberfall"
+    ],
+    "eliteAffixes": [
+      {
+        "ordinal": 0,
+        "affix": null
+      },
+      {
+        "ordinal": 1,
+        "affix": "hazardTrail"
+      }
+    ],
+    "bossAffix": null,
+    "densityBudget": 3,
+    "projectedDensity": 1.5,
+    "isDensityVetoed": false
+  },
+  "1370090251|7|4": {
+    "floorIndex": 7,
+    "playerCountAtLock": 4,
+    "mutators": [
+      "amberfall"
+    ],
+    "eliteAffixes": [
+      {
+        "ordinal": 0,
+        "affix": null
+      },
+      {
+        "ordinal": 1,
+        "affix": "hazardTrail"
+      }
+    ],
+    "bossAffix": null,
+    "densityBudget": 2.5,
+    "projectedDensity": 1.5,
+    "isDensityVetoed": false
+  },
+  "1370090251|8|1": {
+    "floorIndex": 8,
+    "playerCountAtLock": 1,
+    "mutators": [],
+    "eliteAffixes": [
+      {
+        "ordinal": 0,
+        "affix": null
+      },
+      {
+        "ordinal": 1,
+        "affix": null
+      }
+    ],
+    "bossAffix": null,
+    "densityBudget": 4,
+    "projectedDensity": 0,
+    "isDensityVetoed": false
+  },
+  "1370090251|8|2": {
+    "floorIndex": 8,
+    "playerCountAtLock": 2,
+    "mutators": [],
+    "eliteAffixes": [
+      {
+        "ordinal": 0,
+        "affix": null
+      },
+      {
+        "ordinal": 1,
+        "affix": null
+      }
+    ],
+    "bossAffix": null,
+    "densityBudget": 3.5,
+    "projectedDensity": 0,
+    "isDensityVetoed": false
+  },
+  "1370090251|8|3": {
+    "floorIndex": 8,
+    "playerCountAtLock": 3,
+    "mutators": [],
+    "eliteAffixes": [
+      {
+        "ordinal": 0,
+        "affix": null
+      },
+      {
+        "ordinal": 1,
+        "affix": null
+      }
+    ],
+    "bossAffix": null,
+    "densityBudget": 3,
+    "projectedDensity": 0,
+    "isDensityVetoed": false
+  },
+  "1370090251|8|4": {
+    "floorIndex": 8,
+    "playerCountAtLock": 4,
+    "mutators": [],
+    "eliteAffixes": [
+      {
+        "ordinal": 0,
+        "affix": null
+      },
+      {
+        "ordinal": 1,
+        "affix": null
+      }
+    ],
+    "bossAffix": null,
+    "densityBudget": 2.5,
+    "projectedDensity": 0,
+    "isDensityVetoed": false
+  },
+  "1370090251|9|1": {
+    "floorIndex": 9,
+    "playerCountAtLock": 1,
+    "mutators": [],
+    "eliteAffixes": [
+      {
+        "ordinal": 0,
+        "affix": "splits"
+      },
+      {
+        "ordinal": 1,
+        "affix": null
+      }
+    ],
+    "bossAffix": null,
+    "densityBudget": 4,
+    "projectedDensity": 0,
+    "isDensityVetoed": false
+  },
+  "1370090251|9|2": {
+    "floorIndex": 9,
+    "playerCountAtLock": 2,
+    "mutators": [],
+    "eliteAffixes": [
+      {
+        "ordinal": 0,
+        "affix": "splits"
+      },
+      {
+        "ordinal": 1,
+        "affix": null
+      }
+    ],
+    "bossAffix": null,
+    "densityBudget": 3.5,
+    "projectedDensity": 0,
+    "isDensityVetoed": false
+  },
+  "1370090251|9|3": {
+    "floorIndex": 9,
+    "playerCountAtLock": 3,
+    "mutators": [],
+    "eliteAffixes": [
+      {
+        "ordinal": 0,
+        "affix": "splits"
+      },
+      {
+        "ordinal": 1,
+        "affix": null
+      }
+    ],
+    "bossAffix": null,
+    "densityBudget": 3,
+    "projectedDensity": 0,
+    "isDensityVetoed": false
+  },
+  "1370090251|9|4": {
+    "floorIndex": 9,
+    "playerCountAtLock": 4,
+    "mutators": [],
+    "eliteAffixes": [
+      {
+        "ordinal": 0,
+        "affix": "splits"
+      },
+      {
+        "ordinal": 1,
+        "affix": null
+      }
+    ],
+    "bossAffix": null,
+    "densityBudget": 2.5,
+    "projectedDensity": 0,
+    "isDensityVetoed": false
+  },
+  "1370090251|12|1": {
+    "floorIndex": 12,
+    "playerCountAtLock": 1,
+    "mutators": [],
+    "eliteAffixes": [
+      {
+        "ordinal": 0,
+        "affix": "hazardTrail"
+      },
+      {
+        "ordinal": 1,
+        "affix": null
+      }
+    ],
+    "bossAffix": null,
+    "densityBudget": 4,
+    "projectedDensity": 0,
+    "isDensityVetoed": false
+  },
+  "1370090251|12|2": {
+    "floorIndex": 12,
+    "playerCountAtLock": 2,
+    "mutators": [],
+    "eliteAffixes": [
+      {
+        "ordinal": 0,
+        "affix": "hazardTrail"
+      },
+      {
+        "ordinal": 1,
+        "affix": null
+      }
+    ],
+    "bossAffix": null,
+    "densityBudget": 3.5,
+    "projectedDensity": 0,
+    "isDensityVetoed": false
+  },
+  "1370090251|12|3": {
+    "floorIndex": 12,
+    "playerCountAtLock": 3,
+    "mutators": [],
+    "eliteAffixes": [
+      {
+        "ordinal": 0,
+        "affix": "hazardTrail"
+      },
+      {
+        "ordinal": 1,
+        "affix": null
+      }
+    ],
+    "bossAffix": null,
+    "densityBudget": 3,
+    "projectedDensity": 0,
+    "isDensityVetoed": false
+  },
+  "1370090251|12|4": {
+    "floorIndex": 12,
+    "playerCountAtLock": 4,
+    "mutators": [],
+    "eliteAffixes": [
+      {
+        "ordinal": 0,
+        "affix": "hazardTrail"
+      },
+      {
+        "ordinal": 1,
+        "affix": null
+      }
+    ],
+    "bossAffix": null,
+    "densityBudget": 2.5,
+    "projectedDensity": 0,
+    "isDensityVetoed": false
+  },
+  "1370090251|13|1": {
+    "floorIndex": 13,
+    "playerCountAtLock": 1,
+    "mutators": [
+      "amberfall"
+    ],
+    "eliteAffixes": [
+      {
+        "ordinal": 0,
+        "affix": null
+      }
+    ],
+    "bossAffix": null,
+    "densityBudget": 4,
+    "projectedDensity": 1.5,
+    "isDensityVetoed": false
+  },
+  "1370090251|13|2": {
+    "floorIndex": 13,
+    "playerCountAtLock": 2,
+    "mutators": [
+      "amberfall"
+    ],
+    "eliteAffixes": [
+      {
+        "ordinal": 0,
+        "affix": null
+      }
+    ],
+    "bossAffix": null,
+    "densityBudget": 3.5,
+    "projectedDensity": 1.5,
+    "isDensityVetoed": false
+  },
+  "1370090251|13|3": {
+    "floorIndex": 13,
+    "playerCountAtLock": 3,
+    "mutators": [
+      "amberfall"
+    ],
+    "eliteAffixes": [
+      {
+        "ordinal": 0,
+        "affix": null
+      }
+    ],
+    "bossAffix": null,
+    "densityBudget": 3,
+    "projectedDensity": 1.5,
+    "isDensityVetoed": false
+  },
+  "1370090251|13|4": {
+    "floorIndex": 13,
+    "playerCountAtLock": 4,
+    "mutators": [
+      "amberfall"
+    ],
+    "eliteAffixes": [
+      {
+        "ordinal": 0,
+        "affix": null
+      }
+    ],
+    "bossAffix": null,
+    "densityBudget": 2.5,
+    "projectedDensity": 1.5,
+    "isDensityVetoed": false
+  },
+  "1370090251|27|1": {
+    "floorIndex": 27,
+    "playerCountAtLock": 1,
+    "mutators": [],
+    "eliteAffixes": [
+      {
+        "ordinal": 0,
+        "affix": null
+      },
+      {
+        "ordinal": 1,
+        "affix": null
+      }
+    ],
+    "bossAffix": null,
+    "densityBudget": 4,
+    "projectedDensity": 0,
+    "isDensityVetoed": false
+  },
+  "1370090251|27|2": {
+    "floorIndex": 27,
+    "playerCountAtLock": 2,
+    "mutators": [],
+    "eliteAffixes": [
+      {
+        "ordinal": 0,
+        "affix": null
+      },
+      {
+        "ordinal": 1,
+        "affix": null
+      }
+    ],
+    "bossAffix": null,
+    "densityBudget": 3.5,
+    "projectedDensity": 0,
+    "isDensityVetoed": false
+  },
+  "1370090251|27|3": {
+    "floorIndex": 27,
+    "playerCountAtLock": 3,
+    "mutators": [],
+    "eliteAffixes": [
+      {
+        "ordinal": 0,
+        "affix": null
+      },
+      {
+        "ordinal": 1,
+        "affix": null
+      }
+    ],
+    "bossAffix": null,
+    "densityBudget": 3,
+    "projectedDensity": 0,
+    "isDensityVetoed": false
+  },
+  "1370090251|27|4": {
+    "floorIndex": 27,
+    "playerCountAtLock": 4,
+    "mutators": [],
+    "eliteAffixes": [
+      {
+        "ordinal": 0,
+        "affix": null
+      },
+      {
+        "ordinal": 1,
+        "affix": null
+      }
+    ],
     "bossAffix": null,
     "densityBudget": 2.5,
     "projectedDensity": 0,
@@ -1157,6 +1701,102 @@
     "projectedDensity": 0,
     "isDensityVetoed": false
   },
+  "4369|3|1": {
+    "floorIndex": 3,
+    "playerCountAtLock": 1,
+    "mutators": [
+      "amberfall"
+    ],
+    "eliteAffixes": [],
+    "bossAffix": null,
+    "densityBudget": 4,
+    "projectedDensity": 1.5,
+    "isDensityVetoed": false
+  },
+  "4369|3|2": {
+    "floorIndex": 3,
+    "playerCountAtLock": 2,
+    "mutators": [
+      "amberfall"
+    ],
+    "eliteAffixes": [],
+    "bossAffix": null,
+    "densityBudget": 3.5,
+    "projectedDensity": 1.5,
+    "isDensityVetoed": false
+  },
+  "4369|3|3": {
+    "floorIndex": 3,
+    "playerCountAtLock": 3,
+    "mutators": [
+      "amberfall"
+    ],
+    "eliteAffixes": [],
+    "bossAffix": null,
+    "densityBudget": 3,
+    "projectedDensity": 1.5,
+    "isDensityVetoed": false
+  },
+  "4369|3|4": {
+    "floorIndex": 3,
+    "playerCountAtLock": 4,
+    "mutators": [
+      "amberfall"
+    ],
+    "eliteAffixes": [],
+    "bossAffix": null,
+    "densityBudget": 2.5,
+    "projectedDensity": 1.5,
+    "isDensityVetoed": false
+  },
+  "4369|4|1": {
+    "floorIndex": 4,
+    "playerCountAtLock": 1,
+    "mutators": [
+      "amberfall"
+    ],
+    "eliteAffixes": [],
+    "bossAffix": null,
+    "densityBudget": 4,
+    "projectedDensity": 1.5,
+    "isDensityVetoed": false
+  },
+  "4369|4|2": {
+    "floorIndex": 4,
+    "playerCountAtLock": 2,
+    "mutators": [
+      "amberfall"
+    ],
+    "eliteAffixes": [],
+    "bossAffix": null,
+    "densityBudget": 3.5,
+    "projectedDensity": 1.5,
+    "isDensityVetoed": false
+  },
+  "4369|4|3": {
+    "floorIndex": 4,
+    "playerCountAtLock": 3,
+    "mutators": [
+      "amberfall"
+    ],
+    "eliteAffixes": [],
+    "bossAffix": null,
+    "densityBudget": 3,
+    "projectedDensity": 1.5,
+    "isDensityVetoed": false
+  },
+  "4369|4|4": {
+    "floorIndex": 4,
+    "playerCountAtLock": 4,
+    "mutators": [
+      "amberfall"
+    ],
+    "eliteAffixes": [],
+    "bossAffix": null,
+    "densityBudget": 2.5,
+    "projectedDensity": 1.5,
+    "isDensityVetoed": false
+  },
   "4369|5|1": {
     "floorIndex": 5,
     "playerCountAtLock": 1,
@@ -1196,6 +1836,470 @@
     "densityBudget": 2.5,
     "projectedDensity": 0,
     "isDensityVetoed": false
+  },
+  "4369|7|1": {
+    "floorIndex": 7,
+    "playerCountAtLock": 1,
+    "mutators": [],
+    "eliteAffixes": [
+      {
+        "ordinal": 0,
+        "affix": null
+      },
+      {
+        "ordinal": 1,
+        "affix": null
+      }
+    ],
+    "bossAffix": null,
+    "densityBudget": 4,
+    "projectedDensity": 0,
+    "isDensityVetoed": false
+  },
+  "4369|7|2": {
+    "floorIndex": 7,
+    "playerCountAtLock": 2,
+    "mutators": [],
+    "eliteAffixes": [
+      {
+        "ordinal": 0,
+        "affix": null
+      },
+      {
+        "ordinal": 1,
+        "affix": null
+      }
+    ],
+    "bossAffix": null,
+    "densityBudget": 3.5,
+    "projectedDensity": 0,
+    "isDensityVetoed": false
+  },
+  "4369|7|3": {
+    "floorIndex": 7,
+    "playerCountAtLock": 3,
+    "mutators": [],
+    "eliteAffixes": [
+      {
+        "ordinal": 0,
+        "affix": null
+      },
+      {
+        "ordinal": 1,
+        "affix": null
+      }
+    ],
+    "bossAffix": null,
+    "densityBudget": 3,
+    "projectedDensity": 0,
+    "isDensityVetoed": false
+  },
+  "4369|7|4": {
+    "floorIndex": 7,
+    "playerCountAtLock": 4,
+    "mutators": [],
+    "eliteAffixes": [
+      {
+        "ordinal": 0,
+        "affix": null
+      },
+      {
+        "ordinal": 1,
+        "affix": null
+      }
+    ],
+    "bossAffix": null,
+    "densityBudget": 2.5,
+    "projectedDensity": 0,
+    "isDensityVetoed": false
+  },
+  "4369|8|1": {
+    "floorIndex": 8,
+    "playerCountAtLock": 1,
+    "mutators": [
+      "fractureStorm"
+    ],
+    "eliteAffixes": [
+      {
+        "ordinal": 0,
+        "affix": null
+      },
+      {
+        "ordinal": 1,
+        "affix": null
+      }
+    ],
+    "bossAffix": null,
+    "densityBudget": 4,
+    "projectedDensity": 2.5,
+    "isDensityVetoed": false
+  },
+  "4369|8|2": {
+    "floorIndex": 8,
+    "playerCountAtLock": 2,
+    "mutators": [
+      "fractureStorm"
+    ],
+    "eliteAffixes": [
+      {
+        "ordinal": 0,
+        "affix": null
+      },
+      {
+        "ordinal": 1,
+        "affix": null
+      }
+    ],
+    "bossAffix": null,
+    "densityBudget": 3.5,
+    "projectedDensity": 2.5,
+    "isDensityVetoed": false
+  },
+  "4369|8|3": {
+    "floorIndex": 8,
+    "playerCountAtLock": 3,
+    "mutators": [
+      "fractureStorm"
+    ],
+    "eliteAffixes": [
+      {
+        "ordinal": 0,
+        "affix": null
+      },
+      {
+        "ordinal": 1,
+        "affix": null
+      }
+    ],
+    "bossAffix": null,
+    "densityBudget": 3,
+    "projectedDensity": 2.5,
+    "isDensityVetoed": false
+  },
+  "4369|8|4": {
+    "floorIndex": 8,
+    "playerCountAtLock": 4,
+    "mutators": [
+      "fractureStorm"
+    ],
+    "eliteAffixes": [
+      {
+        "ordinal": 0,
+        "affix": null
+      },
+      {
+        "ordinal": 1,
+        "affix": null
+      }
+    ],
+    "bossAffix": null,
+    "densityBudget": 2.5,
+    "projectedDensity": 2.5,
+    "isDensityVetoed": false
+  },
+  "4369|9|1": {
+    "floorIndex": 9,
+    "playerCountAtLock": 1,
+    "mutators": [],
+    "eliteAffixes": [
+      {
+        "ordinal": 0,
+        "affix": "shielded"
+      },
+      {
+        "ordinal": 1,
+        "affix": "enrage"
+      }
+    ],
+    "bossAffix": null,
+    "densityBudget": 4,
+    "projectedDensity": 0,
+    "isDensityVetoed": false
+  },
+  "4369|9|2": {
+    "floorIndex": 9,
+    "playerCountAtLock": 2,
+    "mutators": [],
+    "eliteAffixes": [
+      {
+        "ordinal": 0,
+        "affix": "shielded"
+      },
+      {
+        "ordinal": 1,
+        "affix": "enrage"
+      }
+    ],
+    "bossAffix": null,
+    "densityBudget": 3.5,
+    "projectedDensity": 0,
+    "isDensityVetoed": false
+  },
+  "4369|9|3": {
+    "floorIndex": 9,
+    "playerCountAtLock": 3,
+    "mutators": [],
+    "eliteAffixes": [
+      {
+        "ordinal": 0,
+        "affix": "shielded"
+      },
+      {
+        "ordinal": 1,
+        "affix": "enrage"
+      }
+    ],
+    "bossAffix": null,
+    "densityBudget": 3,
+    "projectedDensity": 0,
+    "isDensityVetoed": false
+  },
+  "4369|9|4": {
+    "floorIndex": 9,
+    "playerCountAtLock": 4,
+    "mutators": [],
+    "eliteAffixes": [
+      {
+        "ordinal": 0,
+        "affix": "shielded"
+      },
+      {
+        "ordinal": 1,
+        "affix": "enrage"
+      }
+    ],
+    "bossAffix": null,
+    "densityBudget": 2.5,
+    "projectedDensity": 0,
+    "isDensityVetoed": false
+  },
+  "4369|12|1": {
+    "floorIndex": 12,
+    "playerCountAtLock": 1,
+    "mutators": [
+      "moltenFloor"
+    ],
+    "eliteAffixes": [
+      {
+        "ordinal": 0,
+        "affix": null
+      },
+      {
+        "ordinal": 1,
+        "affix": null
+      }
+    ],
+    "bossAffix": null,
+    "densityBudget": 4,
+    "projectedDensity": 2,
+    "isDensityVetoed": false
+  },
+  "4369|12|2": {
+    "floorIndex": 12,
+    "playerCountAtLock": 2,
+    "mutators": [
+      "moltenFloor"
+    ],
+    "eliteAffixes": [
+      {
+        "ordinal": 0,
+        "affix": null
+      },
+      {
+        "ordinal": 1,
+        "affix": null
+      }
+    ],
+    "bossAffix": null,
+    "densityBudget": 3.5,
+    "projectedDensity": 2,
+    "isDensityVetoed": false
+  },
+  "4369|12|3": {
+    "floorIndex": 12,
+    "playerCountAtLock": 3,
+    "mutators": [
+      "moltenFloor"
+    ],
+    "eliteAffixes": [
+      {
+        "ordinal": 0,
+        "affix": null
+      },
+      {
+        "ordinal": 1,
+        "affix": null
+      }
+    ],
+    "bossAffix": null,
+    "densityBudget": 3,
+    "projectedDensity": 2,
+    "isDensityVetoed": false
+  },
+  "4369|12|4": {
+    "floorIndex": 12,
+    "playerCountAtLock": 4,
+    "mutators": [
+      "moltenFloor"
+    ],
+    "eliteAffixes": [
+      {
+        "ordinal": 0,
+        "affix": null
+      },
+      {
+        "ordinal": 1,
+        "affix": null
+      }
+    ],
+    "bossAffix": null,
+    "densityBudget": 2.5,
+    "projectedDensity": 2,
+    "isDensityVetoed": false
+  },
+  "4369|13|1": {
+    "floorIndex": 13,
+    "playerCountAtLock": 1,
+    "mutators": [],
+    "eliteAffixes": [
+      {
+        "ordinal": 0,
+        "affix": null
+      }
+    ],
+    "bossAffix": null,
+    "densityBudget": 4,
+    "projectedDensity": 0,
+    "isDensityVetoed": false
+  },
+  "4369|13|2": {
+    "floorIndex": 13,
+    "playerCountAtLock": 2,
+    "mutators": [],
+    "eliteAffixes": [
+      {
+        "ordinal": 0,
+        "affix": null
+      }
+    ],
+    "bossAffix": null,
+    "densityBudget": 3.5,
+    "projectedDensity": 0,
+    "isDensityVetoed": false
+  },
+  "4369|13|3": {
+    "floorIndex": 13,
+    "playerCountAtLock": 3,
+    "mutators": [],
+    "eliteAffixes": [
+      {
+        "ordinal": 0,
+        "affix": null
+      }
+    ],
+    "bossAffix": null,
+    "densityBudget": 3,
+    "projectedDensity": 0,
+    "isDensityVetoed": false
+  },
+  "4369|13|4": {
+    "floorIndex": 13,
+    "playerCountAtLock": 4,
+    "mutators": [],
+    "eliteAffixes": [
+      {
+        "ordinal": 0,
+        "affix": null
+      }
+    ],
+    "bossAffix": null,
+    "densityBudget": 2.5,
+    "projectedDensity": 0,
+    "isDensityVetoed": false
+  },
+  "4369|27|1": {
+    "floorIndex": 27,
+    "playerCountAtLock": 1,
+    "mutators": [
+      "moltenFloor"
+    ],
+    "eliteAffixes": [
+      {
+        "ordinal": 0,
+        "affix": null
+      },
+      {
+        "ordinal": 1,
+        "affix": "reflect"
+      }
+    ],
+    "bossAffix": null,
+    "densityBudget": 4,
+    "projectedDensity": 2,
+    "isDensityVetoed": true
+  },
+  "4369|27|2": {
+    "floorIndex": 27,
+    "playerCountAtLock": 2,
+    "mutators": [
+      "moltenFloor"
+    ],
+    "eliteAffixes": [
+      {
+        "ordinal": 0,
+        "affix": null
+      },
+      {
+        "ordinal": 1,
+        "affix": "reflect"
+      }
+    ],
+    "bossAffix": null,
+    "densityBudget": 3.5,
+    "projectedDensity": 2,
+    "isDensityVetoed": true
+  },
+  "4369|27|3": {
+    "floorIndex": 27,
+    "playerCountAtLock": 3,
+    "mutators": [
+      "moltenFloor"
+    ],
+    "eliteAffixes": [
+      {
+        "ordinal": 0,
+        "affix": null
+      },
+      {
+        "ordinal": 1,
+        "affix": "reflect"
+      }
+    ],
+    "bossAffix": null,
+    "densityBudget": 3,
+    "projectedDensity": 2,
+    "isDensityVetoed": true
+  },
+  "4369|27|4": {
+    "floorIndex": 27,
+    "playerCountAtLock": 4,
+    "mutators": [
+      "moltenFloor"
+    ],
+    "eliteAffixes": [
+      {
+        "ordinal": 0,
+        "affix": null
+      },
+      {
+        "ordinal": 1,
+        "affix": "reflect"
+      }
+    ],
+    "bossAffix": null,
+    "densityBudget": 2.5,
+    "projectedDensity": 2,
+    "isDensityVetoed": true
   },
   "4369|30|1": {
     "floorIndex": 30,
@@ -2259,6 +3363,94 @@
     "projectedDensity": 0,
     "isDensityVetoed": false
   },
+  "12648430|3|1": {
+    "floorIndex": 3,
+    "playerCountAtLock": 1,
+    "mutators": [
+      "amberfall"
+    ],
+    "eliteAffixes": [],
+    "bossAffix": null,
+    "densityBudget": 4,
+    "projectedDensity": 1.5,
+    "isDensityVetoed": false
+  },
+  "12648430|3|2": {
+    "floorIndex": 3,
+    "playerCountAtLock": 2,
+    "mutators": [
+      "amberfall"
+    ],
+    "eliteAffixes": [],
+    "bossAffix": null,
+    "densityBudget": 3.5,
+    "projectedDensity": 1.5,
+    "isDensityVetoed": false
+  },
+  "12648430|3|3": {
+    "floorIndex": 3,
+    "playerCountAtLock": 3,
+    "mutators": [
+      "amberfall"
+    ],
+    "eliteAffixes": [],
+    "bossAffix": null,
+    "densityBudget": 3,
+    "projectedDensity": 1.5,
+    "isDensityVetoed": false
+  },
+  "12648430|3|4": {
+    "floorIndex": 3,
+    "playerCountAtLock": 4,
+    "mutators": [
+      "amberfall"
+    ],
+    "eliteAffixes": [],
+    "bossAffix": null,
+    "densityBudget": 2.5,
+    "projectedDensity": 1.5,
+    "isDensityVetoed": false
+  },
+  "12648430|4|1": {
+    "floorIndex": 4,
+    "playerCountAtLock": 1,
+    "mutators": [],
+    "eliteAffixes": [],
+    "bossAffix": null,
+    "densityBudget": 4,
+    "projectedDensity": 0,
+    "isDensityVetoed": false
+  },
+  "12648430|4|2": {
+    "floorIndex": 4,
+    "playerCountAtLock": 2,
+    "mutators": [],
+    "eliteAffixes": [],
+    "bossAffix": null,
+    "densityBudget": 3.5,
+    "projectedDensity": 0,
+    "isDensityVetoed": false
+  },
+  "12648430|4|3": {
+    "floorIndex": 4,
+    "playerCountAtLock": 3,
+    "mutators": [],
+    "eliteAffixes": [],
+    "bossAffix": null,
+    "densityBudget": 3,
+    "projectedDensity": 0,
+    "isDensityVetoed": false
+  },
+  "12648430|4|4": {
+    "floorIndex": 4,
+    "playerCountAtLock": 4,
+    "mutators": [],
+    "eliteAffixes": [],
+    "bossAffix": null,
+    "densityBudget": 2.5,
+    "projectedDensity": 0,
+    "isDensityVetoed": false
+  },
   "12648430|5|1": {
     "floorIndex": 5,
     "playerCountAtLock": 1,
@@ -2298,6 +3490,473 @@
     "densityBudget": 2.5,
     "projectedDensity": 0,
     "isDensityVetoed": false
+  },
+  "12648430|7|1": {
+    "floorIndex": 7,
+    "playerCountAtLock": 1,
+    "mutators": [],
+    "eliteAffixes": [
+      {
+        "ordinal": 0,
+        "affix": null
+      },
+      {
+        "ordinal": 1,
+        "affix": null
+      }
+    ],
+    "bossAffix": null,
+    "densityBudget": 4,
+    "projectedDensity": 0,
+    "isDensityVetoed": false
+  },
+  "12648430|7|2": {
+    "floorIndex": 7,
+    "playerCountAtLock": 2,
+    "mutators": [],
+    "eliteAffixes": [
+      {
+        "ordinal": 0,
+        "affix": null
+      },
+      {
+        "ordinal": 1,
+        "affix": null
+      }
+    ],
+    "bossAffix": null,
+    "densityBudget": 3.5,
+    "projectedDensity": 0,
+    "isDensityVetoed": false
+  },
+  "12648430|7|3": {
+    "floorIndex": 7,
+    "playerCountAtLock": 3,
+    "mutators": [],
+    "eliteAffixes": [
+      {
+        "ordinal": 0,
+        "affix": null
+      },
+      {
+        "ordinal": 1,
+        "affix": null
+      }
+    ],
+    "bossAffix": null,
+    "densityBudget": 3,
+    "projectedDensity": 0,
+    "isDensityVetoed": false
+  },
+  "12648430|7|4": {
+    "floorIndex": 7,
+    "playerCountAtLock": 4,
+    "mutators": [],
+    "eliteAffixes": [
+      {
+        "ordinal": 0,
+        "affix": null
+      },
+      {
+        "ordinal": 1,
+        "affix": null
+      }
+    ],
+    "bossAffix": null,
+    "densityBudget": 2.5,
+    "projectedDensity": 0,
+    "isDensityVetoed": false
+  },
+  "12648430|8|1": {
+    "floorIndex": 8,
+    "playerCountAtLock": 1,
+    "mutators": [
+      "fractureStorm"
+    ],
+    "eliteAffixes": [
+      {
+        "ordinal": 0,
+        "affix": "shielded"
+      },
+      {
+        "ordinal": 1,
+        "affix": null
+      }
+    ],
+    "bossAffix": null,
+    "densityBudget": 4,
+    "projectedDensity": 2.5,
+    "isDensityVetoed": false
+  },
+  "12648430|8|2": {
+    "floorIndex": 8,
+    "playerCountAtLock": 2,
+    "mutators": [
+      "fractureStorm"
+    ],
+    "eliteAffixes": [
+      {
+        "ordinal": 0,
+        "affix": "shielded"
+      },
+      {
+        "ordinal": 1,
+        "affix": null
+      }
+    ],
+    "bossAffix": null,
+    "densityBudget": 3.5,
+    "projectedDensity": 2.5,
+    "isDensityVetoed": false
+  },
+  "12648430|8|3": {
+    "floorIndex": 8,
+    "playerCountAtLock": 3,
+    "mutators": [
+      "fractureStorm"
+    ],
+    "eliteAffixes": [
+      {
+        "ordinal": 0,
+        "affix": "shielded"
+      },
+      {
+        "ordinal": 1,
+        "affix": null
+      }
+    ],
+    "bossAffix": null,
+    "densityBudget": 3,
+    "projectedDensity": 2.5,
+    "isDensityVetoed": false
+  },
+  "12648430|8|4": {
+    "floorIndex": 8,
+    "playerCountAtLock": 4,
+    "mutators": [
+      "fractureStorm"
+    ],
+    "eliteAffixes": [
+      {
+        "ordinal": 0,
+        "affix": "shielded"
+      },
+      {
+        "ordinal": 1,
+        "affix": null
+      }
+    ],
+    "bossAffix": null,
+    "densityBudget": 2.5,
+    "projectedDensity": 2.5,
+    "isDensityVetoed": false
+  },
+  "12648430|9|1": {
+    "floorIndex": 9,
+    "playerCountAtLock": 1,
+    "mutators": [
+      "moltenFloor"
+    ],
+    "eliteAffixes": [
+      {
+        "ordinal": 0,
+        "affix": "shielded"
+      },
+      {
+        "ordinal": 1,
+        "affix": null
+      }
+    ],
+    "bossAffix": null,
+    "densityBudget": 4,
+    "projectedDensity": 2,
+    "isDensityVetoed": false
+  },
+  "12648430|9|2": {
+    "floorIndex": 9,
+    "playerCountAtLock": 2,
+    "mutators": [
+      "moltenFloor"
+    ],
+    "eliteAffixes": [
+      {
+        "ordinal": 0,
+        "affix": "shielded"
+      },
+      {
+        "ordinal": 1,
+        "affix": null
+      }
+    ],
+    "bossAffix": null,
+    "densityBudget": 3.5,
+    "projectedDensity": 2,
+    "isDensityVetoed": false
+  },
+  "12648430|9|3": {
+    "floorIndex": 9,
+    "playerCountAtLock": 3,
+    "mutators": [
+      "moltenFloor"
+    ],
+    "eliteAffixes": [
+      {
+        "ordinal": 0,
+        "affix": "shielded"
+      },
+      {
+        "ordinal": 1,
+        "affix": null
+      }
+    ],
+    "bossAffix": null,
+    "densityBudget": 3,
+    "projectedDensity": 2,
+    "isDensityVetoed": false
+  },
+  "12648430|9|4": {
+    "floorIndex": 9,
+    "playerCountAtLock": 4,
+    "mutators": [
+      "moltenFloor"
+    ],
+    "eliteAffixes": [
+      {
+        "ordinal": 0,
+        "affix": "shielded"
+      },
+      {
+        "ordinal": 1,
+        "affix": null
+      }
+    ],
+    "bossAffix": null,
+    "densityBudget": 2.5,
+    "projectedDensity": 2,
+    "isDensityVetoed": false
+  },
+  "12648430|12|1": {
+    "floorIndex": 12,
+    "playerCountAtLock": 1,
+    "mutators": [],
+    "eliteAffixes": [
+      {
+        "ordinal": 0,
+        "affix": "shielded"
+      },
+      {
+        "ordinal": 1,
+        "affix": null
+      }
+    ],
+    "bossAffix": null,
+    "densityBudget": 4,
+    "projectedDensity": 0,
+    "isDensityVetoed": false
+  },
+  "12648430|12|2": {
+    "floorIndex": 12,
+    "playerCountAtLock": 2,
+    "mutators": [],
+    "eliteAffixes": [
+      {
+        "ordinal": 0,
+        "affix": "shielded"
+      },
+      {
+        "ordinal": 1,
+        "affix": null
+      }
+    ],
+    "bossAffix": null,
+    "densityBudget": 3.5,
+    "projectedDensity": 0,
+    "isDensityVetoed": false
+  },
+  "12648430|12|3": {
+    "floorIndex": 12,
+    "playerCountAtLock": 3,
+    "mutators": [],
+    "eliteAffixes": [
+      {
+        "ordinal": 0,
+        "affix": "shielded"
+      },
+      {
+        "ordinal": 1,
+        "affix": null
+      }
+    ],
+    "bossAffix": null,
+    "densityBudget": 3,
+    "projectedDensity": 0,
+    "isDensityVetoed": false
+  },
+  "12648430|12|4": {
+    "floorIndex": 12,
+    "playerCountAtLock": 4,
+    "mutators": [],
+    "eliteAffixes": [
+      {
+        "ordinal": 0,
+        "affix": "shielded"
+      },
+      {
+        "ordinal": 1,
+        "affix": null
+      }
+    ],
+    "bossAffix": null,
+    "densityBudget": 2.5,
+    "projectedDensity": 0,
+    "isDensityVetoed": false
+  },
+  "12648430|13|1": {
+    "floorIndex": 13,
+    "playerCountAtLock": 1,
+    "mutators": [],
+    "eliteAffixes": [
+      {
+        "ordinal": 0,
+        "affix": "shielded"
+      }
+    ],
+    "bossAffix": null,
+    "densityBudget": 4,
+    "projectedDensity": 0,
+    "isDensityVetoed": false
+  },
+  "12648430|13|2": {
+    "floorIndex": 13,
+    "playerCountAtLock": 2,
+    "mutators": [],
+    "eliteAffixes": [
+      {
+        "ordinal": 0,
+        "affix": "shielded"
+      }
+    ],
+    "bossAffix": null,
+    "densityBudget": 3.5,
+    "projectedDensity": 0,
+    "isDensityVetoed": false
+  },
+  "12648430|13|3": {
+    "floorIndex": 13,
+    "playerCountAtLock": 3,
+    "mutators": [],
+    "eliteAffixes": [
+      {
+        "ordinal": 0,
+        "affix": "shielded"
+      }
+    ],
+    "bossAffix": null,
+    "densityBudget": 3,
+    "projectedDensity": 0,
+    "isDensityVetoed": false
+  },
+  "12648430|13|4": {
+    "floorIndex": 13,
+    "playerCountAtLock": 4,
+    "mutators": [],
+    "eliteAffixes": [
+      {
+        "ordinal": 0,
+        "affix": "shielded"
+      }
+    ],
+    "bossAffix": null,
+    "densityBudget": 2.5,
+    "projectedDensity": 0,
+    "isDensityVetoed": false
+  },
+  "12648430|27|1": {
+    "floorIndex": 27,
+    "playerCountAtLock": 1,
+    "mutators": [
+      "thinAir",
+      "fractureStorm"
+    ],
+    "eliteAffixes": [
+      {
+        "ordinal": 0,
+        "affix": "enrage"
+      },
+      {
+        "ordinal": 1,
+        "affix": "splits"
+      }
+    ],
+    "bossAffix": null,
+    "densityBudget": 4,
+    "projectedDensity": 3,
+    "isDensityVetoed": false
+  },
+  "12648430|27|2": {
+    "floorIndex": 27,
+    "playerCountAtLock": 2,
+    "mutators": [
+      "thinAir",
+      "fractureStorm"
+    ],
+    "eliteAffixes": [
+      {
+        "ordinal": 0,
+        "affix": "enrage"
+      },
+      {
+        "ordinal": 1,
+        "affix": "splits"
+      }
+    ],
+    "bossAffix": null,
+    "densityBudget": 3.5,
+    "projectedDensity": 3,
+    "isDensityVetoed": false
+  },
+  "12648430|27|3": {
+    "floorIndex": 27,
+    "playerCountAtLock": 3,
+    "mutators": [
+      "thinAir",
+      "fractureStorm"
+    ],
+    "eliteAffixes": [
+      {
+        "ordinal": 0,
+        "affix": "enrage"
+      },
+      {
+        "ordinal": 1,
+        "affix": "splits"
+      }
+    ],
+    "bossAffix": null,
+    "densityBudget": 3,
+    "projectedDensity": 3,
+    "isDensityVetoed": false
+  },
+  "12648430|27|4": {
+    "floorIndex": 27,
+    "playerCountAtLock": 4,
+    "mutators": [
+      "thinAir"
+    ],
+    "eliteAffixes": [
+      {
+        "ordinal": 0,
+        "affix": "enrage"
+      },
+      {
+        "ordinal": 1,
+        "affix": "splits"
+      }
+    ],
+    "bossAffix": null,
+    "densityBudget": 2.5,
+    "projectedDensity": 0.5,
+    "isDensityVetoed": true
   },
   "12648430|30|1": {
     "floorIndex": 30,
@@ -3400,6 +5059,86 @@
     "projectedDensity": 0,
     "isDensityVetoed": false
   },
+  "57005|3|1": {
+    "floorIndex": 3,
+    "playerCountAtLock": 1,
+    "mutators": [],
+    "eliteAffixes": [],
+    "bossAffix": null,
+    "densityBudget": 4,
+    "projectedDensity": 0,
+    "isDensityVetoed": false
+  },
+  "57005|3|2": {
+    "floorIndex": 3,
+    "playerCountAtLock": 2,
+    "mutators": [],
+    "eliteAffixes": [],
+    "bossAffix": null,
+    "densityBudget": 3.5,
+    "projectedDensity": 0,
+    "isDensityVetoed": false
+  },
+  "57005|3|3": {
+    "floorIndex": 3,
+    "playerCountAtLock": 3,
+    "mutators": [],
+    "eliteAffixes": [],
+    "bossAffix": null,
+    "densityBudget": 3,
+    "projectedDensity": 0,
+    "isDensityVetoed": false
+  },
+  "57005|3|4": {
+    "floorIndex": 3,
+    "playerCountAtLock": 4,
+    "mutators": [],
+    "eliteAffixes": [],
+    "bossAffix": null,
+    "densityBudget": 2.5,
+    "projectedDensity": 0,
+    "isDensityVetoed": false
+  },
+  "57005|4|1": {
+    "floorIndex": 4,
+    "playerCountAtLock": 1,
+    "mutators": [],
+    "eliteAffixes": [],
+    "bossAffix": null,
+    "densityBudget": 4,
+    "projectedDensity": 0,
+    "isDensityVetoed": false
+  },
+  "57005|4|2": {
+    "floorIndex": 4,
+    "playerCountAtLock": 2,
+    "mutators": [],
+    "eliteAffixes": [],
+    "bossAffix": null,
+    "densityBudget": 3.5,
+    "projectedDensity": 0,
+    "isDensityVetoed": false
+  },
+  "57005|4|3": {
+    "floorIndex": 4,
+    "playerCountAtLock": 3,
+    "mutators": [],
+    "eliteAffixes": [],
+    "bossAffix": null,
+    "densityBudget": 3,
+    "projectedDensity": 0,
+    "isDensityVetoed": false
+  },
+  "57005|4|4": {
+    "floorIndex": 4,
+    "playerCountAtLock": 4,
+    "mutators": [],
+    "eliteAffixes": [],
+    "bossAffix": null,
+    "densityBudget": 2.5,
+    "projectedDensity": 0,
+    "isDensityVetoed": false
+  },
   "57005|5|1": {
     "floorIndex": 5,
     "playerCountAtLock": 1,
@@ -3438,6 +5177,470 @@
     "bossAffix": null,
     "densityBudget": 2.5,
     "projectedDensity": 0,
+    "isDensityVetoed": false
+  },
+  "57005|7|1": {
+    "floorIndex": 7,
+    "playerCountAtLock": 1,
+    "mutators": [
+      "thinAir"
+    ],
+    "eliteAffixes": [
+      {
+        "ordinal": 0,
+        "affix": null
+      },
+      {
+        "ordinal": 1,
+        "affix": null
+      }
+    ],
+    "bossAffix": null,
+    "densityBudget": 4,
+    "projectedDensity": 0.5,
+    "isDensityVetoed": false
+  },
+  "57005|7|2": {
+    "floorIndex": 7,
+    "playerCountAtLock": 2,
+    "mutators": [
+      "thinAir"
+    ],
+    "eliteAffixes": [
+      {
+        "ordinal": 0,
+        "affix": null
+      },
+      {
+        "ordinal": 1,
+        "affix": null
+      }
+    ],
+    "bossAffix": null,
+    "densityBudget": 3.5,
+    "projectedDensity": 0.5,
+    "isDensityVetoed": false
+  },
+  "57005|7|3": {
+    "floorIndex": 7,
+    "playerCountAtLock": 3,
+    "mutators": [
+      "thinAir"
+    ],
+    "eliteAffixes": [
+      {
+        "ordinal": 0,
+        "affix": null
+      },
+      {
+        "ordinal": 1,
+        "affix": null
+      }
+    ],
+    "bossAffix": null,
+    "densityBudget": 3,
+    "projectedDensity": 0.5,
+    "isDensityVetoed": false
+  },
+  "57005|7|4": {
+    "floorIndex": 7,
+    "playerCountAtLock": 4,
+    "mutators": [
+      "thinAir"
+    ],
+    "eliteAffixes": [
+      {
+        "ordinal": 0,
+        "affix": null
+      },
+      {
+        "ordinal": 1,
+        "affix": null
+      }
+    ],
+    "bossAffix": null,
+    "densityBudget": 2.5,
+    "projectedDensity": 0.5,
+    "isDensityVetoed": false
+  },
+  "57005|8|1": {
+    "floorIndex": 8,
+    "playerCountAtLock": 1,
+    "mutators": [
+      "amberfall"
+    ],
+    "eliteAffixes": [
+      {
+        "ordinal": 0,
+        "affix": null
+      },
+      {
+        "ordinal": 1,
+        "affix": null
+      }
+    ],
+    "bossAffix": null,
+    "densityBudget": 4,
+    "projectedDensity": 1.5,
+    "isDensityVetoed": false
+  },
+  "57005|8|2": {
+    "floorIndex": 8,
+    "playerCountAtLock": 2,
+    "mutators": [
+      "amberfall"
+    ],
+    "eliteAffixes": [
+      {
+        "ordinal": 0,
+        "affix": null
+      },
+      {
+        "ordinal": 1,
+        "affix": null
+      }
+    ],
+    "bossAffix": null,
+    "densityBudget": 3.5,
+    "projectedDensity": 1.5,
+    "isDensityVetoed": false
+  },
+  "57005|8|3": {
+    "floorIndex": 8,
+    "playerCountAtLock": 3,
+    "mutators": [
+      "amberfall"
+    ],
+    "eliteAffixes": [
+      {
+        "ordinal": 0,
+        "affix": null
+      },
+      {
+        "ordinal": 1,
+        "affix": null
+      }
+    ],
+    "bossAffix": null,
+    "densityBudget": 3,
+    "projectedDensity": 1.5,
+    "isDensityVetoed": false
+  },
+  "57005|8|4": {
+    "floorIndex": 8,
+    "playerCountAtLock": 4,
+    "mutators": [
+      "amberfall"
+    ],
+    "eliteAffixes": [
+      {
+        "ordinal": 0,
+        "affix": null
+      },
+      {
+        "ordinal": 1,
+        "affix": null
+      }
+    ],
+    "bossAffix": null,
+    "densityBudget": 2.5,
+    "projectedDensity": 1.5,
+    "isDensityVetoed": false
+  },
+  "57005|9|1": {
+    "floorIndex": 9,
+    "playerCountAtLock": 1,
+    "mutators": [],
+    "eliteAffixes": [
+      {
+        "ordinal": 0,
+        "affix": "enrage"
+      },
+      {
+        "ordinal": 1,
+        "affix": "splits"
+      }
+    ],
+    "bossAffix": null,
+    "densityBudget": 4,
+    "projectedDensity": 0,
+    "isDensityVetoed": false
+  },
+  "57005|9|2": {
+    "floorIndex": 9,
+    "playerCountAtLock": 2,
+    "mutators": [],
+    "eliteAffixes": [
+      {
+        "ordinal": 0,
+        "affix": "enrage"
+      },
+      {
+        "ordinal": 1,
+        "affix": "splits"
+      }
+    ],
+    "bossAffix": null,
+    "densityBudget": 3.5,
+    "projectedDensity": 0,
+    "isDensityVetoed": false
+  },
+  "57005|9|3": {
+    "floorIndex": 9,
+    "playerCountAtLock": 3,
+    "mutators": [],
+    "eliteAffixes": [
+      {
+        "ordinal": 0,
+        "affix": "enrage"
+      },
+      {
+        "ordinal": 1,
+        "affix": "splits"
+      }
+    ],
+    "bossAffix": null,
+    "densityBudget": 3,
+    "projectedDensity": 0,
+    "isDensityVetoed": false
+  },
+  "57005|9|4": {
+    "floorIndex": 9,
+    "playerCountAtLock": 4,
+    "mutators": [],
+    "eliteAffixes": [
+      {
+        "ordinal": 0,
+        "affix": "enrage"
+      },
+      {
+        "ordinal": 1,
+        "affix": "splits"
+      }
+    ],
+    "bossAffix": null,
+    "densityBudget": 2.5,
+    "projectedDensity": 0,
+    "isDensityVetoed": false
+  },
+  "57005|12|1": {
+    "floorIndex": 12,
+    "playerCountAtLock": 1,
+    "mutators": [],
+    "eliteAffixes": [
+      {
+        "ordinal": 0,
+        "affix": null
+      },
+      {
+        "ordinal": 1,
+        "affix": null
+      }
+    ],
+    "bossAffix": null,
+    "densityBudget": 4,
+    "projectedDensity": 0,
+    "isDensityVetoed": false
+  },
+  "57005|12|2": {
+    "floorIndex": 12,
+    "playerCountAtLock": 2,
+    "mutators": [],
+    "eliteAffixes": [
+      {
+        "ordinal": 0,
+        "affix": null
+      },
+      {
+        "ordinal": 1,
+        "affix": null
+      }
+    ],
+    "bossAffix": null,
+    "densityBudget": 3.5,
+    "projectedDensity": 0,
+    "isDensityVetoed": false
+  },
+  "57005|12|3": {
+    "floorIndex": 12,
+    "playerCountAtLock": 3,
+    "mutators": [],
+    "eliteAffixes": [
+      {
+        "ordinal": 0,
+        "affix": null
+      },
+      {
+        "ordinal": 1,
+        "affix": null
+      }
+    ],
+    "bossAffix": null,
+    "densityBudget": 3,
+    "projectedDensity": 0,
+    "isDensityVetoed": false
+  },
+  "57005|12|4": {
+    "floorIndex": 12,
+    "playerCountAtLock": 4,
+    "mutators": [],
+    "eliteAffixes": [
+      {
+        "ordinal": 0,
+        "affix": null
+      },
+      {
+        "ordinal": 1,
+        "affix": null
+      }
+    ],
+    "bossAffix": null,
+    "densityBudget": 2.5,
+    "projectedDensity": 0,
+    "isDensityVetoed": false
+  },
+  "57005|13|1": {
+    "floorIndex": 13,
+    "playerCountAtLock": 1,
+    "mutators": [],
+    "eliteAffixes": [
+      {
+        "ordinal": 0,
+        "affix": null
+      }
+    ],
+    "bossAffix": null,
+    "densityBudget": 4,
+    "projectedDensity": 0,
+    "isDensityVetoed": false
+  },
+  "57005|13|2": {
+    "floorIndex": 13,
+    "playerCountAtLock": 2,
+    "mutators": [],
+    "eliteAffixes": [
+      {
+        "ordinal": 0,
+        "affix": null
+      }
+    ],
+    "bossAffix": null,
+    "densityBudget": 3.5,
+    "projectedDensity": 0,
+    "isDensityVetoed": false
+  },
+  "57005|13|3": {
+    "floorIndex": 13,
+    "playerCountAtLock": 3,
+    "mutators": [],
+    "eliteAffixes": [
+      {
+        "ordinal": 0,
+        "affix": null
+      }
+    ],
+    "bossAffix": null,
+    "densityBudget": 3,
+    "projectedDensity": 0,
+    "isDensityVetoed": false
+  },
+  "57005|13|4": {
+    "floorIndex": 13,
+    "playerCountAtLock": 4,
+    "mutators": [],
+    "eliteAffixes": [
+      {
+        "ordinal": 0,
+        "affix": null
+      }
+    ],
+    "bossAffix": null,
+    "densityBudget": 2.5,
+    "projectedDensity": 0,
+    "isDensityVetoed": false
+  },
+  "57005|27|1": {
+    "floorIndex": 27,
+    "playerCountAtLock": 1,
+    "mutators": [
+      "denseDark"
+    ],
+    "eliteAffixes": [
+      {
+        "ordinal": 0,
+        "affix": null
+      },
+      {
+        "ordinal": 1,
+        "affix": null
+      }
+    ],
+    "bossAffix": null,
+    "densityBudget": 4,
+    "projectedDensity": 1,
+    "isDensityVetoed": false
+  },
+  "57005|27|2": {
+    "floorIndex": 27,
+    "playerCountAtLock": 2,
+    "mutators": [
+      "denseDark"
+    ],
+    "eliteAffixes": [
+      {
+        "ordinal": 0,
+        "affix": null
+      },
+      {
+        "ordinal": 1,
+        "affix": null
+      }
+    ],
+    "bossAffix": null,
+    "densityBudget": 3.5,
+    "projectedDensity": 1,
+    "isDensityVetoed": false
+  },
+  "57005|27|3": {
+    "floorIndex": 27,
+    "playerCountAtLock": 3,
+    "mutators": [
+      "denseDark"
+    ],
+    "eliteAffixes": [
+      {
+        "ordinal": 0,
+        "affix": null
+      },
+      {
+        "ordinal": 1,
+        "affix": null
+      }
+    ],
+    "bossAffix": null,
+    "densityBudget": 3,
+    "projectedDensity": 1,
+    "isDensityVetoed": false
+  },
+  "57005|27|4": {
+    "floorIndex": 27,
+    "playerCountAtLock": 4,
+    "mutators": [
+      "denseDark"
+    ],
+    "eliteAffixes": [
+      {
+        "ordinal": 0,
+        "affix": null
+      },
+      {
+        "ordinal": 1,
+        "affix": null
+      }
+    ],
+    "bossAffix": null,
+    "densityBudget": 2.5,
+    "projectedDensity": 1,
     "isDensityVetoed": false
   },
   "57005|30|1": {
@@ -4479,6 +6682,94 @@
     "projectedDensity": 0,
     "isDensityVetoed": false
   },
+  "42|3|1": {
+    "floorIndex": 3,
+    "playerCountAtLock": 1,
+    "mutators": [],
+    "eliteAffixes": [],
+    "bossAffix": null,
+    "densityBudget": 4,
+    "projectedDensity": 0,
+    "isDensityVetoed": false
+  },
+  "42|3|2": {
+    "floorIndex": 3,
+    "playerCountAtLock": 2,
+    "mutators": [],
+    "eliteAffixes": [],
+    "bossAffix": null,
+    "densityBudget": 3.5,
+    "projectedDensity": 0,
+    "isDensityVetoed": false
+  },
+  "42|3|3": {
+    "floorIndex": 3,
+    "playerCountAtLock": 3,
+    "mutators": [],
+    "eliteAffixes": [],
+    "bossAffix": null,
+    "densityBudget": 3,
+    "projectedDensity": 0,
+    "isDensityVetoed": false
+  },
+  "42|3|4": {
+    "floorIndex": 3,
+    "playerCountAtLock": 4,
+    "mutators": [],
+    "eliteAffixes": [],
+    "bossAffix": null,
+    "densityBudget": 2.5,
+    "projectedDensity": 0,
+    "isDensityVetoed": false
+  },
+  "42|4|1": {
+    "floorIndex": 4,
+    "playerCountAtLock": 1,
+    "mutators": [
+      "moltenFloor"
+    ],
+    "eliteAffixes": [],
+    "bossAffix": null,
+    "densityBudget": 4,
+    "projectedDensity": 2,
+    "isDensityVetoed": false
+  },
+  "42|4|2": {
+    "floorIndex": 4,
+    "playerCountAtLock": 2,
+    "mutators": [
+      "moltenFloor"
+    ],
+    "eliteAffixes": [],
+    "bossAffix": null,
+    "densityBudget": 3.5,
+    "projectedDensity": 2,
+    "isDensityVetoed": false
+  },
+  "42|4|3": {
+    "floorIndex": 4,
+    "playerCountAtLock": 3,
+    "mutators": [
+      "moltenFloor"
+    ],
+    "eliteAffixes": [],
+    "bossAffix": null,
+    "densityBudget": 3,
+    "projectedDensity": 2,
+    "isDensityVetoed": false
+  },
+  "42|4|4": {
+    "floorIndex": 4,
+    "playerCountAtLock": 4,
+    "mutators": [
+      "moltenFloor"
+    ],
+    "eliteAffixes": [],
+    "bossAffix": null,
+    "densityBudget": 2.5,
+    "projectedDensity": 2,
+    "isDensityVetoed": false
+  },
   "42|5|1": {
     "floorIndex": 5,
     "playerCountAtLock": 1,
@@ -4514,6 +6805,454 @@
     "playerCountAtLock": 4,
     "mutators": [],
     "eliteAffixes": [],
+    "bossAffix": null,
+    "densityBudget": 2.5,
+    "projectedDensity": 0,
+    "isDensityVetoed": false
+  },
+  "42|7|1": {
+    "floorIndex": 7,
+    "playerCountAtLock": 1,
+    "mutators": [],
+    "eliteAffixes": [
+      {
+        "ordinal": 0,
+        "affix": null
+      },
+      {
+        "ordinal": 1,
+        "affix": "enrage"
+      }
+    ],
+    "bossAffix": null,
+    "densityBudget": 4,
+    "projectedDensity": 0,
+    "isDensityVetoed": false
+  },
+  "42|7|2": {
+    "floorIndex": 7,
+    "playerCountAtLock": 2,
+    "mutators": [],
+    "eliteAffixes": [
+      {
+        "ordinal": 0,
+        "affix": null
+      },
+      {
+        "ordinal": 1,
+        "affix": "enrage"
+      }
+    ],
+    "bossAffix": null,
+    "densityBudget": 3.5,
+    "projectedDensity": 0,
+    "isDensityVetoed": false
+  },
+  "42|7|3": {
+    "floorIndex": 7,
+    "playerCountAtLock": 3,
+    "mutators": [],
+    "eliteAffixes": [
+      {
+        "ordinal": 0,
+        "affix": null
+      },
+      {
+        "ordinal": 1,
+        "affix": "enrage"
+      }
+    ],
+    "bossAffix": null,
+    "densityBudget": 3,
+    "projectedDensity": 0,
+    "isDensityVetoed": false
+  },
+  "42|7|4": {
+    "floorIndex": 7,
+    "playerCountAtLock": 4,
+    "mutators": [],
+    "eliteAffixes": [
+      {
+        "ordinal": 0,
+        "affix": null
+      },
+      {
+        "ordinal": 1,
+        "affix": "enrage"
+      }
+    ],
+    "bossAffix": null,
+    "densityBudget": 2.5,
+    "projectedDensity": 0,
+    "isDensityVetoed": false
+  },
+  "42|8|1": {
+    "floorIndex": 8,
+    "playerCountAtLock": 1,
+    "mutators": [
+      "fractureStorm"
+    ],
+    "eliteAffixes": [
+      {
+        "ordinal": 0,
+        "affix": null
+      },
+      {
+        "ordinal": 1,
+        "affix": null
+      }
+    ],
+    "bossAffix": null,
+    "densityBudget": 4,
+    "projectedDensity": 2.5,
+    "isDensityVetoed": false
+  },
+  "42|8|2": {
+    "floorIndex": 8,
+    "playerCountAtLock": 2,
+    "mutators": [
+      "fractureStorm"
+    ],
+    "eliteAffixes": [
+      {
+        "ordinal": 0,
+        "affix": null
+      },
+      {
+        "ordinal": 1,
+        "affix": null
+      }
+    ],
+    "bossAffix": null,
+    "densityBudget": 3.5,
+    "projectedDensity": 2.5,
+    "isDensityVetoed": false
+  },
+  "42|8|3": {
+    "floorIndex": 8,
+    "playerCountAtLock": 3,
+    "mutators": [
+      "fractureStorm"
+    ],
+    "eliteAffixes": [
+      {
+        "ordinal": 0,
+        "affix": null
+      },
+      {
+        "ordinal": 1,
+        "affix": null
+      }
+    ],
+    "bossAffix": null,
+    "densityBudget": 3,
+    "projectedDensity": 2.5,
+    "isDensityVetoed": false
+  },
+  "42|8|4": {
+    "floorIndex": 8,
+    "playerCountAtLock": 4,
+    "mutators": [
+      "fractureStorm"
+    ],
+    "eliteAffixes": [
+      {
+        "ordinal": 0,
+        "affix": null
+      },
+      {
+        "ordinal": 1,
+        "affix": null
+      }
+    ],
+    "bossAffix": null,
+    "densityBudget": 2.5,
+    "projectedDensity": 2.5,
+    "isDensityVetoed": false
+  },
+  "42|9|1": {
+    "floorIndex": 9,
+    "playerCountAtLock": 1,
+    "mutators": [],
+    "eliteAffixes": [
+      {
+        "ordinal": 0,
+        "affix": null
+      },
+      {
+        "ordinal": 1,
+        "affix": null
+      }
+    ],
+    "bossAffix": null,
+    "densityBudget": 4,
+    "projectedDensity": 0,
+    "isDensityVetoed": false
+  },
+  "42|9|2": {
+    "floorIndex": 9,
+    "playerCountAtLock": 2,
+    "mutators": [],
+    "eliteAffixes": [
+      {
+        "ordinal": 0,
+        "affix": null
+      },
+      {
+        "ordinal": 1,
+        "affix": null
+      }
+    ],
+    "bossAffix": null,
+    "densityBudget": 3.5,
+    "projectedDensity": 0,
+    "isDensityVetoed": false
+  },
+  "42|9|3": {
+    "floorIndex": 9,
+    "playerCountAtLock": 3,
+    "mutators": [],
+    "eliteAffixes": [
+      {
+        "ordinal": 0,
+        "affix": null
+      },
+      {
+        "ordinal": 1,
+        "affix": null
+      }
+    ],
+    "bossAffix": null,
+    "densityBudget": 3,
+    "projectedDensity": 0,
+    "isDensityVetoed": false
+  },
+  "42|9|4": {
+    "floorIndex": 9,
+    "playerCountAtLock": 4,
+    "mutators": [],
+    "eliteAffixes": [
+      {
+        "ordinal": 0,
+        "affix": null
+      },
+      {
+        "ordinal": 1,
+        "affix": null
+      }
+    ],
+    "bossAffix": null,
+    "densityBudget": 2.5,
+    "projectedDensity": 0,
+    "isDensityVetoed": false
+  },
+  "42|12|1": {
+    "floorIndex": 12,
+    "playerCountAtLock": 1,
+    "mutators": [],
+    "eliteAffixes": [
+      {
+        "ordinal": 0,
+        "affix": null
+      },
+      {
+        "ordinal": 1,
+        "affix": "splits"
+      }
+    ],
+    "bossAffix": null,
+    "densityBudget": 4,
+    "projectedDensity": 0,
+    "isDensityVetoed": false
+  },
+  "42|12|2": {
+    "floorIndex": 12,
+    "playerCountAtLock": 2,
+    "mutators": [],
+    "eliteAffixes": [
+      {
+        "ordinal": 0,
+        "affix": null
+      },
+      {
+        "ordinal": 1,
+        "affix": "splits"
+      }
+    ],
+    "bossAffix": null,
+    "densityBudget": 3.5,
+    "projectedDensity": 0,
+    "isDensityVetoed": false
+  },
+  "42|12|3": {
+    "floorIndex": 12,
+    "playerCountAtLock": 3,
+    "mutators": [],
+    "eliteAffixes": [
+      {
+        "ordinal": 0,
+        "affix": null
+      },
+      {
+        "ordinal": 1,
+        "affix": "splits"
+      }
+    ],
+    "bossAffix": null,
+    "densityBudget": 3,
+    "projectedDensity": 0,
+    "isDensityVetoed": false
+  },
+  "42|12|4": {
+    "floorIndex": 12,
+    "playerCountAtLock": 4,
+    "mutators": [],
+    "eliteAffixes": [
+      {
+        "ordinal": 0,
+        "affix": null
+      },
+      {
+        "ordinal": 1,
+        "affix": "splits"
+      }
+    ],
+    "bossAffix": null,
+    "densityBudget": 2.5,
+    "projectedDensity": 0,
+    "isDensityVetoed": false
+  },
+  "42|13|1": {
+    "floorIndex": 13,
+    "playerCountAtLock": 1,
+    "mutators": [],
+    "eliteAffixes": [
+      {
+        "ordinal": 0,
+        "affix": "shielded"
+      }
+    ],
+    "bossAffix": null,
+    "densityBudget": 4,
+    "projectedDensity": 0,
+    "isDensityVetoed": false
+  },
+  "42|13|2": {
+    "floorIndex": 13,
+    "playerCountAtLock": 2,
+    "mutators": [],
+    "eliteAffixes": [
+      {
+        "ordinal": 0,
+        "affix": "shielded"
+      }
+    ],
+    "bossAffix": null,
+    "densityBudget": 3.5,
+    "projectedDensity": 0,
+    "isDensityVetoed": false
+  },
+  "42|13|3": {
+    "floorIndex": 13,
+    "playerCountAtLock": 3,
+    "mutators": [],
+    "eliteAffixes": [
+      {
+        "ordinal": 0,
+        "affix": "shielded"
+      }
+    ],
+    "bossAffix": null,
+    "densityBudget": 3,
+    "projectedDensity": 0,
+    "isDensityVetoed": false
+  },
+  "42|13|4": {
+    "floorIndex": 13,
+    "playerCountAtLock": 4,
+    "mutators": [],
+    "eliteAffixes": [
+      {
+        "ordinal": 0,
+        "affix": "shielded"
+      }
+    ],
+    "bossAffix": null,
+    "densityBudget": 2.5,
+    "projectedDensity": 0,
+    "isDensityVetoed": false
+  },
+  "42|27|1": {
+    "floorIndex": 27,
+    "playerCountAtLock": 1,
+    "mutators": [],
+    "eliteAffixes": [
+      {
+        "ordinal": 0,
+        "affix": "splits"
+      },
+      {
+        "ordinal": 1,
+        "affix": "shielded"
+      }
+    ],
+    "bossAffix": null,
+    "densityBudget": 4,
+    "projectedDensity": 0,
+    "isDensityVetoed": false
+  },
+  "42|27|2": {
+    "floorIndex": 27,
+    "playerCountAtLock": 2,
+    "mutators": [],
+    "eliteAffixes": [
+      {
+        "ordinal": 0,
+        "affix": "splits"
+      },
+      {
+        "ordinal": 1,
+        "affix": "shielded"
+      }
+    ],
+    "bossAffix": null,
+    "densityBudget": 3.5,
+    "projectedDensity": 0,
+    "isDensityVetoed": false
+  },
+  "42|27|3": {
+    "floorIndex": 27,
+    "playerCountAtLock": 3,
+    "mutators": [],
+    "eliteAffixes": [
+      {
+        "ordinal": 0,
+        "affix": "splits"
+      },
+      {
+        "ordinal": 1,
+        "affix": "shielded"
+      }
+    ],
+    "bossAffix": null,
+    "densityBudget": 3,
+    "projectedDensity": 0,
+    "isDensityVetoed": false
+  },
+  "42|27|4": {
+    "floorIndex": 27,
+    "playerCountAtLock": 4,
+    "mutators": [],
+    "eliteAffixes": [
+      {
+        "ordinal": 0,
+        "affix": "splits"
+      },
+      {
+        "ordinal": 1,
+        "affix": "shielded"
+      }
+    ],
     "bossAffix": null,
     "densityBudget": 2.5,
     "projectedDensity": 0,

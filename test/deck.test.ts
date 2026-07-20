@@ -1,13 +1,15 @@
 // GATE 1 — the biome-selective encounter deck (roster.ts). Locks: the deck is deterministic from
-// seed; a floor never over-draws or repeats a kind within its own hand; pre-F30 stays BYTE-
-// IDENTICAL to the old cumulative roster (existing floors valid, goldens unchanged); and the Sump
-// curation holds (signature core always in, curated-out kinds never appear, spice rotates).
+// seed; a floor never over-draws or repeats a kind within its own hand; the six CURATED pre-F30
+// regions (PRE_F30_LEVEL_VARIETY §7) keep their signature core always in and rotate their spice
+// per floor/seed; and the Sump curation holds (signature core always in, curated-out kinds never
+// appear, spice rotates).
 //
 // Run: npm run test:deck
 
 import type { EnemyKind } from "../src/sim/types.js";
 import { floorRoster, FAMILY_INTRO_FLOOR, REGION_ROSTERS } from "../src/sim/roster.js";
 import { REGIONS, regionForFloor, biomeIndexForFloor } from "../src/sim/biomes.js";
+import type { RegionId } from "../src/sim/biomes.js";
 import { BIOME_PRESSURE } from "../src/sim/balance.js";
 
 let passed = 0, failed = 0;
@@ -20,28 +22,6 @@ function section(name: string): void { process.stdout.write(`\n[${name}]\n`); }
 
 const SEEDS = [0x1111, 0x2222, 0x51a9e, 0xDEAD, 0xC0FFEE, 7, 99999];
 const complexShareOf = (floor: number): number => BIOME_PRESSURE[biomeIndexForFloor(floor)].complexShare;
-
-// The pre-refactor cumulative roster, reproduced verbatim, as the byte-identical oracle.
-function oldRoster(floor: number, complexShare: number): Array<{ kind: EnemyKind; weight: number }> {
-  const roster: Array<{ kind: EnemyKind; weight: number }> = [{ kind: "slime", weight: 5 }];
-  const has = (kind: EnemyKind): boolean => floor >= (FAMILY_INTRO_FLOOR[kind] ?? Infinity);
-  if (has("bat")) roster.push({ kind: "bat", weight: 3 });
-  if (has("skeleton")) roster.push({ kind: "skeleton", weight: 2 });
-  if (has("spitter")) roster.push({ kind: "spitter", weight: (floor >= 3 ? 2 : 1) * complexShare });
-  if (has("ghost")) roster.push({ kind: "ghost", weight: 2 * complexShare });
-  if (has("charger")) roster.push({ kind: "charger", weight: 2 });
-  if (has("burrower")) roster.push({ kind: "burrower", weight: 2 * complexShare });
-  if (has("orbiter")) roster.push({ kind: "orbiter", weight: 2 * complexShare });
-  if (has("shielder")) roster.push({ kind: "shielder", weight: 2 });
-  if (has("rootward")) roster.push({ kind: "rootward", weight: 2 });
-  if (has("caskbellows")) roster.push({ kind: "caskbellows", weight: 2 * complexShare });
-  if (has("echojack")) roster.push({ kind: "echojack", weight: 1.5 * complexShare });
-  if (has("seamcutter")) roster.push({ kind: "seamcutter", weight: 2 });
-  if (has("sinderling")) roster.push({ kind: "sinderling", weight: 2.5 });
-  if (has("mason")) roster.push({ kind: "mason", weight: 1.5 * complexShare });
-  if (has("fragment")) roster.push({ kind: "fragment", weight: 2 * complexShare });
-  return roster;
-}
 
 function eq(a: Array<{ kind: EnemyKind; weight: number }>, b: Array<{ kind: EnemyKind; weight: number }>): boolean {
   if (a.length !== b.length) return false;
@@ -61,15 +41,15 @@ function determinismTests(): void {
   }
   check("same seed+floor => identical hand (every repeat)", stable);
 
-  // Post-F30 varies WITH the seed (the anti-repetition rotation), while pre-F30 is seed-invariant.
-  let sumpVaries = false;
-  const baseSump = floorRoster(SEEDS[0], 40, complexShareOf(40)).map((r) => r.kind).join(",");
-  for (const seed of SEEDS.slice(1)) {
-    if (floorRoster(seed, 40, complexShareOf(40)).map((r) => r.kind).join(",") !== baseSump) sumpVaries = true;
-  }
-  check("Sump hand rotates across seeds (variety between runs)", sumpVaries);
-  check("pre-F30 hand is seed-invariant (authored curriculum)",
-    SEEDS.every((s) => eq(floorRoster(s, 12, complexShareOf(12)), floorRoster(SEEDS[0], 12, complexShareOf(12)))));
+  // Both post-F30 AND (now) pre-F30 curated regions vary WITH the seed — the anti-repetition
+  // rotation is the whole Tier 1 fix. A large-spice-pool floor in each range must rotate.
+  const rotatesAcrossSeeds = (floor: number): boolean => {
+    const base = floorRoster(SEEDS[0], floor, complexShareOf(floor)).map((r) => r.kind).join(",");
+    return SEEDS.slice(1).some((s) => floorRoster(s, floor, complexShareOf(floor)).map((r) => r.kind).join(",") !== base);
+  };
+  check("Sump hand rotates across seeds (variety between runs)", rotatesAcrossSeeds(40));
+  check("pre-F30 curated hand rotates across seeds (F12 Sunless — the anti-repetition fix)", rotatesAcrossSeeds(12));
+  check("pre-F30 curated hand rotates across seeds (F27 Emberreach)", rotatesAcrossSeeds(27));
 }
 
 function noOverdrawTests(): void {
@@ -93,20 +73,51 @@ function noOverdrawTests(): void {
   check("hands never repeat / over-draw / carry non-positive weights", ok, detail.slice(0, 3).join("; "));
 }
 
-function byteIdenticalTests(): void {
-  section("pre-F30 stays byte-identical to the old cumulative roster");
-  let identical = true;
+function curatedShapeTests(): void {
+  section("pre-F30 regions are curated (signature core always in, spice rotates, cores ratified)");
+  // Per-region signature core (PRE_F30_LEVEL_VARIETY_NUMBERS.md §7) + a floor where every core kind
+  // is introduced. The core is ALWAYS in the hand once introduced; spice draws around it.
+  const CORES: Array<{ region: RegionId; floor: number; core: EnemyKind[] }> = [
+    { region: "amberwild", floor: 2, core: ["slime", "bat", "skeleton"] },
+    { region: "rootbound", floor: 9, core: ["slime", "rootward", "orbiter"] },
+    { region: "sunless", floor: 12, core: ["slime", "spitter", "caskbellows"] },
+    { region: "deep", floor: 17, core: ["slime", "charger", "seamcutter"] },
+    { region: "gilded", floor: 22, core: ["slime", "shielder", "echojack"] },
+    { region: "ember", floor: 29, core: ["slime", "sinderling", "mason"] },
+  ];
+  let coreAlways = true;
   const detail: string[] = [];
-  for (const seed of SEEDS) {
-    for (let floor = 1; floor <= 30; floor++) {
-      const cs = complexShareOf(floor);
-      if (!eq(floorRoster(seed, floor, cs), oldRoster(floor, cs))) {
-        identical = false;
-        detail.push(`f${floor}`);
-      }
+  for (const { floor, core } of CORES) {
+    for (const seed of SEEDS) {
+      const kinds = new Set(floorRoster(seed, floor, complexShareOf(floor)).map((r) => r.kind));
+      if (!core.every((k) => kinds.has(k))) { coreAlways = false; detail.push(`f${floor}`); }
     }
   }
-  check("floors 1-30 reproduce the old roster exactly (kinds + weights + order)", identical, detail.slice(0, 5).join(","));
+  check("each region's signature core is always in the hand (once introduced)", coreAlways, detail.slice(0, 3).join(","));
+
+  // The declared tiers match the ratified cores — Rootbound's Wren swap: rootward is the core
+  // guard, skeleton is demoted to spice.
+  const tierOf = (region: RegionId, kind: EnemyKind): string | undefined =>
+    REGION_ROSTERS[region].entries.find((e) => e.kind === kind)?.tier;
+  check("Rootbound core is rootward (the ratified Wren swap), skeleton demoted to spice",
+    tierOf("rootbound", "rootward") === "signature" && tierOf("rootbound", "skeleton") === "spice");
+
+  // rootward debuts F8, so the Rootbound core gracefully falls back on F6-7 (slime present,
+  // rootward absent until its intro, never an empty hand).
+  let f67Ok = true;
+  for (const seed of SEEDS) for (const floor of [6, 7]) {
+    const kinds = floorRoster(seed, floor, complexShareOf(floor)).map((r) => r.kind);
+    if (kinds.length === 0 || kinds.includes("rootward") || !kinds.includes("slime")) f67Ok = false;
+  }
+  check("Rootbound F6-7 gracefully falls back (slime core present, rootward absent until F8, never empty)", f67Ok);
+
+  // F1 is slime-only (the locked tutorial baseline).
+  let f1Ok = true;
+  for (const seed of SEEDS) {
+    const kinds = floorRoster(seed, 1, complexShareOf(1)).map((r) => r.kind);
+    if (kinds.length !== 1 || kinds[0] !== "slime") f1Ok = false;
+  }
+  check("F1 hand is slime-only (tutorial baseline)", f1Ok);
 }
 
 function sumpCurationTests(): void {
@@ -141,15 +152,16 @@ function sumpCurationTests(): void {
 function dataDrivenTests(): void {
   section("the deck is data-driven — every region resolves to a roster");
   check("every region id has a deck", REGIONS.every((r) => REGION_ROSTERS[r.id] !== undefined && REGION_ROSTERS[r.id].entries.length > 0));
-  check("post-F30 decks declare a spice draw (rotation); pre-F30 draw 0 (full pool)",
+  check("every region declares a spice draw; Amberwild draws 1 (tutorial legibility), the rest 2",
     ["sump", "veinworks", "pale", "nullcore"].every((id) => REGION_ROSTERS[id as keyof typeof REGION_ROSTERS].spiceDraw > 0) &&
-    ["amberwild", "rootbound", "sunless", "deep", "gilded", "ember"].every((id) => REGION_ROSTERS[id as keyof typeof REGION_ROSTERS].spiceDraw === 0));
+    REGION_ROSTERS.amberwild.spiceDraw === 1 &&
+    ["rootbound", "sunless", "deep", "gilded", "ember"].every((id) => REGION_ROSTERS[id as keyof typeof REGION_ROSTERS].spiceDraw === 2));
 }
 
 function main(): void {
   determinismTests();
   noOverdrawTests();
-  byteIdenticalTests();
+  curatedShapeTests();
   sumpCurationTests();
   dataDrivenTests();
   process.stdout.write(`\n${passed} checks passed, ${failed} failed\n`);

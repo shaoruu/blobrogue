@@ -580,6 +580,14 @@ export const TIERS: Record<EnemyTier, TierDef> = {
 // + complex chassis ≤ 6") — the affix is one visible behavior, not a doubled tax.
 export const ELITE_COST_CAP = 6;
 
+// The rolled-affix budget surcharge (PRE_F30_LEVEL_VARIETY_NUMBERS.md §1): an affixed elite
+// costs +1.0 threat, folded into its cost at placement BEFORE the budget subtract and clamped
+// at ELITE_COST_CAP. Makes elite affixes budget-NEUTRAL (they trade chaff, like twinnedElites)
+// instead of free difficulty — a standard-chassis elite (base 4) prices to 5, a complex chassis
+// (already at the cap 6) absorbs it. Both adds fold into the same capped floorThreat budget, so
+// total enemy threat can never exceed today's curve.
+export const AFFIX_THREAT_SURCHARGE = 1.0;
+
 // ---- the bestiary balance envelope (roster capacity, cadence, composition, pacing) ----
 // The governance layer over ALL bestiary growth. Numbers here are the contract the
 // planner enforces at build time and test/envelope.test.ts regresses seeded; the

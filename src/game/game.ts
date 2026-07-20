@@ -5529,7 +5529,7 @@ export class Game {
     // Dense Dark (floor mutator, VISION): the run's sight radius contracts. A per-floor constant
     // read from the authoritative descriptor — fairness telegraphs draw on top and stay full-bright
     // (they are never dimmed), so a tighter glow costs readability of the room, never of a tell.
-    const visionMult = floorVisionMult(this.world.floorDescriptor.mutators);
+    const visionMult = floorVisionMult(this.world.floorDescriptor.mutators, this.world.floorDescriptor.floorIndex);
     if (this.isRunning && this.isWorldRevealed) {
       if (!this.isDown && !this.isArenaRespawning()) {
         // Wick PINPRICK (PROTOCOL 45): the owner-only light window bumps the hero glow by a flat
