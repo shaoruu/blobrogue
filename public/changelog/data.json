@@ -10,7 +10,7 @@
         },
         {
           "title": "PVP beyond the private arena",
-          "body": "public matchmaking is still switched off, and a Wave 3 siege / objective mode is still ahead — the private room-code arena's kit ultimates, ring-weather, and mid-match drafts have already shipped."
+          "body": "public matchmaking is still switched off, and a siege / objective mode is still ahead."
         },
         {
           "title": "Odds and ends still queued",
@@ -102,6 +102,10 @@
         {
           "title": "Arena ultimates hit like a truck (visually)",
           "body": "the private-arena kit ults got a big glow-up so they actually read as screen-dominating — Gunner's salvo is a bold cyan volley, Mender's triage a green heal pulse, Bulwark's shove a solid steel slab wall, Phantom's slip a violet phase-blur — each on its own color so a 4-way brawl stays readable."
+        },
+        {
+          "title": "Private-arena fights now change on the fly",
+          "body": "clearly marked tar blooms slow the chokepoints, warned gusts sweep exposed fighters unless they duck behind cover, and telegraphed spark mines pop with a small hit and shove. Tactical mid-match drafts offer counter-picks like Brace Band to soften knockback, Clear Eyes to briefly reveal a visible rival, and Rip Post to clear tar and chip nearby cover."
         },
         {
           "title": "Jet stops littering the floor",
