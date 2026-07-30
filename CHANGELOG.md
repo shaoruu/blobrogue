@@ -9,7 +9,7 @@ Visual patch notes with screenshots: [/changelog](/changelog) on the live site.
 
 ## Unreleased (in progress)
 - **More deep bosses toward floor 100:** the run keeps growing past the F80 Wake — more every-five-floors bosses and the giant F100 finale are still to come.
-- **PVP beyond the private arena:** public matchmaking is still switched off, and a Wave 3 siege / objective mode is still ahead — the private room-code arena's kit ultimates, ring-weather, and mid-match drafts have already shipped.
+- **PVP beyond the private arena:** public matchmaking is still switched off, and a siege / objective mode is still ahead.
 - **Odds and ends still queued:** click-outside-to-close on the shop, a Thumper scorch decal, more music variety, and full run-persistence so a dropped connection resumes your run instead of losing it.
 
 ## 2026-07-20
@@ -32,6 +32,7 @@ Visual patch notes with screenshots: [/changelog](/changelog) on the live site.
 - **Framerate protects itself now:** the game watches its own frame time, and if things get heavy in a busy fight it quietly dials back cosmetic detail (fewer particles, lighter effects) to hold a smooth framerate, then restores full detail once it clears. It never touches anything you need to see — boss tells, telegraphs, hazards, and the HUD always stay full. You shouldn't notice it working; you'll just stop noticing drops.
 - **Razor Halo won't tank your FPS in a crowd:** orbiting through a big pack of enemies used to fire off a burst of hit-effects on every blade contact and stutter the frame. Those contact effects now batch together, so a dense swarm stays smooth — the Halo hits exactly as hard, it just stops spamming the effects.
 - **Arena ultimates hit like a truck (visually):** the private-arena kit ults got a big glow-up so they actually read as screen-dominating — Gunner's salvo is a bold cyan volley, Mender's triage a green heal pulse, Bulwark's shove a solid steel slab wall, Phantom's slip a violet phase-blur — each on its own color so a 4-way brawl stays readable.
+- **Private-arena fights now change on the fly:** clearly marked tar blooms slow the chokepoints, warned gusts sweep exposed fighters unless they duck behind cover, and telegraphed spark mines pop with a small hit and shove. Tactical mid-match drafts offer counter-picks like Brace Band to soften knockback, Clear Eyes to briefly reveal a visible rival, and Rip Post to clear tar and chip nearby cover.
 - **Jet stops littering the floor:** the F35 Mirror boss (Jet) left its blue corruption zones behind after it died, cluttering the room. They now clear when Jet goes down, so the floor's clean once the fight's over.
 - **Razor Halo is a main now:** the worn blade-orbit got a heavy buff so you can actually build around it — 4 blades (was 3), faster spin, harder contact, a shorter re-hit, and a bigger, punchier flare on fire. It shreds anything that presses into your space.
 - **Razor Halo grows as you upgrade it:** the orbit now visibly escalates with your build — more blades, thicker glowing trails, and a more dramatic flare at higher upgrade tiers, so a maxed Halo looks as strong as it hits (readability + hit geometry unchanged).
