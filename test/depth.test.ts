@@ -660,21 +660,35 @@ function riftPullTests(): void {
   section("void rifts: escapable pull pressure");
   check("pull speed stays well under walk speed (always escapable)",
     RIFT_PULL_SPEED <= PLAYER.moveSpeed * 0.5, `${RIFT_PULL_SPEED} vs ${PLAYER.moveSpeed}`);
-  const { w, h } = findHazardWorld("void_rift", 22);
+  // Probe an ISOLATED rift with a wall-clear cardinal neighbour, so only the rift's pull (never a
+  // geometry clamp) can move the parked player. F22 can now roll a hazard mutator
+  // (PRE_F30_LEVEL_VARIETY) that seeds a denser hazard field, so we search for a rift whose one-tile
+  // cardinal probe has a fully open footprint and keep only that rift live.
+  const isClearTile = (d: Dungeon, tx: number, ty: number): boolean =>
+    ([[0, 0], [-1, 0], [1, 0], [0, -1], [0, 1]] as const).every(([dx, dy]) => d.tiles[(ty + dy) * d.w + (tx + dx)] === 0);
+  let probe: { w: WorldState; h: FloorHazard; px: number; py: number; cx: number; cy: number } | null = null;
+  for (const seed of SEEDS) {
+    if (probe) break;
+    const w = quietWorld(seed, 22);
+    for (const h of w.floorHazards.filter((x) => x.kind === "void_rift")) {
+      // One tile out (48px) sits inside the 92px pull radius; a clear footprint means no wall clamp.
+      const side = ([[-1, 0], [1, 0], [0, -1], [0, 1]] as const).find(([dx, dy]) => isClearTile(w.dungeon, h.tx + dx, h.ty + dy));
+      if (!side) continue;
+      probe = { w, h, px: (h.tx + side[0] + 0.5) * TILE, py: (h.ty + side[1] + 0.5) * TILE, cx: (h.tx + 0.5) * TILE, cy: (h.ty + 0.5) * TILE };
+      break;
+    }
+  }
+  if (!probe) throw new Error("no isolated void_rift with a clear cardinal probe found at floor 22");
+  const { w, h, px, py, cx, cy } = probe;
+  w.floorHazards = [h]; // isolate: a second active rift must not pull the player during h's idle
   const p = w.players.get(LOCAL_ID)!;
-  const cx = (h.tx + 0.5) * TILE, cy = (h.ty + 0.5) * TILE;
   p.invuln = 1e9; // isolate the pull from damage
-  // Park on whichever cardinal side of the rift is open floor (placement can hug walls).
-  const d = w.dungeon;
-  const off = RIFT_PULL_RADIUS * 0.7;
-  const [ox, oy] = ([[-off, 0], [off, 0], [0, -off], [0, off]] as const)
-    .find(([dx, dy]) => d.tiles[Math.floor((cy + dy) / TILE) * d.w + Math.floor((cx + dx) / TILE)] === 0) ?? [-off, 0];
   let isPulled = false;
   let isIdleStill = true;
   for (let t = 0; t < 60 * 10; t++) {
     const ph = floorHazardPhaseAt(h, w.floorHazardClock + DT);
-    p.x = cx + ox;
-    p.y = cy + oy;
+    p.x = px;
+    p.y = py;
     const before = Math.hypot(p.x - cx, p.y - cy);
     step(w, t);
     const after = Math.hypot(p.x - cx, p.y - cy);

@@ -2426,7 +2426,7 @@ export function loadFloorIntoWorld(w: WorldState, floor: number, playerCountAtLo
   // Wave 1 mutator expression, resolved once at generation from the frozen mutator set: the
   // hazard budget/kind bias (molten/fracture/amberfall) and the extra-elite count (twinned).
   // Vision (denseDark) is a client render read; dash (thinAir) is read by the shared dash step.
-  const hazMut = floorHazardMutation(w.floorDescriptor.mutators);
+  const hazMut = floorHazardMutation(w.floorDescriptor.mutators, w.floorDescriptor.floorIndex);
   const extraElites = floorExtraElites(w.floorDescriptor.mutators);
   // pvp loads the fixed symmetric arena and suppresses ALL population (AI/props/chests/hazards/
   // shop) through the SAME "bare" seam the dev sandbox uses — mode only swaps the geometry +
@@ -5343,7 +5343,7 @@ function updatePlayer(
   // Thin Air (floor mutator, DASH TUNING): a longer/faster/quicker-recovering dash, read from
   // the frozen descriptor — a per-floor constant, so the server sim and the client's prediction
   // (which holds the identical descriptor) apply it in lockstep; identity when the mutator is off.
-  const dashProfile = floorDashProfile(w.floorDescriptor.mutators);
+  const dashProfile = floorDashProfile(w.floorDescriptor.mutators, w.floorDescriptor.floorIndex);
   const dashBankHeadroom = dashCooldown(p) * dashProfile.cdMult * p.mods.extraDashCharge;
   if (input.dash && p.dashCd <= dashBankHeadroom && p.dashTime <= 0 && (ix || iy)) {
     const dashCdAdded = dashCooldown(p) * dashProfile.cdMult;
@@ -16117,7 +16117,7 @@ function dashClearSilk(w: WorldState, p: PlayerSim, ev: SimEvent[]): void {
   if (!cleared) return;
   w.hazards = w.hazards.filter((h) => h.life > 0);
   if (p.mods.muddyDashRefund > 0 && !p.isMuddyRefundSpent) {
-    const profile = floorDashProfile(w.floorDescriptor.mutators);
+    const profile = floorDashProfile(w.floorDescriptor.mutators, w.floorDescriptor.floorIndex);
     p.dashCd = Math.max(0, p.dashCd - dashCooldown(p) * profile.cdMult * p.mods.muddyDashRefund);
     p.isMuddyRefundSpent = true;
     ev.push({

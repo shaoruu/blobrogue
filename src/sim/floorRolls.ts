@@ -17,9 +17,10 @@
 // new SYSTEMS still APPEND to the roll-order contract so stored seeds stay stable.
 
 import { RollStream, ROLL_ORDER, rollStream } from "./streams.js";
+import { DEEP_FLOOR_MIN } from "./balance.js";
 import type { RollStreamId } from "./streams.js";
 import type { FloorHazardKind } from "./types.js";
-import { isBossFloor } from "./enemies.js";
+import { isBossFloor, isMinibossFloor } from "./enemies.js";
 
 // ---- caps enforced at generation (roadmap "Randomness (Wave 1)") ----
 export const FLOOR_CAPS = {
@@ -28,10 +29,55 @@ export const FLOOR_CAPS = {
   maxBossAffix: 1, // ≤1 boss affix per boss floor
 } as const;
 
-// The first floor THE UNMAKING's randomness turns on (post-F30, the Sump onward). Pre-F30 is the
-// authored curriculum — no floor mutators, no boss affixes — so its descriptor is empty and its
-// golden is trivially stable.
-export const RANDOMNESS_MIN_FLOOR = 31;
+// The first floor THE UNMAKING's uniform randomness turns on (post-F30, the Sump onward): at F31+
+// mutators roll uniformly (rng.int(0,maxMutators)) over the full pool and affixes roll 2 slots @
+// 50% — the byte-stable legacy behavior, unchanged by Tier 1. Pre-F30 is no longer empty: it turns
+// the SAME machinery on with a fairness ramp (PRE_F30_LEVEL_VARIETY: per-lever eligibility floors,
+// a floor-keyed roll-probability table, calm gates, and a per-band affix rate) — boss floors and
+// F1 still resolve to an empty descriptor.
+// Re-exported under its historical name; the value is owned by balance.ts (DEEP_FLOOR_MIN) so
+// enemies.ts can share the same threshold without a runtime import cycle through this module.
+export const RANDOMNESS_MIN_FLOOR = DEEP_FLOOR_MIN;
+
+// ---- PRE-F30 FAIRNESS RAMP (PRE_F30_LEVEL_VARIETY_NUMBERS.md §2-4) ----
+// Per-lever first-eligible floor (§3): a mutator is only in the bag when floor >= its first floor.
+// F31+ ignores this (the whole pool is eligible), so the ramp is a pure pre-F30 gate.
+const MUTATOR_FIRST_FLOOR: Readonly<Record<MutatorId, number>> = {
+  amberfall: 3, moltenFloor: 4, thinAir: 4, denseDark: 7, fractureStorm: 8, twinnedElites: 9,
+};
+
+// Miniboss floors (F13/18/23/28) allow at most ONE mutator AND only the mild set (§3): the captain
+// IS the spike, so denseDark / fractureStorm / twinnedElites are excluded there.
+const MILD_MUTATORS: readonly MutatorId[] = ["amberfall", "moltenFloor", "thinAir"];
+
+// Floor-keyed mutator-count weights P(0)/P(1)/P(2) (§3), replacing the F31+ uniform rng.int(0,2).
+// Any pre-F30 floor absent from this table (F1, boss floors F5/10/15/20/25/30, the F10 gauntlet,
+// and the post-boss opener floors F6/11/16/21/26) resolves to P(0)=100% — the locked calm slots.
+const PRE_F30_MUTATOR_P: Readonly<Record<number, readonly [number, number, number]>> = {
+  3: [0.75, 0.25, 0], 4: [0.65, 0.35, 0],
+  7: [0.60, 0.40, 0], 8: [0.45, 0.45, 0.10], 9: [0.60, 0.40, 0],
+  12: [0.50, 0.45, 0.05], 13: [0.75, 0.25, 0], 14: [0.55, 0.45, 0],
+  17: [0.40, 0.50, 0.10], 18: [0.75, 0.25, 0], 19: [0.55, 0.45, 0],
+  22: [0.35, 0.50, 0.15], 23: [0.70, 0.30, 0], 24: [0.50, 0.50, 0],
+  27: [0.25, 0.55, 0.20], 28: [0.70, 0.30, 0], 29: [0.45, 0.55, 0],
+};
+
+// Per-affix first-eligible floor (§4, mild-first): which affixes are in the pool at a given floor.
+const AFFIX_FIRST_FLOOR: Readonly<Record<RollAffixId, number>> = {
+  enrage: 6, hazardTrail: 6, shielded: 8, splits: 9, reflect: 11,
+};
+
+// The first floor any elite affix can express (min of AFFIX_FIRST_FLOOR — elites debut F6 anyway).
+const AFFIX_MIN_FLOOR = 6;
+
+// Elite-affix roll rate per slot by band (§4), ramping toward the F31+ 50%. floor is always >= F6.
+function preF30AffixRate(floor: number): number {
+  if (floor <= 10) return 0.25;
+  if (floor <= 15) return 0.30;
+  if (floor <= 20) return 0.35;
+  if (floor <= 25) return 0.40;
+  return 0.45; // F26-30
+}
 
 // ---- FLOOR MUTATORS v1 (authored — Wave 1) ----
 // Six authored mutators, ≤2 per deep floor. Each expresses ONLY through already-simulated data:
@@ -100,18 +146,45 @@ export function hasMutator(mutators: readonly string[], id: MutatorId): boolean 
   return mutators.indexOf(id) !== -1;
 }
 
+// The mutator INTENSITY band a floor sits in (PRE_F30_LEVEL_VARIETY_NUMBERS.md §2): five 5-floor
+// pre-F30 bands ramping GENTLER early, reaching the F31+ value by F26-30, then a flat F31+ band.
+// Band 6 (F31+) always returns exactly today's constants, so the Unmaking is byte-for-byte
+// unchanged; the eligibility gate guarantees a mutator's helper is only ever read at or above its
+// first floor, so bands below that first floor are never observed for it.
+function intensityBand(floor: number): number {
+  if (floor <= 5) return 0;
+  if (floor <= 10) return 1;
+  if (floor <= 15) return 2;
+  if (floor <= 20) return 3;
+  if (floor <= 25) return 4;
+  if (floor <= 30) return 5;
+  return 6;
+}
+
 // VISION: denseDark contracts the sight radius. A multiplier the client applies to its hero /
-// teammate glow radius; fairness telegraphs are drawn on top and stay full-bright.
-export function floorVisionMult(mutators: readonly string[]): number {
-  return hasMutator(mutators, "denseDark") ? 0.72 : 1;
+// teammate glow radius; fairness telegraphs are drawn on top and stay full-bright. Milder early
+// (closer to 1.0), reaching the F31+ 0.72 by F26-30. denseDark is F7+, so bands 0 (F≤5) is unread.
+const DENSE_DARK_VISION_BY_BAND: readonly number[] = [0.85, 0.85, 0.82, 0.79, 0.76, 0.72, 0.72];
+export function floorVisionMult(mutators: readonly string[], floor: number): number {
+  return hasMutator(mutators, "denseDark") ? DENSE_DARK_VISION_BY_BAND[intensityBand(floor)] : 1;
 }
 
 // DASH TUNING: thinAir makes the dash longer/faster and recover quicker. Read by the shared dash
 // step (server sim + client prediction both hold the same descriptor), so a snared player's out
-// is unchanged in shape — only its reach/cadence shift.
+// is unchanged in shape — only its reach/cadence shift. Gentler early, reaching the F31+ profile
+// by F26-30. thinAir is F4+, so band 0 anchors the F4-5 values.
 export interface DashProfile { speedMult: number; activeMult: number; cdMult: number; }
-export function floorDashProfile(mutators: readonly string[]): DashProfile {
-  if (hasMutator(mutators, "thinAir")) return { speedMult: 1.28, activeMult: 1.18, cdMult: 0.85 };
+const THIN_AIR_DASH_BY_BAND: readonly DashProfile[] = [
+  { speedMult: 1.15, activeMult: 1.10, cdMult: 0.92 }, // F4-5
+  { speedMult: 1.18, activeMult: 1.12, cdMult: 0.90 }, // F6-10
+  { speedMult: 1.20, activeMult: 1.14, cdMult: 0.89 }, // F11-15
+  { speedMult: 1.22, activeMult: 1.15, cdMult: 0.88 }, // F16-20
+  { speedMult: 1.25, activeMult: 1.16, cdMult: 0.86 }, // F21-25
+  { speedMult: 1.28, activeMult: 1.18, cdMult: 0.85 }, // F26-30
+  { speedMult: 1.28, activeMult: 1.18, cdMult: 0.85 }, // F31+ (today's values)
+];
+export function floorDashProfile(mutators: readonly string[], floor: number): DashProfile {
+  if (hasMutator(mutators, "thinAir")) return THIN_AIR_DASH_BY_BAND[intensityBand(floor)];
   return { speedMult: 1, activeMult: 1, cdMult: 1 };
 }
 
@@ -125,13 +198,22 @@ export function floorExtraElites(mutators: readonly string[]): number {
 // budgets multiply when two hazard mutators co-occur; the biased kinds accumulate so the pick is
 // weighted toward the storm's tiles (never AWAY from a biome's other tiles — the veto/caps keep it
 // fair). Returns identity when no hazard mutator is active.
+// Per-mutator hazard-budget multipliers by intensity band (§2). Each hazard mutator's first floor
+// (amberfall F3, moltenFloor F4, fractureStorm F8) means bands below it are never read for that
+// kind; the last band is F31+ (today's value). budgetMult MULTIPLIES when hazard mutators co-occur.
+const HAZARD_MULT_BY_BAND: Readonly<Record<"amberfall" | "moltenFloor" | "fractureStorm", readonly number[]>> = {
+  amberfall: [1.15, 1.20, 1.25, 1.30, 1.35, 1.40, 1.40],
+  moltenFloor: [1.20, 1.25, 1.30, 1.35, 1.42, 1.50, 1.50],
+  fractureStorm: [1.20, 1.20, 1.28, 1.35, 1.40, 1.45, 1.45],
+};
 export interface HazardMutation { budgetMult: number; biasKinds: FloorHazardKind[]; }
-export function floorHazardMutation(mutators: readonly string[]): HazardMutation {
+export function floorHazardMutation(mutators: readonly string[], floor: number): HazardMutation {
+  const band = intensityBand(floor);
   let budgetMult = 1;
   const biasKinds: FloorHazardKind[] = [];
-  if (hasMutator(mutators, "moltenFloor")) { budgetMult *= 1.5; biasKinds.push("fire_vent"); }
-  if (hasMutator(mutators, "fractureStorm")) { budgetMult *= 1.45; biasKinds.push("void_rift"); }
-  if (hasMutator(mutators, "amberfall")) { budgetMult *= 1.4; biasKinds.push("toxic_pool"); }
+  if (hasMutator(mutators, "moltenFloor")) { budgetMult *= HAZARD_MULT_BY_BAND.moltenFloor[band]; biasKinds.push("fire_vent"); }
+  if (hasMutator(mutators, "fractureStorm")) { budgetMult *= HAZARD_MULT_BY_BAND.fractureStorm[band]; biasKinds.push("void_rift"); }
+  if (hasMutator(mutators, "amberfall")) { budgetMult *= HAZARD_MULT_BY_BAND.amberfall[band]; biasKinds.push("toxic_pool"); }
   return { budgetMult, biasKinds };
 }
 
@@ -175,8 +257,9 @@ export function resolveFloorDescriptor(worldSeed: number, floorIndex: number, pl
   const players = Math.max(1, Math.floor(playerCountAtLock));
   const isDeep = floorIndex >= RANDOMNESS_MIN_FLOOR;
 
-  // Contract step 1 — FLOOR_MUTATORS. Roll 0..maxMutators distinct mutators (draw without
-  // replacement) on deep floors; pre-F30 rolls none (authored curriculum).
+  // Contract step 1 — FLOOR_MUTATORS. Draw 0..maxMutators distinct mutators without replacement.
+  // F31+: uniform count over the full pool (byte-stable legacy). Pre-F30: the fairness ramp —
+  // eligible bag (per-lever first floor; miniboss floors are mild-only) + the floor-keyed P-table.
   const mutators: string[] = [];
   if (isDeep && MUTATOR_POOL.length > 0) {
     const rng = rollStream(worldSeed, floorIndex, RollStream.FLOOR_MUTATORS);
@@ -187,6 +270,27 @@ export function resolveFloorDescriptor(worldSeed: number, floorIndex: number, pl
       [bag[k], bag[j]] = [bag[j], bag[k]];
     }
     for (let i = 0; i < count && i < bag.length; i++) mutators.push(bag[i]);
+  } else if (!isDeep && MUTATOR_POOL.length > 0) {
+    // The count weights table is the calm gate: F1, boss floors (F5/10/…/30), the F10 gauntlet and
+    // the post-boss openers (F6/11/16/21/26) are absent from it, so they never roll (P(0)=100%).
+    const weights = PRE_F30_MUTATOR_P[floorIndex];
+    if (weights !== undefined) {
+      const isMini = isMinibossFloor(floorIndex);
+      const bag = MUTATOR_POOL
+        .map((m) => m.id)
+        .filter((id) => floorIndex >= MUTATOR_FIRST_FLOOR[id] && (!isMini || MILD_MUTATORS.indexOf(id) !== -1));
+      if (bag.length > 0) {
+        const rng = rollStream(worldSeed, floorIndex, RollStream.FLOOR_MUTATORS);
+        const r = rng.next();
+        let count = r < weights[0] ? 0 : r < weights[0] + weights[1] ? 1 : 2;
+        count = Math.min(count, FLOOR_CAPS.maxMutators, bag.length);
+        for (let k = bag.length - 1; k > 0; k--) {
+          const j = rng.int(0, k);
+          [bag[k], bag[j]] = [bag[j], bag[k]];
+        }
+        for (let i = 0; i < count; i++) mutators.push(bag[i]);
+      }
+    }
   }
 
   // Contract step 2 — ENCOUNTER_DECK. The Gate 1 per-region roster draw consumes this stream
@@ -203,6 +307,17 @@ export function resolveFloorDescriptor(worldSeed: number, floorIndex: number, pl
       // Each slot has a 50% chance of a rolled affix (else null); ≤1 affix per elite is inherent
       // (one roll per ordinal). The slot maps to the elite spawned at that ascending ordinal.
       const affix = rng.chance(0.5) ? ELITE_AFFIX_POOL[rng.int(0, ELITE_AFFIX_POOL.length - 1)] : null;
+      eliteAffixes.push({ ordinal, affix });
+    }
+  } else if (!isDeep && !isBossFloor(floorIndex) && floorIndex >= AFFIX_MIN_FLOOR && ELITE_AFFIX_POOL.length > 0) {
+    // Pre-F30 ramp (§4): mild-first eligible pool + a per-band rate, miniboss floors capped to ONE
+    // slot. Boss floors stay clean — their elites (and thus affixes) are inert (spawn early-returns).
+    const pool = ELITE_AFFIX_POOL.filter((id) => floorIndex >= AFFIX_FIRST_FLOOR[id]);
+    const rate = preF30AffixRate(floorIndex);
+    const slots = isMinibossFloor(floorIndex) ? 1 : FLOOR_CAPS.eliteAffixSlots;
+    for (let ordinal = 0; ordinal < slots; ordinal++) {
+      const rng = rollStream(worldSeed, floorIndex, RollStream.ELITE_AFFIXES, ordinal);
+      const affix = rng.chance(rate) ? pool[rng.int(0, pool.length - 1)] : null;
       eliteAffixes.push({ ordinal, affix });
     }
   }

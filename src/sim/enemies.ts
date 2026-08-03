@@ -14,7 +14,7 @@ import {
   coopMobHpMult, coopBossHpMult, coopThreatMult, coopKbResistMult,
   MAX_COMPLEX_PER_ROOM, BRUTE_ELITE_COMBO_FLOOR,
   MAX_BURROWERS_PER_ROOM, MAX_SHIELDERS_PER_ROOM, MAX_WORKERS_PER_ROOM,
-  FLOCK_THREAT_SHARE_MAX, ROLL_AFFIX,
+  FLOCK_THREAT_SHARE_MAX, ROLL_AFFIX, AFFIX_THREAT_SURCHARGE, DEEP_FLOOR_MIN,
 } from "./balance.js";
 import type { EnemyTier, EliteAffix } from "./balance.js";
 // Type-only (erased at runtime, so no import cycle with floorRolls, which imports isBossFloor
@@ -640,6 +640,13 @@ export function isMinibossKind(kind: EnemyKind): boolean {
 // 28, … (every 5 from firstFloor — always the mid-band beat between boss floors) draw
 // from the template roster on a seeded no-immediate-repeat walk, exactly like the deep
 // boss rotation: variety between runs, identical across a run's clients/restarts.
+// The mid-band miniboss CADENCE as a pure function of floor (seed-independent): floors 13, 18, 23,
+// 28, … carry a captain. Used by the pre-F30 fairness ramp (floorRolls) to cap those floors to ≤1
+// mild mutator + 1 affix slot — the captain is the floor's spike.
+export function isMinibossFloor(floor: number): boolean {
+  return floor >= MINIBOSS.firstFloor && floor % BOSS_EVERY === MINIBOSS.firstFloor % BOSS_EVERY;
+}
+
 export function minibossKindForFloor(seed: number, floor: number): EnemyKind | null {
   if (floor < MINIBOSS.firstFloor) return null;
   if (floor % BOSS_EVERY !== MINIBOSS.firstFloor % BOSS_EVERY) return null;
@@ -1094,10 +1101,16 @@ function roomOpenArea(dungeon: Dungeon, roomIndex: number): number {
 // Deterministic threat-budget floor composition (§4): spend FloorThreat on a tiered unit
 // mix instead of counting bodies. Elites/brutes are planned first (they anchor the opening
 // wave); swarm packs and standards fill the remainder and overflow into reinforcements.
-function planFloorUnits(rng: Rng, dungeon: Dungeon, seed: number, floor: number, players: number, extraElites = 0): PlannedUnit[] {
+function planFloorUnits(rng: Rng, dungeon: Dungeon, seed: number, floor: number, players: number, extraElites = 0, eliteAffixes: readonly EliteAffixRoll[] = []): PlannedUnit[] {
   const roomCount = dungeon.rooms.length;
   const pressure = BIOME_PRESSURE[biomeIndexForFloor(floor)];
   let budget = floorThreat(floor) * pressure.budgetMult * coopThreatMult(players);
+  // The affix budget surcharge (PRE_F30_LEVEL_VARIETY_NUMBERS.md §1): an elite whose ascending
+  // ordinal rolled a non-null affix costs +AFFIX_THREAT_SURCHARGE, folded pre-clamp under
+  // ELITE_COST_CAP so the affix trades chaff (budget-neutral) instead of stacking on top. Affixes
+  // map to elites by ordinal exactly as applyRollAffix assigns them at spawn.
+  const isEliteAffixed = (ordinal: number): boolean =>
+    eliteAffixes.some((slot) => slot.ordinal === ordinal && slot.affix !== null);
   const roster = floorRoster(seed, floor, pressure.complexShare);
   const plan: PlannedUnit[] = [];
 
@@ -1243,8 +1256,9 @@ function planFloorUnits(rng: Rng, dungeon: Dungeon, seed: number, floor: number,
     return pickRoom({ kind, tier: "swarm" });
   };
 
-  const add = (kind: EnemyKind, tier: EnemyTier): boolean => {
-    const cost = threatCostOf(kind, tier);
+  const add = (kind: EnemyKind, tier: EnemyTier, surcharge = 0): boolean => {
+    // The surcharge is only ever passed for an affixed elite; fold it in pre-clamp under the cap.
+    const cost = surcharge > 0 ? Math.min(threatCostOf(kind, tier) + surcharge, ELITE_COST_CAP) : threatCostOf(kind, tier);
     if (cost > budget) return false;
     const room = tier === "swarm" ? pickSwarmRoom(kind) : pickRoom({ kind, tier });
     if (room === null) return false;
@@ -1272,9 +1286,17 @@ function planFloorUnits(rng: Rng, dungeon: Dungeon, seed: number, floor: number,
     // The Twinned Elites mutator adds one elite to the plan (paired elite pressure); the
     // LIVE_CAPS.elites active cap + reinforcement release still gate how many are live at once.
     const elites = (floor >= 9 ? 2 : 1) + Math.max(0, extraElites);
+    // Elites take their spawn ordinal in placement order (matching spawnFloorEnemies' eliteOrdinal
+    // walk); an ordinal that rolled an affix pays the budget surcharge when it lands.
+    let eliteOrdinal = 0;
     for (let i = 0; i < elites; i++) {
+      // Pre-F30 ONLY: the surcharge is a pre-#244 budget lever, so it must never retune the
+      // already-shipped post-F30 "Unmaking" balance (F31+ stays byte-stable with the pre-#244 curve).
+      const surcharge = (floor < DEEP_FLOOR_MIN && isEliteAffixed(eliteOrdinal)) ? AFFIX_THREAT_SURCHARGE : 0;
       // Up to three rolls: an elite of a complex family needs a room playing its card.
-      for (let roll = 0; roll < 3 && !add(weightedPick(rng, roster), "elite"); roll++) { /* reroll */ }
+      let placed = false;
+      for (let roll = 0; roll < 3 && !placed; roll++) placed = add(weightedPick(rng, roster), "elite", surcharge);
+      if (placed) eliteOrdinal++;
     }
   }
   if (floor >= TIERS.brute.minFloor) {
@@ -1396,7 +1418,7 @@ export function spawnFloorEnemies(dungeon: Dungeon, seed: number, floor: number,
     return { active, pending: [] };
   }
 
-  const plan = planFloorUnits(rng, dungeon, seed, floor, players, opts.extraElites ?? 0);
+  const plan = planFloorUnits(rng, dungeon, seed, floor, players, opts.extraElites ?? 0, eliteAffixes);
   const cap = activeThreatCap(floor) * coopThreatMult(players);
   let eliteOrdinal = 0; // ascending spawn ordinal for elite-affix assignment (plan order)
   const moverCap = activeMoverCapFor(players);
